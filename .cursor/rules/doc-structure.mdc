@@ -1,0 +1,32 @@
+---
+description: Anvil doc/ directory layout and naming for design + roadmaps
+globs: doc/**
+alwaysApply: false
+---
+
+# Doc structure
+
+## Layout
+
+doc/design/     # full design (numbered chapters)
+doc/roadmaps/   # versioned milestones + phases
+
+## design/
+
+- README.md index + read order
+- Chapters: 00-overview … 09-extensibility (zero-padded prefixes)
+- Do not put roadmap/version plans under design/
+
+## roadmaps/
+
+- README.md — version index table (version, status, link)
+- VERSIONING.md — naming rules only
+- Milestone file: m_<major.minor>_<slug>.md  e.g. m_0.1_mvp.md
+- Milestone dir:  m_<major.minor>/           e.g. m_0.1/
+- Phase file:     m_<ver>/p_<ver>.<n>.md     e.g. m_0.1/p_0.1.1.md
+
+## Required sections
+
+Milestone: goals, phase list, overall acceptance, non-goals, status
+Phase: goals, scope, non-goals, tasks, acceptance, depends-on, linked design chapters, status
+Status values only: planned | in_progress | done | deferred

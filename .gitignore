@@ -1,0 +1,18 @@
+# Binaries / build
+*.exe
+*.test
+*.out
+/dist/
+/bin/
+
+# Agent local state
+.anvil/
+**/.anvil/
+
+# Go
+source/vendor/
+
+# OS / IDE noise
+.DS_Store
+Thumbs.db
+*.swp

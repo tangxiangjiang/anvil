@@ -1,0 +1,11 @@
+---
+description: Anvil Go module lives under source/
+alwaysApply: true
+---
+
+# Source layout
+
+- All Go code, `go.mod`, and examples live under `source/`.
+- Do not place `.go` files or `go.mod` at the repository root.
+- Build/test from `source/`: `go build ./...`, `go test ./...`.
+- Package import path remains `github.com/anvil-dev/anvil` (module root = `source/`).
