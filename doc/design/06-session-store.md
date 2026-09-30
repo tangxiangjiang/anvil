@@ -24,7 +24,9 @@
 | `message` | role, content, tool_call_id, tool_calls, timestamp |
 | `run_start` / `run_end` | run_id, status, steps, usage |
 
-Exact JSON schema is finalized in milestone 0.2 phase docs; design requires append-only writes and crash-safe "last valid line" reads.
+Exact JSON schema is finalized in [m_0.2/p_0.2.1.md](../roadmaps/m_0.2/p_0.2.1.md). Design requires append-only writes and crash-safe "last valid line" reads.
+
+Agent ID format in code: `agent-<hex>` (random), file name `{agentID}.jsonl`.
 
 ## Resume behavior
 
@@ -33,11 +35,10 @@ Exact JSON schema is finalized in milestone 0.2 phase docs; design requires appe
 3. Rebuild message history; re-create tool registry from options.
 4. Inline MCP/custom tools are **not** restored from disk (pass again on Resume) — same rule as Cursor SDK.
 
-## 0.1 scope
+## 0.1 vs 0.2
 
-- Agent IDs may be allocated in memory only.
-- Persistence and `Resume` ship in **0.2**.
-- Design this chapter so 0.1 code leaves extension points (e.g. optional `Store` interface no-op).
+- **0.1:** in-memory history only for the process lifetime; `Resume` returned not-implemented.
+- **0.2.1:** JSONL under `{cwd}/.anvil/agents/` + working `Resume`.
 
 ## Non-goals
 

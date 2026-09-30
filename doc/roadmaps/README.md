@@ -7,12 +7,16 @@ Versioned delivery for Anvil. Design lives in [`doc/design/`](../design/); this 
 | Version | Milestone | Status | Doc |
 |---------|-----------|--------|-----|
 | 0.1 | MVP | done | [m_0.1_mvp.md](m_0.1_mvp.md) |
-| 0.2 | Resume & observability | planned | [m_0.2_resume.md](m_0.2_resume.md) |
+| 0.2 | Resume & observability | in_progress | [m_0.2_resume.md](m_0.2_resume.md) |
 | 0.3 | Extensibility | planned | [m_0.3_extensibility.md](m_0.3_extensibility.md) |
 
 ## Naming
 
 See [VERSIONING.md](VERSIONING.md). Enforced by `.cursor/rules/doc-structure.mdc` and `doc-versioning.mdc`.
+
+## Lessons
+
+Operational notes from real runs: [LESSONS.md](LESSONS.md).
 
 ## How to use
 

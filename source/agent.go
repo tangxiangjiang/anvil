@@ -3,6 +3,7 @@ package anvil
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -10,6 +11,7 @@ import (
 	"github.com/anvil-dev/anvil/internal/id"
 	"github.com/anvil-dev/anvil/internal/llm"
 	"github.com/anvil-dev/anvil/internal/runtime"
+	"github.com/anvil-dev/anvil/internal/store"
 	"github.com/anvil-dev/anvil/internal/tools"
 )
 
@@ -20,6 +22,8 @@ type Agent struct {
 	cwd    string
 	closed bool
 
+	store *store.Store
+
 	mu       sync.Mutex
 	running  bool
 	history  []llm.Message
@@ -28,6 +32,7 @@ type Agent struct {
 }
 
 // Create validates options and returns a new local agent (no LLM call).
+// It writes the agent `meta` record to the JSONL store immediately.
 func Create(ctx context.Context, opts Options) (*Agent, error) {
 	_ = ctx
 	opts, cwd, err := normalizeOptions(opts)
@@ -38,12 +43,27 @@ func Create(ctx context.Context, opts Options) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
+	st := store.New(cwd)
+	agentID := "agent-" + id.New()
+	allowShell := opts.Local.AllowShellEnabled()
+	if err := st.Append(agentID, store.Record{
+		Type:       store.TypeMeta,
+		AgentID:    agentID,
+		CWD:        cwd,
+		Provider:   string(opts.Provider),
+		Model:      opts.Model.ID,
+		MaxSteps:   opts.MaxSteps,
+		AllowShell: &allowShell,
+	}); err != nil {
+		return nil, newError("persist agent meta", false, err)
+	}
 	return &Agent{
-		id:       "agent-" + id.New(),
+		id:       agentID,
 		opts:     opts,
 		cwd:      cwd,
+		store:    st,
 		complete: completer,
-		registry: tools.NewRegistry(cwd, opts.Local.AllowShellEnabled()),
+		registry: tools.NewRegistry(cwd, allowShell),
 		history:  nil,
 	}, nil
 }
@@ -63,12 +83,69 @@ func Prompt(ctx context.Context, message string, opts Options) (*RunResult, erro
 	return run.Wait(ctx)
 }
 
-// Resume loads a persisted agent. Not implemented in 0.1.
+// Resume loads a persisted agent by ID from the local JSONL store.
+//
+// The store location is derived from opts.Local.CWD. Conversation history is
+// restored from disk, but LocalOptions and tool availability are re-applied
+// from the caller's options (MCP/custom tools are never restored from disk).
+// A missing agent ID returns a non-retryable *Error.
 func Resume(ctx context.Context, agentID string, opts Options) (*Agent, error) {
 	_ = ctx
-	_ = agentID
-	_ = opts
-	return nil, newError("Resume is not available until milestone 0.2", false, nil)
+	opts, cwd, err := normalizeOptions(opts)
+	if err != nil {
+		return nil, err
+	}
+	if agentID == "" {
+		return nil, newError("agent id is required", false, nil)
+	}
+	completer, err := newCompleter(opts)
+	if err != nil {
+		return nil, err
+	}
+	st := store.New(cwd)
+	records, err := st.Load(agentID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, newError("agent not found: "+agentID, false, nil)
+		}
+		return nil, newError("load agent store", false, err)
+	}
+	history := historyFromRecords(records)
+	allowShell := opts.Local.AllowShellEnabled()
+	return &Agent{
+		id:       agentID,
+		opts:     opts,
+		cwd:      cwd,
+		store:    st,
+		complete: completer,
+		registry: tools.NewRegistry(cwd, allowShell),
+		history:  history,
+	}, nil
+}
+
+// historyFromRecords rebuilds the message history from persisted records.
+func historyFromRecords(records []store.Record) []llm.Message {
+	var history []llm.Message
+	for _, rec := range records {
+		if rec.Type != store.TypeMessage {
+			continue
+		}
+		msg := llm.Message{
+			Role:       llm.Role(rec.Role),
+			Content:    rec.Content,
+			ToolCallID: rec.ToolCallID,
+			Name:       rec.Name,
+		}
+		for _, tc := range rec.ToolCalls {
+			msg.ToolCalls = append(msg.ToolCalls, llm.ToolCall{
+				ID:   tc.ID,
+				Name: tc.Name,
+				Args: tc.Args,
+			})
+		}
+		history = append(history, msg)
+	}
+	return history
 }
 
 // AgentID returns the agent identifier.
@@ -109,12 +186,16 @@ func (a *Agent) executeRun(ctx context.Context, run *Run, message string, histor
 		a.mu.Unlock()
 	}()
 
+	a.persist(store.Record{Type: store.TypeRunStart, RunID: run.id})
+
 	result := runtime.Loop(ctx, a.complete, a.registry, runtime.Config{
 		CWD:      a.cwd,
 		Model:    a.opts.Model.ID,
 		MaxSteps: a.opts.MaxSteps,
 		History:  history,
 		UserMsg:  message,
+		RunID:    run.id,
+		Sink:     func(m llm.Message) { a.persistMessage(run.id, m) },
 	}, func(ev runtime.Event) {
 		run.emit(Event{
 			Type:       EventType(ev.Type),
@@ -127,12 +208,10 @@ func (a *Agent) executeRun(ctx context.Context, run *Run, message string, histor
 		})
 	})
 
-	// Append turn to in-memory history (user + final assistant text approximation).
+	// Rebuild in-memory history from the authoritative conversation (drop the
+	// transient system prompt which the loop re-adds on every run).
 	a.mu.Lock()
-	a.history = append(a.history, llm.Message{Role: llm.RoleUser, Content: message})
-	if result.Status == "finished" && result.Result != "" {
-		a.history = append(a.history, llm.Message{Role: llm.RoleAssistant, Content: result.Result})
-	}
+	a.history = nonSystemMessages(result.Messages)
 	a.mu.Unlock()
 
 	rr := &RunResult{
@@ -154,11 +233,57 @@ func (a *Agent) executeRun(ctx context.Context, run *Run, message string, histor
 	} else {
 		run.id = rr.ID
 	}
+
+	var usage *store.Usage
+	if result.Usage != nil {
+		usage = &store.Usage{
+			InputTokens:  result.Usage.InputTokens,
+			OutputTokens: result.Usage.OutputTokens,
+			TotalTokens:  result.Usage.TotalTokens,
+		}
+	}
+	a.persist(store.Record{
+		Type:   store.TypeRunEnd,
+		RunID:  rr.ID,
+		Status: string(rr.Status),
+		Steps:  rr.Steps,
+		Usage:  usage,
+	})
+
 	var err error
 	if rr.Status == StatusError {
 		err = newError(rr.Err, false, nil)
 	}
 	run.finish(rr, err)
+}
+
+// persistMessage appends a conversation message record. Errors are swallowed so
+// a store problem never fails an otherwise healthy run.
+func (a *Agent) persistMessage(runID string, m llm.Message) {
+	rec := store.Record{
+		Type:       store.TypeMessage,
+		RunID:      runID,
+		Role:       string(m.Role),
+		Content:    m.Content,
+		ToolCallID: m.ToolCallID,
+		Name:       m.Name,
+	}
+	for _, tc := range m.ToolCalls {
+		rec.ToolCalls = append(rec.ToolCalls, store.ToolCall{
+			ID:   tc.ID,
+			Name: tc.Name,
+			Args: tc.Args,
+		})
+	}
+	a.persist(rec)
+}
+
+// persist writes a record best-effort (never fatal to a run).
+func (a *Agent) persist(rec store.Record) {
+	if a.store == nil {
+		return
+	}
+	_ = a.store.Append(a.id, rec)
 }
 
 // Close releases agent resources.
@@ -170,6 +295,17 @@ func (a *Agent) Close() error {
 	defer a.mu.Unlock()
 	a.closed = true
 	return nil
+}
+
+func nonSystemMessages(messages []llm.Message) []llm.Message {
+	var out []llm.Message
+	for _, m := range messages {
+		if m.Role == llm.RoleSystem {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 func normalizeOptions(opts Options) (Options, string, error) {

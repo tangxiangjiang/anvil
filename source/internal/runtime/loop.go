@@ -23,12 +23,13 @@ type Event struct {
 
 // Result is the terminal run result.
 type Result struct {
-	ID     string
-	Status string
-	Result string
-	Steps  int
-	Usage  *llm.Usage
-	Err    string
+	ID       string
+	Status   string
+	Result   string
+	Steps    int
+	Usage    *llm.Usage
+	Err      string
+	Messages []llm.Message // full conversation incl. system prompt
 }
 
 // Config for a single run.
@@ -38,6 +39,11 @@ type Config struct {
 	MaxSteps int
 	History  []llm.Message
 	UserMsg  string
+	// RunID, if set, is used as the run identifier; otherwise one is generated.
+	RunID string
+	// Sink, if set, receives each conversation message as it is appended
+	// (user, assistant, tool) so callers can persist them durably.
+	Sink func(llm.Message)
 }
 
 // Emitter receives stream events.
@@ -45,12 +51,19 @@ type Emitter func(Event)
 
 // Loop runs the tool-calling agent loop.
 func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry, cfg Config, emit Emitter) Result {
-	runID := "run-" + id.New()
+	runID := cfg.RunID
+	if runID == "" {
+		runID = "run-" + id.New()
+	}
 	if cfg.MaxSteps <= 0 {
 		cfg.MaxSteps = 32
 	}
 	if emit == nil {
 		emit = func(Event) {}
+	}
+	sink := cfg.Sink
+	if sink == nil {
+		sink = func(llm.Message) {}
 	}
 
 	messages := make([]llm.Message, 0, len(cfg.History)+2)
@@ -64,7 +77,9 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 	if !hasSystem {
 		messages = append([]llm.Message{{Role: llm.RoleSystem, Content: prompt.System(cfg.CWD)}}, messages...)
 	}
-	messages = append(messages, llm.Message{Role: llm.RoleUser, Content: cfg.UserMsg})
+	user := llm.Message{Role: llm.RoleUser, Content: cfg.UserMsg}
+	messages = append(messages, user)
+	sink(user)
 
 	var usageAcc *llm.Usage
 	toolDefs := registry.Defs()
@@ -73,7 +88,7 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 		if err := ctx.Err(); err != nil {
 			msg := err.Error()
 			emit(Event{Type: "error", Text: msg})
-			return Result{ID: runID, Status: "cancelled", Steps: step, Usage: usageAcc, Err: msg}
+			return Result{ID: runID, Status: "cancelled", Steps: step, Usage: usageAcc, Err: msg, Messages: messages}
 		}
 
 		resp, err := completer.Complete(ctx, llm.Request{
@@ -84,7 +99,7 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 		if err != nil {
 			msg := err.Error()
 			emit(Event{Type: "error", Text: msg})
-			return Result{ID: runID, Status: "error", Steps: step, Usage: usageAcc, Err: msg}
+			return Result{ID: runID, Status: "error", Steps: step, Usage: usageAcc, Err: msg, Messages: messages}
 		}
 		if resp.Usage != nil {
 			if usageAcc == nil {
@@ -103,15 +118,17 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 			emit(Event{Type: "assistant", Text: assistant.Content})
 		}
 		messages = append(messages, assistant)
+		sink(assistant)
 
 		if len(assistant.ToolCalls) == 0 {
 			emit(Event{Type: "done", Text: assistant.Content})
 			return Result{
-				ID:     runID,
-				Status: "finished",
-				Result: assistant.Content,
-				Steps:  step + 1,
-				Usage:  usageAcc,
+				ID:       runID,
+				Status:   "finished",
+				Result:   assistant.Content,
+				Steps:    step + 1,
+				Usage:    usageAcc,
+				Messages: messages,
 			}
 		}
 
@@ -130,16 +147,18 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 				Content:    res.Content,
 				IsError:    res.IsError,
 			})
-			messages = append(messages, llm.Message{
+			toolMsg := llm.Message{
 				Role:       llm.RoleTool,
 				Content:    res.Content,
 				ToolCallID: tc.ID,
 				Name:       tc.Name,
-			})
+			}
+			messages = append(messages, toolMsg)
+			sink(toolMsg)
 		}
 	}
 
 	msg := fmt.Sprintf("max steps exceeded (%d)", cfg.MaxSteps)
 	emit(Event{Type: "error", Text: msg})
-	return Result{ID: runID, Status: "error", Steps: cfg.MaxSteps, Usage: usageAcc, Err: msg}
+	return Result{ID: runID, Status: "error", Steps: cfg.MaxSteps, Usage: usageAcc, Err: msg, Messages: messages}
 }
