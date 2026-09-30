@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 
 	"github.com/anvil-dev/anvil/internal/id"
 	"github.com/anvil-dev/anvil/internal/llm"
+	"github.com/anvil-dev/anvil/internal/mcp"
 	"github.com/anvil-dev/anvil/internal/runtime"
 	"github.com/anvil-dev/anvil/internal/store"
 	"github.com/anvil-dev/anvil/internal/tools"
@@ -29,18 +31,24 @@ type Agent struct {
 	history  []llm.Message
 	complete llm.Completer
 	registry *tools.Registry
+	mcp      []*mcp.Session
 }
 
 // Create validates options and returns a new local agent (no LLM call).
-// It writes the agent `meta` record to the JSONL store immediately.
 func Create(ctx context.Context, opts Options) (*Agent, error) {
-	_ = ctx
 	opts, cwd, err := normalizeOptions(opts)
 	if err != nil {
 		return nil, err
 	}
 	completer, err := newCompleter(opts)
 	if err != nil {
+		return nil, err
+	}
+	reg, sessions, err := buildRegistry(ctx, cwd, opts)
+	if err != nil {
+		for _, s := range sessions {
+			_ = s.Close()
+		}
 		return nil, err
 	}
 	st := store.New(cwd)
@@ -55,6 +63,9 @@ func Create(ctx context.Context, opts Options) (*Agent, error) {
 		MaxSteps:   opts.MaxSteps,
 		AllowShell: &allowShell,
 	}); err != nil {
+		for _, s := range sessions {
+			_ = s.Close()
+		}
 		return nil, newError("persist agent meta", false, err)
 	}
 	return &Agent{
@@ -63,7 +74,8 @@ func Create(ctx context.Context, opts Options) (*Agent, error) {
 		cwd:      cwd,
 		store:    st,
 		complete: completer,
-		registry: tools.NewRegistry(cwd, allowShell),
+		registry: reg,
+		mcp:      sessions,
 		history:  nil,
 	}, nil
 }
@@ -84,13 +96,7 @@ func Prompt(ctx context.Context, message string, opts Options) (*RunResult, erro
 }
 
 // Resume loads a persisted agent by ID from the local JSONL store.
-//
-// The store location is derived from opts.Local.CWD. Conversation history is
-// restored from disk, but LocalOptions and tool availability are re-applied
-// from the caller's options (MCP/custom tools are never restored from disk).
-// A missing agent ID returns a non-retryable *Error.
 func Resume(ctx context.Context, agentID string, opts Options) (*Agent, error) {
-	_ = ctx
 	opts, cwd, err := normalizeOptions(opts)
 	if err != nil {
 		return nil, err
@@ -102,28 +108,123 @@ func Resume(ctx context.Context, agentID string, opts Options) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
+	reg, sessions, err := buildRegistry(ctx, cwd, opts)
+	if err != nil {
+		for _, s := range sessions {
+			_ = s.Close()
+		}
+		return nil, err
+	}
 	st := store.New(cwd)
 	records, err := st.Load(agentID)
 	if err != nil {
+		for _, s := range sessions {
+			_ = s.Close()
+		}
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, newError("agent not found: "+agentID, false, nil)
 		}
 		return nil, newError("load agent store", false, err)
 	}
-	history := historyFromRecords(records)
-	allowShell := opts.Local.AllowShellEnabled()
 	return &Agent{
 		id:       agentID,
 		opts:     opts,
 		cwd:      cwd,
 		store:    st,
 		complete: completer,
-		registry: tools.NewRegistry(cwd, allowShell),
-		history:  history,
+		registry: reg,
+		mcp:      sessions,
+		history:  historyFromRecords(records),
 	}, nil
 }
 
-// historyFromRecords rebuilds the message history from persisted records.
+func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Registry, []*mcp.Session, error) {
+	reg := tools.NewRegistry(cwd, opts.Local.AllowShellEnabled())
+	if opts.Permission != nil {
+		reg.SetPermission(func(ctx context.Context, name string, args json.RawMessage) (json.RawMessage, error) {
+			dec, err := opts.Permission(ctx, PermissionRequest{ToolName: name, Args: args})
+			if err != nil {
+				return nil, err
+			}
+			if !dec.Allow {
+				msg := dec.Message
+				if msg == "" {
+					msg = "permission denied for tool " + name
+				}
+				return nil, fmt.Errorf("%s", msg)
+			}
+			if len(dec.Args) > 0 {
+				return dec.Args, nil
+			}
+			return args, nil
+		})
+	}
+	for _, spec := range opts.Tools {
+		if spec.Handler == nil {
+			return nil, nil, newError("tool "+spec.Name+": handler is required", false, nil)
+		}
+		if err := reg.Register(&tools.FuncTool{
+			Name:        spec.Name,
+			Description: spec.Description,
+			Parameters:  spec.Parameters,
+			Handler:     spec.Handler,
+		}); err != nil {
+			return nil, nil, newError(err.Error(), false, nil)
+		}
+	}
+	var sessions []*mcp.Session
+	for name, cfg := range opts.MCPServers {
+		sess, err := mcp.Start(ctx, mcp.ServerConfig{
+			Name:    name,
+			Command: cfg.Command,
+			Args:    cfg.Args,
+			Env:     cfg.Env,
+		})
+		if err != nil {
+			for _, s := range sessions {
+				_ = s.Close()
+			}
+			return nil, nil, newError("mcp server "+name, false, err)
+		}
+		sessions = append(sessions, sess)
+		for _, t := range sess.Tools() {
+			toolName := "mcp_" + sanitizeName(name) + "_" + sanitizeName(t.Name)
+			mcpName := t.Name
+			session := sess
+			if err := reg.Register(&tools.FuncTool{
+				Name:        toolName,
+				Description: fmt.Sprintf("[mcp:%s] %s", name, t.Description),
+				Parameters:  t.InputSchema,
+				Handler: func(ctx context.Context, args json.RawMessage) (string, error) {
+					return session.Call(ctx, mcpName, args)
+				},
+			}); err != nil {
+				for _, s := range sessions {
+					_ = s.Close()
+				}
+				return nil, nil, newError(err.Error(), false, nil)
+			}
+		}
+	}
+	return reg, sessions, nil
+}
+
+func sanitizeName(s string) string {
+	out := make([]rune, 0, len(s))
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_':
+			out = append(out, r)
+		default:
+			out = append(out, '_')
+		}
+	}
+	if len(out) == 0 {
+		return "tool"
+	}
+	return string(out)
+}
+
 func historyFromRecords(records []store.Record) []llm.Message {
 	var history []llm.Message
 	for _, rec := range records {
@@ -189,13 +290,15 @@ func (a *Agent) executeRun(ctx context.Context, run *Run, message string, histor
 	a.persist(store.Record{Type: store.TypeRunStart, RunID: run.id})
 
 	result := runtime.Loop(ctx, a.complete, a.registry, runtime.Config{
-		CWD:      a.cwd,
-		Model:    a.opts.Model.ID,
-		MaxSteps: a.opts.MaxSteps,
-		History:  history,
-		UserMsg:  message,
-		RunID:    run.id,
-		Sink:     func(m llm.Message) { a.persistMessage(run.id, m) },
+		CWD:               a.cwd,
+		Model:             a.opts.Model.ID,
+		MaxSteps:          a.opts.MaxSteps,
+		History:           history,
+		UserMsg:           message,
+		RunID:             run.id,
+		HistoryMaxChars:   a.opts.HistoryMaxChars,
+		HistoryKeepRecent: a.opts.HistoryKeepRecent,
+		Sink:              func(m llm.Message) { a.persistMessage(run.id, m) },
 	}, func(ev runtime.Event) {
 		run.emit(Event{
 			Type:       EventType(ev.Type),
@@ -208,8 +311,6 @@ func (a *Agent) executeRun(ctx context.Context, run *Run, message string, histor
 		})
 	})
 
-	// Rebuild in-memory history from the authoritative conversation (drop the
-	// transient system prompt which the loop re-adds on every run).
 	a.mu.Lock()
 	a.history = nonSystemMessages(result.Messages)
 	a.mu.Unlock()
@@ -257,8 +358,6 @@ func (a *Agent) executeRun(ctx context.Context, run *Run, message string, histor
 	run.finish(rr, err)
 }
 
-// persistMessage appends a conversation message record. Errors are swallowed so
-// a store problem never fails an otherwise healthy run.
 func (a *Agent) persistMessage(runID string, m llm.Message) {
 	rec := store.Record{
 		Type:       store.TypeMessage,
@@ -278,7 +377,6 @@ func (a *Agent) persistMessage(runID string, m llm.Message) {
 	a.persist(rec)
 }
 
-// persist writes a record best-effort (never fatal to a run).
 func (a *Agent) persist(rec store.Record) {
 	if a.store == nil {
 		return
@@ -286,7 +384,7 @@ func (a *Agent) persist(rec store.Record) {
 	_ = a.store.Append(a.id, rec)
 }
 
-// Close releases agent resources.
+// Close releases agent resources including MCP servers.
 func (a *Agent) Close() error {
 	if a == nil {
 		return nil
@@ -294,6 +392,10 @@ func (a *Agent) Close() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.closed = true
+	for _, s := range a.mcp {
+		_ = s.Close()
+	}
+	a.mcp = nil
 	return nil
 }
 
@@ -341,6 +443,9 @@ func normalizeOptions(opts Options) (Options, string, error) {
 	opts.Local.CWD = abs
 	if opts.MaxSteps <= 0 {
 		opts.MaxSteps = 32
+	}
+	if opts.HistoryKeepRecent < 0 {
+		opts.HistoryKeepRecent = 0
 	}
 	return opts, abs, nil
 }

@@ -35,6 +35,7 @@ type Registry struct {
 	allowShell bool
 	maxOutput  int
 	tools      map[string]Tool
+	permission PermissionFunc
 }
 
 // NewRegistry builds the built-in tool set.
@@ -60,6 +61,38 @@ func (r *Registry) register(t Tool) {
 	r.tools[t.Def().Name] = t
 }
 
+// Register adds a tool. Returns an error if the name collides.
+func (r *Registry) Register(t Tool) error {
+	name := t.Def().Name
+	if name == "" {
+		return fmt.Errorf("tool name is required")
+	}
+	if _, ok := r.tools[name]; ok {
+		return fmt.Errorf("tool already registered: %s", name)
+	}
+	r.tools[name] = t
+	return nil
+}
+
+// SetPermission installs a mutating-tool gate. nil clears the gate.
+func (r *Registry) SetPermission(fn PermissionFunc) {
+	r.permission = fn
+}
+
+// PermissionFunc decides allow/deny/rewrite for mutating tools.
+type PermissionFunc func(ctx context.Context, name string, args json.RawMessage) (json.RawMessage, error)
+
+var mutatingTools = map[string]bool{
+	"write_file": true,
+	"edit_file":  true,
+	"shell":      true,
+}
+
+// IsMutating reports whether a built-in tool changes the workspace or runs commands.
+func IsMutating(name string) bool {
+	return mutatingTools[name]
+}
+
 // Defs returns tool schemas for the LLM.
 func (r *Registry) Defs() []llm.ToolDef {
 	out := make([]llm.ToolDef, 0, len(r.tools))
@@ -80,7 +113,17 @@ func (r *Registry) Execute(ctx context.Context, name string, args json.RawMessag
 	if !ok {
 		return Result{Content: "unknown tool: " + name, IsError: true}
 	}
-	res = t.Execute(ctx, args)
+	execArgs := args
+	if r.permission != nil && IsMutating(name) {
+		next, err := r.permission(ctx, name, args)
+		if err != nil {
+			return Result{Content: err.Error(), IsError: true}
+		}
+		if next != nil {
+			execArgs = next
+		}
+	}
+	res = t.Execute(ctx, execArgs)
 	res.Content = truncate(res.Content, r.maxOutput)
 	return res
 }

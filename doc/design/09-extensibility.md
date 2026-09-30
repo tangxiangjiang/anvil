@@ -1,13 +1,11 @@
 # 09 — Extensibility
 
-**Milestone focus:** 0.3 (design now, implement later).
+**Milestone focus:** 0.3 (**implemented**).
 
 ## Custom tools
 
-- Allow callers to register tools on `Options` or Agent:
-  - Name, description, JSON schema, `Execute` func.
+- Register via `Options.Tools` (`ToolSpec` + `ToolHandler`).
 - Merge with built-ins; name collisions → create-time error.
-- Custom tools still subject to cwd policy if they use shared path helpers.
 
 ## MCP
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/anvil-dev/anvil/internal/compress"
 	"github.com/anvil-dev/anvil/internal/id"
 	"github.com/anvil-dev/anvil/internal/llm"
 	"github.com/anvil-dev/anvil/internal/prompt"
@@ -41,6 +42,9 @@ type Config struct {
 	UserMsg  string
 	// RunID, if set, is used as the run identifier; otherwise one is generated.
 	RunID string
+	// HistoryMaxChars / HistoryKeepRecent enable optional compression (0.3+).
+	HistoryMaxChars   int
+	HistoryKeepRecent int
 	// Sink, if set, receives each conversation message as it is appended
 	// (user, assistant, tool) so callers can persist them durably.
 	Sink func(llm.Message)
@@ -80,6 +84,18 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 	user := llm.Message{Role: llm.RoleUser, Content: cfg.UserMsg}
 	messages = append(messages, user)
 	sink(user)
+
+	if cfg.HistoryMaxChars > 0 {
+		cr, err := compress.Apply(ctx, completer, cfg.Model, messages, compress.Options{
+			MaxChars:   cfg.HistoryMaxChars,
+			KeepRecent: cfg.HistoryKeepRecent,
+		})
+		if err == nil && cr.DidCompress {
+			messages = cr.Messages
+			// Persist the synthetic summary for observability; Resume re-compresses as needed.
+			sink(llm.Message{Role: llm.RoleUser, Content: cr.Summary})
+		}
+	}
 
 	var usageAcc *llm.Usage
 	toolDefs := registry.Defs()

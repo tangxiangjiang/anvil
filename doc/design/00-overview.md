@@ -38,6 +38,7 @@
 - Product versions use `0.x` while pre-release; **0.1 = MVP**.
 - Design is version-agnostic truth; roadmaps pin what ships per milestone.
 - New capability requires a phase doc before code (see `.cursor/rules/doc-versioning.mdc`).
+- Forward map (see `doc/roadmaps/README.md`): **0.2** resume/cancel, **0.3** extensibility, **0.4** coding UX, **0.5** operator/eval, **0.6** deferred themes.
 
 ## Locked product decisions
 
