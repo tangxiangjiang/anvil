@@ -58,7 +58,17 @@ func main() {
 | 0.2 Resume / Cancel / interactive | [`m_0.2_resume.md`](doc/roadmaps/m_0.2_resume.md) |
 | 0.3 Extensibility | [`m_0.3_extensibility.md`](doc/roadmaps/m_0.3_extensibility.md) |
 | 0.4 Coding UX (stream / patch / rules) | [`m_0.4_coding_ux.md`](doc/roadmaps/m_0.4_coding_ux.md) |
+| 0.5 Operator (List/Get / usage / eval) | [`m_0.5_operator.md`](doc/roadmaps/m_0.5_operator.md) |
 | Index | [`doc/roadmaps/README.md`](doc/roadmaps/README.md) |
+
+### Inspect agents (0.5)
+
+```go
+infos, _ := anvil.List(ctx, anvil.ListOptions{Local: anvil.LocalOptions{CWD: "."}})
+info, _ := anvil.Get(ctx, "agent-…", anvil.ListOptions{Local: anvil.LocalOptions{CWD: "."}})
+```
+
+Offline eval: `cd source && go test ./eval`
 
 ### Project rules (0.4)
 

@@ -173,6 +173,97 @@ func (s *Store) Load(agentID string) ([]Record, error) {
 	return out, nil
 }
 
+// Summary is a rollup of one agent JSONL file for operators.
+type Summary struct {
+	ID         string
+	CWD        string
+	Provider   string
+	Model      string
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+	LastStatus string
+	LastRunID  string
+	Runs       int
+	Usage      *Usage
+}
+
+// ListIDs returns agent ids that have store files (filename without .jsonl).
+func (s *Store) ListIDs() ([]string, error) {
+	if s == nil {
+		return nil, errors.New("nil store")
+	}
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var ids []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasSuffix(name, ".jsonl") {
+			continue
+		}
+		id := strings.TrimSuffix(name, ".jsonl")
+		if id == "" || safeName(id) != id {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+// Summarize derives operator metadata from loaded records.
+func Summarize(records []Record) Summary {
+	var sum Summary
+	var usage Usage
+	hasUsage := false
+	for _, rec := range records {
+		if !rec.Time.IsZero() {
+			if sum.CreatedAt.IsZero() || rec.Time.Before(sum.CreatedAt) {
+				sum.CreatedAt = rec.Time
+			}
+			if sum.UpdatedAt.IsZero() || rec.Time.After(sum.UpdatedAt) {
+				sum.UpdatedAt = rec.Time
+			}
+		}
+		switch rec.Type {
+		case TypeMeta:
+			if sum.ID == "" {
+				sum.ID = rec.AgentID
+			}
+			if sum.CWD == "" {
+				sum.CWD = rec.CWD
+			}
+			if sum.Provider == "" {
+				sum.Provider = rec.Provider
+			}
+			if sum.Model == "" {
+				sum.Model = rec.Model
+			}
+		case TypeRunEnd:
+			sum.Runs++
+			sum.LastStatus = rec.Status
+			sum.LastRunID = rec.RunID
+			if rec.Usage != nil {
+				hasUsage = true
+				usage.InputTokens += rec.Usage.InputTokens
+				usage.OutputTokens += rec.Usage.OutputTokens
+				usage.TotalTokens += rec.Usage.TotalTokens
+			}
+		}
+	}
+	if hasUsage {
+		u := usage
+		sum.Usage = &u
+	}
+	return sum
+}
+
 func safeID(agentID string) error {
 	if agentID == "" {
 		return errors.New("agent id is required")

@@ -49,6 +49,10 @@ func main() {
 	}
 	fmt.Println("status:", result.Status)
 	fmt.Println("steps:", result.Steps)
+	if result.Usage != nil {
+		fmt.Printf("usage: in=%d out=%d total=%d\n",
+			result.Usage.InputTokens, result.Usage.OutputTokens, result.Usage.TotalTokens)
+	}
 	fmt.Println(result.Result)
 	if result.Status == anvil.StatusError {
 		os.Exit(2)
