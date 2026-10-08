@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/anvil-dev/anvil/internal/compress"
@@ -102,9 +103,7 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 
 	for step := 0; step < cfg.MaxSteps; step++ {
 		if err := ctx.Err(); err != nil {
-			msg := err.Error()
-			emit(Event{Type: "error", Text: msg})
-			return Result{ID: runID, Status: "cancelled", Steps: step, Usage: usageAcc, Err: msg, Messages: messages}
+			return cancelledResult(runID, step, usageAcc, messages, err, emit)
 		}
 
 		resp, err := completer.Complete(ctx, llm.Request{
@@ -113,6 +112,9 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 			Tools:    toolDefs,
 		})
 		if err != nil {
+			if ctx.Err() != nil {
+				return cancelledResult(runID, step, usageAcc, messages, ctx.Err(), emit)
+			}
 			msg := err.Error()
 			emit(Event{Type: "error", Text: msg})
 			return Result{ID: runID, Status: "error", Steps: step, Usage: usageAcc, Err: msg, Messages: messages}
@@ -177,4 +179,17 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 	msg := fmt.Sprintf("max steps exceeded (%d)", cfg.MaxSteps)
 	emit(Event{Type: "error", Text: msg})
 	return Result{ID: runID, Status: "error", Steps: cfg.MaxSteps, Usage: usageAcc, Err: msg, Messages: messages}
+}
+
+func cancelledResult(runID string, steps int, usage *llm.Usage, messages []llm.Message, err error, emit Emitter) Result {
+	msg := "cancelled"
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			msg = "max wall time exceeded"
+		} else {
+			msg = err.Error()
+		}
+	}
+	emit(Event{Type: "error", Text: msg})
+	return Result{ID: runID, Status: "cancelled", Steps: steps, Usage: usage, Err: msg, Messages: messages}
 }

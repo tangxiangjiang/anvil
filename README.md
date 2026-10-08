@@ -22,6 +22,11 @@ export ANVIL_MODEL=private/deepseek-v4-pro
 export ANVIL_PROVIDER=openai   # or anthropic
 
 go run ./examples/oneshot /path/to/repo "Fix the failing test"
+
+# Multi-turn + resume (0.2)
+go run ./examples/interactive /path/to/repo
+# later:
+go run ./examples/interactive --resume agent-<id> /path/to/repo
 ```
 
 ```go
@@ -45,6 +50,10 @@ func main() {
 }
 ```
 
-## MVP status (0.1)
+## Status
 
-See [`doc/roadmaps/m_0.1_mvp.md`](doc/roadmaps/m_0.1_mvp.md).
+| Milestone | Doc |
+|-----------|-----|
+| 0.1 MVP | [`m_0.1_mvp.md`](doc/roadmaps/m_0.1_mvp.md) |
+| 0.2 Resume / Cancel / interactive | [`m_0.2_resume.md`](doc/roadmaps/m_0.2_resume.md) |
+| Index | [`doc/roadmaps/README.md`](doc/roadmaps/README.md) |

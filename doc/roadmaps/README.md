@@ -7,7 +7,7 @@ Versioned delivery for Anvil. Design lives in [`doc/design/`](../design/); this 
 | Version | Milestone | Status | Doc |
 |---------|-----------|--------|-----|
 | 0.1 | MVP | done | [m_0.1_mvp.md](m_0.1_mvp.md) |
-| 0.2 | Resume & observability | in_progress | [m_0.2_resume.md](m_0.2_resume.md) |
+| 0.2 | Resume & observability | done | [m_0.2_resume.md](m_0.2_resume.md) |
 | 0.3 | Extensibility | done | [m_0.3_extensibility.md](m_0.3_extensibility.md) |
 | 0.4 | Coding UX | planned | [m_0.4_coding_ux.md](m_0.4_coding_ux.md) |
 | 0.5 | Operator surface | planned | [m_0.5_operator.md](m_0.5_operator.md) |
@@ -29,7 +29,6 @@ Operational notes from real runs: [LESSONS.md](LESSONS.md).
 
 ## Suggested order after 0.3
 
-1. Finish **0.2** (`p_0.2.2` Cancel/limits → `p_0.2.3` interactive).
-2. **0.4** coding UX (stream, edits, rules).
-3. **0.5** operator/eval.
-4. Promote items from **0.6** only with new design + phases.
+1. **0.4** coding UX (stream, edits, rules).
+2. **0.5** operator/eval.
+3. Promote items from **0.6** only with new design + phases.

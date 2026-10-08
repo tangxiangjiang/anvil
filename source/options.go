@@ -3,6 +3,7 @@ package anvil
 import (
 	"context"
 	"encoding/json"
+	"time"
 )
 
 // Provider selects the LLM wire protocol.
@@ -21,6 +22,10 @@ type Options struct {
 	Model    Model
 	Local    LocalOptions
 	MaxSteps int // 0 = default (32)
+	// MaxWallTime bounds a single Send/Prompt run. Zero means no wall-time limit.
+	// When exceeded, the run ends with StatusCancelled (same as Cancel).
+	// MaxSteps still applies independently (whichever hits first wins).
+	MaxWallTime time.Duration
 
 	// Tools are caller-registered tools merged with built-ins (0.3+).
 	Tools []ToolSpec

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/anvil-dev/anvil/internal/id"
 	"github.com/anvil-dev/anvil/internal/llm"
@@ -273,23 +274,33 @@ func (a *Agent) Send(ctx context.Context, message string, opts ...SendOption) (*
 	}
 	a.running = true
 	historyCopy := append([]llm.Message(nil), a.history...)
+	wall := a.opts.MaxWallTime
 	a.mu.Unlock()
 
-	run := newRun("run-" + id.New())
-	go a.executeRun(ctx, run, message, historyCopy)
+	runCtx, cancel := context.WithCancel(ctx)
+	run := newRun("run-"+id.New(), cancel)
+	go a.executeRun(runCtx, cancel, wall, run, message, historyCopy)
 	return run, nil
 }
 
-func (a *Agent) executeRun(ctx context.Context, run *Run, message string, history []llm.Message) {
+func (a *Agent) executeRun(ctx context.Context, cancel context.CancelFunc, wall time.Duration, run *Run, message string, history []llm.Message) {
 	defer func() {
+		cancel()
 		a.mu.Lock()
 		a.running = false
 		a.mu.Unlock()
 	}()
 
+	loopCtx := ctx
+	if wall > 0 {
+		var wallCancel context.CancelFunc
+		loopCtx, wallCancel = context.WithTimeout(ctx, wall)
+		defer wallCancel()
+	}
+
 	a.persist(store.Record{Type: store.TypeRunStart, RunID: run.id})
 
-	result := runtime.Loop(ctx, a.complete, a.registry, runtime.Config{
+	result := runtime.Loop(loopCtx, a.complete, a.registry, runtime.Config{
 		CWD:               a.cwd,
 		Model:             a.opts.Model.ID,
 		MaxSteps:          a.opts.MaxSteps,

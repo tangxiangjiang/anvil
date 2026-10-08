@@ -11,16 +11,19 @@ type Run struct {
 	events chan Event
 	done   chan struct{}
 
+	cancel context.CancelFunc
+
 	mu     sync.Mutex
 	result *RunResult
 	err    error
 }
 
-func newRun(id string) *Run {
+func newRun(id string, cancel context.CancelFunc) *Run {
 	return &Run{
 		id:     id,
 		events: make(chan Event, 64),
 		done:   make(chan struct{}),
+		cancel: cancel,
 	}
 }
 
@@ -58,10 +61,17 @@ func (r *Run) Wait(ctx context.Context) (*RunResult, error) {
 	}
 }
 
-// Cancel is available in milestone 0.2.
+// Cancel requests the run to stop. In-flight LLM/shell calls observing the
+// run context should abort; Wait then returns StatusCancelled.
 func (r *Run) Cancel(ctx context.Context) error {
 	_ = ctx
-	return newError("Cancel is not available until milestone 0.2", false, nil)
+	if r == nil {
+		return newError("nil run", false, nil)
+	}
+	if r.cancel != nil {
+		r.cancel()
+	}
+	return nil
 }
 
 func (r *Run) finish(result *RunResult, err error) {
@@ -77,7 +87,6 @@ func (r *Run) emit(ev Event) {
 	select {
 	case r.events <- ev:
 	default:
-		// Drop if consumer is slow; Wait still authoritative.
 		select {
 		case r.events <- ev:
 		default:
