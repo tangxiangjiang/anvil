@@ -40,7 +40,16 @@ Agent ID format in code: `agent-<hex>` (random), file name `{agentID}.jsonl`.
 - **0.1:** in-memory history only for the process lifetime; `Resume` returned not-implemented.
 - **0.2.1:** JSONL under `{cwd}/.anvil/agents/` + working `Resume`.
 
+## Backends (0.6+)
+
+| Backend | Layout | Notes |
+|---------|--------|--------|
+| `jsonl` (default) | `{cwd}/.anvil/agents/{id}.jsonl` | Debuggable, append-only |
+| `sqlite` | `{cwd}/.anvil/agents.db` | Optional; selected via `LocalOptions.Store` |
+
+No automatic migration between backends; pick one per cwd (or migrate offline yourself).
+
 ## Non-goals
 
 - Multi-machine sync, encryption at rest (caller can encrypt the disk).
-- SQLite (deferred unless JSONL proves insufficient).
+- Automatic JSONL ↔ SQLite migration tooling.

@@ -6,11 +6,14 @@ Stream delivers `Event` values until closed.
 
 | Type | When | Payload highlights |
 |------|------|--------------------|
+| `progress` | Start of each LLM round (0.6+) | `Step` (1-based), `MaxSteps` |
 | `assistant` | Model text (full or delta) | `Text` |
 | `tool_call` | Before/as tool executes | `ToolCallID`, `Name`, `Args` JSON |
 | `tool_result` | After tool returns | `ToolCallID`, `Content`, `IsError` |
 | `done` | Terminal success path | mirrors status finished |
 | `error` | Terminal failure on stream | message / code |
+
+MaxSteps exceeded yields `RunResult.Status=error` with a stable message; callers may use `anvil.IsMaxStepsExceeded` (0.6+). Default MaxSteps when unset is **128**.
 
 Callers must still use `Wait` for authoritative `RunResult`.
 

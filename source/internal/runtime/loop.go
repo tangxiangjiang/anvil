@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/anvil-dev/anvil/internal/compress"
 	"github.com/anvil-dev/anvil/internal/id"
@@ -21,7 +22,15 @@ type Event struct {
 	Args       []byte
 	Content    string
 	IsError    bool
+	Step       int
+	MaxSteps   int
 }
+
+// DefaultMaxSteps is used when Config.MaxSteps is unset.
+const DefaultMaxSteps = 128
+
+// MaxStepsExceededPrefix is the stable prefix of Result.Err when the step limit is hit.
+const MaxStepsExceededPrefix = "max steps exceeded"
 
 // Result is the terminal run result.
 type Result struct {
@@ -63,7 +72,7 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 		runID = "run-" + id.New()
 	}
 	if cfg.MaxSteps <= 0 {
-		cfg.MaxSteps = 32
+		cfg.MaxSteps = DefaultMaxSteps
 	}
 	if emit == nil {
 		emit = func(Event) {}
@@ -111,6 +120,8 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 		if err := ctx.Err(); err != nil {
 			return cancelledResult(runID, step, usageAcc, messages, err, emit)
 		}
+
+		emit(Event{Type: "progress", Step: step + 1, MaxSteps: cfg.MaxSteps})
 
 		streamed := false
 		var resp *llm.Response
@@ -192,9 +203,14 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 		}
 	}
 
-	msg := fmt.Sprintf("max steps exceeded (%d)", cfg.MaxSteps)
+	msg := fmt.Sprintf("%s (%d)", MaxStepsExceededPrefix, cfg.MaxSteps)
 	emit(Event{Type: "error", Text: msg})
 	return Result{ID: runID, Status: "error", Steps: cfg.MaxSteps, Usage: usageAcc, Err: msg, Messages: messages}
+}
+
+// IsMaxStepsExceeded reports whether errText is a MaxSteps limit failure.
+func IsMaxStepsExceeded(errText string) bool {
+	return strings.HasPrefix(errText, MaxStepsExceededPrefix)
 }
 
 func cancelledResult(runID string, steps int, usage *llm.Usage, messages []llm.Message, err error, emit Emitter) Result {

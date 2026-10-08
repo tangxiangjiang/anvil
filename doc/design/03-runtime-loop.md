@@ -22,11 +22,13 @@ Execute one user message as a **tool-calling loop** until the model stops reques
 
 ## Limits
 
-| Limit | Default (MVP) | Notes |
-|-------|---------------|--------|
-| `MaxSteps` | 32 | Tool rounds; configurable later |
-| `MaxWallTime` | none in 0.1 | Add in 0.2 |
+| Limit | Default | Notes |
+|-------|---------|--------|
+| `MaxSteps` | **128** (0.6+; was 32 in MVP) | LLM rounds; `0` in Options means default |
+| `MaxWallTime` | none unless set | Added in 0.2; cancel semantics |
 | Per-tool timeout | shell: 60s | Others bound by ctx |
+
+Each LLM round emits a `progress` event with current step and MaxSteps (0.6+).
 
 ## Completion conditions
 

@@ -11,7 +11,7 @@ Versioned delivery for Anvil. Design lives in [`doc/design/`](../design/); this 
 | 0.3 | Extensibility | done | [m_0.3_extensibility.md](m_0.3_extensibility.md) |
 | 0.4 | Coding UX | done | [m_0.4_coding_ux.md](m_0.4_coding_ux.md) |
 | 0.5 | Operator surface | done | [m_0.5_operator.md](m_0.5_operator.md) |
-| 0.6 | Future / deferred | planned | [m_0.6_future.md](m_0.6_future.md) |
+| 0.6 | Scale | done | [m_0.6_scale.md](m_0.6_scale.md) |
 
 ## Naming
 
@@ -27,8 +27,7 @@ Operational notes from real runs: [LESSONS.md](LESSONS.md).
 2. Implement only that phase's tasks and acceptance criteria.
 3. Mark phase `done`; refresh this index if milestone status changes.
 
-## Suggested order after 0.3
+## Suggested order after 0.5
 
-1. **0.4** coding UX (stream, edits, rules).
-2. **0.5** operator/eval.
-3. Promote items from **0.6** only with new design + phases.
+1. **0.6** Scale: progress events → harder eval → MCP HTTP/SSE → SQLite store → CLI.
+2. Themes still deferred (sub-agents, IDE, cloud, Bridge, new LLM protocols) need new design + phases before coding.

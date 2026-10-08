@@ -1,6 +1,6 @@
 # 09 — Extensibility
 
-**Milestone focus:** 0.3 (**implemented**).
+**Milestone focus:** 0.3 (stdio MCP / tools / hooks **implemented**); 0.6 adds HTTP/SSE MCP.
 
 ## Custom tools
 
@@ -9,14 +9,19 @@
 
 ## MCP
 
-- Integrate MCP stdio clients (e.g. `mark3labs/mcp-go`) into the tool registry.
-- Config shape conceptually:
+- Integrate MCP clients into the tool registry.
+- Config shape:
 
 ```text
-MCPServers: map[name] => { Command, Args, Env } or HTTP URL
+MCPServers: map[name] => {
+  Transport: stdio | sse | http   // empty + Command => stdio
+  Command, Args, Env              // stdio
+  URL                             // sse / http
+}
 ```
 
 - On Resume: re-pass MCP configs (not persisted with secrets).
+- OAuth / browser auth for remote MCP is out of scope.
 
 ## Permission hooks
 
@@ -33,7 +38,7 @@ MCPServers: map[name] => { Command, Args, Env } or HTTP URL
 ## Sub-agents
 
 - Out of scope until a future milestone explicitly redesigns architecture.
-- Do not invent hidden multi-agent routing in 0.1–0.3.
+- Do not invent hidden multi-agent routing in 0.x without an explicit redesign milestone.
 
 ## Compatibility promise
 

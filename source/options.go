@@ -21,7 +21,7 @@ type Options struct {
 	BaseURL  string
 	Model    Model
 	Local    LocalOptions
-	MaxSteps int // 0 = default (32)
+	MaxSteps int // 0 = default (128)
 	// MaxWallTime bounds a single Send/Prompt run. Zero means no wall-time limit.
 	// When exceeded, the run ends with StatusCancelled (same as Cancel).
 	// MaxSteps still applies independently (whichever hits first wins).
@@ -58,6 +58,9 @@ type LocalOptions struct {
 	LoadRules bool
 	// LoadCursorRules also loads .cursor/rules/* when LoadRules is true (still off unless set).
 	LoadCursorRules bool
+
+	// Store selects the session backend: "jsonl" (default) or "sqlite".
+	Store string
 }
 
 // AllowShellEnabled returns whether shell tool is enabled.
@@ -79,11 +82,14 @@ type ToolSpec struct {
 	Handler     ToolHandler
 }
 
-// MCPServerConfig launches a stdio MCP server.
+// MCPServerConfig launches or connects to an MCP server.
 type MCPServerConfig struct {
-	Command string
-	Args    []string
-	Env     []string // KEY=VAL entries appended to the process environment
+	// Transport is stdio | http | sse. Empty: stdio if Command set, else http if URL set.
+	Transport string
+	Command   string
+	Args      []string
+	Env       []string // KEY=VAL for stdio process
+	URL       string   // http / sse base URL
 }
 
 // PermissionFunc decides whether a mutating tool may run.

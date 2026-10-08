@@ -27,7 +27,7 @@ type Agent struct {
 	cwd    string
 	closed bool
 
-	store *store.Store
+	store store.Backend
 
 	mu       sync.Mutex
 	running  bool
@@ -55,7 +55,13 @@ func Create(ctx context.Context, opts Options) (*Agent, error) {
 		}
 		return nil, err
 	}
-	st := store.New(cwd)
+	st, err := store.Open(cwd, opts.Local.Store)
+	if err != nil {
+		for _, s := range sessions {
+			_ = s.Close()
+		}
+		return nil, newError("open store", false, err)
+	}
 	agentID := "agent-" + id.New()
 	allowShell := opts.Local.AllowShellEnabled()
 	if err := st.Append(agentID, store.Record{
@@ -67,6 +73,7 @@ func Create(ctx context.Context, opts Options) (*Agent, error) {
 		MaxSteps:   opts.MaxSteps,
 		AllowShell: &allowShell,
 	}); err != nil {
+		_ = st.Close()
 		for _, s := range sessions {
 			_ = s.Close()
 		}
@@ -74,6 +81,7 @@ func Create(ctx context.Context, opts Options) (*Agent, error) {
 	}
 	sysPrompt, err := buildSystemPrompt(cwd, opts)
 	if err != nil {
+		_ = st.Close()
 		for _, s := range sessions {
 			_ = s.Close()
 		}
@@ -107,7 +115,7 @@ func Prompt(ctx context.Context, message string, opts Options) (*RunResult, erro
 	return run.Wait(ctx)
 }
 
-// Resume loads a persisted agent by ID from the local JSONL store.
+// Resume loads a persisted agent by ID from the local store (jsonl or sqlite).
 func Resume(ctx context.Context, agentID string, opts Options) (*Agent, error) {
 	opts, cwd, err := normalizeOptions(opts)
 	if err != nil {
@@ -127,9 +135,16 @@ func Resume(ctx context.Context, agentID string, opts Options) (*Agent, error) {
 		}
 		return nil, err
 	}
-	st := store.New(cwd)
+	st, err := store.Open(cwd, opts.Local.Store)
+	if err != nil {
+		for _, s := range sessions {
+			_ = s.Close()
+		}
+		return nil, newError("open store", false, err)
+	}
 	records, err := st.Load(agentID)
 	if err != nil {
+		_ = st.Close()
 		for _, s := range sessions {
 			_ = s.Close()
 		}
@@ -210,10 +225,12 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 	var sessions []*mcp.Session
 	for name, cfg := range opts.MCPServers {
 		sess, err := mcp.Start(ctx, mcp.ServerConfig{
-			Name:    name,
-			Command: cfg.Command,
-			Args:    cfg.Args,
-			Env:     cfg.Env,
+			Name:      name,
+			Transport: cfg.Transport,
+			Command:   cfg.Command,
+			Args:      cfg.Args,
+			Env:       cfg.Env,
+			URL:       cfg.URL,
 		})
 		if err != nil {
 			for _, s := range sessions {
@@ -354,6 +371,8 @@ func (a *Agent) executeRun(ctx context.Context, cancel context.CancelFunc, wall 
 			Args:       json.RawMessage(ev.Args),
 			Content:    ev.Content,
 			IsError:    ev.IsError,
+			Step:       ev.Step,
+			MaxSteps:   ev.MaxSteps,
 		})
 	})
 
@@ -430,7 +449,7 @@ func (a *Agent) persist(rec store.Record) {
 	_ = a.store.Append(a.id, rec)
 }
 
-// Close releases agent resources including MCP servers.
+// Close releases agent resources including MCP servers and the store backend.
 func (a *Agent) Close() error {
 	if a == nil {
 		return nil
@@ -438,6 +457,10 @@ func (a *Agent) Close() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.closed = true
+	if a.store != nil {
+		_ = a.store.Close()
+		a.store = nil
+	}
 	for _, s := range a.mcp {
 		_ = s.Close()
 	}
@@ -488,7 +511,7 @@ func normalizeOptions(opts Options) (Options, string, error) {
 	}
 	opts.Local.CWD = abs
 	if opts.MaxSteps <= 0 {
-		opts.MaxSteps = 32
+		opts.MaxSteps = runtime.DefaultMaxSteps
 	}
 	if opts.HistoryKeepRecent < 0 {
 		opts.HistoryKeepRecent = 0

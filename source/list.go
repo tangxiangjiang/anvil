@@ -35,7 +35,11 @@ func List(ctx context.Context, opts ListOptions) ([]AgentInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	st := store.New(cwd)
+	st, err := store.Open(cwd, opts.Local.Store)
+	if err != nil {
+		return nil, newError("open store", false, err)
+	}
+	defer st.Close()
 	ids, err := st.ListIDs()
 	if err != nil {
 		return nil, newError("list agents", false, err)
@@ -61,7 +65,11 @@ func Get(ctx context.Context, agentID string, opts ListOptions) (*AgentInfo, err
 	if err != nil {
 		return nil, err
 	}
-	st := store.New(cwd)
+	st, err := store.Open(cwd, opts.Local.Store)
+	if err != nil {
+		return nil, newError("open store", false, err)
+	}
+	defer st.Close()
 	info, err := loadInfo(st, agentID)
 	if err != nil {
 		return nil, err
@@ -81,7 +89,7 @@ func (a *Agent) Usage() (*Usage, error) {
 	return info.Usage, nil
 }
 
-func loadInfo(st *store.Store, agentID string) (AgentInfo, error) {
+func loadInfo(st store.Backend, agentID string) (AgentInfo, error) {
 	recs, err := st.Load(agentID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {

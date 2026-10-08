@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"strconv"
@@ -14,12 +15,14 @@ import (
 	"sync/atomic"
 )
 
-// ServerConfig launches a stdio MCP server.
+// ServerConfig launches or connects to an MCP server.
 type ServerConfig struct {
-	Name    string
-	Command string
-	Args    []string
-	Env     []string
+	Name      string
+	Transport string // stdio | http | sse; empty defaults from Command/URL
+	Command   string
+	Args      []string
+	Env       []string
+	URL       string // http / sse base URL
 }
 
 // ToolInfo is one MCP tool descriptor.
@@ -29,15 +32,24 @@ type ToolInfo struct {
 	InputSchema json.RawMessage
 }
 
-// Session is a live MCP stdio connection.
+// Session is a live MCP connection (stdio, HTTP, or SSE).
 type Session struct {
-	name   string
-	cmd    *exec.Cmd
-	stdin  io.WriteCloser
-	stdout *bufio.Reader
-	mu     sync.Mutex
-	nextID atomic.Int64
-	tools  []ToolInfo
+	name      string
+	transport string // stdio | http | sse
+	cmd       *exec.Cmd
+	stdin     io.WriteCloser
+	stdout    *bufio.Reader
+	mu        sync.Mutex
+	nextID    atomic.Int64
+	tools     []ToolInfo
+
+	http       *http.Client
+	baseURL    string
+	msgURL     string
+	sseBody    io.ReadCloser
+	sseReader  *bufio.Reader
+	sseReplies chan json.RawMessage
+	sseErr     chan error
 }
 
 type rpcRequest struct {
@@ -57,8 +69,28 @@ type rpcResponse struct {
 	} `json:"error"`
 }
 
-// Start launches the server and completes initialize + tools/list.
+// Start connects to the server and completes initialize + tools/list.
 func Start(ctx context.Context, cfg ServerConfig) (*Session, error) {
+	transport := strings.ToLower(strings.TrimSpace(cfg.Transport))
+	switch {
+	case transport == "http" || transport == "sse" || (cfg.URL != "" && cfg.Command == ""):
+		if transport == "" {
+			transport = "http"
+		}
+		cfg.Transport = transport
+		return StartRemote(ctx, cfg)
+	case transport == "" || transport == "stdio":
+		return startStdio(ctx, cfg)
+	default:
+		if cfg.URL != "" {
+			cfg.Transport = transport
+			return StartRemote(ctx, cfg)
+		}
+		return nil, fmt.Errorf("mcp %s: unknown transport %q", cfg.Name, cfg.Transport)
+	}
+}
+
+func startStdio(ctx context.Context, cfg ServerConfig) (*Session, error) {
 	if cfg.Command == "" {
 		return nil, fmt.Errorf("mcp %s: command is required", cfg.Name)
 	}
@@ -79,10 +111,11 @@ func Start(ctx context.Context, cfg ServerConfig) (*Session, error) {
 		return nil, fmt.Errorf("mcp %s start: %w", cfg.Name, err)
 	}
 	s := &Session{
-		name:   cfg.Name,
-		cmd:    cmd,
-		stdin:  stdin,
-		stdout: bufio.NewReader(stdout),
+		name:      cfg.Name,
+		transport: "stdio",
+		cmd:       cmd,
+		stdin:     stdin,
+		stdout:    bufio.NewReader(stdout),
 	}
 	if err := s.initialize(ctx); err != nil {
 		_ = s.Close()
@@ -144,12 +177,17 @@ func (s *Session) Call(ctx context.Context, name string, args json.RawMessage) (
 	return out, nil
 }
 
-// Close stops the server process.
+// Close stops the server process or remote connection.
 func (s *Session) Close() error {
 	if s == nil {
 		return nil
 	}
-	_ = s.stdin.Close()
+	if s.sseBody != nil {
+		_ = s.sseBody.Close()
+	}
+	if s.stdin != nil {
+		_ = s.stdin.Close()
+	}
 	if s.cmd != nil && s.cmd.Process != nil {
 		_ = s.cmd.Process.Kill()
 		_, _ = s.cmd.Process.Wait()
@@ -203,6 +241,9 @@ func (s *Session) listTools(ctx context.Context) ([]ToolInfo, error) {
 }
 
 func (s *Session) notify(ctx context.Context, method string, params any) error {
+	if s.transport == "http" || s.transport == "sse" {
+		return s.notifyHTTP(ctx, method, params)
+	}
 	_ = ctx
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -211,6 +252,9 @@ func (s *Session) notify(ctx context.Context, method string, params any) error {
 }
 
 func (s *Session) request(ctx context.Context, method string, params any) (json.RawMessage, error) {
+	if s.transport == "http" || s.transport == "sse" {
+		return s.requestHTTP(ctx, method, params)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	id := s.nextID.Add(1)

@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/anvil-dev/anvil"
 )
@@ -32,29 +35,96 @@ func main() {
 	if len(os.Args) > 2 {
 		msg = os.Args[2]
 	}
+	maxSteps := 128
+	if v := strings.TrimSpace(os.Getenv("ANVIL_MAX_STEPS")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			fmt.Fprintln(os.Stderr, "ANVIL_MAX_STEPS must be a positive integer")
+			os.Exit(2)
+		}
+		maxSteps = n
+	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
-	result, err := anvil.Prompt(ctx, msg, anvil.Options{
+	agent, err := anvil.Create(ctx, anvil.Options{
 		Provider: provider,
 		APIKey:   apiKey,
 		BaseURL:  baseURL,
 		Model:    anvil.Model{ID: model},
 		Local:    anvil.LocalOptions{CWD: cwd},
+		MaxSteps: maxSteps,
 	})
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "startup/run error:", err)
+		fmt.Fprintln(os.Stderr, "create:", err)
 		os.Exit(1)
 	}
+	defer agent.Close()
+
+	fmt.Printf("agent=%s max_steps=%d cwd=%s\n", agent.AgentID(), maxSteps, cwd)
+	fmt.Println("---")
+
+	run, err := agent.Send(ctx, msg)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "send:", err)
+		os.Exit(1)
+	}
+
+	step := 0
+	for ev := range run.Stream(ctx) {
+		switch ev.Type {
+		case anvil.EventAssistant:
+			if ev.Text == "" {
+				continue
+			}
+			fmt.Print(ev.Text)
+		case anvil.EventToolCall:
+			step++
+			fmt.Printf("\n\n===== step %d tool_call: %s =====\n", step, ev.Name)
+			if len(ev.Args) > 0 {
+				fmt.Println(string(ev.Args))
+			}
+		case anvil.EventToolResult:
+			label := "ok"
+			if ev.IsError {
+				label = "error"
+			}
+			fmt.Printf("----- tool_result %s (%s) -----\n", ev.Name, label)
+			fmt.Println(truncate(ev.Content, 4000))
+		case anvil.EventError:
+			fmt.Printf("\n[error] %s\n", ev.Text)
+		case anvil.EventDone:
+			if ev.Text != "" {
+				fmt.Printf("\n\n===== done =====\n%s\n", ev.Text)
+			}
+		}
+	}
+
+	result, err := run.Wait(ctx)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "wait:", err)
+		os.Exit(1)
+	}
+	fmt.Println("---")
 	fmt.Println("status:", result.Status)
 	fmt.Println("steps:", result.Steps)
 	if result.Usage != nil {
 		fmt.Printf("usage: in=%d out=%d total=%d\n",
 			result.Usage.InputTokens, result.Usage.OutputTokens, result.Usage.TotalTokens)
 	}
-	fmt.Println(result.Result)
+	if result.Err != "" {
+		fmt.Println("err:", result.Err)
+	}
 	if result.Status == anvil.StatusError {
 		os.Exit(2)
 	}
+}
+
+func truncate(s string, maxRunes int) string {
+	if maxRunes <= 0 || utf8.RuneCountInString(s) <= maxRunes {
+		return s
+	}
+	runes := []rune(s)
+	return string(runes[:maxRunes]) + fmt.Sprintf("\n… truncated (%d runes total)", len(runes))
 }

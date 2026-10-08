@@ -109,3 +109,6 @@ Do not conflate the two in examples or CI exit codes (suggest exit 1 vs 2).
 | Resume, store-backed history | 0.2 |
 | Cancel | 0.2 |
 | Custom tools / MCP on Options | 0.3 |
+| List / Get / Usage | 0.5 |
+| Progress events / default MaxSteps 128 | 0.6 |
+| MCP HTTP/SSE; Store backend; CLI | 0.6 |

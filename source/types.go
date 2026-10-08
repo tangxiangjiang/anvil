@@ -15,6 +15,7 @@ const (
 type EventType string
 
 const (
+	EventProgress   EventType = "progress"
 	EventAssistant  EventType = "assistant"
 	EventToolCall   EventType = "tool_call"
 	EventToolResult EventType = "tool_result"
@@ -48,4 +49,6 @@ type Event struct {
 	Args       json.RawMessage
 	Content    string
 	IsError    bool
+	Step       int // 1-based LLM round; set on EventProgress
+	MaxSteps   int // configured limit; set on EventProgress
 }

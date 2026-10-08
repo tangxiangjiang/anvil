@@ -21,12 +21,15 @@ export ANVIL_BASE_URL=https://your-gateway.example.com/v1   # OpenAI-compatible
 export ANVIL_MODEL=private/deepseek-v4-pro
 export ANVIL_PROVIDER=openai   # or anthropic
 
-go run ./examples/oneshot /path/to/repo "Fix the failing test"
+# CLI (0.6) — preferred for smoke / operator use
+go build -o ../bin/anvil.exe ./cmd/anvil
+../bin/anvil.exe prompt /path/to/repo "Fix the failing test"
+../bin/anvil.exe list /path/to/repo
+../bin/anvil.exe chat --resume agent-<id> /path/to/repo
 
-# Multi-turn + resume (0.2)
+# Thin examples (still available)
+go run ./examples/oneshot /path/to/repo "Fix the failing test"
 go run ./examples/interactive /path/to/repo
-# later:
-go run ./examples/interactive --resume agent-<id> /path/to/repo
 ```
 
 ```go
@@ -59,6 +62,7 @@ func main() {
 | 0.3 Extensibility | [`m_0.3_extensibility.md`](doc/roadmaps/m_0.3_extensibility.md) |
 | 0.4 Coding UX (stream / patch / rules) | [`m_0.4_coding_ux.md`](doc/roadmaps/m_0.4_coding_ux.md) |
 | 0.5 Operator (List/Get / usage / eval) | [`m_0.5_operator.md`](doc/roadmaps/m_0.5_operator.md) |
+| 0.6 Scale (progress / MCP HTTP / SQLite / CLI) | [`m_0.6_scale.md`](doc/roadmaps/m_0.6_scale.md) |
 | Index | [`doc/roadmaps/README.md`](doc/roadmaps/README.md) |
 
 ### Inspect agents (0.5)
@@ -69,6 +73,12 @@ info, _ := anvil.Get(ctx, "agent-…", anvil.ListOptions{Local: anvil.LocalOptio
 ```
 
 Offline eval: `cd source && go test ./eval`
+
+### CLI notes (0.6)
+
+- Streams `progress` / assistant / tool events; default MaxSteps is **128**.
+- `--store sqlite` uses `{cwd}/.anvil/agents.db` (default `jsonl`).
+- Optional `{cwd}/.anvil/config` JSON: `provider`, `model`, `base_url`, `max_steps`, `store` (prefer `ANVIL_API_KEY` in env).
 
 ### Project rules (0.4)
 
