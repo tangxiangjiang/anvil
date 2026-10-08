@@ -13,6 +13,8 @@ import (
 	"github.com/anvil-dev/anvil/internal/id"
 	"github.com/anvil-dev/anvil/internal/llm"
 	"github.com/anvil-dev/anvil/internal/mcp"
+	"github.com/anvil-dev/anvil/internal/prompt"
+	"github.com/anvil-dev/anvil/internal/rules"
 	"github.com/anvil-dev/anvil/internal/runtime"
 	"github.com/anvil-dev/anvil/internal/store"
 	"github.com/anvil-dev/anvil/internal/tools"
@@ -30,9 +32,10 @@ type Agent struct {
 	mu       sync.Mutex
 	running  bool
 	history  []llm.Message
-	complete llm.Completer
-	registry *tools.Registry
-	mcp      []*mcp.Session
+	complete     llm.Completer
+	registry     *tools.Registry
+	mcp          []*mcp.Session
+	systemPrompt string
 }
 
 // Create validates options and returns a new local agent (no LLM call).
@@ -69,15 +72,23 @@ func Create(ctx context.Context, opts Options) (*Agent, error) {
 		}
 		return nil, newError("persist agent meta", false, err)
 	}
+	sysPrompt, err := buildSystemPrompt(cwd, opts)
+	if err != nil {
+		for _, s := range sessions {
+			_ = s.Close()
+		}
+		return nil, newError("load project rules", false, err)
+	}
 	return &Agent{
-		id:       agentID,
-		opts:     opts,
-		cwd:      cwd,
-		store:    st,
-		complete: completer,
-		registry: reg,
-		mcp:      sessions,
-		history:  nil,
+		id:           agentID,
+		opts:         opts,
+		cwd:          cwd,
+		store:        st,
+		complete:     completer,
+		registry:     reg,
+		mcp:          sessions,
+		history:      nil,
+		systemPrompt: sysPrompt,
 	}, nil
 }
 
@@ -127,16 +138,39 @@ func Resume(ctx context.Context, agentID string, opts Options) (*Agent, error) {
 		}
 		return nil, newError("load agent store", false, err)
 	}
+	sysPrompt, err := buildSystemPrompt(cwd, opts)
+	if err != nil {
+		for _, s := range sessions {
+			_ = s.Close()
+		}
+		return nil, newError("load project rules", false, err)
+	}
 	return &Agent{
-		id:       agentID,
-		opts:     opts,
-		cwd:      cwd,
-		store:    st,
-		complete: completer,
-		registry: reg,
-		mcp:      sessions,
-		history:  historyFromRecords(records),
+		id:           agentID,
+		opts:         opts,
+		cwd:          cwd,
+		store:        st,
+		complete:     completer,
+		registry:     reg,
+		mcp:          sessions,
+		history:      historyFromRecords(records),
+		systemPrompt: sysPrompt,
 	}, nil
+}
+
+func buildSystemPrompt(cwd string, opts Options) (string, error) {
+	rulesText := ""
+	if opts.Local.LoadRules || opts.Local.LoadCursorRules {
+		var err error
+		rulesText, err = rules.Load(cwd, rules.Options{
+			LoadProject: opts.Local.LoadRules,
+			LoadCursor:  opts.Local.LoadCursorRules,
+		})
+		if err != nil {
+			return "", err
+		}
+	}
+	return prompt.SystemWithRules(cwd, rulesText), nil
 }
 
 func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Registry, []*mcp.Session, error) {
@@ -309,6 +343,7 @@ func (a *Agent) executeRun(ctx context.Context, cancel context.CancelFunc, wall 
 		RunID:             run.id,
 		HistoryMaxChars:   a.opts.HistoryMaxChars,
 		HistoryKeepRecent: a.opts.HistoryKeepRecent,
+		SystemPrompt:      a.systemPrompt,
 		Sink:              func(m llm.Message) { a.persistMessage(run.id, m) },
 	}, func(ev runtime.Event) {
 		run.emit(Event{

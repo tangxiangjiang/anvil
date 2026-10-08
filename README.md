@@ -56,4 +56,15 @@ func main() {
 |-----------|-----|
 | 0.1 MVP | [`m_0.1_mvp.md`](doc/roadmaps/m_0.1_mvp.md) |
 | 0.2 Resume / Cancel / interactive | [`m_0.2_resume.md`](doc/roadmaps/m_0.2_resume.md) |
+| 0.3 Extensibility | [`m_0.3_extensibility.md`](doc/roadmaps/m_0.3_extensibility.md) |
+| 0.4 Coding UX (stream / patch / rules) | [`m_0.4_coding_ux.md`](doc/roadmaps/m_0.4_coding_ux.md) |
 | Index | [`doc/roadmaps/README.md`](doc/roadmaps/README.md) |
+
+### Project rules (0.4)
+
+```go
+Local: anvil.LocalOptions{
+  CWD:       ".",
+  LoadRules: true, // AGENTS.md + .anvil/rules/*.md
+}
+```

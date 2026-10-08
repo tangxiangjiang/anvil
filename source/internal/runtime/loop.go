@@ -49,6 +49,8 @@ type Config struct {
 	// Sink, if set, receives each conversation message as it is appended
 	// (user, assistant, tool) so callers can persist them durably.
 	Sink func(llm.Message)
+	// SystemPrompt overrides the default prompt.System(cwd) when non-empty.
+	SystemPrompt string
 }
 
 // Emitter receives stream events.
@@ -80,7 +82,11 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 		messages = append(messages, m)
 	}
 	if !hasSystem {
-		messages = append([]llm.Message{{Role: llm.RoleSystem, Content: prompt.System(cfg.CWD)}}, messages...)
+		sys := cfg.SystemPrompt
+		if sys == "" {
+			sys = prompt.System(cfg.CWD)
+		}
+		messages = append([]llm.Message{{Role: llm.RoleSystem, Content: sys}}, messages...)
 	}
 	user := llm.Message{Role: llm.RoleUser, Content: cfg.UserMsg}
 	messages = append(messages, user)
@@ -106,11 +112,21 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 			return cancelledResult(runID, step, usageAcc, messages, err, emit)
 		}
 
-		resp, err := completer.Complete(ctx, llm.Request{
-			Model:    cfg.Model,
-			Messages: messages,
-			Tools:    toolDefs,
-		})
+		streamed := false
+		var resp *llm.Response
+		var err error
+		req := llm.Request{Model: cfg.Model, Messages: messages, Tools: toolDefs}
+		if sc, ok := completer.(llm.StreamCompleter); ok {
+			resp, err = sc.CompleteStream(ctx, req, func(d llm.Delta) {
+				if d.Text == "" {
+					return
+				}
+				streamed = true
+				emit(Event{Type: "assistant", Text: d.Text})
+			})
+		} else {
+			resp, err = completer.Complete(ctx, req)
+		}
 		if err != nil {
 			if ctx.Err() != nil {
 				return cancelledResult(runID, step, usageAcc, messages, ctx.Err(), emit)
@@ -132,7 +148,7 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 		if assistant.Role == "" {
 			assistant.Role = llm.RoleAssistant
 		}
-		if assistant.Content != "" {
+		if assistant.Content != "" && !streamed {
 			emit(Event{Type: "assistant", Text: assistant.Content})
 		}
 		messages = append(messages, assistant)

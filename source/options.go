@@ -53,6 +53,11 @@ type Model struct {
 type LocalOptions struct {
 	CWD        string
 	AllowShell *bool // nil = true (default)
+
+	// LoadRules loads AGENTS.md and .anvil/rules/*.md into the system prompt (off by default).
+	LoadRules bool
+	// LoadCursorRules also loads .cursor/rules/* when LoadRules is true (still off unless set).
+	LoadCursorRules bool
 }
 
 // AllowShellEnabled returns whether shell tool is enabled.

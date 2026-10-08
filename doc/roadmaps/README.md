@@ -9,7 +9,7 @@ Versioned delivery for Anvil. Design lives in [`doc/design/`](../design/); this 
 | 0.1 | MVP | done | [m_0.1_mvp.md](m_0.1_mvp.md) |
 | 0.2 | Resume & observability | done | [m_0.2_resume.md](m_0.2_resume.md) |
 | 0.3 | Extensibility | done | [m_0.3_extensibility.md](m_0.3_extensibility.md) |
-| 0.4 | Coding UX | planned | [m_0.4_coding_ux.md](m_0.4_coding_ux.md) |
+| 0.4 | Coding UX | done | [m_0.4_coding_ux.md](m_0.4_coding_ux.md) |
 | 0.5 | Operator surface | planned | [m_0.5_operator.md](m_0.5_operator.md) |
 | 0.6 | Future / deferred | planned | [m_0.6_future.md](m_0.6_future.md) |
 

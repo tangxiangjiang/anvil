@@ -49,6 +49,7 @@ func NewRegistry(cwd string, allowShell bool) *Registry {
 	r.register(&readFileTool{r: r})
 	r.register(&writeFileTool{r: r})
 	r.register(&editFileTool{r: r})
+	r.register(&applyPatchTool{r: r})
 	r.register(&grepTool{r: r})
 	r.register(&globTool{r: r})
 	if allowShell {
@@ -83,9 +84,10 @@ func (r *Registry) SetPermission(fn PermissionFunc) {
 type PermissionFunc func(ctx context.Context, name string, args json.RawMessage) (json.RawMessage, error)
 
 var mutatingTools = map[string]bool{
-	"write_file": true,
-	"edit_file":  true,
-	"shell":      true,
+	"write_file":  true,
+	"edit_file":   true,
+	"apply_patch": true,
+	"shell":       true,
 }
 
 // IsMutating reports whether a built-in tool changes the workspace or runs commands.
@@ -132,23 +134,24 @@ func (r *Registry) resolvePath(p string) (string, error) {
 	if p == "" {
 		return "", fmt.Errorf("path is required")
 	}
+	cwdResolved, err := filepath.EvalSymlinks(r.cwd)
+	if err != nil {
+		cwdResolved = filepath.Clean(r.cwd)
+	} else {
+		cwdResolved = filepath.Clean(cwdResolved)
+	}
 	var abs string
 	if filepath.IsAbs(p) {
 		abs = filepath.Clean(p)
 	} else {
-		abs = filepath.Clean(filepath.Join(r.cwd, p))
+		abs = filepath.Clean(filepath.Join(cwdResolved, p))
 	}
-	// Resolve symlinks for containment when possible.
-	resolved, err := filepath.EvalSymlinks(abs)
-	if err == nil {
+	// Resolve symlinks when the path exists; for new files keep cleaned abs under cwd.
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
 		abs = resolved
 	}
-	cwdResolved, err := filepath.EvalSymlinks(r.cwd)
-	if err != nil {
-		cwdResolved = r.cwd
-	}
 	rel, err := filepath.Rel(cwdResolved, abs)
-	if err != nil || strings.HasPrefix(rel, "..") {
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("path escapes cwd: %s", p)
 	}
 	return abs, nil
@@ -302,10 +305,19 @@ func (t *editFileTool) Execute(ctx context.Context, args json.RawMessage) Result
 	text := string(data)
 	count := strings.Count(text, in.OldString)
 	if count == 0 {
-		return Result{Content: "old_string not found", IsError: true}
+		hint := nearestContextHint(text, in.OldString)
+		msg := "old_string not found"
+		if hint != "" {
+			msg += "; nearest context:\n" + hint
+		}
+		msg += "; tip: read_file first or use apply_patch with more context"
+		return Result{Content: msg, IsError: true}
 	}
 	if count > 1 {
-		return Result{Content: fmt.Sprintf("old_string found %d times; must be unique", count), IsError: true}
+		return Result{Content: fmt.Sprintf(
+			"old_string found %d times; must be unique. Include surrounding lines in old_string, or use apply_patch with @@ hunks.",
+			count,
+		), IsError: true}
 	}
 	updated := strings.Replace(text, in.OldString, in.NewString, 1)
 	if err := os.WriteFile(abs, []byte(updated), 0o644); err != nil {
@@ -505,4 +517,37 @@ func (t *shellTool) Execute(ctx context.Context, args json.RawMessage) Result {
 
 func isWindows() bool {
 	return runtime.GOOS == "windows"
+}
+
+func nearestContextHint(text, needle string) string {
+	lines := strings.Split(text, "\n")
+	needleLines := strings.Split(needle, "\n")
+	key := needleLines[0]
+	if key == "" && len(needleLines) > 1 {
+		key = needleLines[1]
+	}
+	if key == "" {
+		return ""
+	}
+	for i, line := range lines {
+		if strings.Contains(line, key) || (len(key) > 8 && strings.Contains(line, key[:min(16, len(key))])) {
+			start := i - 1
+			if start < 0 {
+				start = 0
+			}
+			end := i + 2
+			if end > len(lines) {
+				end = len(lines)
+			}
+			return strings.Join(lines[start:end], "\n")
+		}
+	}
+	return ""
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

@@ -88,7 +88,7 @@ POST /v1/messages
 ## Streaming strategy
 
 **0.1:** Reliable non-streaming request per loop step; coarse `assistant` events.  
-**Later:** Provider SSE with incremental deltas.
+**0.4:** `StreamCompleter.CompleteStream` for OpenAI-compatible and Anthropic SSE; runtime emits incremental `assistant` deltas when available, with non-stream Completer fallback.
 
 ## Mocking
 

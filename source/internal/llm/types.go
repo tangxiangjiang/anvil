@@ -63,6 +63,17 @@ type Completer interface {
 	Complete(ctx context.Context, req Request) (*Response, error)
 }
 
+// Delta is a streaming assistant text chunk.
+type Delta struct {
+	Text string
+}
+
+// StreamCompleter optionally streams assistant text while assembling the final Response.
+type StreamCompleter interface {
+	Completer
+	CompleteStream(ctx context.Context, req Request, onDelta func(Delta)) (*Response, error)
+}
+
 // Config shared by adapters.
 type Config struct {
 	APIKey  string
