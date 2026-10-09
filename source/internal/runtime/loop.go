@@ -24,6 +24,7 @@ type Event struct {
 	IsError    bool
 	Step       int
 	MaxSteps   int
+	Code       string
 }
 
 // DefaultMaxSteps is used when Config.MaxSteps is unset.
@@ -40,6 +41,7 @@ type Result struct {
 	Steps    int
 	Usage    *llm.Usage
 	Err      string
+	Code     string
 	Messages []llm.Message // full conversation incl. system prompt
 }
 
@@ -118,7 +120,7 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 
 	for step := 0; step < cfg.MaxSteps; step++ {
 		if err := ctx.Err(); err != nil {
-			return cancelledResult(runID, step, usageAcc, messages, err, emit)
+			return cancelledResult(ctx, runID, step, usageAcc, messages, err, emit)
 		}
 
 		emit(Event{Type: "progress", Step: step + 1, MaxSteps: cfg.MaxSteps})
@@ -140,11 +142,11 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 		}
 		if err != nil {
 			if ctx.Err() != nil {
-				return cancelledResult(runID, step, usageAcc, messages, ctx.Err(), emit)
+				return cancelledResult(ctx, runID, step, usageAcc, messages, ctx.Err(), emit)
 			}
 			msg := err.Error()
-			emit(Event{Type: "error", Text: msg})
-			return Result{ID: runID, Status: "error", Steps: step, Usage: usageAcc, Err: msg, Messages: messages}
+			emit(Event{Type: "error", Text: msg, Code: CodeProvider})
+			return Result{ID: runID, Status: "error", Steps: step, Usage: usageAcc, Err: msg, Code: CodeProvider, Messages: messages}
 		}
 		if resp.Usage != nil {
 			if usageAcc == nil {
@@ -204,8 +206,8 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 	}
 
 	msg := fmt.Sprintf("%s (%d)", MaxStepsExceededPrefix, cfg.MaxSteps)
-	emit(Event{Type: "error", Text: msg})
-	return Result{ID: runID, Status: "error", Steps: cfg.MaxSteps, Usage: usageAcc, Err: msg, Messages: messages}
+	emit(Event{Type: "error", Text: msg, Code: CodeMaxSteps})
+	return Result{ID: runID, Status: "error", Steps: cfg.MaxSteps, Usage: usageAcc, Err: msg, Code: CodeMaxSteps, Messages: messages}
 }
 
 // IsMaxStepsExceeded reports whether errText is a MaxSteps limit failure.
@@ -213,15 +215,37 @@ func IsMaxStepsExceeded(errText string) bool {
 	return strings.HasPrefix(errText, MaxStepsExceededPrefix)
 }
 
-func cancelledResult(runID string, steps int, usage *llm.Usage, messages []llm.Message, err error, emit Emitter) Result {
-	msg := "cancelled"
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-			msg = "max wall time exceeded"
-		} else {
-			msg = err.Error()
+// IsMaxWallTime reports whether errText is an Options.MaxWallTime failure.
+func IsMaxWallTime(errText string) bool {
+	return errText == ErrMaxWallTime.Error()
+}
+
+// IsContextDeadline reports whether errText is a parent context deadline failure.
+func IsContextDeadline(errText string) bool {
+	return errText == context.DeadlineExceeded.Error() || errText == "context deadline exceeded"
+}
+
+func cancelledResult(ctx context.Context, runID string, steps int, usage *llm.Usage, messages []llm.Message, err error, emit Emitter) Result {
+	code, msg := classifyCancel(ctx, err)
+	emit(Event{Type: "error", Text: msg, Code: code})
+	return Result{ID: runID, Status: "cancelled", Steps: steps, Usage: usage, Err: msg, Code: code, Messages: messages}
+}
+
+func classifyCancel(ctx context.Context, err error) (code, msg string) {
+	cause := context.Cause(ctx)
+	switch {
+	case errors.Is(cause, ErrMaxWallTime), errors.Is(err, ErrMaxWallTime):
+		return CodeMaxWallTime, ErrMaxWallTime.Error()
+	case errors.Is(cause, ErrCancelled):
+		return CodeCancelled, ErrCancelled.Error()
+	case errors.Is(cause, context.DeadlineExceeded), errors.Is(err, context.DeadlineExceeded):
+		return CodeContextDeadline, context.DeadlineExceeded.Error()
+	case errors.Is(cause, context.Canceled), errors.Is(err, context.Canceled):
+		return CodeCancelled, ErrCancelled.Error()
+	default:
+		if err != nil {
+			return CodeCancelled, err.Error()
 		}
+		return CodeCancelled, ErrCancelled.Error()
 	}
-	emit(Event{Type: "error", Text: msg})
-	return Result{ID: runID, Status: "cancelled", Steps: steps, Usage: usage, Err: msg, Messages: messages}
 }

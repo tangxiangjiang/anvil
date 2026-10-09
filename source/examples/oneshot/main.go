@@ -44,17 +44,29 @@ func main() {
 		}
 		maxSteps = n
 	}
+	var maxWall time.Duration
+	if v := strings.TrimSpace(os.Getenv("ANVIL_MAX_WALL")); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d < 0 {
+			fmt.Fprintln(os.Stderr, "ANVIL_MAX_WALL must be a duration like 10m")
+			os.Exit(2)
+		}
+		maxWall = d
+	}
 
+	// Host context deadline (code=context_deadline) is separate from MaxWallTime
+	// (code=max_wall_time). Default host budget is 30m.
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
 	agent, err := anvil.Create(ctx, anvil.Options{
-		Provider: provider,
-		APIKey:   apiKey,
-		BaseURL:  baseURL,
-		Model:    anvil.Model{ID: model},
-		Local:    anvil.LocalOptions{CWD: cwd},
-		MaxSteps: maxSteps,
+		Provider:    provider,
+		APIKey:      apiKey,
+		BaseURL:     baseURL,
+		Model:       anvil.Model{ID: model},
+		Local:       anvil.LocalOptions{CWD: cwd},
+		MaxSteps:    maxSteps,
+		MaxWallTime: maxWall,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "create:", err)
@@ -70,6 +82,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "send:", err)
 		os.Exit(1)
 	}
+	fmt.Println(anvil.FormatRunStart(agent.AgentID(), run.ID()))
 
 	step := 0
 	for ev := range run.Stream(ctx) {
@@ -93,7 +106,11 @@ func main() {
 			fmt.Printf("----- tool_result %s (%s) -----\n", ev.Name, label)
 			fmt.Println(truncate(ev.Content, 4000))
 		case anvil.EventError:
-			fmt.Printf("\n[error] %s\n", ev.Text)
+			if ev.Code != "" {
+				fmt.Printf("\n[error code=%s] %s\n", ev.Code, ev.Text)
+			} else {
+				fmt.Printf("\n[error] %s\n", ev.Text)
+			}
 		case anvil.EventDone:
 			if ev.Text != "" {
 				fmt.Printf("\n\n===== done =====\n%s\n", ev.Text)
@@ -107,8 +124,7 @@ func main() {
 		os.Exit(1)
 	}
 	fmt.Println("---")
-	fmt.Println("status:", result.Status)
-	fmt.Println("steps:", result.Steps)
+	fmt.Println(anvil.FormatRunEnd(result))
 	if result.Usage != nil {
 		fmt.Printf("usage: in=%d out=%d total=%d\n",
 			result.Usage.InputTokens, result.Usage.OutputTokens, result.Usage.TotalTokens)

@@ -97,8 +97,8 @@ func TestProgressEventsAndMaxSteps(t *testing.T) {
 	if res.Status != "error" {
 		t.Fatalf("status=%s", res.Status)
 	}
-	if !runtime.IsMaxStepsExceeded(res.Err) {
-		t.Fatalf("err %q", res.Err)
+	if !runtime.IsMaxStepsExceeded(res.Err) || res.Code != runtime.CodeMaxSteps {
+		t.Fatalf("err %q code %q", res.Err, res.Code)
 	}
 	if len(progress) != 3 {
 		t.Fatalf("progress count %d: %+v", len(progress), progress)

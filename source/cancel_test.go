@@ -49,6 +49,9 @@ func TestRunCancel(t *testing.T) {
 	if res.Status != StatusCancelled {
 		t.Fatalf("status=%s err=%s", res.Status, res.Err)
 	}
+	if res.Code != CodeCancelled {
+		t.Fatalf("code=%s", res.Code)
+	}
 }
 
 func TestMaxWallTime(t *testing.T) {
@@ -76,11 +79,11 @@ func TestMaxWallTime(t *testing.T) {
 	if res.Status != StatusCancelled {
 		t.Fatalf("status=%s err=%s", res.Status, res.Err)
 	}
-	if res.Err != "max wall time exceeded" && res.Err != context.DeadlineExceeded.Error() {
-		// Loop maps DeadlineExceeded to "max wall time exceeded"
-		if res.Err != "max wall time exceeded" {
-			t.Fatalf("want wall-time message, got %q", res.Err)
-		}
+	if res.Code != CodeMaxWallTime {
+		t.Fatalf("code=%s err=%q", res.Code, res.Err)
+	}
+	if res.Err != "max wall time exceeded" {
+		t.Fatalf("want wall-time message, got %q", res.Err)
 	}
 }
 
@@ -97,7 +100,7 @@ func TestLoopCancelMidStep(t *testing.T) {
 		UserMsg:  "x",
 		MaxSteps: 4,
 	}, nil)
-	if res.Status != "cancelled" {
+	if res.Status != "cancelled" || res.Code != runtime.CodeCancelled {
 		t.Fatalf("%+v", res)
 	}
 }

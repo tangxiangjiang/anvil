@@ -328,15 +328,15 @@ func (a *Agent) Send(ctx context.Context, message string, opts ...SendOption) (*
 	wall := a.opts.MaxWallTime
 	a.mu.Unlock()
 
-	runCtx, cancel := context.WithCancel(ctx)
-	run := newRun("run-"+id.New(), cancel)
-	go a.executeRun(runCtx, cancel, wall, run, message, historyCopy)
+	runCtx, cancelCause := context.WithCancelCause(ctx)
+	run := newRun("run-"+id.New(), cancelCause)
+	go a.executeRun(runCtx, cancelCause, wall, run, message, historyCopy)
 	return run, nil
 }
 
-func (a *Agent) executeRun(ctx context.Context, cancel context.CancelFunc, wall time.Duration, run *Run, message string, history []llm.Message) {
+func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseFunc, wall time.Duration, run *Run, message string, history []llm.Message) {
 	defer func() {
-		cancel()
+		cancelCause(nil)
 		a.mu.Lock()
 		a.running = false
 		a.mu.Unlock()
@@ -345,7 +345,7 @@ func (a *Agent) executeRun(ctx context.Context, cancel context.CancelFunc, wall 
 	loopCtx := ctx
 	if wall > 0 {
 		var wallCancel context.CancelFunc
-		loopCtx, wallCancel = context.WithTimeout(ctx, wall)
+		loopCtx, wallCancel = context.WithTimeoutCause(ctx, wall, runtime.ErrMaxWallTime)
 		defer wallCancel()
 	}
 
@@ -373,6 +373,7 @@ func (a *Agent) executeRun(ctx context.Context, cancel context.CancelFunc, wall 
 			IsError:    ev.IsError,
 			Step:       ev.Step,
 			MaxSteps:   ev.MaxSteps,
+			Code:       Code(ev.Code),
 		})
 	})
 
@@ -386,6 +387,7 @@ func (a *Agent) executeRun(ctx context.Context, cancel context.CancelFunc, wall 
 		Result: result.Result,
 		Steps:  result.Steps,
 		Err:    result.Err,
+		Code:   Code(result.Code),
 	}
 	if result.Usage != nil {
 		rr.Usage = &Usage{

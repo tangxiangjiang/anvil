@@ -78,9 +78,12 @@ info, _ := anvil.Get(ctx, "agent-…", anvil.ListOptions{Local: anvil.LocalOptio
 
 Offline eval: `cd source && go test ./eval`
 
-### CLI notes (0.6)
+### CLI notes (0.6 / 0.7)
 
 - Streams `progress` / assistant / tool events; default MaxSteps is **128**.
+- After `Send`, prints `agent=… run=…` (`FormatRunStart`); `RunResult.Code` distinguishes `max_steps` / `provider` / `cancelled` / `max_wall_time` / `context_deadline`.
+- `--max-wall` / `ANVIL_MAX_WALL` sets `Options.MaxWallTime` (separate from the CLI’s 30m host context deadline).
+- Exit codes: **1** startup/config, **2** run `Status=error`.
 - `--store sqlite` uses `{cwd}/.anvil/agents.db` (default `jsonl`).
 - Optional `{cwd}/.anvil/config` JSON: `provider`, `model`, `base_url`, `max_steps`, `store` (prefer `ANVIL_API_KEY` in env).
 

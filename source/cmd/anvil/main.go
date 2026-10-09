@@ -73,10 +73,14 @@ Flags (also via env / optional .anvil/config JSON):
   --model     model id             (ANVIL_MODEL)
   --base-url  API root             (ANVIL_BASE_URL)
   --max-steps N                    (ANVIL_MAX_STEPS, default 128)
+  --max-wall  duration             (ANVIL_MAX_WALL, e.g. 10m; 0 = unset)
   --store     jsonl|sqlite         (default jsonl)
   --api-key   key                  (ANVIL_API_KEY; preferred over config)
 
-Exit codes: 0 ok, 1 startup/config, 2 run error
+Timeouts: prompt wraps the run in a 30m host context deadline (code=context_deadline).
+Options.MaxWallTime / --max-wall is separate (code=max_wall_time). Explicit cancel → cancelled.
+
+Exit codes: 0 ok, 1 startup/config, 2 run error (see RunResult.Code)
 `)
 }
 
@@ -86,6 +90,7 @@ type cliFlags struct {
 	baseURL  string
 	apiKey   string
 	maxSteps int
+	maxWall  time.Duration
 	store    string
 	resume   string
 	cwd      string
@@ -94,7 +99,7 @@ type cliFlags struct {
 }
 
 func parseFlags(args []string) (cliFlags, error) {
-	f := cliFlags{maxSteps: -1}
+	f := cliFlags{maxSteps: -1, maxWall: -1}
 	for len(args) > 0 {
 		a := args[0]
 		if !strings.HasPrefix(a, "-") {
@@ -123,6 +128,13 @@ func parseFlags(args []string) (cliFlags, error) {
 				return f, fmt.Errorf("--max-steps must be a positive integer")
 			}
 			f.maxSteps = n
+			args = args[1:]
+		case a == "--max-wall" && len(args) > 0:
+			d, err := time.ParseDuration(args[0])
+			if err != nil || d < 0 {
+				return f, fmt.Errorf("--max-wall must be a duration like 10m")
+			}
+			f.maxWall = d
 			args = args[1:]
 		case a == "--store" && len(args) > 0:
 			f.store = args[0]
@@ -183,13 +195,25 @@ func buildOptions(cwd string, f cliFlags) (anvil.Options, error) {
 		}
 	}
 
+	var maxWall time.Duration
+	if f.maxWall >= 0 {
+		maxWall = f.maxWall
+	} else if v := strings.TrimSpace(os.Getenv("ANVIL_MAX_WALL")); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d < 0 {
+			return anvil.Options{}, fmt.Errorf("ANVIL_MAX_WALL must be a duration like 10m")
+		}
+		maxWall = d
+	}
+
 	return anvil.Options{
-		Provider: anvil.Provider(provider),
-		APIKey:   apiKey,
-		BaseURL:  baseURL,
-		Model:    anvil.Model{ID: model},
-		Local:    anvil.LocalOptions{CWD: abs, Store: storeKind},
-		MaxSteps: maxSteps,
+		Provider:    anvil.Provider(provider),
+		APIKey:      apiKey,
+		BaseURL:     baseURL,
+		Model:       anvil.Model{ID: model},
+		Local:       anvil.LocalOptions{CWD: abs, Store: storeKind},
+		MaxSteps:    maxSteps,
+		MaxWallTime: maxWall,
 	}, nil
 }
 
@@ -234,14 +258,17 @@ func cmdPrompt(args []string) error {
 	if err != nil {
 		return err
 	}
+	fmt.Println(anvil.FormatRunStart(agent.AgentID(), run.ID()))
 	printStream(run.Stream(ctx))
 	res, err := run.Wait(ctx)
 	if err != nil {
 		return err
 	}
 	printResult(res)
-	if res.Status == anvil.StatusError {
-		return &runExitError{msg: res.Err}
+	if res.Status == anvil.StatusError || res.Status == anvil.StatusCancelled {
+		if res.Status == anvil.StatusError {
+			return &runExitError{msg: res.Err}
+		}
 	}
 	return nil
 }
@@ -295,6 +322,7 @@ func cmdChat(args []string) error {
 			fmt.Fprintln(os.Stderr, "send:", err)
 			continue
 		}
+		fmt.Println(anvil.FormatRunStart(agent.AgentID(), run.ID()))
 		go func() {
 			<-runCtx.Done()
 			_ = run.Cancel(context.Background())
@@ -306,7 +334,7 @@ func cmdChat(args []string) error {
 			fmt.Fprintln(os.Stderr, "wait:", err)
 			continue
 		}
-		fmt.Printf("status=%s steps=%d\n", res.Status, res.Steps)
+		fmt.Println(anvil.FormatRunEnd(res))
 	}
 	fmt.Println("agent id:", agent.AgentID())
 	return nil
@@ -376,7 +404,11 @@ func printStream(ch <-chan anvil.Event) {
 			}
 			fmt.Printf("[tool_result %s %s] %s\n", ev.Name, label, truncate(ev.Content, 2000))
 		case anvil.EventError:
-			fmt.Printf("\n[error] %s\n", ev.Text)
+			if ev.Code != "" {
+				fmt.Printf("\n[error code=%s] %s\n", ev.Code, ev.Text)
+			} else {
+				fmt.Printf("\n[error] %s\n", ev.Text)
+			}
 		case anvil.EventDone:
 			if ev.Text != "" {
 				fmt.Printf("\n")
@@ -388,8 +420,7 @@ func printStream(ch <-chan anvil.Event) {
 
 func printResult(res *anvil.RunResult) {
 	fmt.Println("---")
-	fmt.Println("status:", res.Status)
-	fmt.Println("steps:", res.Steps)
+	fmt.Println(anvil.FormatRunEnd(res))
 	if res.Usage != nil {
 		fmt.Printf("usage: in=%d out=%d total=%d\n",
 			res.Usage.InputTokens, res.Usage.OutputTokens, res.Usage.TotalTokens)

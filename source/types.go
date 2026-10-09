@@ -30,6 +30,18 @@ type Usage struct {
 	TotalTokens  int
 }
 
+// Code is a stable machine-readable run failure class (0.7+).
+type Code string
+
+const (
+	CodeMaxSteps        Code = "max_steps"
+	CodeCancelled       Code = "cancelled"
+	CodeContextDeadline Code = "context_deadline"
+	CodeMaxWallTime     Code = "max_wall_time"
+	CodeProvider        Code = "provider"
+	CodeToolPanic       Code = "tool_panic"
+)
+
 // RunResult is the authoritative outcome of a Run (from Wait).
 type RunResult struct {
 	ID     string
@@ -38,6 +50,7 @@ type RunResult struct {
 	Steps  int
 	Usage  *Usage
 	Err    string
+	Code   Code // set on error/cancelled when classifiable (0.7+)
 }
 
 // Event is one streamed unit from a Run.
@@ -51,4 +64,5 @@ type Event struct {
 	IsError    bool
 	Step       int // 1-based LLM round; set on EventProgress
 	MaxSteps   int // configured limit; set on EventProgress
+	Code       Code // set on EventError when classifiable (0.7+)
 }

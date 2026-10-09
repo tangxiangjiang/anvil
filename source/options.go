@@ -23,7 +23,8 @@ type Options struct {
 	Local    LocalOptions
 	MaxSteps int // 0 = default (128)
 	// MaxWallTime bounds a single Send/Prompt run. Zero means no wall-time limit.
-	// When exceeded, the run ends with StatusCancelled (same as Cancel).
+	// When exceeded, the run ends with StatusCancelled and CodeMaxWallTime.
+	// Parent context deadline → CodeContextDeadline; explicit Cancel → CodeCancelled.
 	// MaxSteps still applies independently (whichever hits first wins).
 	MaxWallTime time.Duration
 

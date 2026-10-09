@@ -3,6 +3,8 @@ package anvil
 import (
 	"context"
 	"sync"
+
+	"github.com/anvil-dev/anvil/internal/runtime"
 )
 
 // Run is one Send execution.
@@ -11,19 +13,19 @@ type Run struct {
 	events chan Event
 	done   chan struct{}
 
-	cancel context.CancelFunc
+	cancelCause context.CancelCauseFunc
 
 	mu     sync.Mutex
 	result *RunResult
 	err    error
 }
 
-func newRun(id string, cancel context.CancelFunc) *Run {
+func newRun(id string, cancelCause context.CancelCauseFunc) *Run {
 	return &Run{
-		id:     id,
-		events: make(chan Event, 64),
-		done:   make(chan struct{}),
-		cancel: cancel,
+		id:          id,
+		events:      make(chan Event, 64),
+		done:        make(chan struct{}),
+		cancelCause: cancelCause,
 	}
 }
 
@@ -62,14 +64,14 @@ func (r *Run) Wait(ctx context.Context) (*RunResult, error) {
 }
 
 // Cancel requests the run to stop. In-flight LLM/shell calls observing the
-// run context should abort; Wait then returns StatusCancelled.
+// run context should abort; Wait then returns StatusCancelled with CodeCancelled.
 func (r *Run) Cancel(ctx context.Context) error {
 	_ = ctx
 	if r == nil {
 		return newError("nil run", false, nil)
 	}
-	if r.cancel != nil {
-		r.cancel()
+	if r.cancelCause != nil {
+		r.cancelCause(runtime.ErrCancelled)
 	}
 	return nil
 }

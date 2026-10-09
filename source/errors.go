@@ -22,7 +22,37 @@ func IsMaxStepsExceeded(errText string) bool {
 
 // IsMaxStepsExceededResult reports whether r ended due to the step limit.
 func IsMaxStepsExceededResult(r *RunResult) bool {
-	return r != nil && r.Status == StatusError && IsMaxStepsExceeded(r.Err)
+	if r == nil || r.Status != StatusError {
+		return false
+	}
+	return r.Code == CodeMaxSteps || IsMaxStepsExceeded(r.Err)
+}
+
+// ResultCode returns r.Code, or infers a code from Status/Err for older results.
+func ResultCode(r *RunResult) Code {
+	if r == nil {
+		return ""
+	}
+	if r.Code != "" {
+		return r.Code
+	}
+	switch r.Status {
+	case StatusCancelled:
+		if runtime.IsMaxWallTime(r.Err) {
+			return CodeMaxWallTime
+		}
+		if runtime.IsContextDeadline(r.Err) {
+			return CodeContextDeadline
+		}
+		return CodeCancelled
+	case StatusError:
+		if IsMaxStepsExceeded(r.Err) {
+			return CodeMaxSteps
+		}
+		return CodeProvider
+	default:
+		return ""
+	}
 }
 
 func (e *Error) Error() string {
