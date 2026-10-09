@@ -5,9 +5,9 @@ alwaysApply: true
 
 # Versioned delivery
 
-1. Design lives in doc/design/. Roadmaps live in doc/roadmaps/.
-2. Product work maps to a milestone version (0.1 = MVP). New capability needs a phase doc first.
-3. Naming: m_0.1_mvp.md, phases in m_0.1/p_0.1.1.md …
+1. Design lives in doc/design/v…/; roadmaps in doc/roadmaps/v…/ (current cutoff: **v1.0** for both).
+2. Product work maps to a milestone version (0.1 = MVP; 0.10 = SDK local parity). New capability needs a phase doc first.
+3. Naming inside a cutoff: m_0.1_mvp.md, phases in m_0.1/p_0.1.1.md …
 4. Implement only what the current phase lists. Do not skip ahead or add unplanned scope.
-5. After finishing a phase: set that phase status to done; update roadmaps/README.md.
-6. 0.x = pre-release. Do not invent parallel doc trees or alternate naming.
+5. After finishing a phase: set that phase status to done; update roadmaps/v…/README.md.
+6. 0.x = pre-release. Do not invent flat design/roadmap files outside a v…/ tree.

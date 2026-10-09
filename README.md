@@ -6,8 +6,8 @@ Independent **local-only** Go Agent SDK. Capability-aligned with Cursor’s loca
 
 | Path | Purpose |
 |------|---------|
-| [`doc/design/`](doc/design/) | Full design |
-| [`doc/roadmaps/`](doc/roadmaps/) | Versioned milestones / phases |
+| [`doc/design/`](doc/design/) | Versioned design (current: [`v1.0/`](doc/design/v1.0/)) |
+| [`doc/roadmaps/`](doc/roadmaps/) | Versioned milestones (current: [`v1.0/`](doc/roadmaps/v1.0/)) |
 | [`source/`](source/) | Go module (`github.com/anvil-dev/anvil`) |
 
 ## Quick start
@@ -57,13 +57,17 @@ func main() {
 
 | Milestone | Doc |
 |-----------|-----|
-| 0.1 MVP | [`m_0.1_mvp.md`](doc/roadmaps/m_0.1_mvp.md) |
-| 0.2 Resume / Cancel / interactive | [`m_0.2_resume.md`](doc/roadmaps/m_0.2_resume.md) |
-| 0.3 Extensibility | [`m_0.3_extensibility.md`](doc/roadmaps/m_0.3_extensibility.md) |
-| 0.4 Coding UX (stream / patch / rules) | [`m_0.4_coding_ux.md`](doc/roadmaps/m_0.4_coding_ux.md) |
-| 0.5 Operator (List/Get / usage / eval) | [`m_0.5_operator.md`](doc/roadmaps/m_0.5_operator.md) |
-| 0.6 Scale (progress / MCP HTTP / SQLite / CLI) | [`m_0.6_scale.md`](doc/roadmaps/m_0.6_scale.md) |
-| Index | [`doc/roadmaps/README.md`](doc/roadmaps/README.md) |
+| 0.1 MVP | [`m_0.1_mvp.md`](doc/roadmaps/v1.0/m_0.1_mvp.md) |
+| 0.2 Resume / Cancel / interactive | [`m_0.2_resume.md`](doc/roadmaps/v1.0/m_0.2_resume.md) |
+| 0.3 Extensibility | [`m_0.3_extensibility.md`](doc/roadmaps/v1.0/m_0.3_extensibility.md) |
+| 0.4 Coding UX (stream / patch / rules) | [`m_0.4_coding_ux.md`](doc/roadmaps/v1.0/m_0.4_coding_ux.md) |
+| 0.5 Operator (List/Get / usage / eval) | [`m_0.5_operator.md`](doc/roadmaps/v1.0/m_0.5_operator.md) |
+| 0.6 Scale (progress / MCP HTTP / SQLite / CLI) | [`m_0.6_scale.md`](doc/roadmaps/v1.0/m_0.6_scale.md) |
+| 0.7 Streaming & errors (design 07) | [`m_0.7_streaming_errors.md`](doc/roadmaps/v1.0/m_0.7_streaming_errors.md) |
+| 0.8 Security (design 08) | [`m_0.8_security.md`](doc/roadmaps/v1.0/m_0.8_security.md) |
+| 0.9 Extensibility depth (design 09) | [`m_0.9_extensibility.md`](doc/roadmaps/v1.0/m_0.9_extensibility.md) |
+| 0.10 Cursor SDK local parity (design 10) | [`m_0.10_sdk_parity.md`](doc/roadmaps/v1.0/m_0.10_sdk_parity.md) |
+| Index | [`doc/roadmaps/v1.0/README.md`](doc/roadmaps/v1.0/README.md) |
 
 ### Inspect agents (0.5)
 

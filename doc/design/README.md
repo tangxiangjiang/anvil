@@ -1,24 +1,19 @@
-# Design index
+# Design
 
-Anvil is an independent **local-only** Go Agent SDK. Read design chapters in order before implementing any roadmap phase.
+Design is **versioned by product cutoff**. Each `vX.Y/` tree is the design snapshot that roadmaps through that line implement against.
 
-## Read order
+## Version trees
 
-| # | Doc | Topic |
-|---|-----|--------|
-| 00 | [00-overview.md](00-overview.md) | Goals, non-goals, glossary, version strategy |
-| 01 | [01-architecture.md](01-architecture.md) | Layers, packages, data flow |
-| 02 | [02-public-api.md](02-public-api.md) | Create / Prompt / Resume / Send / Stream / Wait |
-| 03 | [03-runtime-loop.md](03-runtime-loop.md) | Tool-calling loop, limits, completion |
-| 04 | [04-tools-and-sandbox.md](04-tools-and-sandbox.md) | Built-in tools and cwd sandbox |
-| 05 | [05-llm-provider.md](05-llm-provider.md) | OpenAI-compatible + Anthropic clients |
-| 06 | [06-session-store.md](06-session-store.md) | JSONL persistence and Resume |
-| 07 | [07-streaming-and-errors.md](07-streaming-and-errors.md) | Events and error model |
-| 08 | [08-security.md](08-security.md) | Path escape, shell, secrets, truncation |
-| 09 | [09-extensibility.md](09-extensibility.md) | Custom tools, MCP, hooks (post-0.1) |
+| Tree | Role | Index |
+|------|------|--------|
+| [`v1.0/`](v1.0/) | **Current cutoff** — chapters 00–10 for delivery through product **0.10** | [v1.0/README.md](v1.0/README.md) |
 
-## Relation to roadmaps
+Matching roadmaps: [`doc/roadmaps/v1.0/`](../roadmaps/v1.0/).
 
-- Design describes **what** and **why**.
-- [doc/roadmaps/](../roadmaps/) describes **when** (milestones / phases).
-- Do not put version plans under `design/`.
+Future major design cuts (e.g. `v1.1/`, `v2.0/`) get a new directory; do not mix chapters across trees.
+
+## Conventions
+
+- Prefer linking `doc/design/v1.0/<chapter>.md` (or relative `../../design/v1.0/…` from `roadmaps/v1.0/` milestones).
+- Do not recreate a flat `doc/design/00-*.md` set alongside version trees.
+- New capability still needs a roadmap phase before code (see `.cursor/rules/doc-versioning.mdc`).

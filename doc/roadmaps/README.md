@@ -1,33 +1,13 @@
 # Roadmaps
 
-Versioned delivery for Anvil. Design lives in [`doc/design/`](../design/); this tree only tracks **when** work ships.
+Roadmaps are **versioned by product cutoff**, matching design trees.
 
-## Version index
+## Version trees
 
-| Version | Milestone | Status | Doc |
-|---------|-----------|--------|-----|
-| 0.1 | MVP | done | [m_0.1_mvp.md](m_0.1_mvp.md) |
-| 0.2 | Resume & observability | done | [m_0.2_resume.md](m_0.2_resume.md) |
-| 0.3 | Extensibility | done | [m_0.3_extensibility.md](m_0.3_extensibility.md) |
-| 0.4 | Coding UX | done | [m_0.4_coding_ux.md](m_0.4_coding_ux.md) |
-| 0.5 | Operator surface | done | [m_0.5_operator.md](m_0.5_operator.md) |
-| 0.6 | Scale | done | [m_0.6_scale.md](m_0.6_scale.md) |
+| Tree | Role | Index |
+|------|------|--------|
+| [`v1.0/`](v1.0/) | **Current cutoff** — milestones 0.1–0.10 (through SDK local parity) | [v1.0/README.md](v1.0/README.md) |
 
-## Naming
+Design cutoff: [`doc/design/v1.0/`](../design/v1.0/). Parent design index: [`doc/design/README.md`](../design/README.md).
 
-See [VERSIONING.md](VERSIONING.md). Enforced by `.cursor/rules/doc-structure.mdc` and `doc-versioning.mdc`.
-
-## Lessons
-
-Operational notes from real runs: [LESSONS.md](LESSONS.md).
-
-## How to use
-
-1. Pick the active milestone phase (`status: planned` → set `in_progress`).
-2. Implement only that phase's tasks and acceptance criteria.
-3. Mark phase `done`; refresh this index if milestone status changes.
-
-## Suggested order after 0.5
-
-1. **0.6** Scale: progress events → harder eval → MCP HTTP/SSE → SQLite store → CLI.
-2. Themes still deferred (sub-agents, IDE, cloud, Bridge, new LLM protocols) need new design + phases before coding.
+Future delivery lines get a new `doc/roadmaps/v…/` directory; do not mix milestones across trees.

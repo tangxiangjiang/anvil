@@ -17,6 +17,25 @@ import (
 
 const defaultMaxOutput = 64 * 1024
 
+// Heavy / generated trees that make full-repo WalkDir unusable (e.g. Unreal Engine).
+var skipDirNames = map[string]bool{
+	".git": true, ".svn": true, ".hg": true,
+	"node_modules": true, ".next": true, "dist": true, "build": true,
+	"Intermediate": true, "Binaries": true, "DerivedDataCache": true,
+	"Saved": true, "__pycache__": true, ".anvil": true,
+}
+
+const (
+	grepMaxMatches   = 200
+	globMaxHits      = 500
+	grepMaxFileBytes = 2 << 20 // skip files larger than 2MiB in walk fallback
+	searchBudget     = 45 * time.Second
+)
+
+func shouldSkipDir(name string) bool {
+	return skipDirNames[name]
+}
+
 // Result is a tool execution outcome.
 type Result struct {
 	Content string
@@ -332,8 +351,10 @@ type grepTool struct{ r *Registry }
 
 func (t *grepTool) Def() llm.ToolDef {
 	return llm.ToolDef{
-		Name:        "grep",
-		Description: "Search file contents under the workspace with a Go regexp.",
+		Name: "grep",
+		Description: "Search file contents under the workspace. Prefer a narrow path " +
+			"(e.g. Engine/Source/Runtime/Engine) — full Engine trees are huge. " +
+			"Uses ripgrep when available; skips Intermediate/Binaries/.git and similar.",
 		Parameters: mustSchema(`{
 			"type":"object",
 			"properties":{
@@ -347,7 +368,6 @@ func (t *grepTool) Def() llm.ToolDef {
 }
 
 func (t *grepTool) Execute(ctx context.Context, args json.RawMessage) Result {
-	_ = ctx
 	var in struct {
 		Pattern string `json:"pattern"`
 		Path    string `json:"path"`
@@ -356,28 +376,171 @@ func (t *grepTool) Execute(ctx context.Context, args json.RawMessage) Result {
 	if err := json.Unmarshal(args, &in); err != nil {
 		return Result{Content: err.Error(), IsError: true}
 	}
-	re, err := regexp.Compile(in.Pattern)
-	if err != nil {
-		return Result{Content: err.Error(), IsError: true}
+	if in.Pattern == "" {
+		return Result{Content: "pattern is required", IsError: true}
 	}
 	root := t.r.cwd
+	var err error
 	if in.Path != "" {
 		root, err = t.r.resolvePath(in.Path)
 		if err != nil {
 			return Result{Content: err.Error(), IsError: true}
 		}
 	}
+	ctx, cancel := context.WithTimeout(ctx, searchBudget)
+	defer cancel()
+
+	if out, ok, res := t.grepRipgrep(ctx, root, in.Pattern, in.Glob); ok {
+		if res.IsError {
+			return res
+		}
+		if out == "" {
+			return Result{Content: "no matches"}
+		}
+		return Result{Content: out}
+	}
+	return t.grepWalk(ctx, root, in.Pattern, in.Glob)
+}
+
+func (t *grepTool) grepRipgrep(ctx context.Context, root, pattern, glob string) (string, bool, Result) {
+	rg, err := exec.LookPath("rg")
+	if err != nil {
+		return "", false, Result{}
+	}
+	cwdAbs, err := filepath.Abs(t.r.cwd)
+	if err != nil {
+		cwdAbs = t.r.cwd
+	}
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		rootAbs = root
+	}
+	searchRoot := rootAbs
+	if rel, err := filepath.Rel(cwdAbs, rootAbs); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		searchRoot = rel
+	}
+	args := []string{"-n", "--no-heading", "--color", "never",
+		"--max-count", "20", // per-file
+		"-m", fmt.Sprintf("%d", grepMaxMatches),
+		"-g", "!**/Intermediate/**",
+		"-g", "!**/Binaries/**",
+		"-g", "!**/.git/**",
+		"-g", "!**/DerivedDataCache/**",
+		"-g", "!**/Saved/**",
+		"-g", "!**/node_modules/**",
+	}
+	if glob != "" {
+		args = append(args, "-g", glob)
+	}
+	args = append(args, "--", pattern, searchRoot)
+	cmd := exec.CommandContext(ctx, rg, args...)
+	cmd.Dir = cwdAbs
+	out, err := cmd.CombinedOutput()
+	text := strings.TrimSpace(string(out))
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", true, Result{Content: "grep timed out; narrow path/glob and retry", IsError: true}
+		}
+		// rg exit 1 = no matches
+		if ee, ok := err.(*exec.ExitError); ok && ee.ExitCode() == 1 {
+			return "", true, Result{}
+		}
+		// Fall back to walk on other rg failures (bad regex dialect, etc.)
+		return "", false, Result{}
+	}
+	var kept []string
+	for _, line := range strings.Split(text, "\n") {
+		if line == "" {
+			continue
+		}
+		relLine, pathPart, ok := normalizeGrepLine(cwdAbs, line)
+		if !ok {
+			continue
+		}
+		if pathHasSkippedDir(pathPart) {
+			continue
+		}
+		kept = append(kept, relLine)
+	}
+	return strings.Join(kept, "\n"), true, Result{}
+}
+
+func splitGrepLine(line string) (pathPart, rest string, ok bool) {
+	// path:line:content — on Windows path may be C:\...
+	start := 0
+	if len(line) >= 3 && line[1] == ':' && (line[2] == '\\' || line[2] == '/') {
+		start = 2
+	}
+	idx := strings.Index(line[start:], ":")
+	if idx < 0 {
+		return "", "", false
+	}
+	idx += start
+	return line[:idx], line[idx:], true
+}
+
+func normalizeGrepLine(cwd, line string) (relLine, pathPart string, ok bool) {
+	pathPart, rest, ok := splitGrepLine(line)
+	if !ok {
+		return "", "", false
+	}
+	if !filepath.IsAbs(pathPart) {
+		return filepath.ToSlash(pathPart) + rest, pathPart, true
+	}
+	rel, err := filepath.Rel(cwd, pathPart)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		// Best-effort prefix strip when short/long path forms differ.
+		cwdSlash := strings.ToLower(filepath.ToSlash(cwd))
+		pathSlash := filepath.ToSlash(pathPart)
+		if strings.HasPrefix(strings.ToLower(pathSlash), cwdSlash+"/") {
+			rel = pathSlash[len(cwdSlash)+1:]
+		} else {
+			return filepath.ToSlash(pathPart) + rest, pathPart, true
+		}
+	}
+	return filepath.ToSlash(rel) + rest, pathPart, true
+}
+
+func pathHasSkippedDir(path string) bool {
+	for _, part := range strings.Split(filepath.ToSlash(path), "/") {
+		if shouldSkipDir(part) {
+			return true
+		}
+	}
+	return false
+}
+
+func (t *grepTool) grepWalk(ctx context.Context, root, pattern, glob string) Result {
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return Result{Content: err.Error(), IsError: true}
+	}
 	var matches []string
+	timedOut := false
 	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
+		if err != nil {
 			return nil
 		}
-		if in.Glob != "" {
+		if ctx.Err() != nil {
+			timedOut = true
+			return filepath.SkipAll
+		}
+		if d.IsDir() {
+			if shouldSkipDir(d.Name()) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if glob != "" {
 			base := filepath.Base(path)
-			ok, _ := filepath.Match(in.Glob, base)
+			ok, _ := filepath.Match(glob, base)
 			if !ok {
 				return nil
 			}
+		}
+		info, err := d.Info()
+		if err != nil || info.Size() > grepMaxFileBytes {
+			return nil
 		}
 		rel, err := filepath.Rel(t.r.cwd, path)
 		if err != nil {
@@ -387,20 +550,43 @@ func (t *grepTool) Execute(ctx context.Context, args json.RawMessage) Result {
 		if err != nil {
 			return nil
 		}
+		if isMostlyBinary(data) {
+			return nil
+		}
 		for i, line := range strings.Split(string(data), "\n") {
 			if re.MatchString(line) {
 				matches = append(matches, fmt.Sprintf("%s:%d:%s", filepath.ToSlash(rel), i+1, line))
-				if len(matches) >= 200 {
+				if len(matches) >= grepMaxMatches {
 					return filepath.SkipAll
 				}
 			}
 		}
 		return nil
 	})
+	if timedOut && len(matches) == 0 {
+		return Result{Content: "grep timed out; narrow path/glob and retry", IsError: true}
+	}
 	if len(matches) == 0 {
 		return Result{Content: "no matches"}
 	}
-	return Result{Content: strings.Join(matches, "\n")}
+	out := strings.Join(matches, "\n")
+	if timedOut {
+		out += "\n…[grep stopped early due to time budget; narrow path]"
+	}
+	return Result{Content: out}
+}
+
+func isMostlyBinary(data []byte) bool {
+	n := len(data)
+	if n > 8000 {
+		n = 8000
+	}
+	for i := 0; i < n; i++ {
+		if data[i] == 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // --- glob ---
@@ -409,8 +595,9 @@ type globTool struct{ r *Registry }
 
 func (t *globTool) Def() llm.ToolDef {
 	return llm.ToolDef{
-		Name:        "glob",
-		Description: "List files under the workspace matching a glob pattern (matched against relative paths).",
+		Name: "glob",
+		Description: "List files under the workspace matching a glob pattern (relative paths). " +
+			"Skips Intermediate/Binaries/.git and similar generated trees.",
 		Parameters: mustSchema(`{
 			"type":"object",
 			"properties":{
@@ -422,16 +609,29 @@ func (t *globTool) Def() llm.ToolDef {
 }
 
 func (t *globTool) Execute(ctx context.Context, args json.RawMessage) Result {
-	_ = ctx
 	var in struct {
 		Pattern string `json:"pattern"`
 	}
 	if err := json.Unmarshal(args, &in); err != nil {
 		return Result{Content: err.Error(), IsError: true}
 	}
+	ctx, cancel := context.WithTimeout(ctx, searchBudget)
+	defer cancel()
+
 	var hits []string
+	timedOut := false
 	_ = filepath.WalkDir(t.r.cwd, func(path string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
+		if err != nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			timedOut = true
+			return filepath.SkipAll
+		}
+		if d.IsDir() {
+			if shouldSkipDir(d.Name()) {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		rel, err := filepath.Rel(t.r.cwd, path)
@@ -443,22 +643,29 @@ func (t *globTool) Execute(ctx context.Context, args json.RawMessage) Result {
 		if !ok {
 			ok, _ = filepath.Match(in.Pattern, filepath.Base(relSlash))
 		}
-		// Also support **/. style via simple contains of suffix
+		// Also support **/prefix style via basename match
 		if !ok && strings.HasPrefix(in.Pattern, "**/") {
 			ok, _ = filepath.Match(strings.TrimPrefix(in.Pattern, "**/"), filepath.Base(relSlash))
 		}
 		if ok {
 			hits = append(hits, relSlash)
-			if len(hits) >= 500 {
+			if len(hits) >= globMaxHits {
 				return filepath.SkipAll
 			}
 		}
 		return nil
 	})
+	if timedOut && len(hits) == 0 {
+		return Result{Content: "glob timed out; use a tighter pattern", IsError: true}
+	}
 	if len(hits) == 0 {
 		return Result{Content: "no files"}
 	}
-	return Result{Content: strings.Join(hits, "\n")}
+	out := strings.Join(hits, "\n")
+	if timedOut {
+		out += "\n…[glob stopped early due to time budget]"
+	}
+	return Result{Content: out}
 }
 
 // --- shell ---
