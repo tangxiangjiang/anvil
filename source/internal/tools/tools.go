@@ -165,15 +165,49 @@ func (r *Registry) resolvePath(p string) (string, error) {
 	} else {
 		abs = filepath.Clean(filepath.Join(cwdResolved, p))
 	}
-	// Resolve symlinks when the path exists; for new files keep cleaned abs under cwd.
-	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
-		abs = resolved
+	// Resolve symlink components even when the final leaf does not exist yet
+	// (e.g. write through a directory symlink that points outside cwd).
+	abs, err = resolveSymlinkPath(abs)
+	if err != nil {
+		return "", fmt.Errorf("path escapes cwd: %s", p)
 	}
 	rel, err := filepath.Rel(cwdResolved, abs)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	if err != nil || !pathInsideRoot(rel) {
 		return "", fmt.Errorf("path escapes cwd: %s", p)
 	}
 	return abs, nil
+}
+
+// resolveSymlinkPath returns abs with all existing symlink prefixes evaluated.
+func resolveSymlinkPath(abs string) (string, error) {
+	abs = filepath.Clean(abs)
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		return filepath.Clean(resolved), nil
+	}
+	// Walk up to the longest existing ancestor, resolve it, then re-join the suffix.
+	suffix := make([]string, 0, 4)
+	cur := abs
+	for {
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			break
+		}
+		suffix = append([]string{filepath.Base(cur)}, suffix...)
+		if _, err := os.Lstat(parent); err != nil {
+			cur = parent
+			continue
+		}
+		resolvedParent, err := filepath.EvalSymlinks(parent)
+		if err != nil {
+			return abs, nil
+		}
+		return filepath.Clean(filepath.Join(append([]string{resolvedParent}, suffix...)...)), nil
+	}
+	return abs, nil
+}
+
+func pathInsideRoot(rel string) bool {
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func truncate(s string, max int) string {

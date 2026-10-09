@@ -10,6 +10,7 @@ import (
 	"github.com/anvil-dev/anvil/internal/id"
 	"github.com/anvil-dev/anvil/internal/llm"
 	"github.com/anvil-dev/anvil/internal/prompt"
+	"github.com/anvil-dev/anvil/internal/redact"
 	"github.com/anvil-dev/anvil/internal/tools"
 )
 
@@ -187,16 +188,17 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 				Args:       tc.Args,
 			})
 			res := registry.Execute(ctx, tc.Name, tc.Args)
+			content := redact.String(res.Content)
 			emit(Event{
 				Type:       "tool_result",
 				ToolCallID: tc.ID,
 				Name:       tc.Name,
-				Content:    res.Content,
+				Content:    content,
 				IsError:    res.IsError,
 			})
 			toolMsg := llm.Message{
 				Role:       llm.RoleTool,
-				Content:    res.Content,
+				Content:    content,
 				ToolCallID: tc.ID,
 				Name:       tc.Name,
 			}

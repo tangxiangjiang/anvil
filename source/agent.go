@@ -185,7 +185,9 @@ func buildSystemPrompt(cwd string, opts Options) (string, error) {
 			return "", err
 		}
 	}
-	return prompt.SystemWithRules(cwd, rulesText), nil
+	return prompt.SystemWithOptions(cwd, rulesText, prompt.Options{
+		AllowShell: opts.Local.AllowShellEnabled(),
+	}), nil
 }
 
 func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Registry, []*mcp.Session, error) {
