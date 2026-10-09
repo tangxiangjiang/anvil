@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TangXiangjiang.
+// SPDX-License-Identifier: MIT
+
 // Package settings loads Cursor-compatible project/user config files.
 package settings
 

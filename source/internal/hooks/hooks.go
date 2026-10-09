@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TangXiangjiang.
+// SPDX-License-Identifier: MIT
+
 // Package hooks loads minimal file-based policy hooks (0.10).
 package hooks
 

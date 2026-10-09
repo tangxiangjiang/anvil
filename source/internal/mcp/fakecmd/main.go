@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TangXiangjiang.
+// SPDX-License-Identifier: MIT
+
 package main
 
 // Fake MCP stdio server for tests: exposes tool "echo".

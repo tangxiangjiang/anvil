@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TangXiangjiang.
+// SPDX-License-Identifier: MIT
+
 package prompt_test
 
 import (

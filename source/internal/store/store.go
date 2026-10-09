@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TangXiangjiang.
+// SPDX-License-Identifier: MIT
+
 // Package store implements the local append-only JSONL session store described
 // in doc/design/06-session-store.md.
 //

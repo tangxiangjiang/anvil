@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TangXiangjiang.
+// SPDX-License-Identifier: MIT
+
 // Package redact provides best-effort secret scrubbing for tool outputs and events.
 // It is not a DLP product — patterns are heuristic and may false-positive or miss secrets.
 package redact

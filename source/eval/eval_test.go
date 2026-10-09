@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TangXiangjiang.
+// SPDX-License-Identifier: MIT
+
 // Package eval holds offline regression fixtures for the agent tool loop.
 // Live gateway smoke tests belong in cmd/anvil or examples — not here.
 //
