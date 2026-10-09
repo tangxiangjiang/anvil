@@ -54,3 +54,4 @@ No automatic migration between backends; pick one per cwd (or migrate offline yo
 
 - Multi-machine sync, encryption at rest (caller can encrypt the disk).
 - Automatic JSONL ↔ SQLite migration tooling.
+- **Development memory** (durable project facts across agents) — that is a **plugin**, not the session store; see [21-dev-memory.md](21-dev-memory.md).

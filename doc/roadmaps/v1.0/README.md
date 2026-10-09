@@ -1,6 +1,6 @@
 # Roadmaps v1.0 (cutoff)
 
-Versioned delivery for Anvil through product **0.10**. Design cutoff: [`doc/design/v1.0/`](../../design/v1.0/).
+Versioned delivery for Anvil through product **0.22**. Design cutoff: [`doc/design/v1.0/`](../../design/v1.0/).
 
 ## Version index
 
@@ -16,6 +16,18 @@ Versioned delivery for Anvil through product **0.10**. Design cutoff: [`doc/desi
 | 0.8 | Security hardening | done | [m_0.8_security.md](m_0.8_security.md) | [08](../../design/v1.0/08-security.md) |
 | 0.9 | Extensibility depth | done | [m_0.9_extensibility.md](m_0.9_extensibility.md) | [09](../../design/v1.0/09-extensibility.md) |
 | 0.10 | Cursor SDK local parity | done | [m_0.10_sdk_parity.md](m_0.10_sdk_parity.md) | [10](../../design/v1.0/10-sdk-parity.md) |
+| 0.11 | Worker daemon & agent-worker | planned | [m_0.11_worker_daemon.md](m_0.11_worker_daemon.md) | [11](../../design/v1.0/11-worker-daemon.md) |
+| 0.12 | Model gateway | planned | [m_0.12_model_gateway.md](m_0.12_model_gateway.md) | [12](../../design/v1.0/12-model-gateway.md) |
+| 0.13 | Retrieval quality | planned | [m_0.13_retrieval.md](m_0.13_retrieval.md) | [13](../../design/v1.0/13-retrieval.md) |
+| 0.14 | Hooks & skills deepen | planned | [m_0.14_hooks_skills.md](m_0.14_hooks_skills.md) | [14](../../design/v1.0/14-hooks-skills.md) |
+| 0.15 | Web search | planned | [m_0.15_web_search.md](m_0.15_web_search.md) | [15](../../design/v1.0/15-web-search.md) |
+| 0.16 | LSP & language intelligence | planned | [m_0.16_lsp.md](m_0.16_lsp.md) | [16](../../design/v1.0/16-lsp.md) |
+| 0.17 | Git tools | planned | [m_0.17_git_tools.md](m_0.17_git_tools.md) | [17](../../design/v1.0/17-git-tools.md) |
+| 0.18 | Test & build tools | planned | [m_0.18_test_build.md](m_0.18_test_build.md) | [18](../../design/v1.0/18-test-build.md) |
+| 0.19 | Vision (image / screenshot) | planned | [m_0.19_vision.md](m_0.19_vision.md) | [19](../../design/v1.0/19-vision.md) |
+| 0.20 | Agent plugins (worker-side) | planned | [m_0.20_plugins.md](m_0.20_plugins.md) | [20](../../design/v1.0/20-plugins.md) |
+| 0.21 | Dev memory (plugin) | planned | [m_0.21_dev_memory.md](m_0.21_dev_memory.md) | [21](../../design/v1.0/21-dev-memory.md) |
+| 0.22 | Project search (SQLite+VDB) | planned | [m_0.22_project_search.md](m_0.22_project_search.md) | [22](../../design/v1.0/22-project-search.md) |
 
 ## Naming
 
@@ -31,13 +43,25 @@ Operational notes from real runs: [LESSONS.md](LESSONS.md).
 2. Implement only that phase's tasks and acceptance criteria.
 3. Mark phase `done`; refresh this index if milestone status changes.
 
-## Suggested order after 0.6
+## Post-0.10 scope lock (designs landed)
 
-1. **0.7** design 07 — streaming/errors hardening  
-2. **0.8** design 08 — security hardening  
-3. **0.9** design 09 — extensibility depth (not sub-agents; not 0.10 settingSources)  
-4. **0.10** design 10 — Cursor SDK *local* API/config parity  
+| Priority | Track | Milestone | Design |
+|----------|--------|-----------|--------|
+| 1 | Model gateway (catalog + auth) | **0.12** | [12](../../design/v1.0/12-model-gateway.md) |
+| 2 | Retrieval quality | **0.13** | [13](../../design/v1.0/13-retrieval.md) |
+| 3 | Hooks / skills deepen | **0.14** | [14](../../design/v1.0/14-hooks-skills.md) |
+| 4 | agentd + agent-worker | **0.11** | [11](../../design/v1.0/11-worker-daemon.md) |
+| 5 | Web search (+ fetch_url) | **0.15** | [15](../../design/v1.0/15-web-search.md) |
+| 6 | LSP / diagnostics / rename | **0.16** | [16](../../design/v1.0/16-lsp.md) |
+| 7 | Git tools (read) | **0.17** | [17](../../design/v1.0/17-git-tools.md) |
+| 8 | Test & build tools | **0.18** | [18](../../design/v1.0/18-test-build.md) |
+| 9 | Vision / images | **0.19** | [19](../../design/v1.0/19-vision.md) |
+| 10 | Worker-side plugins | **0.20** | [20](../../design/v1.0/20-plugins.md) |
+| 11 | Dev memory (plugin) | **0.21** | [21](../../design/v1.0/21-dev-memory.md) |
+| 12 | Project search (SQLite+VDB) | **0.22** | [22](../../design/v1.0/22-project-search.md) |
 
-Still deferred without new design: IDE plugin, cloud, Bridge, multi-agent runtime clone.
+Suggested implementation order: **0.11** ∥ **0.12** → **0.22** engine → **0.13** `semantic_search` wire-up → **0.17**/**0.18** → **0.16** → **0.20** → **0.21** memory → **0.15** → **0.14** → **0.19**.
+
+Explicitly **not** in this lock: IDE plugin UI, Cursor Cloud/Bridge, in-process multi-agent graph, full Cursor hooks/plugins/team MDM, OS sandbox clone, notebook cell editor, DAP debugger, public plugin marketplace.
 
 Parent index: [`doc/roadmaps/README.md`](../README.md).

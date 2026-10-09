@@ -31,6 +31,8 @@ const (
 
 OpenAI-compatible gateways (DeepSeek, private `/v1`, vLLM, etc.) use `ProviderOpenAI` with a custom `BaseURL`, e.g. model `private/deepseek-v4-pro`.
 
+Anvil’s own **model gateway** (catalog + auth + proxy) is designed in **[12-model-gateway.md](12-model-gateway.md)** / product **0.12**; point `BaseURL` + API key at that service.
+
 ## Example requests
 
 **OpenAI-compatible**

@@ -1,8 +1,8 @@
 # Design v1.0 (cutoff)
 
-Anvil **local-only** Go Agent SDK design through product milestone **0.10** (Cursor SDK *local* surface parity). Read chapters in order before implementing the matching roadmap phase.
+Anvil **local-only** Go Agent SDK design through product milestone **0.22** (project search). Read chapters in order before implementing the matching roadmap phase.
 
-This tree is the **design freeze line** for 0.1–0.10 delivery. Later product lines get a new `doc/design/v…/` directory.
+This tree is the **design cutoff** for 0.1–0.22 delivery. Later product lines get a new `doc/design/v…/` directory.
 
 ## Read order
 
@@ -19,6 +19,18 @@ This tree is the **design freeze line** for 0.1–0.10 delivery. Later product l
 | 08 | [08-security.md](08-security.md) | Path escape, shell, secrets → roadmap 0.8 |
 | 09 | [09-extensibility.md](09-extensibility.md) | Custom tools, MCP, hooks → roadmap 0.3 / 0.9 |
 | 10 | [10-sdk-parity.md](10-sdk-parity.md) | Cursor SDK **local** parity → roadmap **0.10** (done) |
+| 11 | [11-worker-daemon.md](11-worker-daemon.md) | agentd + agent-worker → **0.11** |
+| 12 | [12-model-gateway.md](12-model-gateway.md) | Model gateway → **0.12** |
+| 13 | [13-retrieval.md](13-retrieval.md) | Index / semantic search → **0.13** |
+| 14 | [14-hooks-skills.md](14-hooks-skills.md) | Hooks & skills → **0.14** |
+| 15 | [15-web-search.md](15-web-search.md) | Web search / fetch_url → **0.15** |
+| 16 | [16-lsp.md](16-lsp.md) | LSP diagnostics / nav / rename → **0.16** |
+| 17 | [17-git-tools.md](17-git-tools.md) | git_status / diff / log → **0.17** |
+| 18 | [18-test-build.md](18-test-build.md) | run_tests / build → **0.18** |
+| 19 | [19-vision.md](19-vision.md) | Image attachments / read_image → **0.19** |
+| 20 | [20-plugins.md](20-plugins.md) | Worker-side agent plugins → **0.20** |
+| 21 | [21-dev-memory.md](21-dev-memory.md) | Dev memory **plugin** → **0.21** |
+| 22 | [22-project-search.md](22-project-search.md) | Project search SQLite+VDB → **0.22** |
 
 Parent index: [`doc/design/README.md`](../README.md).
 
@@ -26,4 +38,4 @@ Parent index: [`doc/design/README.md`](../README.md).
 
 - Design describes **what** and **why** for this cutoff.
 - [`doc/roadmaps/v1.0/`](../../roadmaps/v1.0/) describes **when**.
-- Chapter 10 only via [m_0.10_sdk_parity.md](../../roadmaps/v1.0/m_0.10_sdk_parity.md).
+- Chapters 11–22 map to [m_0.11](../../roadmaps/v1.0/m_0.11_worker_daemon.md) … [m_0.22](../../roadmaps/v1.0/m_0.22_project_search.md).

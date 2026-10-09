@@ -47,3 +47,10 @@
 - MCP-backed tools (0.3).
 - Caller-registered custom tools (0.3).
 - Git-specific helpers (optional; shell can cover git for MVP).
+- `semantic_search` + local index → **[13-retrieval.md](13-retrieval.md)** / **0.13**; engine **[22-project-search.md](22-project-search.md)** / **0.22**.
+- `list_skills` / `read_skill` → **[14-hooks-skills.md](14-hooks-skills.md)** / **0.14**.
+- `web_search` / `fetch_url` → **[15-web-search.md](15-web-search.md)** / **0.15**.
+- LSP tools / rename → **[16-lsp.md](16-lsp.md)** / **0.16**.
+- `git_status` / `git_diff` / `git_log` → **[17-git-tools.md](17-git-tools.md)** / **0.17**.
+- `run_tests` / `build` → **[18-test-build.md](18-test-build.md)** / **0.18**.
+- Vision attachments / `read_image` → **[19-vision.md](19-vision.md)** / **0.19**.

@@ -13,13 +13,32 @@
 
 ## Non-goals
 
-- Cloud / remote VM agents, auto-create PR, hosted pools.
-- Multi-agent graph orchestration or sub-agent frameworks.
+- Cloud / remote VM agents, auto-create PR, hosted Cursor pools.
+- In-process multi-agent **graph** / planner handoff inside the library (worker pool under **agentd** is a separate process model — see [11](11-worker-daemon.md)).
 - Cursor SDK Bridge / depending on Cursor runtime (capability alignment ≠ protocol compatibility with Cursor).
 - Drop-in import replacement for `@cursor/sdk` / `cursor-sdk`.
-- First-party IDE plugin or deep LSP integration.
-- Training or hosting models.
+- First-party IDE plugin UI. LSP is exposed as **agent tools** only ([16](16-lsp.md)), not an editor product.
+- Training or **hosting** model weights inside Anvil. Catalog + auth live in the **model gateway** ([12](12-model-gateway.md)), not as Cursor `models.list` inside the agent library.
 - Other LLM wire protocols beyond OpenAI-compatible and Anthropic (unless a new design chapter adds them).
+
+## Post-0.10 scope lock
+
+After local surface parity (0.10), only these tracks are in-scope (designs landed; see roadmaps):
+
+| # | Track | Design | Milestone |
+|---|--------|--------|-----------|
+| 1 | Model gateway (catalog + auth) | [12](12-model-gateway.md) | **0.12** |
+| 2 | Retrieval (index / semantic search) | [13](13-retrieval.md) | **0.13** |
+| 3 | Hooks / skills deepen | [14](14-hooks-skills.md) | **0.14** |
+| 4 | agentd + agent-worker | [11](11-worker-daemon.md) | **0.11** |
+| 5 | Web search (+ fetch_url) | [15](15-web-search.md) | **0.15** |
+| 6 | LSP / diagnostics / rename | [16](16-lsp.md) | **0.16** |
+| 7 | Git tools (read) | [17](17-git-tools.md) | **0.17** |
+| 8 | Test & build tools | [18](18-test-build.md) | **0.18** |
+| 9 | Vision / images | [19](19-vision.md) | **0.19** |
+| 10 | Worker-side plugins | [20](20-plugins.md) | **0.20** |
+| 11 | Dev memory (plugin) | [21](21-dev-memory.md) | **0.21** |
+| 12 | Project search (SQLite+VDB) | [22](22-project-search.md) | **0.22** |
 
 ## Glossary
 
@@ -30,23 +49,26 @@
 | **Tool** | Named function the model can call (read_file, shell, …). |
 | **Event** | Streamed unit on a Run (`assistant`, `tool_call`, `tool_result`, `done`, …). |
 | **Store** | Local persistence under `{cwd}/.anvil/` (JSONL). |
+| **agentd** | Per-machine worker-daemon (lifecycle + optional cluster edge). See [11](11-worker-daemon.md). |
+| **agent-worker** | Child process running one Anvil Local agent job. |
 | **Milestone** | Versioned delivery unit (`0.1`, `0.2`, …) in `doc/roadmaps/`. |
 | **Phase** | Ordered work package inside a milestone (`p_0.1.1`, …). |
 
 ## Version strategy
 
-- Product versions use `0.x` while pre-release; **0.1 = MVP**; **0.10** = SDK local surface parity (still 0.x).
+- Product versions use `0.x` while pre-release; **0.1 = MVP**; **0.10** = SDK local surface parity; **0.11–0.22** = post-parity scope lock (still 0.x).
 - Design lives in versioned trees under `doc/design/` (this file is **`v1.0`** cutoff). Roadmaps live under `doc/roadmaps/v1.0/`.
 - New capability requires a phase doc before code (see `.cursor/rules/doc-versioning.mdc`).
-- Chapters **00–09** core; **[10-sdk-parity.md](10-sdk-parity.md)** → product **0.10**.
-- Forward map: **0.7**←07, **0.8**←08, **0.9**←09 depth, **0.10**←10 — see [`doc/roadmaps/v1.0/README.md`](../../roadmaps/v1.0/README.md).
+- Chapters **00–09** core; **10**→0.10 … **22**→0.22.
+- Forward map: see [`doc/roadmaps/v1.0/README.md`](../../roadmaps/v1.0/README.md).
 
 ## Locked product decisions
 
 | Decision | Choice |
 |----------|--------|
-| Runtime | Local only |
+| Runtime | Local only (in-process SDK); optional **agentd** for multi-job hosts |
 | API style | Cursor **capability** alignment (local), idiomatic Go |
 | LLM wire | OpenAI-compatible **and** Anthropic Messages |
 | Session store | JSONL under cwd (no SQLite in 0.1/0.2 default) |
-| Orchestration | Single agent tool loop |
+| Orchestration | Single agent tool loop in-process; process pool via agentd (0.11) |
+| Plugins | Optional/heavy/org packs on **worker**; **general** tools stay in agent core ([20](20-plugins.md)) |

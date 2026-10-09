@@ -39,16 +39,24 @@ anvil/
     run.go
     errors.go
     types.go
+    cmd/
+      anvil/            # operator CLI
+      agentd/           # worker-daemon (0.11)
+      agent-worker/     # worker entry (0.11)
     internal/
       llm/
       runtime/
       tools/
       store/
       prompt/
+      daemon/           # 0.11
+      worker/           # 0.11
     examples/
       oneshot/
       interactive/
 ```
+
+Process topology for multi-job hosts: see [11-worker-daemon.md](11-worker-daemon.md).
 
 Default module path placeholder: `github.com/anvil-dev/anvil` (module root is `source/`).
 

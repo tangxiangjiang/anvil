@@ -31,12 +31,18 @@ Alignment means **same jobs for the caller**, idiomatic Go — not protocol comp
 | ListRuns / GetRun | done (0.10) |
 | Project hooks.json (minimal shell/write gate) | done (0.10) |
 | Prewarm local workspace helper | done (0.10) |
-| Full Cursor hooks event catalog | deferred |
+| Full Cursor hooks event catalog | deferred (subset deepen → [14](14-hooks-skills.md) / 0.14) |
+| Skills / skill router | deferred to [14](14-hooks-skills.md) / 0.14 |
+| Model catalog API | deferred to [12](12-model-gateway.md) / 0.12 |
+| Semantic / index search | deferred to [13](13-retrieval.md) / 0.13 |
+| Web search / fetch | deferred to [15](15-web-search.md) / 0.15 |
+| Git / test / build structured tools | deferred to [17](17-git-tools.md)–[18](18-test-build.md) |
+| Vision / image attachments | deferred to [19](19-vision.md) / 0.19 |
 | MCP OAuth browser login | deferred |
 | Cursor Bridge / embed Cursor runtime | deferred |
 | Cloud agents / dashboard MCP | deferred |
-| Sub-agent framework | deferred |
-| IDE / LSP deep integration | deferred |
+| Sub-agent framework (Cursor-style in-process) | deferred (process workers → [11](11-worker-daemon.md) / 0.11) |
+| IDE / LSP deep integration | deferred (LSP **tools** subset → [16](16-lsp.md) / 0.16; not IDE UI) |
 | Composer / semantic-search quality parity | deferred (not surface) |
 
 ## 0.10 API notes
@@ -81,7 +87,8 @@ Deny → tool error to the model. Full Cursor hook catalog remains deferred.
 - Cursor Bridge / calling Cursor agent runtime  
 - Cloud agents and dashboard MCP  
 - Drop-in import replacement for `@cursor/sdk`  
-- Sub-agent framework parity  
+- Sub-agent framework parity (in-process); see [11](11-worker-daemon.md) for agentd workers  
+
 - IDE / LSP deep integration  
 - Claiming equal large-repo intelligence without separate quality work  
 

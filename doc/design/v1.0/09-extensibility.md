@@ -43,10 +43,22 @@ MCPServers: map[name] => {
 - Event order: all `tool_call` in assistant order, then all `tool_result` in the same start order (not completion order).
 - `ParallelToolsMax` bounds concurrency (default 4).
 
-## Sub-agents
+## Sub-agents / workers
 
-- Out of scope until a future milestone explicitly redesigns architecture.
-- Do not invent hidden multi-agent routing in 0.x without an explicit redesign milestone.
+- **In-process** multi-agent graph / hidden routing inside `anvil.Create` remains out of scope.
+- **Process-level** workers are designed in **[11-worker-daemon.md](11-worker-daemon.md)** / product **0.11** (`agentd` + `agent-worker`), not as Cursor-style nested sub-agents in the library.
+
+## Hooks & skills (deepen)
+
+- 0.10 ships minimal file hooks; deeper hooks + **skills** → **[14-hooks-skills.md](14-hooks-skills.md)** / **0.14**.
+
+## Retrieval
+
+- Builtin index / `semantic_search` → **[13-retrieval.md](13-retrieval.md)** / **0.13**.
+- Web / `fetch_url` → **[15-web-search.md](15-web-search.md)** / **0.15**.
+- LSP / git / test-build / vision → **[16](16-lsp.md)**–**[19](19-vision.md)**.
+- Worker-side **plugins** (capability packs) → **[20-plugins.md](20-plugins.md)** / **0.20** (distinct from MCP and skills).
+- **Dev memory** as first-party plugin → **[21-dev-memory.md](21-dev-memory.md)** / **0.21** (not session Resume).
 
 ## Compatibility promise
 
