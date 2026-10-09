@@ -30,6 +30,7 @@ func StartRemote(ctx context.Context, cfg ServerConfig) (*Session, error) {
 		baseURL:   strings.TrimRight(cfg.URL, "/"),
 		http:      &http.Client{},
 		msgURL:    strings.TrimRight(cfg.URL, "/"),
+		headers:   cfg.Headers,
 	}
 	switch transport {
 	case "http":
@@ -55,12 +56,22 @@ func StartRemote(ctx context.Context, cfg ServerConfig) (*Session, error) {
 	return s, nil
 }
 
+func (s *Session) applyHeaders(req *http.Request) {
+	for k, v := range s.headers {
+		if k == "" {
+			continue
+		}
+		req.Header.Set(k, v)
+	}
+}
+
 func (s *Session) openSSE(ctx context.Context) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.baseURL, nil)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Accept", "text/event-stream")
+	s.applyHeaders(req)
 	resp, err := s.http.Do(req)
 	if err != nil {
 		return err
@@ -172,6 +183,7 @@ func (s *Session) requestHTTP(ctx context.Context, method string, params any) (j
 			return nil, err
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
+		s.applyHeaders(httpReq)
 		resp, err := s.http.Do(httpReq)
 		if err != nil {
 			return nil, err
@@ -218,6 +230,7 @@ func (s *Session) requestHTTP(ctx context.Context, method string, params any) (j
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json")
+	s.applyHeaders(httpReq)
 	resp, err := s.http.Do(httpReq)
 	if err != nil {
 		return nil, err
@@ -251,6 +264,7 @@ func (s *Session) notifyHTTP(ctx context.Context, method string, params any) err
 		return err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	s.applyHeaders(httpReq)
 	resp, err := s.http.Do(httpReq)
 	if err != nil {
 		return err

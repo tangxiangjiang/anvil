@@ -23,6 +23,8 @@ type ServerConfig struct {
 	Args      []string
 	Env       []string
 	URL       string // http / sse base URL
+	// Headers are applied to HTTP/SSE requests only (ignored for stdio).
+	Headers map[string]string
 }
 
 // ToolInfo is one MCP tool descriptor.
@@ -46,6 +48,7 @@ type Session struct {
 	http       *http.Client
 	baseURL    string
 	msgURL     string
+	headers    map[string]string
 	sseBody    io.ReadCloser
 	sseReader  *bufio.Reader
 	sseReplies chan json.RawMessage

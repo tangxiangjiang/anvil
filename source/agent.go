@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/anvil-dev/anvil/internal/compress"
 	"github.com/anvil-dev/anvil/internal/id"
 	"github.com/anvil-dev/anvil/internal/llm"
 	"github.com/anvil-dev/anvil/internal/mcp"
@@ -233,6 +234,7 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 			Args:      cfg.Args,
 			Env:       cfg.Env,
 			URL:       cfg.URL,
+			Headers:   cfg.Headers,
 		})
 		if err != nil {
 			for _, s := range sessions {
@@ -280,8 +282,25 @@ func sanitizeName(s string) string {
 }
 
 func historyFromRecords(records []store.Record) []llm.Message {
+	lastSummary := -1
+	for i, rec := range records {
+		if rec.Type == store.TypeSummary {
+			lastSummary = i
+		}
+	}
 	var history []llm.Message
-	for _, rec := range records {
+	if lastSummary >= 0 {
+		history = append(history, llm.Message{
+			Role:    llm.RoleUser,
+			Name:    compress.SummaryMarker,
+			Content: records[lastSummary].Content,
+		})
+	}
+	start := 0
+	if lastSummary >= 0 {
+		start = lastSummary + 1
+	}
+	for _, rec := range records[start:] {
 		if rec.Type != store.TypeMessage {
 			continue
 		}
@@ -363,6 +382,8 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 		HistoryMaxChars:   a.opts.HistoryMaxChars,
 		HistoryKeepRecent: a.opts.HistoryKeepRecent,
 		SystemPrompt:      a.systemPrompt,
+		ParallelTools:     a.opts.ParallelTools,
+		ParallelToolsMax:  a.opts.ParallelToolsMax,
 		Sink:              func(m llm.Message) { a.persistMessage(run.id, m) },
 	}, func(ev runtime.Event) {
 		run.emit(Event{
@@ -428,6 +449,16 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 }
 
 func (a *Agent) persistMessage(runID string, m llm.Message) {
+	if m.Name == compress.SummaryMarker {
+		a.persist(store.Record{
+			Type:    store.TypeSummary,
+			RunID:   runID,
+			Role:    string(m.Role),
+			Content: m.Content,
+			Name:    m.Name,
+		})
+		return
+	}
 	rec := store.Record{
 		Type:       store.TypeMessage,
 		RunID:      runID,

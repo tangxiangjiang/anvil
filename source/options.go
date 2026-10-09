@@ -43,6 +43,12 @@ type Options struct {
 	// HistoryKeepRecent is how many trailing messages to keep verbatim when compressing.
 	// 0 defaults to 6.
 	HistoryKeepRecent int
+
+	// ParallelTools runs same-turn tool_calls concurrently when all are non-mutating (0.9+).
+	// Default false = sequential. Batches that include mutating tools stay sequential.
+	ParallelTools bool
+	// ParallelToolsMax bounds concurrent tool executions when ParallelTools is on (0 = 4).
+	ParallelToolsMax int
 }
 
 // Model identifies the model id for the selected provider.
@@ -91,6 +97,8 @@ type MCPServerConfig struct {
 	Args      []string
 	Env       []string // KEY=VAL for stdio process
 	URL       string   // http / sse base URL
+	// Headers are sent on HTTP/SSE requests (0.9+). Ignored for stdio. Not for OAuth flows.
+	Headers map[string]string
 }
 
 // PermissionFunc decides whether a mutating tool may run.

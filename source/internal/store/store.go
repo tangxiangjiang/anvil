@@ -27,6 +27,7 @@ import (
 const (
 	TypeMeta     = "meta"
 	TypeMessage  = "message"
+	TypeSummary  = "summary" // compression marker (0.9+); prior messages are ignored on Resume
 	TypeRunStart = "run_start"
 	TypeRunEnd   = "run_end"
 )

@@ -8,6 +8,9 @@ import (
 	"github.com/anvil-dev/anvil/internal/llm"
 )
 
+// SummaryMarker is the message Name used for persisted compression markers (0.9+).
+const SummaryMarker = "anvil.summary"
+
 // Options controls history compression.
 type Options struct {
 	MaxChars   int
@@ -16,9 +19,11 @@ type Options struct {
 
 // Result of a compression attempt.
 type Result struct {
-	Messages []llm.Message
+	Messages    []llm.Message
 	DidCompress bool
 	Summary     string
+	// Recent are non-system messages kept verbatim after the summary (for re-persist on Resume).
+	Recent []llm.Message
 }
 
 // Apply compresses older messages when over budget. System messages are kept.
@@ -53,12 +58,18 @@ func Apply(ctx context.Context, completer llm.Completer, model string, messages 
 	}
 	summaryMsg := llm.Message{
 		Role:    llm.RoleUser,
+		Name:    SummaryMarker,
 		Content: "[conversation summary]\n" + summary,
 	}
 	out := append([]llm.Message{}, system...)
 	out = append(out, summaryMsg)
 	out = append(out, recent...)
-	return Result{Messages: out, DidCompress: true, Summary: summaryMsg.Content}, nil
+	return Result{
+		Messages:    out,
+		DidCompress: true,
+		Summary:     summaryMsg.Content,
+		Recent:      append([]llm.Message(nil), recent...),
+	}, nil
 }
 
 func summarize(ctx context.Context, completer llm.Completer, model string, old []llm.Message) (string, error) {

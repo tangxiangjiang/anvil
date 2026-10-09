@@ -13,6 +13,46 @@ import (
 	"github.com/anvil-dev/anvil/internal/mcp"
 )
 
+func TestHTTPHeaders(t *testing.T) {
+	var sawAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sawAuth = r.Header.Get("Authorization")
+		var req struct {
+			ID     int64  `json:"id"`
+			Method string `json:"method"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		var result any
+		switch req.Method {
+		case "initialize":
+			result = map[string]any{"protocolVersion": "2024-11-05", "capabilities": map[string]any{}, "serverInfo": map[string]string{"name": "fake"}}
+		case "notifications/initialized":
+			w.WriteHeader(204)
+			return
+		case "tools/list":
+			result = map[string]any{"tools": []any{}}
+		default:
+			result = map[string]any{}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": result})
+	}))
+	defer srv.Close()
+
+	sess, err := mcp.Start(context.Background(), mcp.ServerConfig{
+		Name:      "remote",
+		Transport: "http",
+		URL:       srv.URL,
+		Headers:   map[string]string{"Authorization": "Bearer test-token-xyz"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+	if sawAuth != "Bearer test-token-xyz" {
+		t.Fatalf("Authorization=%q", sawAuth)
+	}
+}
+
 func TestHTTPTransportEcho(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {

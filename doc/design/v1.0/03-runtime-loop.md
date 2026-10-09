@@ -10,9 +10,9 @@ Execute one user message as a **tool-calling loop** until the model stops reques
 2. Build request: system prompt + history + tool schemas.
 3. Call LLM (`internal/llm`).
 4. If response has tool calls:
-   - Emit `tool_call` events.
-   - Execute each tool via registry (sequential in 0.1; parallel optional later).
-   - Emit `tool_result` events; append tool results to history.
+   - Emit `tool_call` events in assistant order.
+   - Execute via registry: sequential by default; `Options.ParallelTools` (0.9+) may run a non-mutating batch concurrently.
+   - Emit `tool_result` events in the same start order; append tool results to history.
    - Increment step counter; if `steps >= MaxSteps`, finish with error/limit status.
    - Go to 3.
 5. If response is assistant text only:
@@ -55,5 +55,5 @@ If `Send` is called while a Run is active → return `*anvil.Error` (not retryab
 ## Out of scope for 0.1
 
 - Planner / multi-agent handoff.
-- Speculative parallel tool execution.
-- Automatic context summarization (0.3).
+- Speculative / planner-driven tool fan-out (opt-in same-turn parallel is 0.9).
+- Automatic context summarization (0.3; durable markers in 0.9).
