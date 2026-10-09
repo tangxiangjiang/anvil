@@ -21,7 +21,14 @@ type Agent struct { /* unexported fields */ }
 
 func (a *Agent) AgentID() string
 func (a *Agent) Send(ctx context.Context, message string, opts ...SendOption) (*Run, error)
+func (a *Agent) Reload(ctx context.Context) error // 0.10+: refresh file MCP/rules/hooks
+func (a *Agent) ListRuns(ctx context.Context) ([]RunInfo, error) // 0.10+
 func (a *Agent) Close() error
+
+func WithForce() SendOption // 0.10+: cancel in-flight run then Send
+func ListRuns(ctx, agentID string, opts ListOptions) ([]RunInfo, error)
+func GetRun(ctx, agentID, runID string, opts ListOptions) (*RunInfo, error)
+func Prewarm(ctx context.Context, cwd string, sources []SettingSource) (func(), error)
 ```
 
 ## Run
@@ -112,4 +119,4 @@ Do not conflate the two in examples or CI exit codes (suggest exit 1 vs 2).
 | List / Get / Usage | 0.5 |
 | Progress events / default MaxSteps 128 | 0.6 |
 | MCP HTTP/SSE; Store backend; CLI | 0.6 |
-| settingSources, SystemPrompt, tool allow/deny, Force/Reload, ListRuns, hooks | 0.10 |
+| settingSources, SystemPrompt, BuiltinTools/DisallowedTools, Force/Reload, ListRuns, hooks, Prewarm | **0.10** |

@@ -14,6 +14,14 @@ const (
 	ProviderAnthropic Provider = "anthropic"
 )
 
+// SettingSource selects file-based config layers (Cursor SDK local settingSources).
+type SettingSource string
+
+const (
+	SettingSourceProject SettingSource = "project" // {cwd}/.cursor/…
+	SettingSourceUser    SettingSource = "user"    // ~/.cursor/…
+)
+
 // Options configures Create / Prompt / Resume.
 type Options struct {
 	Provider Provider
@@ -31,8 +39,8 @@ type Options struct {
 	// Tools are caller-registered tools merged with built-ins (0.3+).
 	Tools []ToolSpec
 
-	// MCPServers are stdio MCP servers started on Create/Resume (0.3+).
-	// Not restored from disk — pass again on Resume.
+	// MCPServers are inline MCP servers (0.3+). Not restored from disk — pass again on Resume.
+	// When SettingSources load file MCP, inline entries override same-named file servers.
 	MCPServers map[string]MCPServerConfig
 
 	// Permission is invoked before mutating built-ins (write_file, edit_file, shell).
@@ -45,10 +53,19 @@ type Options struct {
 	HistoryKeepRecent int
 
 	// ParallelTools runs same-turn tool_calls concurrently when all are non-mutating (0.9+).
-	// Default false = sequential. Batches that include mutating tools stay sequential.
 	ParallelTools bool
 	// ParallelToolsMax bounds concurrent tool executions when ParallelTools is on (0 = 4).
 	ParallelToolsMax int
+
+	// SystemPrompt replaces Anvil's default main system text when non-empty (0.10+).
+	// Project rules (when enabled) are still appended. Not persisted across Resume unless passed again.
+	SystemPrompt string
+
+	// BuiltinTools, when non-empty, is an allow-list of built-in tool names or groups (0.10+).
+	// Groups: shell, read, write, edit, search, mcp. Custom Tools entries are never filtered out.
+	BuiltinTools []string
+	// DisallowedTools denies built-in names or groups after allow-list (0.10+).
+	DisallowedTools []string
 }
 
 // Model identifies the model id for the selected provider.
@@ -64,10 +81,25 @@ type LocalOptions struct {
 	// LoadRules loads AGENTS.md and .anvil/rules/*.md into the system prompt (off by default).
 	LoadRules bool
 	// LoadCursorRules also loads .cursor/rules/* when LoadRules is true (still off unless set).
+	// When SettingSources includes "project", .cursor/rules are loaded even if this is false.
 	LoadCursorRules bool
 
 	// Store selects the session backend: "jsonl" (default) or "sqlite".
 	Store string
+
+	// SettingSources enables file-based MCP/rules/hooks layers (0.10+).
+	// Empty = inline-only (current default): no .cursor/mcp.json load.
+	SettingSources []SettingSource
+}
+
+// HasSettingSource reports whether src is enabled.
+func (o LocalOptions) HasSettingSource(src SettingSource) bool {
+	for _, s := range o.SettingSources {
+		if s == src {
+			return true
+		}
+	}
+	return false
 }
 
 // AllowShellEnabled returns whether shell tool is enabled.
@@ -117,7 +149,14 @@ type PermissionDecision struct {
 	Message string          // deny reason shown to the model
 }
 
-// SendOption mutates per-send behavior (reserved).
+// SendOption mutates per-send behavior.
 type SendOption func(*sendConfig)
 
-type sendConfig struct{}
+type sendConfig struct {
+	Force bool
+}
+
+// WithForce cancels an in-flight run (if any) before accepting the new Send (0.10+).
+func WithForce() SendOption {
+	return func(c *sendConfig) { c.Force = true }
+}

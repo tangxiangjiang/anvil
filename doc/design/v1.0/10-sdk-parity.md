@@ -1,7 +1,7 @@
 # 10 — Cursor SDK local parity
 
 **Product version focus:** **0.10** ([m_0.10_sdk_parity.md](../../roadmaps/v1.0/m_0.10_sdk_parity.md))  
-**Status:** planned (design frozen for roadmap; implement only via 0.10 phases)
+**Status:** done (surface parity through p_0.10.1–p_0.10.5)
 
 ## Intent
 
@@ -9,56 +9,72 @@ Anvil’s public local surface should stay **capability-aligned** with Cursor SD
 
 Alignment means **same jobs for the caller**, idiomatic Go — not protocol compatibility, not embedding the Cursor runtime, not matching Composer/IDE exploration quality.
 
-Chapters **00–09** already define the core loop, tools, providers, store, streaming, security, and extensibility. This chapter only records what **still must land for 0.10** relative to today’s Cursor SDK *local* docs.
+## Checklist (Cursor SDK local → Anvil)
 
-## Already covered in 00–09 / shipped ≤0.6
+| Cursor SDK local capability | Anvil |
+|-----------------------------|--------|
+| Create / Prompt / Resume / Send / Stream / Wait / Cancel / Close | done (≤0.6) |
+| Local `cwd` + sandbox tools | done |
+| OpenAI-compatible + Anthropic | done |
+| Session store + Resume | done |
+| Custom tools / Permission | done (0.3) |
+| MCP stdio + HTTP/SSE + headers | done (0.6 / 0.9) |
+| List / Get agents | done (0.5) |
+| Progress / MaxSteps / CLI | done (0.6) |
+| Stable error codes / wall vs deadline | done (0.7) |
+| `local.settingSources` (`project` / `user`) | done (0.10) |
+| `.cursor/mcp.json` project/user load | done (0.10) |
+| Public `SystemPrompt` override | done (0.10) |
+| Builtin allow / deny (`BuiltinTools` / `DisallowedTools`) | done (0.10) |
+| Force busy Send | done (0.10) |
+| Reload file MCP/rules/hooks | done (0.10) |
+| ListRuns / GetRun | done (0.10) |
+| Project hooks.json (minimal shell/write gate) | done (0.10) |
+| Prewarm local workspace helper | done (0.10) |
+| Full Cursor hooks event catalog | deferred |
+| MCP OAuth browser login | deferred |
+| Cursor Bridge / embed Cursor runtime | deferred |
+| Cloud agents / dashboard MCP | deferred |
+| Sub-agent framework | deferred |
+| IDE / LSP deep integration | deferred |
+| Composer / semantic-search quality parity | deferred (not surface) |
 
-| Capability | Where |
-|------------|--------|
-| Create / Prompt / Resume / Send / Stream / Wait / Cancel / Close | 02, 03 |
-| Local `cwd`, sandbox tools | 04, 08 |
-| OpenAI-compatible + Anthropic | 05 |
-| Session store + Resume | 06 |
-| Events / errors / usage | 07 |
-| Custom tools, MCP (stdio + HTTP/SSE), permission hook | 09, 0.3/0.6 |
-| List / Get | 0.5 |
-| Progress, store backends, CLI | 0.6 |
+## 0.10 API notes
 
-## 0.10 additions (design requirements)
+### SettingSources
 
-### Config layers — `settingSources`
+- `LocalOptions.SettingSources`: `project`, `user`; empty = inline-only.
+- Project: `{cwd}/.cursor/mcp.json`; also loads `.cursor/rules` into the system prompt.
+- User: `~/.cursor/mcp.json`.
+- Precedence: inline `MCPServers` → project → user.
+- Hooks: `.anvil/hooks.json` or `.cursor/hooks.json` when `project` is enabled.
 
-- Empty / omitted: **inline only** (current default): `Options.MCPServers`, explicit rules flags.
-- `project`: load `.cursor/mcp.json` under cwd; continue supporting Anvil rules paths (`AGENTS.md`, `.anvil/rules`, optional `.cursor/rules` when enabled).
-- `user`: load `~/.cursor/mcp.json` (and document any Anvil user-level path).
-- Precedence (high → low): per-send inline (if added) → Create inline → project → user.
-- Inline MCP still **not** restored on Resume; file sources may be re-read when sources are enabled.
+### SystemPrompt and tool filters
 
-### System prompt and tool filters
+- `Options.SystemPrompt` replaces the default Anvil main prompt; rules still append when enabled.
+- `BuiltinTools` / `DisallowedTools`: names or groups `shell|read|write|edit|search|mcp`. Custom `Tools` are never filtered out.
 
-- Public **`SystemPrompt`**: replaces Anvil’s default main system text for the primary loop; tool schemas and MCP registration still apply.
-- **Built-in allow/deny** lists (Cursor’s `tools` / `disallowedTools` idea): filter built-ins and/or groups (`shell`, `mcp`, …). Must not collide confusingly with custom `ToolSpec` registration — prefer distinct field names in Go if `Tools` is already taken.
-- Not persisted across Resume unless passed again.
+### Force / Reload / ListRuns
 
-### Run control and inspection
-
-- **`Force`**: if a run is in flight, cancel/expire it then accept the new `Send` (document exact status of the cancelled run).
-- **`Reload`**: re-read file-based MCP / rules / hooks without disposing the agent.
-- **`ListRuns` / get run**: expose `run_start` / `run_end` (and ids) from the store for operators.
+- `Send(..., WithForce())` cancels the in-flight run then accepts the new message.
+- `Agent.Reload` rebuilds registry/prompt/hooks from files.
+- `ListRuns` / `GetRun` / `Agent.ListRuns` read `run_start` / `run_end` from the store.
 
 ### Hooks (minimal)
 
-- File-based project hooks (`.cursor/hooks.json` and/or `.anvil/hooks.json`) when project sources are on.
-- 0.10 minimum: gate **shell** (and optionally write/edit) before execution; deny → tool error to the model.
-- Full Cursor hook catalog is **out of scope** for 0.10.
+```json
+{
+  "version": 1,
+  "beforeShell": [{"denyContains": "rm -rf", "message": "blocked"}],
+  "beforeWrite": [{"denyContains": "/etc/", "message": "blocked"}]
+}
+```
 
-### Prewarm (optional but specified)
+Deny → tool error to the model. Full Cursor hook catalog remains deferred.
 
-- Host helper to resolve rules / MCP / ignore-style scans ahead of first `Send` for large checkouts (Cursor’s `prewarmLocalWorkspace` role). Best-effort cache; must not require the Cursor app.
+### Prewarm
 
-### MCP HTTP extras
-
-- Request **headers** on HTTP/SSE MCP configs (prefer landed in 0.9; required for hosts by 0.10). OAuth browser login remains deferred.
+`Prewarm(ctx, cwd, sources) (release func(), err)` resolves MCP/rules/hooks paths without the Cursor app.
 
 ## Explicit non-goals (remain)
 
@@ -71,8 +87,4 @@ Chapters **00–09** already define the core loop, tools, providers, store, stre
 
 ## Roadmap mapping
 
-Implement only through [m_0.10_sdk_parity.md](../../roadmaps/v1.0/m_0.10_sdk_parity.md) phases `p_0.10.1` … `p_0.10.5`. Do not implement from this chapter alone.
-
-## Checklist deliverable
-
-Phase `p_0.10.5` publishes a living table: Cursor SDK local feature → Anvil status (`done` / `0.10` / `deferred`), kept in sync with this chapter.
+Implemented via [m_0.10_sdk_parity.md](../../roadmaps/v1.0/m_0.10_sdk_parity.md) phases `p_0.10.1` … `p_0.10.5`.

@@ -95,3 +95,19 @@ Local: anvil.LocalOptions{
   LoadRules: true, // AGENTS.md + .anvil/rules/*.md
 }
 ```
+
+### SDK local parity (0.10)
+
+Surface alignment with Cursor SDK *local* knobs (not Cursor runtime quality). See [`doc/design/v1.0/10-sdk-parity.md`](doc/design/v1.0/10-sdk-parity.md).
+
+```go
+Local: anvil.LocalOptions{
+  CWD:            ".",
+  SettingSources: []anvil.SettingSource{anvil.SettingSourceProject}, // .cursor/mcp.json + hooks
+}
+// Options.SystemPrompt, BuiltinTools / DisallowedTools
+// Send(ctx, msg, anvil.WithForce()); agent.Reload(ctx); anvil.ListRuns(...)
+// anvil.Prewarm(ctx, cwd, sources)
+```
+
+Still deferred: Bridge, cloud agents, full hooks catalog, sub-agents, IDE plugin.

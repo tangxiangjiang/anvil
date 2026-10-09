@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/anvil-dev/anvil/internal/compress"
+	"github.com/anvil-dev/anvil/internal/hooks"
 	"github.com/anvil-dev/anvil/internal/id"
 	"github.com/anvil-dev/anvil/internal/llm"
 	"github.com/anvil-dev/anvil/internal/mcp"
@@ -30,13 +31,15 @@ type Agent struct {
 
 	store store.Backend
 
-	mu       sync.Mutex
-	running  bool
-	history  []llm.Message
+	mu           sync.Mutex
+	running      bool
+	activeRun    *Run
+	history      []llm.Message
 	complete     llm.Completer
 	registry     *tools.Registry
 	mcp          []*mcp.Session
 	systemPrompt string
+	hookFile     *hooks.File
 }
 
 // Create validates options and returns a new local agent (no LLM call).
@@ -45,11 +48,15 @@ func Create(ctx context.Context, opts Options) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
+	opts, err = mergeMCPFromSources(cwd, opts)
+	if err != nil {
+		return nil, err
+	}
 	completer, err := newCompleter(opts)
 	if err != nil {
 		return nil, err
 	}
-	reg, sessions, err := buildRegistry(ctx, cwd, opts)
+	reg, sessions, hookFile, err := buildRegistry(ctx, cwd, opts)
 	if err != nil {
 		for _, s := range sessions {
 			_ = s.Close()
@@ -98,6 +105,7 @@ func Create(ctx context.Context, opts Options) (*Agent, error) {
 		mcp:          sessions,
 		history:      nil,
 		systemPrompt: sysPrompt,
+		hookFile:     hookFile,
 	}, nil
 }
 
@@ -125,11 +133,15 @@ func Resume(ctx context.Context, agentID string, opts Options) (*Agent, error) {
 	if agentID == "" {
 		return nil, newError("agent id is required", false, nil)
 	}
+	opts, err = mergeMCPFromSources(cwd, opts)
+	if err != nil {
+		return nil, err
+	}
 	completer, err := newCompleter(opts)
 	if err != nil {
 		return nil, err
 	}
-	reg, sessions, err := buildRegistry(ctx, cwd, opts)
+	reg, sessions, hookFile, err := buildRegistry(ctx, cwd, opts)
 	if err != nil {
 		for _, s := range sessions {
 			_ = s.Close()
@@ -171,31 +183,51 @@ func Resume(ctx context.Context, agentID string, opts Options) (*Agent, error) {
 		mcp:          sessions,
 		history:      historyFromRecords(records),
 		systemPrompt: sysPrompt,
+		hookFile:     hookFile,
 	}, nil
 }
 
 func buildSystemPrompt(cwd string, opts Options) (string, error) {
+	loadProject := opts.Local.LoadRules
+	loadCursor := opts.Local.LoadCursorRules || opts.Local.HasSettingSource(SettingSourceProject)
 	rulesText := ""
-	if opts.Local.LoadRules || opts.Local.LoadCursorRules {
+	if loadProject || loadCursor {
 		var err error
 		rulesText, err = rules.Load(cwd, rules.Options{
-			LoadProject: opts.Local.LoadRules,
-			LoadCursor:  opts.Local.LoadCursorRules,
+			LoadProject: loadProject,
+			LoadCursor:  loadCursor,
 		})
 		if err != nil {
 			return "", err
 		}
+	}
+	if opts.SystemPrompt != "" {
+		if rulesText == "" {
+			return opts.SystemPrompt, nil
+		}
+		return opts.SystemPrompt + "\n\n# Project rules\n" + rulesText, nil
 	}
 	return prompt.SystemWithOptions(cwd, rulesText, prompt.Options{
 		AllowShell: opts.Local.AllowShellEnabled(),
 	}), nil
 }
 
-func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Registry, []*mcp.Session, error) {
+func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Registry, []*mcp.Session, *hooks.File, error) {
 	reg := tools.NewRegistry(cwd, opts.Local.AllowShellEnabled())
-	if opts.Permission != nil {
+
+	var hookFile *hooks.File
+	if opts.Local.HasSettingSource(SettingSourceProject) {
+		hf, _, err := hooks.Load(cwd)
+		if err != nil {
+			return nil, nil, nil, newError("load hooks", false, err)
+		}
+		hookFile = hf
+	}
+
+	perm := composePermission(opts.Permission, hookFile)
+	if perm != nil {
 		reg.SetPermission(func(ctx context.Context, name string, args json.RawMessage) (json.RawMessage, error) {
-			dec, err := opts.Permission(ctx, PermissionRequest{ToolName: name, Args: args})
+			dec, err := perm(ctx, PermissionRequest{ToolName: name, Args: args})
 			if err != nil {
 				return nil, err
 			}
@@ -214,7 +246,7 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 	}
 	for _, spec := range opts.Tools {
 		if spec.Handler == nil {
-			return nil, nil, newError("tool "+spec.Name+": handler is required", false, nil)
+			return nil, nil, nil, newError("tool "+spec.Name+": handler is required", false, nil)
 		}
 		if err := reg.Register(&tools.FuncTool{
 			Name:        spec.Name,
@@ -222,7 +254,7 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 			Parameters:  spec.Parameters,
 			Handler:     spec.Handler,
 		}); err != nil {
-			return nil, nil, newError(err.Error(), false, nil)
+			return nil, nil, nil, newError(err.Error(), false, nil)
 		}
 	}
 	var sessions []*mcp.Session
@@ -240,7 +272,7 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 			for _, s := range sessions {
 				_ = s.Close()
 			}
-			return nil, nil, newError("mcp server "+name, false, err)
+			return nil, nil, nil, newError("mcp server "+name, false, err)
 		}
 		sessions = append(sessions, sess)
 		for _, t := range sess.Tools() {
@@ -258,11 +290,40 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 				for _, s := range sessions {
 					_ = s.Close()
 				}
-				return nil, nil, newError(err.Error(), false, nil)
+				return nil, nil, nil, newError(err.Error(), false, nil)
 			}
 		}
 	}
-	return reg, sessions, nil
+	applyBuiltinToolFilters(reg, opts)
+	return reg, sessions, hookFile, nil
+}
+
+func composePermission(user PermissionFunc, hookFile *hooks.File) PermissionFunc {
+	if user == nil && hookFile == nil {
+		return nil
+	}
+	return func(ctx context.Context, req PermissionRequest) (PermissionDecision, error) {
+		if hookFile != nil {
+			switch req.ToolName {
+			case "shell":
+				var in struct {
+					Command string `json:"command"`
+				}
+				_ = json.Unmarshal(req.Args, &in)
+				if deny, msg := hookFile.CheckShell(in.Command); deny {
+					return PermissionDecision{Allow: false, Message: msg}, nil
+				}
+			case "write_file", "edit_file", "apply_patch":
+				if deny, msg := hookFile.CheckMutate(req.ToolName, string(req.Args)); deny {
+					return PermissionDecision{Allow: false, Message: msg}, nil
+				}
+			}
+		}
+		if user != nil {
+			return user(ctx, req)
+		}
+		return PermissionDecision{Allow: true}, nil
+	}
 }
 
 func sanitizeName(s string) string {
@@ -332,13 +393,29 @@ func (a *Agent) AgentID() string {
 
 // Send starts a run for the user message.
 func (a *Agent) Send(ctx context.Context, message string, opts ...SendOption) (*Run, error) {
-	_ = opts
 	if a == nil {
 		return nil, newError("nil agent", false, nil)
 	}
 	if a.closed {
 		return nil, newError("agent is closed", false, nil)
 	}
+	cfg := sendConfig{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&cfg)
+		}
+	}
+
+	if cfg.Force {
+		a.mu.Lock()
+		prev := a.activeRun
+		a.mu.Unlock()
+		if prev != nil {
+			_ = prev.Cancel(ctx)
+			_, _ = prev.Wait(ctx)
+		}
+	}
+
 	a.mu.Lock()
 	if a.running {
 		a.mu.Unlock()
@@ -347,12 +424,68 @@ func (a *Agent) Send(ctx context.Context, message string, opts ...SendOption) (*
 	a.running = true
 	historyCopy := append([]llm.Message(nil), a.history...)
 	wall := a.opts.MaxWallTime
-	a.mu.Unlock()
-
 	runCtx, cancelCause := context.WithCancelCause(ctx)
 	run := newRun("run-"+id.New(), cancelCause)
+	a.activeRun = run
+	a.mu.Unlock()
+
 	go a.executeRun(runCtx, cancelCause, wall, run, message, historyCopy)
 	return run, nil
+}
+
+// Reload re-reads file-based MCP, rules, and hooks without disposing the agent (0.10+).
+// Inline MCPServers / Tools / SystemPrompt from the original Options are kept;
+// file layers are refreshed. Fails if a run is in progress.
+func (a *Agent) Reload(ctx context.Context) error {
+	if a == nil {
+		return newError("nil agent", false, nil)
+	}
+	a.mu.Lock()
+	if a.running {
+		a.mu.Unlock()
+		return newError("cannot reload while a run is in progress", false, nil)
+	}
+	opts := a.opts
+	cwd := a.cwd
+	oldSessions := a.mcp
+	a.mu.Unlock()
+
+	opts, err := mergeMCPFromSources(cwd, opts)
+	if err != nil {
+		return err
+	}
+	reg, sessions, hookFile, err := buildRegistry(ctx, cwd, opts)
+	if err != nil {
+		for _, s := range sessions {
+			_ = s.Close()
+		}
+		return err
+	}
+	sysPrompt, err := buildSystemPrompt(cwd, opts)
+	if err != nil {
+		for _, s := range sessions {
+			_ = s.Close()
+		}
+		return newError("load project rules", false, err)
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.running {
+		for _, s := range sessions {
+			_ = s.Close()
+		}
+		return newError("cannot reload while a run is in progress", false, nil)
+	}
+	for _, s := range oldSessions {
+		_ = s.Close()
+	}
+	a.opts = opts
+	a.registry = reg
+	a.mcp = sessions
+	a.systemPrompt = sysPrompt
+	a.hookFile = hookFile
+	return nil
 }
 
 func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseFunc, wall time.Duration, run *Run, message string, history []llm.Message) {
@@ -360,6 +493,9 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 		cancelCause(nil)
 		a.mu.Lock()
 		a.running = false
+		if a.activeRun == run {
+			a.activeRun = nil
+		}
 		a.mu.Unlock()
 	}()
 

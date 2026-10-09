@@ -94,6 +94,26 @@ func (r *Registry) Register(t Tool) error {
 	return nil
 }
 
+// Unregister removes a tool by name. No-op if missing.
+func (r *Registry) Unregister(name string) {
+	if r == nil {
+		return
+	}
+	delete(r.tools, name)
+}
+
+// Names returns registered tool names (unsorted).
+func (r *Registry) Names() []string {
+	if r == nil {
+		return nil
+	}
+	out := make([]string, 0, len(r.tools))
+	for name := range r.tools {
+		out = append(out, name)
+	}
+	return out
+}
+
 // SetPermission installs a mutating-tool gate. nil clears the gate.
 func (r *Registry) SetPermission(fn PermissionFunc) {
 	r.permission = fn

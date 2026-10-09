@@ -15,7 +15,7 @@ Versioned delivery for Anvil through product **0.10**. Design cutoff: [`doc/desi
 | 0.7 | Streaming & errors | done | [m_0.7_streaming_errors.md](m_0.7_streaming_errors.md) | [07](../../design/v1.0/07-streaming-and-errors.md) |
 | 0.8 | Security hardening | done | [m_0.8_security.md](m_0.8_security.md) | [08](../../design/v1.0/08-security.md) |
 | 0.9 | Extensibility depth | done | [m_0.9_extensibility.md](m_0.9_extensibility.md) | [09](../../design/v1.0/09-extensibility.md) |
-| 0.10 | Cursor SDK local parity | planned | [m_0.10_sdk_parity.md](m_0.10_sdk_parity.md) | [10](../../design/v1.0/10-sdk-parity.md) |
+| 0.10 | Cursor SDK local parity | done | [m_0.10_sdk_parity.md](m_0.10_sdk_parity.md) | [10](../../design/v1.0/10-sdk-parity.md) |
 
 ## Naming
 

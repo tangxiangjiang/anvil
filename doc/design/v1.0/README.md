@@ -18,7 +18,7 @@ This tree is the **design freeze line** for 0.1–0.10 delivery. Later product l
 | 07 | [07-streaming-and-errors.md](07-streaming-and-errors.md) | Events and error model → roadmap 0.7 |
 | 08 | [08-security.md](08-security.md) | Path escape, shell, secrets → roadmap 0.8 |
 | 09 | [09-extensibility.md](09-extensibility.md) | Custom tools, MCP, hooks → roadmap 0.3 / 0.9 |
-| 10 | [10-sdk-parity.md](10-sdk-parity.md) | Cursor SDK **local** parity → roadmap **0.10** |
+| 10 | [10-sdk-parity.md](10-sdk-parity.md) | Cursor SDK **local** parity → roadmap **0.10** (done) |
 
 Parent index: [`doc/design/README.md`](../README.md).
 
