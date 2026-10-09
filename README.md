@@ -1,5 +1,7 @@
 # Anvil
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 Independent **local-only** Go Agent SDK. Capability-aligned with Cursor’s local agent API shape (`Create` / `Prompt` / `Send` / `Stream` / `Wait`), but runs your own tool loop against **OpenAI-compatible** or **Anthropic** HTTP APIs — not the Cursor runtime.
 
 ## Layout
@@ -111,3 +113,7 @@ Local: anvil.LocalOptions{
 ```
 
 Still deferred: Bridge, cloud agents, full hooks catalog, sub-agents, IDE plugin.
+
+## License
+
+Licensed under the MIT License. See [LICENSE](LICENSE).
