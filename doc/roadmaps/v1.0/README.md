@@ -23,7 +23,7 @@ Versioned delivery for Anvil through product **0.22**. Design cutoff: [`doc/desi
 | 0.15 | Web search | done | [m_0.15_web_search.md](m_0.15_web_search.md) | [15](../../design/v1.0/15-web-search.md) |
 | 0.16 | LSP & language intelligence | done | [m_0.16_lsp.md](m_0.16_lsp.md) | [16](../../design/v1.0/16-lsp.md) |
 | 0.17 | Git tools | done | [m_0.17_git_tools.md](m_0.17_git_tools.md) | [17](../../design/v1.0/17-git-tools.md) |
-| 0.18 | Test & build tools | planned | [m_0.18_test_build.md](m_0.18_test_build.md) | [18](../../design/v1.0/18-test-build.md) |
+| 0.18 | Test & build tools | done | [m_0.18_test_build.md](m_0.18_test_build.md) | [18](../../design/v1.0/18-test-build.md) |
 | 0.19 | Vision (image / screenshot) | planned | [m_0.19_vision.md](m_0.19_vision.md) | [19](../../design/v1.0/19-vision.md) |
 | 0.20 | Agent plugins (worker-side) | planned | [m_0.20_plugins.md](m_0.20_plugins.md) | [20](../../design/v1.0/20-plugins.md) |
 | 0.21 | Dev memory (plugin) | planned | [m_0.21_dev_memory.md](m_0.21_dev_memory.md) | [21](../../design/v1.0/21-dev-memory.md) |

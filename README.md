@@ -134,6 +134,18 @@ set ANVIL_MODEL=private/demo
 
 `anvil.ListModels` hits `GET {BaseURL}/models`. See [`doc/design/v1.0/12-model-gateway.md`](doc/design/v1.0/12-model-gateway.md).
 
+### Test & build (0.18)
+
+`run_tests` / `build` register only when configured via `Options.Test` / `Options.Build` or `.anvil/project.json`. Tool group `verify`. Model may pass `selector` / `path` / `extra_args` tokens; shell metacharacters are rejected. Commands are argv arrays (no shell string).
+
+```go
+Test:  anvil.TestOptions{Command: []string{"go", "test", "./..."}},
+Build: anvil.BuildOptions{Command: []string{"go", "build", "./..."}},
+// example: source/examples/project.example.json → copy to .anvil/project.json
+```
+
+See [`doc/design/v1.0/18-test-build.md`](doc/design/v1.0/18-test-build.md).
+
 ### Git tools (0.17)
 
 Read-only builtins `git_status`, `git_diff`, `git_log` (tool group `git`). Invokes the `git` binary with fixed argv (`GIT_TERMINAL_PROMPT=0`); non-git cwd returns a clear error. Diffs are size-capped and redacted.

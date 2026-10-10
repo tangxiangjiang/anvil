@@ -1,7 +1,7 @@
 # 18 — Test & build tools
 
 **Product version focus:** **0.18** ([m_0.18_test_build.md](../../roadmaps/v1.0/m_0.18_test_build.md))  
-**Status:** planned
+**Status:** done
 
 ## Intent
 

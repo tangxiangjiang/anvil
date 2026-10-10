@@ -66,6 +66,7 @@ type Registry struct {
 	webCfg     WebConfig
 	lsp        *lsp.Supervisor
 	fileSync   func(ctx context.Context, absPath string)
+	verifyCfg  VerifyConfig
 }
 
 // PreExecFunc runs before every tool (hooks like beforeMCP / beforeRead).

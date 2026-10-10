@@ -27,6 +27,7 @@ import (
 	"github.com/anvil-dev/anvil/internal/skills"
 	"github.com/anvil-dev/anvil/internal/store"
 	"github.com/anvil-dev/anvil/internal/tools"
+	"github.com/anvil-dev/anvil/internal/verify"
 	"github.com/anvil-dev/anvil/internal/websearch"
 )
 
@@ -333,6 +334,9 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 	if err := configureWebTools(reg, opts); err != nil {
 		return nil, nil, nil, nil, err
 	}
+	if err := configureVerifyTools(reg, cwd, opts); err != nil {
+		return nil, nil, nil, nil, err
+	}
 	lspSup, err := configureLSP(ctx, reg, cwd, opts)
 	if err != nil {
 		return nil, nil, nil, nil, err
@@ -514,6 +518,25 @@ func configureLSP(ctx context.Context, reg *tools.Registry, cwd string, opts Opt
 	}
 	reg.SetLSP(sup)
 	return sup, nil
+}
+
+func configureVerifyTools(reg *tools.Registry, cwd string, opts Options) error {
+	pf, err := verify.LoadProject(cwd)
+	if err != nil {
+		return newError("load project.json", false, err)
+	}
+	testSpec := verify.MergeSpec(verify.CommandSpec{
+		Command: opts.Test.Command,
+		Timeout: opts.Test.Timeout,
+		Dir:     opts.Test.Dir,
+	}, pf.TestSpec())
+	buildSpec := verify.MergeSpec(verify.CommandSpec{
+		Command: opts.Build.Command,
+		Timeout: opts.Build.Timeout,
+		Dir:     opts.Build.Dir,
+	}, pf.BuildSpec())
+	reg.SetVerifyConfig(tools.VerifyConfig{Test: testSpec, Build: buildSpec})
+	return nil
 }
 
 func configureWebTools(reg *tools.Registry, opts Options) error {

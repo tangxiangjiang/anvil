@@ -65,7 +65,7 @@ type Options struct {
 	SystemPrompt string
 
 	// BuiltinTools, when non-empty, is an allow-list of built-in tool names or groups (0.10+).
-	// Groups: shell, read, write, edit, search, skills, web, lsp, git, mcp. Custom Tools entries are never filtered out.
+	// Groups: shell, read, write, edit, search, skills, web, lsp, git, verify, mcp. Custom Tools entries are never filtered out.
 	BuiltinTools []string
 	// DisallowedTools denies built-in names or groups after allow-list (0.10+).
 	DisallowedTools []string
@@ -93,6 +93,25 @@ type Options struct {
 
 	// LSP enables language-server tools (0.16+). Disabled by default unless configured.
 	LSP LSPOptions
+
+	// Test configures run_tests (0.18+). Absent/empty Command → tool not registered.
+	Test TestOptions
+	// Build configures build (0.18+). Absent/empty Command → tool not registered.
+	Build BuildOptions
+}
+
+// TestOptions is the argv test command (0.18+).
+type TestOptions struct {
+	Command []string      // e.g. ["go","test","./..."]
+	Timeout time.Duration // 0 = 10m
+	Dir     string        // optional subdir under cwd
+}
+
+// BuildOptions is the argv build command (0.18+).
+type BuildOptions struct {
+	Command []string
+	Timeout time.Duration // 0 = 5m
+	Dir     string
 }
 
 // LSPOptions configures language servers (0.16+).

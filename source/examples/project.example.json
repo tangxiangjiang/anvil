@@ -1,0 +1,10 @@
+{
+  "test": {
+    "command": ["go", "test", "./..."],
+    "timeout_ms": 600000
+  },
+  "build": {
+    "command": ["go", "build", "./..."],
+    "timeout_ms": 300000
+  }
+}

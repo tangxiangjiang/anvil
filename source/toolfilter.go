@@ -74,6 +74,9 @@ func expandToolSelectors(selectors []string) map[string]bool {
 			out["git_status"] = true
 			out["git_diff"] = true
 			out["git_log"] = true
+		case "verify", "test":
+			out["run_tests"] = true
+			out["build"] = true
 		case "mcp":
 			out["__mcp__"] = true
 		default:
