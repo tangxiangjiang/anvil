@@ -16,6 +16,7 @@ import (
 	"github.com/anvil-dev/anvil/internal/compress"
 	"github.com/anvil-dev/anvil/internal/hooks"
 	"github.com/anvil-dev/anvil/internal/id"
+	"github.com/anvil-dev/anvil/internal/index"
 	"github.com/anvil-dev/anvil/internal/llm"
 	"github.com/anvil-dev/anvil/internal/mcp"
 	"github.com/anvil-dev/anvil/internal/prompt"
@@ -217,6 +218,22 @@ func buildSystemPrompt(cwd string, opts Options) (string, error) {
 
 func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Registry, []*mcp.Session, *hooks.File, error) {
 	reg := tools.NewRegistry(cwd, opts.Local.AllowShellEnabled())
+	embedKey := opts.EmbedAPIKey
+	if embedKey == "" {
+		embedKey = opts.APIKey
+	}
+	embedURL := opts.EmbedBaseURL
+	if embedURL == "" {
+		embedURL = opts.BaseURL
+	}
+	reg.SetIndexEmbed(tools.IndexEmbed{
+		BaseURL: embedURL,
+		APIKey:  embedKey,
+		Model:   opts.EmbedModel,
+	})
+	if opts.Local.EnsureIndex && !index.Exists(cwd) {
+		_, _ = index.Build(ctx, cwd, index.BuildOptions{})
+	}
 
 	var hookFile *hooks.File
 	if opts.Local.HasSettingSource(SettingSourceProject) {

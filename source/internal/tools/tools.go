@@ -58,6 +58,7 @@ type Registry struct {
 	maxOutput  int
 	tools      map[string]Tool
 	permission PermissionFunc
+	indexEmbed IndexEmbed
 }
 
 // NewRegistry builds the built-in tool set.
@@ -74,6 +75,7 @@ func NewRegistry(cwd string, allowShell bool) *Registry {
 	r.register(&applyPatchTool{r: r})
 	r.register(&grepTool{r: r})
 	r.register(&globTool{r: r})
+	r.register(&semanticSearchTool{r: r})
 	if allowShell {
 		r.register(&shellTool{r: r})
 	}

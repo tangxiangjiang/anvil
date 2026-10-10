@@ -49,6 +49,23 @@ func TestCmdGetJSON(t *testing.T) {
 	}
 }
 
+func TestCmdIndexBuildStatus(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a\nfunc HelloIndex() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmdIndex([]string{"build", dir}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmdIndex([]string{"status", dir}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := anvil.IndexStat(dir)
+	if err != nil || !st.Exists || st.Chunks < 1 {
+		t.Fatalf("%+v %v", st, err)
+	}
+}
+
 func TestBuildOptionsFromConfigFile(t *testing.T) {
 	dir := t.TempDir()
 	cfgDir := filepath.Join(dir, ".anvil")

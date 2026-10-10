@@ -38,6 +38,8 @@ func main() {
 		err = cmdGet(args)
 	case "models":
 		err = cmdModels(args)
+	case "index":
+		err = cmdIndex(args)
 	case "help", "-h", "--help":
 		usage()
 		return
@@ -73,6 +75,7 @@ Usage:
   anvil list [flags] <cwd>
   anvil get [flags] <cwd> <agent-id>
   anvil models [flags]
+  anvil index build|status|clear [flags] <cwd>
 
 Flags (also via env / optional .anvil/config JSON):
   --provider  openai|anthropic     (ANVIL_PROVIDER)
@@ -442,6 +445,95 @@ func truncate(s string, maxRunes int) string {
 	}
 	runes := []rune(s)
 	return string(runes[:maxRunes]) + "…"
+}
+
+func cmdIndex(args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: anvil index build|status|clear [flags] <cwd>")
+	}
+	sub := args[0]
+	rest := args[1:]
+	switch sub {
+	case "build":
+		return cmdIndexBuild(rest)
+	case "status":
+		return cmdIndexStatus(rest)
+	case "clear":
+		return cmdIndexClear(rest)
+	default:
+		return fmt.Errorf("unknown index subcommand %q (build|status|clear)", sub)
+	}
+}
+
+func cmdIndexBuild(args []string) error {
+	var embedURL, embedModel, embedKey string
+	for len(args) > 0 && strings.HasPrefix(args[0], "-") {
+		a := args[0]
+		args = args[1:]
+		switch {
+		case a == "--embed-url" && len(args) > 0:
+			embedURL = args[0]
+			args = args[1:]
+		case a == "--embed-model" && len(args) > 0:
+			embedModel = args[0]
+			args = args[1:]
+		case a == "--embed-key" && len(args) > 0:
+			embedKey = args[0]
+			args = args[1:]
+		case a == "--base-url" && len(args) > 0:
+			embedURL = args[0]
+			args = args[1:]
+		default:
+			return fmt.Errorf("unknown flag %s", a)
+		}
+	}
+	if len(args) < 1 {
+		return fmt.Errorf("usage: anvil index build [--embed-url URL] [--embed-model ID] [--embed-key KEY] <cwd>")
+	}
+	cwd := args[0]
+	if embedURL == "" {
+		embedURL = firstNonEmpty(os.Getenv("ANVIL_EMBED_BASE_URL"), os.Getenv("ANVIL_BASE_URL"))
+	}
+	if embedModel == "" {
+		embedModel = os.Getenv("ANVIL_EMBED_MODEL")
+	}
+	if embedKey == "" {
+		embedKey = firstNonEmpty(os.Getenv("ANVIL_EMBED_API_KEY"), os.Getenv("ANVIL_API_KEY"))
+	}
+	// Embed only when both URL and model are set.
+	opts := anvil.IndexBuildOptions{}
+	if embedURL != "" && embedModel != "" {
+		opts.EmbedBaseURL = embedURL
+		opts.EmbedModel = embedModel
+		opts.EmbedAPIKey = embedKey
+	}
+	res, err := anvil.BuildIndex(context.Background(), cwd, opts)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("index=%s files_seen=%d indexed=%d skipped=%d removed=%d chunks=%d embedded=%d\n",
+		res.DBPath, res.FilesSeen, res.FilesIndexed, res.FilesSkipped, res.FilesRemoved, res.Chunks, res.Embedded)
+	return nil
+}
+
+func cmdIndexStatus(args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: anvil index status <cwd>")
+	}
+	st, err := anvil.IndexStat(args[0])
+	if err != nil {
+		return err
+	}
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(st)
+}
+
+func cmdIndexClear(args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: anvil index clear <cwd>")
+	}
+	return anvil.ClearIndex(args[0])
 }
 
 func cmdModels(args []string) error {

@@ -69,6 +69,14 @@ type Options struct {
 	BuiltinTools []string
 	// DisallowedTools denies built-in names or groups after allow-list (0.10+).
 	DisallowedTools []string
+
+	// EmbedBaseURL is an OpenAI-compatible root (…/v1) for /embeddings (0.13+).
+	// Empty: lexical-only semantic_search (and index build skips vectors unless CLI flags set).
+	EmbedBaseURL string
+	// EmbedModel is the embedding model id when EmbedBaseURL is set.
+	EmbedModel string
+	// EmbedAPIKey overrides APIKey for embeddings when non-empty.
+	EmbedAPIKey string
 }
 
 // Model identifies the model id for the selected provider.
@@ -93,6 +101,10 @@ type LocalOptions struct {
 	// SettingSources enables file-based MCP/rules/hooks layers (0.10+).
 	// Empty = inline-only (current default): no .cursor/mcp.json load.
 	SettingSources []SettingSource
+
+	// EnsureIndex builds a lexical project index when search.db is missing (0.13+).
+	// Does not call the embed API. Create still prefers a fast path — use CLI for full rebuilds.
+	EnsureIndex bool
 }
 
 // HasSettingSource reports whether src is enabled.

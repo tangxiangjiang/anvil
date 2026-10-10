@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/anvil-dev/anvil/internal/hooks"
+	"github.com/anvil-dev/anvil/internal/index"
 	"github.com/anvil-dev/anvil/internal/rules"
 	"github.com/anvil-dev/anvil/internal/settings"
 )
@@ -45,6 +46,10 @@ func Prewarm(ctx context.Context, cwd string, sources []SettingSource) (release 
 		if _, err := settings.UserMCPPath(); err != nil {
 			return nil, newError("prewarm user path", false, err)
 		}
+	}
+	// Best-effort lexical index if missing (does not embed; use `anvil index build` for hybrid).
+	if !index.Exists(abs) {
+		_, _ = index.Build(ctx, abs, index.BuildOptions{})
 	}
 	return func() {}, nil
 }

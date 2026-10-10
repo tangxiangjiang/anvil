@@ -134,6 +134,21 @@ set ANVIL_MODEL=private/demo
 
 `anvil.ListModels` hits `GET {BaseURL}/models`. See [`doc/design/v1.0/12-model-gateway.md`](doc/design/v1.0/12-model-gateway.md).
 
+### Retrieval / semantic_search (0.13)
+
+Local project index at `{cwd}/.anvil/index/search.db` (SQLite + FTS5; optional embedding BLOBs). Builtin tool `semantic_search` (tool group `search`).
+
+```bash
+cd source
+go build -o ../bin/anvil.exe ./cmd/anvil
+../bin/anvil.exe index build /path/to/repo
+../bin/anvil.exe index status /path/to/repo
+# optional hybrid embeddings (OpenAI-compatible POST …/embeddings):
+../bin/anvil.exe index build --embed-url http://127.0.0.1:8080/v1 --embed-model text-embedding-3-small /path/to/repo
+```
+
+`Local.EnsureIndex` builds a lexical index on Create when `search.db` is missing. See [`doc/design/v1.0/13-retrieval.md`](doc/design/v1.0/13-retrieval.md).
+
 ### Worker daemon (0.11)
 
 `agentd` accepts local controller connections (unix socket or `tcp://127.0.0.1:…`), allowlists repos, and runs jobs via an embedded Anvil worker (`ForceStub` in tests; real LLM via `ANVIL_*` env).

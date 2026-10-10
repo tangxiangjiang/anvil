@@ -1,7 +1,7 @@
 # 13 — Retrieval quality (index / semantic search)
 
 **Product version focus:** **0.13** ([m_0.13_retrieval.md](../../roadmaps/v1.0/m_0.13_retrieval.md))  
-**Status:** planned
+**Status:** done
 
 ## Intent
 
@@ -78,11 +78,24 @@ Embedding batch calls go through configured embed endpoint (`Options.EmbedBaseUR
 
 No claim of Cursor Composer-quality recall; acceptance is “materially better than grep-only on medium repos” with fixtures.
 
+## Embeddings route (gateway)
+
+When hybrid embeddings are enabled, Anvil calls OpenAI-compatible:
+
+`POST {EmbedBaseURL}/embeddings` with body `{"model":"<id>","input":["…"]}` and `Authorization: Bearer …`.
+
+`EmbedBaseURL` is typically the same as chat `BaseURL` (gateway `/v1`). Gateway may proxy `/v1/embeddings` to an upstream that supports it; if unset, index build and `semantic_search` stay **FTS-only**.
+
 ## MCP path (B)
 
-- Publish contract: tools `semantic_search` / `reindex` with same args semantics.
-- Hosts that already run a vector DB may attach MCP instead of builtin index.
-- Anvil does not require MCP for 0.13 acceptance.
+Optional alternative to the builtin index (not required for 0.13 acceptance):
+
+| Tool | Args | Notes |
+|------|------|--------|
+| `semantic_search` | `query`, `path_glob?`, `top_k?` | Same semantics as builtin; return path/line/excerpt text |
+| `reindex` | optional `full?: bool` | Operator refresh; Anvil may keep this CLI-only |
+
+Register via `Options.MCPServers` / `.cursor/mcp.json`. Builtin `semantic_search` remains the default; deny it with `DisallowedTools: ["semantic_search"]` if MCP replaces it.
 
 ## Security
 
