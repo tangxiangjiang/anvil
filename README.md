@@ -150,6 +150,17 @@ Plugins: []string{"sample"},
 
 Crash of an exec plugin fails that tool call / job path; it does not take down agentd (worker/embedded runner reports the error). See [`doc/design/v1.0/20-plugins.md`](doc/design/v1.0/20-plugins.md).
 
+### Development memory (0.21)
+
+First-party plugin `memory` (not core builtins). Durable notes under `{cwd}/.anvil/memory/` that survive new agent ids on the same cwd — distinct from session Resume (transcript) and rules/skills (static instructions).
+
+```go
+Plugins: []string{"memory"},
+// optional vector boost for memory_search when EmbedBaseURL + EmbedModel are set
+```
+
+Tools: `memory_write` / `memory_read` / `memory_search` / `memory_list` / `memory_delete`. Writes redact secret-like strings (reject private keys). Without the plugin, memory tools are absent; Resume still works. See [`doc/design/v1.0/21-dev-memory.md`](doc/design/v1.0/21-dev-memory.md).
+
 ### Vision / images (0.19)
 
 Opt-in multimodal attachments (off by default). Set `Options.Vision.Enabled` and pass images via `WithAttachments` / `Options.Attachments` (path under cwd or in-memory bytes). Optional builtin `read_image` (tool group `vision`) queues a sandbox file for the next Completer turn. Images are downscaled (default longest side 2048, ~4MiB encoded budget). Gateway catalog may advertise `anvil.vision: true` on models.

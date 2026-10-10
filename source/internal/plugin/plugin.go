@@ -34,6 +34,8 @@ type LoadOptions struct {
 	// Policy gates which ids/permissions may load (nil = allow requested).
 	Policy *Policy
 	Logger *slog.Logger
+	// Embed is optional embeddings config for plugins that opt into vectors (0.21+).
+	Embed EmbedConfig
 }
 
 // Manager holds initialized plugins for Close.
@@ -114,7 +116,7 @@ func Load(ctx context.Context, cwd string, ids []string, reg *tools.Registry, op
 	if len(ids) == 0 {
 		return &Manager{}, nil
 	}
-	host := NewHost(cwd, reg, opts.Logger)
+	host := NewHostWithEmbed(cwd, reg, opts.Logger, opts.Embed)
 	mgr := &Manager{}
 	seen := map[string]bool{}
 	for _, raw := range ids {

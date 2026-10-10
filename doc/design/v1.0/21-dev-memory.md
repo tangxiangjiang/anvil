@@ -1,7 +1,7 @@
 # 21 — Development memory (plugin)
 
 **Product version focus:** **0.21** ([m_0.21_dev_memory.md](../../roadmaps/v1.0/m_0.21_dev_memory.md))  
-**Status:** planned
+**Status:** done
 
 ## Intent
 

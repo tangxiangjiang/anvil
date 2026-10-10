@@ -19,7 +19,7 @@
     "heartbeat_sec": 10
   },
   "plugins": {
-    "available": ["sample"],
+    "available": ["sample", "memory"],
     "deny": [],
     "search_paths": []
   }

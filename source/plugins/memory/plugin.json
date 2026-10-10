@@ -1,0 +1,7 @@
+{
+  "id": "memory",
+  "version": "0.1.0",
+  "anvil_api": 1,
+  "capabilities": ["tools.memory"],
+  "permissions": ["fs.read", "fs.write", "net.none"]
+}

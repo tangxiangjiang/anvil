@@ -31,6 +31,7 @@ import (
 	"github.com/anvil-dev/anvil/internal/verify"
 	"github.com/anvil-dev/anvil/internal/vision"
 	"github.com/anvil-dev/anvil/internal/websearch"
+	plugmemory "github.com/anvil-dev/anvil/plugins/memory"
 	"github.com/anvil-dev/anvil/plugins/sample"
 )
 
@@ -223,10 +224,23 @@ func buildSystemPrompt(cwd string, opts Options) (string, error) {
 	if notes := sessionStartNotes(cwd, opts); notes != "" {
 		base += "\n\n# Session notes\n" + notes
 	}
+	if pluginNotes := pluginSessionHints(opts); pluginNotes != "" {
+		base += "\n\n# Plugins\n" + pluginNotes
+	}
 	if always := alwaysSkillsText(cwd, opts); always != "" {
 		base += "\n\n# Skills (always)\n" + always
 	}
 	return base, nil
+}
+
+func pluginSessionHints(opts Options) string {
+	var parts []string
+	for _, id := range opts.Plugins {
+		if strings.TrimSpace(id) == "memory" {
+			parts = append(parts, plugmemory.SessionHint)
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 func sessionStartNotes(cwd string, opts Options) string {
@@ -292,6 +306,7 @@ func cleanupRegistry(sessions []*mcp.Session, plugMgr *plugin.Manager, lspSup *l
 func builtinPluginFactories() map[string]plugin.Factory {
 	return map[string]plugin.Factory{
 		"sample": sample.New,
+		"memory": plugmemory.New,
 	}
 }
 
@@ -467,6 +482,11 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 		Factories:   builtinPluginFactories(),
 		SearchPaths: opts.PluginDirs,
 		Policy:      toPluginPolicy(opts.PluginPolicy),
+		Embed: plugin.EmbedConfig{
+			BaseURL: embedURL,
+			APIKey:  embedKey,
+			Model:   opts.EmbedModel,
+		},
 	})
 	if err != nil {
 		cleanupRegistry(sessions, nil, lspSup)
