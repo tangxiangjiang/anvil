@@ -56,6 +56,19 @@ func Build(ctx context.Context, cwd string, opts BuildOptions) (*BuildResult, er
 	res := &BuildResult{DBPath: db.Path()}
 	var pendingEmbed []embedJob
 
+	wantEmbed := opts.EmbedURL != "" && opts.EmbedModel != ""
+	forceReembed := false
+	if wantEmbed {
+		prevModel := db.getMeta("embed_model")
+		if prevModel != "" && prevModel != opts.EmbedModel {
+			if _, err := db.db.Exec(`DELETE FROM chunk_vec`); err != nil {
+				return nil, fmt.Errorf("clear vectors on embed model change: %w", err)
+			}
+			_ = db.setMeta("embed_model", "")
+			forceReembed = true
+		}
+	}
+
 	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return nil
@@ -106,7 +119,8 @@ func Build(ctx context.Context, cwd string, opts BuildOptions) (*BuildResult, er
 
 		var oldHash string
 		_ = db.db.QueryRow(`SELECT hash FROM files WHERE path=?`, rel).Scan(&oldHash)
-		if oldHash == fileHash {
+		unchanged := oldHash == fileHash
+		if unchanged && !forceReembed {
 			return nil
 		}
 
@@ -114,12 +128,24 @@ func Build(ctx context.Context, cwd string, opts BuildOptions) (*BuildResult, er
 		for i := range chunks {
 			chunks[i].Text = redact.String(chunks[i].Text)
 		}
-		if err := db.replaceFile(rel, info.ModTime().Unix(), fileHash, chunks); err != nil {
-			return fmt.Errorf("index %s: %w", rel, err)
+		if !unchanged {
+			if err := db.replaceFile(rel, info.ModTime().Unix(), fileHash, chunks); err != nil {
+				return fmt.Errorf("index %s: %w", rel, err)
+			}
+			res.FilesIndexed++
+			res.Chunks += len(chunks)
+		} else {
+			// Model change: keep chunks, re-queue embeddings only.
+			uids, texts, err := db.chunkTextsForPath(rel)
+			if err != nil {
+				return err
+			}
+			chunks = chunks[:0]
+			for i := range uids {
+				chunks = append(chunks, Chunk{UID: uids[i], Text: texts[i]})
+			}
 		}
-		res.FilesIndexed++
-		res.Chunks += len(chunks)
-		if opts.EmbedURL != "" && opts.EmbedModel != "" {
+		if wantEmbed {
 			for _, c := range chunks {
 				pendingEmbed = append(pendingEmbed, embedJob{UID: c.UID, Text: c.Text})
 			}
@@ -311,6 +337,23 @@ func (d *DB) uidsForPath(path string) ([]string, error) {
 		out = append(out, uid)
 	}
 	return out, nil
+}
+
+func (d *DB) chunkTextsForPath(path string) (uids []string, texts []string, err error) {
+	rows, err := d.db.Query(`SELECT uid, text FROM chunks WHERE path=?`, path)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var uid, text string
+		if err := rows.Scan(&uid, &text); err != nil {
+			return nil, nil, err
+		}
+		uids = append(uids, uid)
+		texts = append(texts, text)
+	}
+	return uids, texts, rows.Err()
 }
 
 func langOf(rel string) string {

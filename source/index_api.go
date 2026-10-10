@@ -22,7 +22,7 @@ type IndexBuildResult = index.BuildResult
 // IndexStatus describes {cwd}/.anvil/index/search.db.
 type IndexStatus = index.Status
 
-// BuildIndex walks cwd and updates the project search index (0.13+).
+// BuildIndex walks cwd and updates the project search index (0.13+ / engine 0.22).
 func BuildIndex(ctx context.Context, cwd string, opts IndexBuildOptions) (*IndexBuildResult, error) {
 	return index.Build(ctx, cwd, index.BuildOptions{
 		EmbedURL:    opts.EmbedBaseURL,

@@ -1,7 +1,7 @@
 # 22 — Project search engine (MVP: SQLite + VDB)
 
 **Product version focus:** **0.22** ([m_0.22_project_search.md](../../roadmaps/v1.0/m_0.22_project_search.md))  
-**Status:** planned
+**Status:** done (BLOB + brute-force cosine MVP; sqlite-vec optional later)
 
 ## Verdict
 

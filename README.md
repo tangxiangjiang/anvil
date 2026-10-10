@@ -245,20 +245,23 @@ AllowHookCommands:  false, // set true only if you trust hooks.json command entr
 
 See [`doc/design/v1.0/14-hooks-skills.md`](doc/design/v1.0/14-hooks-skills.md).
 
-### Retrieval / semantic_search (0.13)
+### Project search engine (0.22) / semantic_search (0.13)
 
-Local project index at `{cwd}/.anvil/index/search.db` (SQLite + FTS5; optional embedding BLOBs). Builtin tool `semantic_search` (tool group `search`).
+Local engine at `{cwd}/.anvil/index/search.db`: SQLite tables + **FTS5** lexical + optional **BLOB** embeddings (brute-force cosine). Builtin `semantic_search` (tool group `search`) uses hybrid when vectors exist, else FTS-only. `grep` remains independent.
 
 ```bash
 cd source
 go build -o ../bin/anvil.exe ./cmd/anvil
 ../bin/anvil.exe index build /path/to/repo
 ../bin/anvil.exe index status /path/to/repo
+../bin/anvil.exe index clear /path/to/repo
 # optional hybrid embeddings (OpenAI-compatible POST …/embeddings):
 ../bin/anvil.exe index build --embed-url http://127.0.0.1:8080/v1 --embed-model text-embedding-3-small /path/to/repo
 ```
 
-`Local.EnsureIndex` builds a lexical index on Create when `search.db` is missing. See [`doc/design/v1.0/13-retrieval.md`](doc/design/v1.0/13-retrieval.md).
+Incremental builds skip unchanged file hashes; embed-model changes clear vectors and re-embed. `Local.EnsureIndex` builds a lexical index on Create when `search.db` is missing.
+
+See [`doc/design/v1.0/22-project-search.md`](doc/design/v1.0/22-project-search.md) (engine) and [`doc/design/v1.0/13-retrieval.md`](doc/design/v1.0/13-retrieval.md) (tool).
 
 ### Worker daemon (0.11)
 

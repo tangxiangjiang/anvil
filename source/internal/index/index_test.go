@@ -196,6 +196,116 @@ func fakeVec(s string) []float64 {
 	return v
 }
 
+func TestEmptyIndexSearch(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := index.Build(context.Background(), dir, index.BuildOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	hits, err := index.Search(context.Background(), dir, index.Query{Text: "nothinghere", TopK: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 0 {
+		t.Fatalf("expected empty hits, got %+v", hits)
+	}
+}
+
+func TestIncrementalReembedOnlyChangedFile(t *testing.T) {
+	dir := t.TempDir()
+	writeTree(t, dir)
+	var embedCalls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Input []string `json:"input"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		embedCalls += len(req.Input)
+		type item struct {
+			Embedding []float64 `json:"embedding"`
+			Index     int       `json:"index"`
+		}
+		var data []item
+		for i, s := range req.Input {
+			data = append(data, item{Index: i, Embedding: fakeVec(s)})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
+	}))
+	defer srv.Close()
+	opts := index.BuildOptions{EmbedURL: srv.URL + "/v1", EmbedModel: "fake", EmbedAPIKey: "k"}
+	r1, err := index.Build(context.Background(), dir, opts)
+	if err != nil || r1.Embedded < 1 {
+		t.Fatalf("%v %+v", err, r1)
+	}
+	firstEmbeds := embedCalls
+	embedCalls = 0
+
+	// Touch only alpha.go
+	path := filepath.Join(dir, "pkg", "alpha.go")
+	body, _ := os.ReadFile(path)
+	if err := os.WriteFile(path, append(body, []byte("\n// touched\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r2, err := index.Build(context.Background(), dir, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r2.FilesIndexed != 1 {
+		t.Fatalf("expected 1 file reindexed, got %+v", r2)
+	}
+	if embedCalls == 0 || embedCalls >= firstEmbeds {
+		t.Fatalf("expected fewer embeds than full rebuild: first=%d second=%d", firstEmbeds, embedCalls)
+	}
+}
+
+func TestEmbedModelChangeReembeds(t *testing.T) {
+	dir := t.TempDir()
+	writeTree(t, dir)
+	var models []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Input []string `json:"input"`
+			Model string   `json:"model"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		models = append(models, req.Model)
+		type item struct {
+			Embedding []float64 `json:"embedding"`
+			Index     int       `json:"index"`
+		}
+		var data []item
+		for i, s := range req.Input {
+			data = append(data, item{Index: i, Embedding: fakeVec(s + req.Model)})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
+	}))
+	defer srv.Close()
+	_, err := index.Build(context.Background(), dir, index.BuildOptions{
+		EmbedURL: srv.URL + "/v1", EmbedModel: "m1", EmbedAPIKey: "k",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r2, err := index.Build(context.Background(), dir, index.BuildOptions{
+		EmbedURL: srv.URL + "/v1", EmbedModel: "m2", EmbedAPIKey: "k",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r2.Embedded < 1 {
+		t.Fatalf("expected re-embed on model change, got %+v", r2)
+	}
+	st, _ := index.Stat(dir)
+	if st.EmbedModel != "m2" {
+		t.Fatalf("embed_model=%q", st.EmbedModel)
+	}
+	eng := index.NewEngine(dir)
+	eng.Embed = index.BuildOptions{EmbedURL: srv.URL + "/v1", EmbedModel: "m2", EmbedAPIKey: "k"}
+	hits, err := eng.Search(context.Background(), index.Query{Text: "AlphaWidget", Mode: "hybrid", TopK: 3})
+	if err != nil || len(hits) == 0 {
+		t.Fatalf("%v %+v", err, hits)
+	}
+}
+
 func TestChunkerUnit(t *testing.T) {
 	// Build via public API on a long file to ensure multiple chunks.
 	dir := t.TempDir()
