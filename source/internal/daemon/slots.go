@@ -35,6 +35,7 @@ type slot struct {
 func NewSlots(max int) *Slots {
 	s := &Slots{
 		max:     max,
+		nextID:  max,
 		byID:    make(map[string]*slot),
 		jobToID: make(map[string]string),
 	}
@@ -43,6 +44,55 @@ func NewSlots(max int) *Slots {
 		s.byID[id] = &slot{id: id, status: SlotIdle}
 	}
 	return s
+}
+
+// Max returns configured capacity.
+func (s *Slots) Max() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.max
+}
+
+// Resize changes capacity. Growing adds idle slots; shrinking removes idle slots only
+// (busy slots remain until Release, then max reflects target after idle drop).
+func (s *Slots) Resize(max int) error {
+	if max < 1 {
+		return fmt.Errorf("max_workers must be >= 1")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if max == s.max {
+		return nil
+	}
+	if max > s.max {
+		for len(s.byID) < max {
+			s.nextID++
+			id := fmt.Sprintf("worker-%d", s.nextID)
+			for s.byID[id] != nil {
+				s.nextID++
+				id = fmt.Sprintf("worker-%d", s.nextID)
+			}
+			s.byID[id] = &slot{id: id, status: SlotIdle}
+		}
+		s.max = max
+		return nil
+	}
+	// Shrink: remove idle slots until at target or no idle left.
+	for len(s.byID) > max {
+		removed := false
+		for id, sl := range s.byID {
+			if sl.status == SlotIdle {
+				delete(s.byID, id)
+				removed = true
+				break
+			}
+		}
+		if !removed {
+			break
+		}
+	}
+	s.max = max
+	return nil
 }
 
 // Snapshot returns list result.

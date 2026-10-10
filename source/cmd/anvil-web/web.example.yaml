@@ -1,0 +1,7 @@
+listen: 127.0.0.1:17900
+db_path: anvil-web.db
+scheduler_url: http://127.0.0.1:17800
+scheduler_token_env: ANVIL_SCHEDULER_TOKEN
+session_ttl_hours: 168
+admin_user_env: ANVIL_WEB_ADMIN_USER
+admin_password_env: ANVIL_WEB_ADMIN_PASSWORD

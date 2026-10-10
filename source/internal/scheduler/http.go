@@ -22,8 +22,10 @@ func (h *Hub) ServeApp(ctx context.Context) error {
 	mux.HandleFunc("/v1/health", h.withAuth(h.handleHealth))
 	mux.HandleFunc("/v1/llm", h.withAuth(h.handleLLM))
 	mux.HandleFunc("/v1/nodes", h.withAuth(h.handleNodes))
+	mux.HandleFunc("/v1/nodes/", h.withAuth(h.handleNodeByID))
 	mux.HandleFunc("/v1/models", h.withAuth(h.handleModels))
 	mux.HandleFunc("/v1/jobs", h.withAuth(h.handleJobs))
+	mux.HandleFunc("/v1/usage", h.withAuth(h.handleUsage))
 
 	srv := &http.Server{
 		Addr:              h.cfg.ListenApp,
@@ -148,6 +150,50 @@ func (h *Hub) handleNodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"nodes": h.ListNodes()})
+}
+
+func (h *Hub) handleNodeByID(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/v1/nodes/")
+	id = strings.Trim(id, "/")
+	if id == "" || strings.Contains(id, "/") {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	switch r.Method {
+	case http.MethodPatch:
+		var req PatchNodeRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+		if req.MaxWorkers == nil && req.Accepting == nil {
+			http.Error(w, "max_workers or accepting required", http.StatusBadRequest)
+			return
+		}
+		if err := h.PatchNode(id, req); err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": id})
+	case http.MethodGet:
+		for _, n := range h.ListNodes() {
+			if n.ID == id {
+				writeJSON(w, http.StatusOK, n)
+				return
+			}
+		}
+		http.Error(w, "not found", http.StatusNotFound)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (h *Hub) handleUsage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, http.StatusOK, h.UsageSnapshot())
 }
 
 func (h *Hub) handleModels(w http.ResponseWriter, r *http.Request) {

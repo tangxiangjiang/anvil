@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Anvil Web</title>
+  <link rel="stylesheet" href="/css/app.css" />
+</head>
+<body>
+  <div id="view-setup" class="login-wrap" hidden>
+    <form class="login-card" id="setup-form">
+      <h1>Anvil</h1>
+      <p>Install wizard — create the root admin account</p>
+      <label for="setup-user">Admin username</label>
+      <input id="setup-user" name="username" autocomplete="username" value="admin" required />
+      <label for="setup-pass">Password (min 8 chars)</label>
+      <input id="setup-pass" name="password" type="password" autocomplete="new-password" minlength="8" required />
+      <label for="setup-pass2">Confirm password</label>
+      <input id="setup-pass2" name="password2" type="password" autocomplete="new-password" minlength="8" required />
+      <div class="err" id="setup-err"></div>
+      <button type="submit" style="width:100%">Create admin &amp; continue</button>
+    </form>
+  </div>
+
+  <div id="view-login" class="login-wrap" hidden>
+    <form class="login-card" id="login-form">
+      <h1>Anvil</h1>
+      <p>Fleet ops console</p>
+      <label for="user">Username</label>
+      <input id="user" name="username" autocomplete="username" required />
+      <label for="pass">Password</label>
+      <input id="pass" name="password" type="password" autocomplete="current-password" required />
+      <div class="err" id="login-err"></div>
+      <button type="submit" style="width:100%">Sign in</button>
+    </form>
+  </div>
+
+  <div id="view-shell" class="shell" hidden>
+    <aside class="side">
+      <div class="brand">Anvil<span>cluster console</span></div>
+      <nav class="nav" id="nav"></nav>
+      <div class="side-foot">
+        <div id="whoami"></div>
+        <button type="button" class="ghost" id="btn-logout" style="margin-top:0.5rem">Sign out</button>
+      </div>
+    </aside>
+    <main class="main" id="app"></main>
+  </div>
+
+  <script defer src="/vendor/alpine.min.js"></script>
+  <script src="/vendor/chart.umd.min.js"></script>
+  <script src="/js/api.js"></script>
+  <script src="/js/nav.js"></script>
+  <script src="/js/features/nodes.js"></script>
+  <script src="/js/features/usage.js"></script>
+  <script src="/js/app.js"></script>
+</body>
+</html>

@@ -43,6 +43,7 @@ type Done struct {
 	Error  string
 	Code   string
 	Steps  int
+	Usage  *anvil.Usage
 }
 
 // OptionsFromEnv builds Create options from ANVIL_* environment variables.
@@ -138,5 +139,6 @@ func RunJob(ctx context.Context, opts anvil.Options, job Job, emit func(Event)) 
 		Error:  res.Err,
 		Code:   string(res.Code),
 		Steps:  res.Steps,
+		Usage:  res.Usage,
 	}
 }

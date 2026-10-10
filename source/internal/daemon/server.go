@@ -19,8 +19,9 @@ type Server struct {
 	runner JobRunner
 	log    *log.Logger
 
-	mu       sync.Mutex
-	listener net.Listener
+	mu        sync.Mutex
+	listener  net.Listener
+	accepting bool // false = drain (reject new assigns)
 }
 
 // NewServer constructs a server (does not listen yet).
@@ -39,10 +40,11 @@ func NewServer(cfg Config, runner JobRunner, logger *log.Logger) (*Server, error
 		logger = log.Default()
 	}
 	return &Server{
-		cfg:    cfg,
-		slots:  NewSlots(cfg.MaxWorkers),
-		runner: runner,
-		log:    logger,
+		cfg:       cfg,
+		slots:     NewSlots(cfg.MaxWorkers),
+		runner:    runner,
+		log:       logger,
+		accepting: true,
 	}, nil
 }
 
@@ -71,6 +73,34 @@ func (s *Server) RunnerLLM() (LLMConfig, bool) {
 
 // Slots exposes the slot registry (tests).
 func (s *Server) Slots() *Slots { return s.slots }
+
+// Accepting reports whether new jobs are accepted (not draining).
+func (s *Server) Accepting() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.accepting
+}
+
+// ApplyClusterControl applies scale/drain from the scheduler.
+func (s *Server) ApplyClusterControl(body *ClusterControlBody) error {
+	if s == nil || body == nil {
+		return nil
+	}
+	if body.Accepting != nil {
+		s.mu.Lock()
+		s.accepting = *body.Accepting
+		s.mu.Unlock()
+	}
+	if body.SetMaxWorkers != nil {
+		if err := s.slots.Resize(*body.SetMaxWorkers); err != nil {
+			return err
+		}
+		s.mu.Lock()
+		s.cfg.MaxWorkers = *body.SetMaxWorkers
+		s.mu.Unlock()
+	}
+	return nil
+}
 
 // Serve listens and handles connections until ctx is cancelled or Close.
 func (s *Server) Serve(ctx context.Context) error {
@@ -182,6 +212,10 @@ func (s *Server) handleJobAssign(parent context.Context, w *connWriter, env Enve
 	var job JobAssignBody
 	if err := DecodeBody(env, &job); err != nil || job.JobID == "" || job.RepoID == "" {
 		_ = s.writeErr(w, env.ID, "invalid job.assign body", job.JobID)
+		return
+	}
+	if !s.Accepting() {
+		_ = s.writeErr(w, env.ID, "node is draining (not accepting jobs)", job.JobID)
 		return
 	}
 	cwd, err := s.cfg.ResolveRepo(job.RepoID)

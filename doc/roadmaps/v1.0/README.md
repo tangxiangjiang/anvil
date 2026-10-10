@@ -1,6 +1,6 @@
 # Roadmaps v1.0 (cutoff)
 
-Versioned delivery for Anvil through product **0.24**. Design cutoff: [`doc/design/v1.0/`](../../design/v1.0/).
+Versioned delivery for Anvil through product **0.25**. Design cutoff: [`doc/design/v1.0/`](../../design/v1.0/).
 
 ## Version index
 
@@ -30,6 +30,7 @@ Versioned delivery for Anvil through product **0.24**. Design cutoff: [`doc/desi
 | 0.22 | Project search (SQLite+VDB) | done | [m_0.22_project_search.md](m_0.22_project_search.md) | [22](../../design/v1.0/22-project-search.md) |
 | 0.23 | YAML ops config (agentd + gateway) | done | [m_0.23_yaml_config.md](m_0.23_yaml_config.md) | [23](../../design/v1.0/23-yaml-config.md) |
 | 0.24 | Scheduler hub (controller + catalog) | done | [m_0.24_scheduler.md](m_0.24_scheduler.md) | [24](../../design/v1.0/24-scheduler.md) |
+| 0.25 | Web fleet ops (anvil-web) | done | [m_0.25_web_admin.md](m_0.25_web_admin.md) | [25](../../design/v1.0/25-web-admin.md) |
 
 ## Naming
 

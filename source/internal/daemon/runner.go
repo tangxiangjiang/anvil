@@ -96,7 +96,7 @@ func (r *EmbeddedRunner) Run(ctx context.Context, job JobAssignBody, cwd string,
 			Code:       string(ev.Code),
 		})
 	})
-	return JobDoneBody{
+	out := JobDoneBody{
 		JobID:  done.JobID,
 		Status: done.Status,
 		Result: done.Result,
@@ -104,6 +104,14 @@ func (r *EmbeddedRunner) Run(ctx context.Context, job JobAssignBody, cwd string,
 		Code:   done.Code,
 		Steps:  done.Steps,
 	}
+	if done.Usage != nil {
+		out.Usage = &TokenUsage{
+			InputTokens:  done.Usage.InputTokens,
+			OutputTokens: done.Usage.OutputTokens,
+			TotalTokens:  done.Usage.TotalTokens,
+		}
+	}
+	return out
 }
 
 // applyLLMDefaults fills Options from agentd llm config when env left them empty.
@@ -143,7 +151,10 @@ func runStub(ctx context.Context, job JobAssignBody, emit func(JobEventBody)) Jo
 	case <-time.After(10 * time.Millisecond):
 	}
 	emit(JobEventBody{JobID: job.JobID, Type: string(anvil.EventDone), Text: "stub:" + job.Prompt})
-	return JobDoneBody{JobID: job.JobID, Status: string(anvil.StatusFinished), Result: "stub:" + job.Prompt, Steps: 1}
+	return JobDoneBody{
+		JobID: job.JobID, Status: string(anvil.StatusFinished), Result: "stub:" + job.Prompt, Steps: 1,
+		Usage: &TokenUsage{InputTokens: 1, OutputTokens: 1, TotalTokens: 2},
+	}
 }
 
 // EnvPassthrough lists LLM-related env names workers inherit.

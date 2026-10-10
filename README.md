@@ -303,7 +303,24 @@ curl -s -H "Authorization: Bearer sched-token" -H "Content-Type: application/jso
 
 See [`doc/design/v1.0/24-scheduler.md`](doc/design/v1.0/24-scheduler.md).
 
-Still deferred: Bridge, cloud agents, full hooks catalog, IDE plugin, web admin, job event streaming via scheduler.
+### Web fleet console (0.25)
+
+`anvil-web` is a separate ops UI: SQLite account auth (7-day Bearer session in the browser), BFF to the scheduler. Manage node capacity (+/− `max_workers`), drain/enable, and view token usage. Extensible shell (`static/js/nav.js` + `features/*`).
+
+```bash
+cd source
+go build -o ../bin/anvil-web.exe ./cmd/anvil-web
+set ANVIL_SCHEDULER_TOKEN=sched-token
+../bin/anvil-web.exe --config cmd/anvil-web/web.example.yaml
+# open http://127.0.0.1:17900 → install wizard (create root admin) → Nodes / Usage
+# optional env bootstrap instead of wizard: ANVIL_WEB_ADMIN_USER / ANVIL_WEB_ADMIN_PASSWORD
+```
+
+Scheduler also exposes `GET /v1/usage` and `PATCH /v1/nodes/{id}` (`max_workers`, `accepting`). See [`doc/design/v1.0/25-web-admin.md`](doc/design/v1.0/25-web-admin.md).
+
+**Adding a web feature:** register a nav item in `internal/web/static/js/nav.js`, add `static/js/features/<name>.js` with `mount`/`unmount`, and wire `/api/v1/...` on [`internal/web/server.go`](source/internal/web/server.go) (+ schedclient if needed).
+
+Still deferred: Bridge, cloud agents, full hooks catalog, IDE plugin, OIDC/RBAC, job event streaming via scheduler.
 
 ## License
 

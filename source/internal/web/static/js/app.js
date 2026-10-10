@@ -1,0 +1,124 @@
+(function () {
+  let current = null;
+
+  function hideAll() {
+    document.getElementById("view-setup").hidden = true;
+    document.getElementById("view-login").hidden = true;
+    document.getElementById("view-shell").hidden = true;
+  }
+
+  function showSetup() {
+    hideAll();
+    document.getElementById("view-setup").hidden = false;
+    if (current && Features[current] && Features[current].unmount) Features[current].unmount();
+    current = null;
+  }
+
+  function showLogin() {
+    hideAll();
+    document.getElementById("view-login").hidden = false;
+    if (current && Features[current] && Features[current].unmount) Features[current].unmount();
+    current = null;
+  }
+
+  function showShell() {
+    hideAll();
+    document.getElementById("view-shell").hidden = false;
+  }
+
+  async function route() {
+    let needsSetup = false;
+    try {
+      const st = await api.v1.setupStatus();
+      needsSetup = !!st.needs_setup;
+    } catch (_) {
+      // treat as not setup if status fails after install
+    }
+    if (needsSetup) {
+      api.setToken("");
+      location.hash = "#/setup";
+      showSetup();
+      return;
+    }
+
+    const hash = location.hash || "#/nodes";
+    if (hash === "#/setup") {
+      location.hash = "#/login";
+    }
+    if (hash === "#/login" || !api.getToken()) {
+      showLogin();
+      return;
+    }
+    try {
+      const me = await api.v1.me();
+      document.getElementById("whoami").textContent = me.username || "";
+    } catch (_) {
+      api.setToken("");
+      showLogin();
+      return;
+    }
+    showShell();
+    const item = Nav.items.find((i) => i.hash === hash) || Nav.items[0];
+    Nav.render(document.getElementById("nav"), item.hash);
+    if (current && Features[current] && Features[current].unmount) Features[current].unmount();
+    current = item.feature;
+    const app = document.getElementById("app");
+    app.innerHTML = "";
+    if (Features[current] && Features[current].mount) {
+      await Features[current].mount(app);
+    } else {
+      app.innerHTML = `<p class="muted">Unknown feature. Add to Nav.items + Features.</p>`;
+    }
+  }
+
+  document.getElementById("setup-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const err = document.getElementById("setup-err");
+    err.textContent = "";
+    const username = document.getElementById("setup-user").value.trim();
+    const password = document.getElementById("setup-pass").value;
+    const password2 = document.getElementById("setup-pass2").value;
+    if (password !== password2) {
+      err.textContent = "passwords do not match";
+      return;
+    }
+    if (password.length < 8) {
+      err.textContent = "password must be at least 8 characters";
+      return;
+    }
+    try {
+      const res = await api.v1.setupAdmin(username, password);
+      if (res.token) api.setToken(res.token);
+      location.hash = "#/nodes";
+      await route();
+    } catch (ex) {
+      err.textContent = ex.message || "setup failed";
+    }
+  });
+
+  document.getElementById("login-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const err = document.getElementById("login-err");
+    err.textContent = "";
+    const username = document.getElementById("user").value.trim();
+    const password = document.getElementById("pass").value;
+    try {
+      const res = await api.v1.login(username, password);
+      api.setToken(res.token);
+      location.hash = "#/nodes";
+      await route();
+    } catch (ex) {
+      err.textContent = ex.message || "login failed";
+    }
+  });
+
+  document.getElementById("btn-logout").addEventListener("click", async () => {
+    try { await api.v1.logout(); } catch (_) {}
+    api.setToken("");
+    location.hash = "#/login";
+    await route();
+  });
+
+  window.addEventListener("hashchange", () => { route(); });
+  route();
+})();

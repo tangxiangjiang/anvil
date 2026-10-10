@@ -89,12 +89,14 @@ func (e *ClusterEdge) session(ctx context.Context, url string) error {
 	e.server.ApplyClusterLLM(okBody.LLM)
 
 	sendHB := func() error {
-		idle, busy := e.server.Slots().Counts()
+		snap := e.server.Slots().Snapshot()
 		hb, _ := MarshalBody(ClusterHeartbeatBody{
 			NodeID:       nodeID,
-			Idle:         idle,
-			Busy:         busy,
-			Max:          e.cfg.MaxWorkers,
+			Idle:         snap.Idle,
+			Busy:         snap.Busy,
+			Max:          snap.MaxWorkers,
+			Accepting:    e.server.Accepting(),
+			Workers:      snap.Workers,
 			Capabilities: e.cfg.PluginCapabilityLabels(),
 		})
 		return e.write(conn, Envelope{Kind: KindClusterHeartbeat, Body: hb})
@@ -123,6 +125,12 @@ func (e *ClusterEdge) session(ctx context.Context, url string) error {
 				var cfgBody ClusterConfigBody
 				_ = DecodeBody(msg, &cfgBody)
 				e.server.ApplyClusterLLM(cfgBody.LLM)
+			case KindClusterControl:
+				var ctl ClusterControlBody
+				_ = DecodeBody(msg, &ctl)
+				if err := e.server.ApplyClusterControl(&ctl); err != nil {
+					e.log.Printf("cluster.control: %v", err)
+				}
 			}
 		}
 	}()
@@ -142,6 +150,11 @@ func (e *ClusterEdge) session(ctx context.Context, url string) error {
 }
 
 func (e *ClusterEdge) forwardAssign(ctx context.Context, sched net.Conn, job JobAssignBody) {
+	if !e.server.Accepting() {
+		done, _ := MarshalBody(JobDoneBody{JobID: job.JobID, Status: "error", Error: "node is draining (not accepting jobs)"})
+		_ = e.write(sched, Envelope{Kind: KindClusterDone, Body: done})
+		return
+	}
 	cwd, err := e.cfg.ResolveRepo(job.RepoID)
 	if err != nil {
 		done, _ := MarshalBody(JobDoneBody{JobID: job.JobID, Status: "error", Error: err.Error()})

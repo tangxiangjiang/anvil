@@ -29,6 +29,7 @@ const (
 	KindClusterAssign    = "cluster.assign"
 	KindClusterDone      = "cluster.done"
 	KindClusterConfig    = "cluster.config"
+	KindClusterControl   = "cluster.control"
 )
 
 // Envelope is a length-framed JSON control message.
@@ -109,14 +110,22 @@ type JobCancelBody struct {
 	JobID string `json:"job_id"`
 }
 
+// TokenUsage is LLM token counts (0.25+).
+type TokenUsage struct {
+	InputTokens  int `json:"input_tokens,omitempty"`
+	OutputTokens int `json:"output_tokens,omitempty"`
+	TotalTokens  int `json:"total_tokens,omitempty"`
+}
+
 // JobDoneBody is the terminal job status.
 type JobDoneBody struct {
-	JobID  string `json:"job_id"`
-	Status string `json:"status"` // finished|error|cancelled
-	Result string `json:"result,omitempty"`
-	Error  string `json:"error,omitempty"`
-	Code   string `json:"code,omitempty"`
-	Steps  int    `json:"steps,omitempty"`
+	JobID  string      `json:"job_id"`
+	Status string      `json:"status"` // finished|error|cancelled
+	Result string      `json:"result,omitempty"`
+	Error  string      `json:"error,omitempty"`
+	Code   string      `json:"code,omitempty"`
+	Steps  int         `json:"steps,omitempty"`
+	Usage  *TokenUsage `json:"usage,omitempty"`
 }
 
 // ErrorBody is a protocol-level error.
@@ -152,13 +161,21 @@ type ClusterConfigBody struct {
 	LLM *ClusterLLMBody `json:"llm,omitempty"`
 }
 
+// ClusterControlBody scales capacity or drain/enable (0.25+).
+type ClusterControlBody struct {
+	SetMaxWorkers *int  `json:"set_max_workers,omitempty"`
+	Accepting     *bool `json:"accepting,omitempty"`
+}
+
 // ClusterHeartbeatBody advertises capacity.
 type ClusterHeartbeatBody struct {
-	NodeID       string   `json:"node_id"`
-	Idle         int      `json:"idle"`
-	Busy         int      `json:"busy"`
-	Max          int      `json:"max_workers"`
-	Capabilities []string `json:"capabilities,omitempty"` // 0.20+ plugin labels
+	NodeID       string        `json:"node_id"`
+	Idle         int           `json:"idle"`
+	Busy         int           `json:"busy"`
+	Max          int           `json:"max_workers"`
+	Accepting    bool          `json:"accepting"`
+	Workers      []WorkerState `json:"workers,omitempty"`
+	Capabilities []string      `json:"capabilities,omitempty"` // 0.20+ plugin labels
 }
 
 // MustMarshalBody encodes v as JSON RawMessage; panics only on programmer error in tests — prefer MarshalBody.
