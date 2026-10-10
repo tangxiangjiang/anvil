@@ -57,6 +57,8 @@ type Config struct {
 	MaxSteps int
 	History  []llm.Message
 	UserMsg  string
+	// UserParts are optional multimodal parts on the initial user message (0.19+).
+	UserParts []llm.ContentPart
 	// RunID, if set, is used as the run identifier; otherwise one is generated.
 	RunID string
 	// HistoryMaxChars / HistoryKeepRecent enable optional compression (0.3+).
@@ -108,7 +110,7 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 		}
 		messages = append([]llm.Message{{Role: llm.RoleSystem, Content: sys}}, messages...)
 	}
-	user := llm.Message{Role: llm.RoleUser, Content: cfg.UserMsg}
+	user := llm.Message{Role: llm.RoleUser, Content: cfg.UserMsg, Parts: cfg.UserParts}
 	messages = append(messages, user)
 	sink(user)
 
@@ -193,6 +195,15 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 		}
 
 		messages = runToolCalls(ctx, registry, assistant.ToolCalls, cfg, messages, sink, emit)
+		if parts := registry.TakeVisionParts(); len(parts) > 0 {
+			inj := llm.Message{
+				Role:    llm.RoleUser,
+				Content: "(attached images from read_image)",
+				Parts:   parts,
+			}
+			messages = append(messages, inj)
+			sink(inj)
+		}
 	}
 
 	msg := fmt.Sprintf("%s (%d)", MaxStepsExceededPrefix, cfg.MaxSteps)

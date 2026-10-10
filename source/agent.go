@@ -28,6 +28,7 @@ import (
 	"github.com/anvil-dev/anvil/internal/store"
 	"github.com/anvil-dev/anvil/internal/tools"
 	"github.com/anvil-dev/anvil/internal/verify"
+	"github.com/anvil-dev/anvil/internal/vision"
 	"github.com/anvil-dev/anvil/internal/websearch"
 )
 
@@ -140,7 +141,11 @@ func Prompt(ctx context.Context, message string, opts Options) (*RunResult, erro
 	}
 	defer agent.Close()
 
-	run, err := agent.Send(ctx, message)
+	var sendOpts []SendOption
+	if len(opts.Attachments) > 0 {
+		sendOpts = append(sendOpts, WithAttachments(opts.Attachments...))
+	}
+	run, err := agent.Send(ctx, message, sendOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -337,6 +342,7 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 	if err := configureVerifyTools(reg, cwd, opts); err != nil {
 		return nil, nil, nil, nil, err
 	}
+	configureVisionTools(reg, opts)
 	lspSup, err := configureLSP(ctx, reg, cwd, opts)
 	if err != nil {
 		return nil, nil, nil, nil, err
@@ -539,6 +545,51 @@ func configureVerifyTools(reg *tools.Registry, cwd string, opts Options) error {
 	return nil
 }
 
+func configureVisionTools(reg *tools.Registry, opts Options) {
+	reg.SetVisionConfig(tools.VisionConfig{
+		Enabled:  opts.Vision.Enabled,
+		MaxSide:  opts.Vision.MaxSide,
+		MaxBytes: opts.Vision.MaxBytes,
+	})
+}
+
+func (a *Agent) prepareAttachments(atts []ImageAttachment) ([]llm.ContentPart, error) {
+	if len(atts) == 0 {
+		return nil, nil
+	}
+	if !a.opts.Vision.Enabled {
+		return nil, newError("Vision.Enabled is required for image attachments", false, nil)
+	}
+	vopts := vision.Options{MaxSide: a.opts.Vision.MaxSide, MaxBytes: a.opts.Vision.MaxBytes}
+	parts := make([]llm.ContentPart, 0, len(atts))
+	for i, att := range atts {
+		var img *vision.Image
+		var err error
+		switch {
+		case len(att.Bytes) > 0:
+			img, err = vision.Process(att.Bytes, att.MIME, vopts)
+		case strings.TrimSpace(att.Path) != "":
+			abs, rerr := a.registry.ResolvePath(att.Path)
+			if rerr != nil {
+				return nil, newError(rerr.Error(), false, nil)
+			}
+			img, err = vision.LoadFile(abs, vopts)
+		default:
+			return nil, newError(fmt.Sprintf("attachment[%d]: path or bytes required", i), false, nil)
+		}
+		if err != nil {
+			return nil, newError(fmt.Sprintf("attachment[%d]: %v", i, err), false, nil)
+		}
+		parts = append(parts, llm.ContentPart{
+			Type:   "image",
+			MIME:   img.MIME,
+			Data:   img.Data,
+			Detail: att.Detail,
+		})
+	}
+	return parts, nil
+}
+
 func configureWebTools(reg *tools.Registry, opts Options) error {
 	ws := opts.WebSearch
 	if !ws.Enabled {
@@ -698,6 +749,11 @@ func (a *Agent) Send(ctx context.Context, message string, opts ...SendOption) (*
 		}
 	}
 
+	parts, err := a.prepareAttachments(cfg.Attachments)
+	if err != nil {
+		return nil, err
+	}
+
 	a.mu.Lock()
 	if a.running {
 		a.mu.Unlock()
@@ -711,7 +767,7 @@ func (a *Agent) Send(ctx context.Context, message string, opts ...SendOption) (*
 	a.activeRun = run
 	a.mu.Unlock()
 
-	go a.executeRun(runCtx, cancelCause, wall, run, message, historyCopy)
+	go a.executeRun(runCtx, cancelCause, wall, run, message, historyCopy, parts)
 	return run, nil
 }
 
@@ -784,7 +840,7 @@ func (a *Agent) Reload(ctx context.Context) error {
 	return nil
 }
 
-func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseFunc, wall time.Duration, run *Run, message string, history []llm.Message) {
+func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseFunc, wall time.Duration, run *Run, message string, history []llm.Message, userParts []llm.ContentPart) {
 	defer func() {
 		cancelCause(nil)
 		a.mu.Lock()
@@ -815,6 +871,7 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 		MaxSteps:          a.opts.MaxSteps,
 		History:           history,
 		UserMsg:           message,
+		UserParts:         userParts,
 		RunID:             run.id,
 		HistoryMaxChars:   a.opts.HistoryMaxChars,
 		HistoryKeepRecent: a.opts.HistoryKeepRecent,

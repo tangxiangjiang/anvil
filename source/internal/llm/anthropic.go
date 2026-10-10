@@ -150,7 +150,7 @@ func toAnthropicMessages(in []Message) (system string, out []anthropicMessage) {
 			flushTools()
 			out = append(out, anthropicMessage{
 				Role:    "user",
-				Content: []any{map[string]string{"type": "text", "text": m.Content}},
+				Content: anthropicUserContent(m),
 			})
 		case RoleAssistant:
 			flushTools()
@@ -187,6 +187,45 @@ func toAnthropicMessages(in []Message) (system string, out []anthropicMessage) {
 	}
 	flushTools()
 	return system, out
+}
+
+func anthropicUserContent(m Message) []any {
+	if len(m.Parts) == 0 {
+		return []any{map[string]string{"type": "text", "text": m.Content}}
+	}
+	blocks := make([]any, 0, len(m.Parts)+1)
+	if m.Content != "" {
+		blocks = append(blocks, map[string]string{"type": "text", "text": m.Content})
+	}
+	for _, p := range m.Parts {
+		switch p.Type {
+		case "text":
+			if p.Text != "" {
+				blocks = append(blocks, map[string]string{"type": "text", "text": p.Text})
+			}
+		case "image":
+			mime := p.MIME
+			if mime == "" {
+				mime = "image/png"
+			}
+			data := p.Text
+			if data == "" && len(p.Data) > 0 {
+				data = encodeB64(p.Data)
+			}
+			blocks = append(blocks, map[string]any{
+				"type": "image",
+				"source": map[string]string{
+					"type":       "base64",
+					"media_type": mime,
+					"data":       data,
+				},
+			})
+		}
+	}
+	if len(blocks) == 0 {
+		return []any{map[string]string{"type": "text", "text": m.Content}}
+	}
+	return blocks
 }
 
 func fromAnthropicContent(blocks []json.RawMessage) (Message, error) {

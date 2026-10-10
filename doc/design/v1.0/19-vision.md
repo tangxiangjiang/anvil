@@ -1,7 +1,7 @@
 # 19 — Vision (image / screenshot)
 
 **Product version focus:** **0.19** ([m_0.19_vision.md](../../roadmaps/v1.0/m_0.19_vision.md))  
-**Status:** planned
+**Status:** done
 
 ## Intent
 
@@ -30,8 +30,8 @@ read_image
   max_side?: number   # downscale before send
 ```
 
-- Loads file → next model turn includes image part **or** returns a short handle id the runtime injects (prefer inject on subsequent Completer call in same step — document exact semantics in phase).
-- Simpler MVP: tool result is text “image queued”; runtime adds image to the **following** assistant request automatically.
+- Loads file → tool result is text `image queued (…)`; runtime drains the queue after tool results and injects a synthetic user message with image `Parts` before the **next** Completer call in the same run.
+- Host attachments on Send/Prompt become `Parts` on the initial user message (no tool required).
 
 ### Tool group
 

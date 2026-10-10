@@ -14,7 +14,8 @@
       "upstream": "openai_compat",
       "upstream_model": "gpt-4o-mini",
       "provider": "openai",
-      "params": ["temperature"]
+      "params": ["temperature"],
+      "vision": true
     }
   ]
 }

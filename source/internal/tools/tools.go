@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/anvil-dev/anvil/internal/llm"
@@ -67,6 +68,9 @@ type Registry struct {
 	lsp        *lsp.Supervisor
 	fileSync   func(ctx context.Context, absPath string)
 	verifyCfg  VerifyConfig
+	visionCfg  VisionConfig
+	visionMu   sync.Mutex
+	visionQ    []llm.ContentPart
 }
 
 // PreExecFunc runs before every tool (hooks like beforeMCP / beforeRead).

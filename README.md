@@ -134,6 +134,19 @@ set ANVIL_MODEL=private/demo
 
 `anvil.ListModels` hits `GET {BaseURL}/models`. See [`doc/design/v1.0/12-model-gateway.md`](doc/design/v1.0/12-model-gateway.md).
 
+### Vision / images (0.19)
+
+Opt-in multimodal attachments (off by default). Set `Options.Vision.Enabled` and pass images via `WithAttachments` / `Options.Attachments` (path under cwd or in-memory bytes). Optional builtin `read_image` (tool group `vision`) queues a sandbox file for the next Completer turn. Images are downscaled (default longest side 2048, ~4MiB encoded budget). Gateway catalog may advertise `anvil.vision: true` on models.
+
+```go
+Vision: anvil.VisionOptions{Enabled: true},
+// Prompt(..., Options{..., Attachments: []anvil.ImageAttachment{{Path: "ui.png"}}})
+// or agent.Send(ctx, "look", anvil.WithAttachments(anvil.ImageAttachment{Path: "ui.png"}))
+// DisallowedTools: []string{"vision"},
+```
+
+See [`doc/design/v1.0/19-vision.md`](doc/design/v1.0/19-vision.md).
+
 ### Test & build (0.18)
 
 `run_tests` / `build` register only when configured via `Options.Test` / `Options.Build` or `.anvil/project.json`. Tool group `verify`. Model may pass `selector` / `path` / `extra_args` tokens; shell metacharacters are rejected. Commands are argv arrays (no shell string).

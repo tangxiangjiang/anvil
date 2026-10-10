@@ -21,6 +21,7 @@ type anvilExt struct {
 	Provider      string   `json:"provider"`
 	UpstreamModel string   `json:"upstream_model"`
 	Params        []string `json:"params,omitempty"`
+	Vision        bool     `json:"vision,omitempty"`
 }
 
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
@@ -40,6 +41,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 				Provider:      m.Provider,
 				UpstreamModel: m.UpstreamModel,
 				Params:        m.Params,
+				Vision:        m.Vision,
 			},
 		})
 	}

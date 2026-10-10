@@ -20,6 +20,8 @@ var rules = []rule{
 	{regexp.MustCompile(`(?i)(Bearer\s+)[A-Za-z0-9._\-+=/]{8,}`), "${1}" + placeholder},
 	{regexp.MustCompile(`-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----`), placeholder},
 	{regexp.MustCompile(`(?i)(api[_-]?key\s*[=:]\s*)(["']?)[A-Za-z0-9_\-/.+=]{8,}(["']?)`), "${1}${2}" + placeholder + "${3}"},
+	// Multimodal payloads must not land in logs (0.19+).
+	{regexp.MustCompile(`data:image/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]{40,}`), "data:image/…;base64," + placeholder},
 }
 
 // String replaces obvious secret material with [REDACTED].

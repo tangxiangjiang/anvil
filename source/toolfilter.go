@@ -77,6 +77,8 @@ func expandToolSelectors(selectors []string) map[string]bool {
 		case "verify", "test":
 			out["run_tests"] = true
 			out["build"] = true
+		case "vision":
+			out["read_image"] = true
 		case "mcp":
 			out["__mcp__"] = true
 		default:

@@ -65,7 +65,7 @@ type Options struct {
 	SystemPrompt string
 
 	// BuiltinTools, when non-empty, is an allow-list of built-in tool names or groups (0.10+).
-	// Groups: shell, read, write, edit, search, skills, web, lsp, git, verify, mcp. Custom Tools entries are never filtered out.
+	// Groups: shell, read, write, edit, search, skills, web, lsp, git, verify, vision, mcp. Custom Tools entries are never filtered out.
 	BuiltinTools []string
 	// DisallowedTools denies built-in names or groups after allow-list (0.10+).
 	DisallowedTools []string
@@ -98,6 +98,28 @@ type Options struct {
 	Test TestOptions
 	// Build configures build (0.18+). Absent/empty Command → tool not registered.
 	Build BuildOptions
+
+	// Vision enables multimodal image attachments and optional read_image (0.19+).
+	Vision VisionOptions
+	// Attachments are images included on Prompt (and Create→first Send via Prompt helper).
+	// Prefer WithAttachments on Agent.Send for multi-turn.
+	Attachments []ImageAttachment
+}
+
+// VisionOptions controls image attachments / read_image (0.19+).
+type VisionOptions struct {
+	Enabled            bool
+	MaxSide            int  // longest side before downscale; 0 = 2048
+	MaxBytes           int  // max base64 payload bytes; 0 = 4MiB
+	AllowRemoteImageURL bool // reserved; remote https fetch stays off in 0.19
+}
+
+// ImageAttachment is a host-supplied image for Send/Prompt (0.19+).
+type ImageAttachment struct {
+	Path   string // under cwd sandbox when set
+	Bytes  []byte // in-memory image (e.g. screenshot); preferred over Path when non-empty
+	MIME   string // optional; sniffed when empty
+	Detail string // openai detail: low|high|auto
 }
 
 // TestOptions is the argv test command (0.18+).
@@ -244,10 +266,18 @@ type PermissionDecision struct {
 type SendOption func(*sendConfig)
 
 type sendConfig struct {
-	Force bool
+	Force       bool
+	Attachments []ImageAttachment
 }
 
 // WithForce cancels an in-flight run (if any) before accepting the new Send (0.10+).
 func WithForce() SendOption {
 	return func(c *sendConfig) { c.Force = true }
+}
+
+// WithAttachments attaches images to this Send (requires Options.Vision.Enabled).
+func WithAttachments(atts ...ImageAttachment) SendOption {
+	return func(c *sendConfig) {
+		c.Attachments = append(c.Attachments, atts...)
+	}
 }

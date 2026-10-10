@@ -6,6 +6,7 @@ package llm
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -44,7 +45,7 @@ type openAIRequest struct {
 
 type openAIMessage struct {
 	Role       string           `json:"role"`
-	Content    string           `json:"content,omitempty"`
+	Content    any              `json:"content,omitempty"` // string or []parts
 	ToolCallID string           `json:"tool_call_id,omitempty"`
 	Name       string           `json:"name,omitempty"`
 	ToolCalls  []openAIToolCall `json:"tool_calls,omitempty"`
@@ -144,7 +145,7 @@ func toOpenAIMessages(in []Message) []openAIMessage {
 	for _, m := range in {
 		om := openAIMessage{
 			Role:       string(m.Role),
-			Content:    m.Content,
+			Content:    openAIContent(m),
 			ToolCallID: m.ToolCallID,
 			Name:       m.Name,
 		}
@@ -162,10 +163,42 @@ func toOpenAIMessages(in []Message) []openAIMessage {
 	return out
 }
 
+func openAIContent(m Message) any {
+	if len(m.Parts) == 0 {
+		return m.Content
+	}
+	parts := make([]map[string]any, 0, len(m.Parts)+1)
+	if m.Content != "" {
+		parts = append(parts, map[string]any{"type": "text", "text": m.Content})
+	}
+	for _, p := range m.Parts {
+		switch p.Type {
+		case "text":
+			if p.Text != "" {
+				parts = append(parts, map[string]any{"type": "text", "text": p.Text})
+			}
+		case "image":
+			url := p.Text // may already be data URL
+			if url == "" && len(p.Data) > 0 {
+				url = "data:" + p.MIME + ";base64," + encodeB64(p.Data)
+			}
+			img := map[string]any{"url": url}
+			if p.Detail != "" {
+				img["detail"] = p.Detail
+			}
+			parts = append(parts, map[string]any{"type": "image_url", "image_url": img})
+		}
+	}
+	if len(parts) == 0 {
+		return m.Content
+	}
+	return parts
+}
+
 func fromOpenAIMessage(m openAIMessage) Message {
 	msg := Message{
 		Role:       Role(m.Role),
-		Content:    m.Content,
+		Content:    openAIContentString(m.Content),
 		ToolCallID: m.ToolCallID,
 		Name:       m.Name,
 	}
@@ -195,6 +228,23 @@ func toOpenAITools(in []ToolDef) []openAITool {
 		out = append(out, ot)
 	}
 	return out
+}
+
+func encodeB64(b []byte) string {
+	return base64.StdEncoding.EncodeToString(b)
+}
+
+func openAIContentString(v any) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	case nil:
+		return ""
+	default:
+		// Multimodal responses rarely appear; stringify best-effort.
+		raw, _ := json.Marshal(t)
+		return string(raw)
+	}
 }
 
 func firstNonEmpty(a, b string) string {

@@ -41,3 +41,15 @@ func TestRedactPreservesNormalText(t *testing.T) {
 		t.Fatalf("unexpected change: %q", redact.String(in))
 	}
 }
+
+func TestRedactImageDataURL(t *testing.T) {
+	b64 := strings.Repeat("A", 48)
+	in := "payload data:image/png;base64," + b64 + " end"
+	out := redact.String(in)
+	if strings.Contains(out, b64) {
+		t.Fatalf("base64 leaked: %q", out)
+	}
+	if !strings.Contains(out, "[REDACTED]") {
+		t.Fatalf("expected placeholder: %q", out)
+	}
+}

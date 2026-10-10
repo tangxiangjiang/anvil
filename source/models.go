@@ -21,6 +21,8 @@ type ModelInfo struct {
 	// UpstreamModel is the upstream id (advisory).
 	UpstreamModel string
 	Params        []string
+	// Vision is true when the gateway marks the model as multimodal (anvil.vision).
+	Vision bool
 }
 
 // ListModelsOptions configures ListModels.
@@ -63,6 +65,7 @@ func ListModels(ctx context.Context, opts ListModelsOptions) ([]ModelInfo, error
 				Provider      string   `json:"provider"`
 				UpstreamModel string   `json:"upstream_model"`
 				Params        []string `json:"params"`
+				Vision        bool     `json:"vision"`
 			} `json:"anvil"`
 		} `json:"data"`
 	}
@@ -76,6 +79,7 @@ func ListModels(ctx context.Context, opts ListModelsOptions) ([]ModelInfo, error
 			m.Provider = d.Anvil.Provider
 			m.UpstreamModel = d.Anvil.UpstreamModel
 			m.Params = d.Anvil.Params
+			m.Vision = d.Anvil.Vision
 		}
 		out = append(out, m)
 	}

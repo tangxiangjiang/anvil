@@ -22,9 +22,21 @@ const (
 type Message struct {
 	Role       Role
 	Content    string
+	// Parts are optional multimodal content parts (0.19+). When non-empty, providers
+	// prefer Parts over Content for user messages (Content may still hold plain text).
+	Parts      []ContentPart
 	ToolCallID string
 	ToolCalls  []ToolCall
 	Name       string
+}
+
+// ContentPart is a multimodal message part.
+type ContentPart struct {
+	Type   string // "text" | "image"
+	Text   string
+	MIME   string // image/*
+	Data   []byte // raw image bytes (not logged)
+	Detail string // openai detail hint: low|high|auto
 }
 
 // ToolCall is a model-requested tool invocation.

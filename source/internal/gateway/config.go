@@ -24,6 +24,7 @@ type ModelRoute struct {
 	UpstreamModel string   `json:"upstream_model"`
 	Provider      string   `json:"provider"` // advisory: openai (default)
 	Params        []string `json:"params,omitempty"`
+	Vision        bool     `json:"vision,omitempty"` // advisory: model accepts image parts (0.19+)
 	OwnedBy       string   `json:"owned_by,omitempty"`
 }
 

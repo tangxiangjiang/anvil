@@ -58,7 +58,8 @@ anvil / agent-worker / CLI
       "anvil": {
         "provider": "openai",
         "upstream_model": "deepseek-chat",
-        "params": ["temperature"]
+        "params": ["temperature"],
+        "vision": true
       }
     }
   ]
@@ -66,7 +67,7 @@ anvil / agent-worker / CLI
 ```
 
 - Public `id` is what Anvil/`Options.Model` use.
-- Optional `anvil` extension object is advisory (provider hint, param names); clients may ignore unknown fields.
+- Optional `anvil` extension object is advisory (provider hint, param names, `vision` multimodal flag for **0.19+**); clients may ignore unknown fields. `ListModels` maps `anvil.vision` → `ModelInfo.Vision`.
 - Catalog is **config-driven** (YAML/JSON on gateway); no live scrape of Cursor Dashboard.
 
 ### Proxy
