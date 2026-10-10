@@ -278,7 +278,32 @@ set ANVIL_API_KEY=gw-token
 
 Protocol: length-prefixed JSON (`hello`, `worker.list`, `job.assign` / `job.event` / `job.cancel` / `job.done`). See [`doc/design/v1.0/11-worker-daemon.md`](doc/design/v1.0/11-worker-daemon.md) and [`doc/design/v1.0/23-yaml-config.md`](doc/design/v1.0/23-yaml-config.md).
 
-Still deferred: Bridge, cloud agents, full hooks catalog, IDE plugin, web admin.
+### Scheduler hub (0.24)
+
+`anvil-scheduler` is the app-facing control plane: configure gateway credentials (`PUT /v1/llm`), list nodes/models, submit jobs. agentd joins `listen_cluster`; scheduler pushes `base_url` / `api_key` / `model` on `join_ok` and live `cluster.config`. Chat still goes worker → gateway (scheduler does not proxy).
+
+```bash
+cd source
+go build -o ../bin/anvil-scheduler.exe ./cmd/anvil-scheduler
+go build -o ../bin/agentd.exe ./cmd/agentd
+# edit scheduler.example.yaml; enable agentd cluster.url → listen_cluster
+set ANVIL_SCHEDULER_TOKEN=sched-token
+set ANVIL_GATEWAY_TOKEN=gw-token
+../bin/anvil-scheduler.exe --config cmd/anvil-scheduler/scheduler.example.yaml
+# agentd: cluster.enabled=true, token_env=ANVIL_SCHEDULER_TOKEN
+../bin/agentd.exe --config cmd/agentd/agentd.example.yaml
+
+curl -s -H "Authorization: Bearer sched-token" http://127.0.0.1:17800/v1/nodes
+curl -s -H "Authorization: Bearer sched-token" -H "Content-Type: application/json" ^
+  -X PUT http://127.0.0.1:17800/v1/llm -d "{\"base_url\":\"http://127.0.0.1:8080/v1\",\"api_key\":\"gw-token\",\"model\":\"private/demo\"}"
+curl -s -H "Authorization: Bearer sched-token" http://127.0.0.1:17800/v1/models
+curl -s -H "Authorization: Bearer sched-token" -H "Content-Type: application/json" ^
+  -X POST http://127.0.0.1:17800/v1/jobs -d "{\"repo_id\":\"demo\",\"prompt\":\"hello\"}"
+```
+
+See [`doc/design/v1.0/24-scheduler.md`](doc/design/v1.0/24-scheduler.md).
+
+Still deferred: Bridge, cloud agents, full hooks catalog, IDE plugin, web admin, job event streaming via scheduler.
 
 ## License
 

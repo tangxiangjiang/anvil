@@ -1,0 +1,13 @@
+listen_app: 127.0.0.1:17800
+listen_cluster: tcp://127.0.0.1:17777
+token_env: ANVIL_SCHEDULER_TOKEN
+heartbeat_stale_sec: 30
+models_cache_sec: 15
+# Optional bootstrap (apps can overwrite via PUT /v1/llm).
+# api_key is read from api_key_env at startup — never put secrets in this file.
+llm:
+  base_url: http://127.0.0.1:8080/v1
+  api_key_env: ANVIL_GATEWAY_TOKEN
+  model: private/demo
+  provider: openai
+  max_steps: 128

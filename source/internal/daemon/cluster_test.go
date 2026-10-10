@@ -45,7 +45,10 @@ func TestClusterJoinHeartbeatAndAssign(t *testing.T) {
 				if join.Token != "cluster-token" {
 					return
 				}
-				if err := WriteEnvelope(conn, Envelope{Kind: KindClusterJoinOK}); err != nil {
+				okBody, _ := MarshalBody(ClusterJoinOKBody{LLM: &ClusterLLMBody{
+					BaseURL: "http://127.0.0.1:8080/v1", APIKey: "gw-key", Model: "private/demo",
+				}})
+				if err := WriteEnvelope(conn, Envelope{Kind: KindClusterJoinOK, Body: okBody}); err != nil {
 					return
 				}
 				once.Do(func() { joined <- struct{}{} })
@@ -100,7 +103,7 @@ func TestClusterJoinHeartbeatAndAssign(t *testing.T) {
 	}
 	_ = cfg.Normalize()
 
-	srv, err := NewServer(cfg, EmbeddedRunner{}, nil)
+	srv, err := NewServer(cfg, &EmbeddedRunner{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,6 +117,17 @@ func TestClusterJoinHeartbeatAndAssign(t *testing.T) {
 	case <-joined:
 	case <-time.After(3 * time.Second):
 		t.Fatal("join timeout")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		llm, ok := srv.RunnerLLM()
+		if ok && llm.BaseURL == "http://127.0.0.1:8080/v1" && llm.APIKey == "gw-key" && llm.Model == "private/demo" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("llm not applied: ok=%v %+v", ok, llm)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 	select {
 	case <-hbSeen:

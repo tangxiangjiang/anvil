@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/anvil-dev/anvil"
@@ -22,16 +23,40 @@ type JobRunner interface {
 type EmbeddedRunner struct {
 	PluginDirs []string
 	Deny       []string
-	LLM        LLMConfig
+
+	mu  sync.RWMutex
+	LLM LLMConfig
+}
+
+// SetLLM replaces worker LLM defaults (scheduler provision / live config).
+func (r *EmbeddedRunner) SetLLM(llm LLMConfig) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.LLM = llm
+	r.mu.Unlock()
+}
+
+func (r *EmbeddedRunner) llmSnapshot() LLMConfig {
+	if r == nil {
+		return LLMConfig{}
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.LLM
 }
 
 // Run implements JobRunner.
-func (r EmbeddedRunner) Run(ctx context.Context, job JobAssignBody, cwd string, emit func(JobEventBody)) JobDoneBody {
+func (r *EmbeddedRunner) Run(ctx context.Context, job JobAssignBody, cwd string, emit func(JobEventBody)) JobDoneBody {
+	if r == nil {
+		return JobDoneBody{JobID: job.JobID, Status: "error", Error: "nil runner"}
+	}
 	if job.ForceStub {
 		return runStub(ctx, job, emit)
 	}
 	opts := worker.OptionsFromEnv()
-	applyLLMDefaults(&opts, r.LLM)
+	applyLLMDefaults(&opts, r.llmSnapshot())
 	opts.Local.CWD = cwd
 	if job.MaxSteps > 0 {
 		opts.MaxSteps = job.MaxSteps
@@ -82,6 +107,7 @@ func (r EmbeddedRunner) Run(ctx context.Context, job JobAssignBody, cwd string, 
 }
 
 // applyLLMDefaults fills Options from agentd llm config when env left them empty.
+// Provisioned APIKey (scheduler) wins over env when set.
 func applyLLMDefaults(opts *anvil.Options, llm LLMConfig) {
 	if opts == nil {
 		return
@@ -89,11 +115,13 @@ func applyLLMDefaults(opts *anvil.Options, llm LLMConfig) {
 	if opts.BaseURL == "" && llm.BaseURL != "" {
 		opts.BaseURL = llm.BaseURL
 	}
-	keyEnv := llm.APIKeyEnv
-	if keyEnv == "" {
-		keyEnv = "ANVIL_API_KEY"
-	}
-	if opts.APIKey == "" {
+	if llm.APIKey != "" {
+		opts.APIKey = llm.APIKey
+	} else if opts.APIKey == "" {
+		keyEnv := llm.APIKeyEnv
+		if keyEnv == "" {
+			keyEnv = "ANVIL_API_KEY"
+		}
 		opts.APIKey = os.Getenv(keyEnv)
 	}
 	if opts.Model.ID == "" && llm.Model != "" {

@@ -118,6 +118,15 @@ func TestApplyLLMDefaultsFillsBaseURL(t *testing.T) {
 	}
 }
 
+func TestApplyLLMDefaultsProvisionedAPIKeyWins(t *testing.T) {
+	t.Setenv("ANVIL_API_KEY", "env-key")
+	opts := worker.OptionsFromEnv()
+	applyLLMDefaults(&opts, LLMConfig{APIKey: "sched-key", BaseURL: "http://gw/v1"})
+	if opts.APIKey != "sched-key" {
+		t.Fatalf("api_key=%q", opts.APIKey)
+	}
+}
+
 func jsonQuote(s string) string {
 	b, _ := MarshalBody(s)
 	// MarshalBody of string includes quotes

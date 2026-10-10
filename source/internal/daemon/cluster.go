@@ -84,6 +84,9 @@ func (e *ClusterEdge) session(ctx context.Context, url string) error {
 	if env.Kind != KindClusterJoinOK {
 		return fmt.Errorf("cluster join rejected: kind=%s", env.Kind)
 	}
+	var okBody ClusterJoinOKBody
+	_ = DecodeBody(env, &okBody)
+	e.server.ApplyClusterLLM(okBody.LLM)
 
 	sendHB := func() error {
 		idle, busy := e.server.Slots().Counts()
@@ -111,10 +114,15 @@ func (e *ClusterEdge) session(ctx context.Context, url string) error {
 				errCh <- err
 				return
 			}
-			if msg.Kind == KindClusterAssign {
+			switch msg.Kind {
+			case KindClusterAssign:
 				var job JobAssignBody
 				_ = DecodeBody(msg, &job)
 				go e.forwardAssign(ctx, conn, job)
+			case KindClusterConfig:
+				var cfgBody ClusterConfigBody
+				_ = DecodeBody(msg, &cfgBody)
+				e.server.ApplyClusterLLM(cfgBody.LLM)
 			}
 		}
 	}()
@@ -140,6 +148,14 @@ func (e *ClusterEdge) forwardAssign(ctx context.Context, sched net.Conn, job Job
 		_ = e.write(sched, Envelope{Kind: KindClusterDone, Body: done})
 		return
 	}
+	resolved, err := e.cfg.ResolvePlugins(job.Plugins)
+	if err != nil {
+		done, _ := MarshalBody(JobDoneBody{JobID: job.JobID, Status: "error", Error: err.Error()})
+		_ = e.write(sched, Envelope{Kind: KindClusterDone, Body: done})
+		return
+	}
+	job.Plugins = resolved
+
 	jobCtx, cancel := context.WithCancel(ctx)
 	_, err = e.server.Slots().TryAcquire(job.JobID, cancel)
 	if err != nil {

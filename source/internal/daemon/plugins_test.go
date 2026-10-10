@@ -49,7 +49,7 @@ func TestHelloOKAdvertisesPluginCaps(t *testing.T) {
 	cfg.Repos = []RepoEntry{{ID: "demo", CWD: dir}}
 	cfg.Plugins = PluginsConfig{Available: []string{"sample"}}
 	cfg.NodeID = "test-node"
-	srv, err := NewServer(cfg, EmbeddedRunner{}, nil)
+	srv, err := NewServer(cfg, &EmbeddedRunner{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -15,7 +15,7 @@
     "enabled": false,
     "url": "tcp://127.0.0.1:17777",
     "node_id": "local-1",
-    "token_env": "ANVIL_CLUSTER_TOKEN",
+    "token_env": "ANVIL_SCHEDULER_TOKEN",
     "heartbeat_sec": 10
   },
   "plugins": {

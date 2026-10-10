@@ -45,13 +45,38 @@ type ClusterConfig struct {
 }
 
 // LLMConfig holds defaults injected into embedded workers (0.23+).
-// Secrets stay in env named by APIKeyEnv; agentd does not proxy LLM HTTP.
+// File configs use APIKeyEnv; scheduler may set APIKey in-memory (0.24+).
+// agentd does not proxy LLM HTTP.
 type LLMConfig struct {
 	BaseURL   string `json:"base_url" yaml:"base_url"`
 	APIKeyEnv string `json:"api_key_env" yaml:"api_key_env"` // default ANVIL_API_KEY
-	Model     string `json:"model" yaml:"model"`
-	Provider  string `json:"provider" yaml:"provider"`
-	MaxSteps  int    `json:"max_steps" yaml:"max_steps"`
+	// APIKey is provisioned by the scheduler (not loaded from YAML).
+	APIKey   string `json:"-" yaml:"-"`
+	Model    string `json:"model" yaml:"model"`
+	Provider string `json:"provider" yaml:"provider"`
+	MaxSteps int    `json:"max_steps" yaml:"max_steps"`
+}
+
+// MergeClusterLLM overlays non-empty cluster llm fields onto c.
+func (c *LLMConfig) MergeClusterLLM(src ClusterLLMBody) {
+	if c == nil {
+		return
+	}
+	if src.BaseURL != "" {
+		c.BaseURL = src.BaseURL
+	}
+	if src.APIKey != "" {
+		c.APIKey = src.APIKey
+	}
+	if src.Model != "" {
+		c.Model = src.Model
+	}
+	if src.Provider != "" {
+		c.Provider = src.Provider
+	}
+	if src.MaxSteps > 0 {
+		c.MaxSteps = src.MaxSteps
+	}
 }
 
 // Config is agentd configuration (JSON or YAML file + flags).

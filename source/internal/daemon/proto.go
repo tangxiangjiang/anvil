@@ -22,12 +22,13 @@ const (
 	KindJobDone     = "job.done"
 	KindError       = "error"
 
-	// Cluster stubs (filled in p_0.11.4).
+	// Cluster (0.11 edge; 0.24 scheduler llm provision).
 	KindClusterJoin      = "cluster.join"
 	KindClusterJoinOK    = "cluster.join_ok"
 	KindClusterHeartbeat = "cluster.heartbeat"
 	KindClusterAssign    = "cluster.assign"
 	KindClusterDone      = "cluster.done"
+	KindClusterConfig    = "cluster.config"
 )
 
 // Envelope is a length-framed JSON control message.
@@ -129,6 +130,26 @@ type ClusterJoinBody struct {
 	NodeID     string `json:"node_id"`
 	Token      string `json:"token"`
 	MaxWorkers int    `json:"max_workers"`
+}
+
+// ClusterLLMBody is LLM defaults pushed by the scheduler (0.24+).
+// APIKey is a gateway bearer; never log it.
+type ClusterLLMBody struct {
+	BaseURL  string `json:"base_url,omitempty"`
+	APIKey   string `json:"api_key,omitempty"`
+	Model    string `json:"model,omitempty"`
+	Provider string `json:"provider,omitempty"`
+	MaxSteps int    `json:"max_steps,omitempty"`
+}
+
+// ClusterJoinOKBody is the scheduler admission reply (may include llm).
+type ClusterJoinOKBody struct {
+	LLM *ClusterLLMBody `json:"llm,omitempty"`
+}
+
+// ClusterConfigBody pushes live llm updates (cluster.config).
+type ClusterConfigBody struct {
+	LLM *ClusterLLMBody `json:"llm,omitempty"`
 }
 
 // ClusterHeartbeatBody advertises capacity.

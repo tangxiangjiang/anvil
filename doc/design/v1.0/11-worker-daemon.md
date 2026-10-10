@@ -23,7 +23,7 @@ This is **not** Cursor sub-agent graph parity and **not** a model gateway. LLM t
 | **Controller / host** | Caller that assigns work (local CLI, cloud-agent Slave, CI). Speaks daemon control protocol. |
 | **Job** | One assignable unit: prompt (or follow-up), `cwd`/repo binding, limits, cancel token. |
 | **Cluster edge** | Daemon’s optional face that registers with a cluster control plane and relays jobs to local workers. |
-| **Scheduler / coordinator** | Out-of-process cluster control plane (if any). **Not** named “daemon”; not required for 0.11 local path. |
+| **Scheduler / coordinator** | Cluster control plane. In-tree **`anvil-scheduler`** (0.24+) is the app-facing hub: HTTP for apps, cluster edge for agentd, LLM provision + job assign. Not required for 0.11 local-only path. |
 
 Naming note: prefer **worker** / **daemon**, not slave/master.
 
@@ -131,7 +131,7 @@ source/
 
 - Library import path stays `github.com/anvil-dev/anvil`.
 - Daemon must not require Cursor SDK or Cursor runtime.
-- Model catalog / routing stays outside: agentd `llm.base_url` (0.23+) or `ANVIL_BASE_URL` / worker env points at a **model gateway** or provider. agentd does not proxy LLM HTTP — the worker Completer calls that URL. Ops config is JSON or YAML ([23-yaml-config.md](23-yaml-config.md)).
+- Model catalog / routing stays outside: agentd `llm.base_url` (0.23+), scheduler-provisioned llm (0.24+), or `ANVIL_BASE_URL` / worker env points at a **model gateway** or provider. agentd does not proxy LLM HTTP — the worker Completer calls that URL. Fleet apps prefer **anvil-scheduler** HTTP ([24-scheduler.md](24-scheduler.md)); ops config is JSON or YAML ([23-yaml-config.md](23-yaml-config.md)).
 
 ## Security
 

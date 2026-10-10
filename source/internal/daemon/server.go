@@ -29,7 +29,7 @@ func NewServer(cfg Config, runner JobRunner, logger *log.Logger) (*Server, error
 		return nil, err
 	}
 	if runner == nil {
-		runner = EmbeddedRunner{
+		runner = &EmbeddedRunner{
 			PluginDirs: append([]string(nil), cfg.Plugins.SearchPaths...),
 			Deny:       append([]string(nil), cfg.Plugins.Deny...),
 			LLM:        cfg.LLM,
@@ -48,6 +48,26 @@ func NewServer(cfg Config, runner JobRunner, logger *log.Logger) (*Server, error
 
 // Config returns a copy of the config.
 func (s *Server) Config() Config { return s.cfg }
+
+// ApplyClusterLLM merges scheduler-provisioned llm into the embedded runner.
+func (s *Server) ApplyClusterLLM(body *ClusterLLMBody) {
+	if s == nil || body == nil {
+		return
+	}
+	if er, ok := s.runner.(*EmbeddedRunner); ok {
+		cur := er.llmSnapshot()
+		cur.MergeClusterLLM(*body)
+		er.SetLLM(cur)
+	}
+}
+
+// RunnerLLM returns a snapshot of embedded runner llm defaults (tests / debug).
+func (s *Server) RunnerLLM() (LLMConfig, bool) {
+	if er, ok := s.runner.(*EmbeddedRunner); ok {
+		return er.llmSnapshot(), true
+	}
+	return LLMConfig{}, false
+}
 
 // Slots exposes the slot registry (tests).
 func (s *Server) Slots() *Slots { return s.slots }

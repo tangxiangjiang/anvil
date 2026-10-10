@@ -28,7 +28,7 @@ func startTestServer(t *testing.T, maxWorkers int, repos []RepoEntry) (*Server, 
 	if err := cfg.Normalize(); err != nil {
 		t.Fatal(err)
 	}
-	srv, err := NewServer(cfg, EmbeddedRunner{}, nil)
+	srv, err := NewServer(cfg, &EmbeddedRunner{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
