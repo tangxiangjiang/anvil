@@ -306,6 +306,70 @@ func TestEmbedModelChangeReembeds(t *testing.T) {
 	}
 }
 
+func TestEmbedModelChangeKeepsMetaOnEmbedFailure(t *testing.T) {
+	dir := t.TempDir()
+	writeTree(t, dir)
+	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Input []string `json:"input"`
+			Model string   `json:"model"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		type item struct {
+			Embedding []float64 `json:"embedding"`
+			Index     int       `json:"index"`
+		}
+		var data []item
+		for i, s := range req.Input {
+			data = append(data, item{Index: i, Embedding: fakeVec(s + req.Model)})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
+	}))
+	defer ok.Close()
+	if _, err := index.Build(context.Background(), dir, index.BuildOptions{
+		EmbedURL: ok.URL + "/v1", EmbedModel: "m1", EmbedAPIKey: "k",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fail := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusBadGateway)
+	}))
+	defer fail.Close()
+	if _, err := index.Build(context.Background(), dir, index.BuildOptions{
+		EmbedURL: fail.URL + "/v1", EmbedModel: "m2", EmbedAPIKey: "k",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := index.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.EmbedModel != "m1" {
+		t.Fatalf("embed_model cleared on failed switch: %q (want m1)", st.EmbedModel)
+	}
+	if st.EmbedError == "" {
+		t.Fatal("expected embed_error after failed switch")
+	}
+	if st.Vectors != 0 {
+		t.Fatalf("vectors should be cleared on model change, got %d", st.Vectors)
+	}
+
+	// Retry with m2 must still force re-embed (meta must not be empty).
+	r3, err := index.Build(context.Background(), dir, index.BuildOptions{
+		EmbedURL: ok.URL + "/v1", EmbedModel: "m2", EmbedAPIKey: "k",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r3.Embedded < 1 {
+		t.Fatalf("expected re-embed after failed switch, got %+v", r3)
+	}
+	st, _ = index.Stat(dir)
+	if st.EmbedModel != "m2" || st.Vectors < 1 {
+		t.Fatalf("after recovery: model=%q vectors=%d err=%q", st.EmbedModel, st.Vectors, st.EmbedError)
+	}
+}
+
 func TestChunkerUnit(t *testing.T) {
 	// Build via public API on a long file to ensure multiple chunks.
 	dir := t.TempDir()

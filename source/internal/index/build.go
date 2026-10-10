@@ -60,11 +60,16 @@ func Build(ctx context.Context, cwd string, opts BuildOptions) (*BuildResult, er
 	forceReembed := false
 	if wantEmbed {
 		prevModel := db.getMeta("embed_model")
-		if prevModel != "" && prevModel != opts.EmbedModel {
-			if _, err := db.db.Exec(`DELETE FROM chunk_vec`); err != nil {
-				return nil, fmt.Errorf("clear vectors on embed model change: %w", err)
+		// Treat empty prev as "needs embed" so a failed first/re-embed can retry
+		// without leaving the index stuck (unchanged files would otherwise skip).
+		if prevModel != opts.EmbedModel {
+			if prevModel != "" {
+				// Drop incompatible vectors; keep prevModel in meta until embed
+				// succeeds so a failed switch still forces re-embed next time.
+				if _, err := db.db.Exec(`DELETE FROM chunk_vec`); err != nil {
+					return nil, fmt.Errorf("clear vectors on embed model change: %w", err)
+				}
 			}
-			_ = db.setMeta("embed_model", "")
 			forceReembed = true
 		}
 	}
