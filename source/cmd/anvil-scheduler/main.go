@@ -13,8 +13,10 @@ import (
 	"os/signal"
 	"runtime/debug"
 	"syscall"
+	"time"
 
 	"github.com/anvil-dev/anvil/internal/scheduler"
+	"github.com/anvil-dev/anvil/internal/web/auth"
 )
 
 func main() {
@@ -28,14 +30,14 @@ func main() {
 Usage:
   anvil-scheduler --config scheduler.yaml
 
-Apps speak HTTP (Bearer token from token_env):
+Apps speak HTTP (Bearer from token_env, or anvil-web session when web_sessions_db is set):
   GET  /v1/health
   GET|PUT /v1/llm
   GET  /v1/nodes
   GET  /v1/models
   POST /v1/jobs
 
-agentd joins listen_cluster (cluster.join / heartbeat / assign / done).
+agentd joins listen_cluster with the static scheduler token only.
 LLM credentials are configured by apps (PUT /v1/llm) and pushed to agentd
 on join_ok and cluster.config. Scheduler does not proxy chat.
 
@@ -62,6 +64,16 @@ on join_ok and cluster.config. Scheduler does not proxy chat.
 	}
 
 	hub := scheduler.NewHub(cfg, log.Default())
+	if cfg.WebSessionsDB != "" {
+		store, err := auth.Open(cfg.WebSessionsDB, 7*24*time.Hour)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "web_sessions_db: %v\n", err)
+			os.Exit(1)
+		}
+		hub.SetSessions(store)
+		defer hub.CloseSessions()
+		log.Printf("scheduler accepting anvil-web sessions from %s", cfg.WebSessionsDB)
+	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	if err := hub.Run(ctx); err != nil {

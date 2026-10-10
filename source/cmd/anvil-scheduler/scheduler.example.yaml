@@ -1,6 +1,8 @@
 listen_app: 127.0.0.1:17800
 listen_cluster: tcp://127.0.0.1:17777
 token_env: ANVIL_SCHEDULER_TOKEN
+# Same path as anvil-web db_path so Flutter can login via web then call scheduler.
+web_sessions_db: anvil-web.db
 heartbeat_stale_sec: 30
 models_cache_sec: 15
 # Optional bootstrap (apps can overwrite via PUT /v1/llm).

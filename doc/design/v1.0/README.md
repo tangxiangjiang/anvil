@@ -1,8 +1,8 @@
 # Design v1.0 (cutoff)
 
-Anvil **local-only** Go Agent SDK design through product milestone **0.25** (web fleet ops). Read chapters in order before implementing the matching roadmap phase.
+Anvil **local-only** Go Agent SDK design through product milestone **0.26** (Flutter mobile + auth bridge). Read chapters in order before implementing the matching roadmap phase.
 
-This tree is the **design cutoff** for 0.1–0.25 delivery. Later product lines get a new `doc/design/v…/` directory.
+This tree is the **design cutoff** for 0.1–0.26 delivery. Later product lines get a new `doc/design/v…/` directory.
 
 ## Read order
 
@@ -34,6 +34,7 @@ This tree is the **design cutoff** for 0.1–0.25 delivery. Later product lines 
 | 23 | [23-yaml-config.md](23-yaml-config.md) | YAML ops config (agentd + gateway) → **0.23** |
 | 24 | [24-scheduler.md](24-scheduler.md) | Scheduler hub (app HTTP + cluster) → **0.24** |
 | 25 | [25-web-admin.md](25-web-admin.md) | anvil-web fleet ops console → **0.25** |
+| 26 | [26-mobile-app.md](26-mobile-app.md) | Flutter app + web session on scheduler → **0.26** |
 
 Parent index: [`doc/design/README.md`](../README.md).
 
@@ -41,4 +42,4 @@ Parent index: [`doc/design/README.md`](../README.md).
 
 - Design describes **what** and **why** for this cutoff.
 - [`doc/roadmaps/v1.0/`](../../roadmaps/v1.0/) describes **when**.
-- Chapters 11–25 map to [m_0.11](../../roadmaps/v1.0/m_0.11_worker_daemon.md) … [m_0.25](../../roadmaps/v1.0/m_0.25_web_admin.md).
+- Chapters 11–26 map to [m_0.11](../../roadmaps/v1.0/m_0.11_worker_daemon.md) … [m_0.26](../../roadmaps/v1.0/m_0.26_mobile_app.md).

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/anvil-dev/anvil/internal/daemon"
+	"github.com/anvil-dev/anvil/internal/web/auth"
 )
 
 // NodeInfo is a public snapshot of a joined agentd.
@@ -77,6 +78,8 @@ type Hub struct {
 	modelsMu    sync.Mutex
 	modelsAt    time.Time
 	modelsCache []modelJSON
+
+	sessions *auth.Store // optional; validates anvil-web session Bearers on app HTTP
 }
 
 // NewHub constructs a hub with bootstrap llm.
@@ -92,6 +95,17 @@ func NewHub(cfg Config, logger *log.Logger) *Hub {
 		waiters: make(map[string]chan daemon.JobDoneBody),
 		jobNode: make(map[string]string),
 		usageN:  make(map[string]UsageTotals),
+	}
+}
+
+// SetSessions attaches a web auth store for app-HTTP session Bearer acceptance.
+func (h *Hub) SetSessions(s *auth.Store) { h.sessions = s }
+
+// CloseSessions closes the optional web sessions store.
+func (h *Hub) CloseSessions() {
+	if h.sessions != nil {
+		_ = h.sessions.Close()
+		h.sessions = nil
 	}
 }
 

@@ -11,6 +11,7 @@ Independent **local-only** Go Agent SDK. Capability-aligned with Cursor’s loca
 | [`doc/design/`](doc/design/) | Versioned design (current: [`v1.0/`](doc/design/v1.0/)) |
 | [`doc/roadmaps/`](doc/roadmaps/) | Versioned milestones (current: [`v1.0/`](doc/roadmaps/v1.0/)) |
 | [`source/`](source/) | Go module (`github.com/anvil-dev/anvil`) |
+| [`app/`](app/) | Flutter mobile client (login via web → scheduler jobs) |
 
 ## Quick start
 
@@ -282,11 +283,14 @@ Protocol: length-prefixed JSON (`hello`, `worker.list`, `job.assign` / `job.even
 
 `anvil-scheduler` is the app-facing control plane: configure gateway credentials (`PUT /v1/llm`), list nodes/models, submit jobs. agentd joins `listen_cluster`; scheduler pushes `base_url` / `api_key` / `model` on `join_ok` and live `cluster.config`. Chat still goes worker → gateway (scheduler does not proxy).
 
+App HTTP accepts the static `ANVIL_SCHEDULER_TOKEN` **or** a valid anvil-web session Bearer when `web_sessions_db` points at the same SQLite file as web `db_path`. Cluster join still requires the static token only.
+
 ```bash
 cd source
 go build -o ../bin/anvil-scheduler.exe ./cmd/anvil-scheduler
 go build -o ../bin/agentd.exe ./cmd/agentd
-# edit scheduler.example.yaml; enable agentd cluster.url → listen_cluster
+# edit scheduler.example.yaml; set web_sessions_db to the same path as web db_path
+# enable agentd cluster.url → listen_cluster
 set ANVIL_SCHEDULER_TOKEN=sched-token
 set ANVIL_GATEWAY_TOKEN=gw-token
 ../bin/anvil-scheduler.exe --config cmd/anvil-scheduler/scheduler.example.yaml
@@ -320,7 +324,24 @@ Scheduler also exposes `GET /v1/usage` and `PATCH /v1/nodes/{id}` (`max_workers`
 
 **Adding a web feature:** register a nav item in `internal/web/static/js/nav.js`, add `static/js/features/<name>.js` with `mount`/`unmount`, and wire `/api/v1/...` on [`internal/web/server.go`](source/internal/web/server.go) (+ schedclient if needed).
 
-Still deferred: Bridge, cloud agents, full hooks catalog, IDE plugin, OIDC/RBAC, job event streaming via scheduler.
+### Flutter mobile app (0.26)
+
+Phone client under [`app/`](app/): sign in to anvil-web, then call scheduler `/v1/jobs` and `/v1/models` with the session Bearer. No fleet UI (use the web console).
+
+```bash
+# 1) Point scheduler at the web DB (same file as anvil-web db_path)
+#    web_sessions_db: anvil-web.db
+# 2) Run web + scheduler + agentd (see above)
+cd app
+flutter pub get
+flutter run
+# Login: web URL, scheduler URL, username, password from the web wizard
+flutter test
+```
+
+See [`doc/design/v1.0/26-mobile-app.md`](doc/design/v1.0/26-mobile-app.md) and [`app/README.md`](app/README.md).
+
+Still deferred: Bridge, cloud agents, full hooks catalog, IDE plugin, OIDC/RBAC, job event streaming via scheduler, workflow/milestone DAG on mobile.
 
 ## License
 

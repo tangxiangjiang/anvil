@@ -16,8 +16,8 @@ import (
 	"github.com/anvil-dev/anvil/internal/id"
 )
 
-// ServeApp serves the HTTP app plane until ctx is done.
-func (h *Hub) ServeApp(ctx context.Context) error {
+// AppHandler returns the authenticated app HTTP mux (for ServeApp and tests).
+func (h *Hub) AppHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/health", h.withAuth(h.handleHealth))
 	mux.HandleFunc("/v1/llm", h.withAuth(h.handleLLM))
@@ -26,10 +26,14 @@ func (h *Hub) ServeApp(ctx context.Context) error {
 	mux.HandleFunc("/v1/models", h.withAuth(h.handleModels))
 	mux.HandleFunc("/v1/jobs", h.withAuth(h.handleJobs))
 	mux.HandleFunc("/v1/usage", h.withAuth(h.handleUsage))
+	return mux
+}
 
+// ServeApp serves the HTTP app plane until ctx is done.
+func (h *Hub) ServeApp(ctx context.Context) error {
 	srv := &http.Server{
 		Addr:              h.cfg.ListenApp,
-		Handler:           mux,
+		Handler:           h.AppHandler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	ln, err := net.Listen("tcp", h.cfg.ListenApp)
@@ -58,11 +62,22 @@ func (h *Hub) withAuth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		got := bearer(r.Header.Get("Authorization"))
-		if got == "" || got != want {
+		if got == "" {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		next(w, r)
+		if got == want {
+			next(w, r)
+			return
+		}
+		// Optional: accept anvil-web session Bearers (same SQLite as web db_path).
+		if h.sessions != nil {
+			if _, err := h.sessions.LookupSession(got); err == nil {
+				next(w, r)
+				return
+			}
+		}
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
 	}
 }
 

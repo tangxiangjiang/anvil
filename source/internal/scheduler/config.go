@@ -14,12 +14,13 @@ import (
 
 // Config is anvil-scheduler configuration (JSON or YAML).
 type Config struct {
-	ListenApp     string    `json:"listen_app" yaml:"listen_app"`         // HTTP e.g. 127.0.0.1:17800
-	ListenCluster string    `json:"listen_cluster" yaml:"listen_cluster"` // tcp://127.0.0.1:17777
-	TokenEnv      string    `json:"token_env" yaml:"token_env"`
-	StaleSec      int       `json:"heartbeat_stale_sec" yaml:"heartbeat_stale_sec"`
-	ModelsCacheSec int      `json:"models_cache_sec" yaml:"models_cache_sec"`
-	LLM           LLMBootstrap `json:"llm" yaml:"llm"`
+	ListenApp      string       `json:"listen_app" yaml:"listen_app"`           // HTTP e.g. 127.0.0.1:17800
+	ListenCluster  string       `json:"listen_cluster" yaml:"listen_cluster"`   // tcp://127.0.0.1:17777
+	TokenEnv       string       `json:"token_env" yaml:"token_env"`
+	WebSessionsDB  string       `json:"web_sessions_db" yaml:"web_sessions_db"` // optional: same path as anvil-web db_path
+	StaleSec       int          `json:"heartbeat_stale_sec" yaml:"heartbeat_stale_sec"`
+	ModelsCacheSec int          `json:"models_cache_sec" yaml:"models_cache_sec"`
+	LLM            LLMBootstrap `json:"llm" yaml:"llm"`
 }
 
 // LLMBootstrap is optional file/env seed for llm (app may overwrite via PUT /v1/llm).
