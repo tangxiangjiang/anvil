@@ -17,5 +17,10 @@
     "node_id": "local-1",
     "token_env": "ANVIL_CLUSTER_TOKEN",
     "heartbeat_sec": 10
+  },
+  "plugins": {
+    "available": ["sample"],
+    "deny": [],
+    "search_paths": []
   }
 }

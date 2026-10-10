@@ -88,10 +88,11 @@ func (e *ClusterEdge) session(ctx context.Context, url string) error {
 	sendHB := func() error {
 		idle, busy := e.server.Slots().Counts()
 		hb, _ := MarshalBody(ClusterHeartbeatBody{
-			NodeID: nodeID,
-			Idle:   idle,
-			Busy:   busy,
-			Max:    e.cfg.MaxWorkers,
+			NodeID:       nodeID,
+			Idle:         idle,
+			Busy:         busy,
+			Max:          e.cfg.MaxWorkers,
+			Capabilities: e.cfg.PluginCapabilityLabels(),
 		})
 		return e.write(conn, Envelope{Kind: KindClusterHeartbeat, Body: hb})
 	}

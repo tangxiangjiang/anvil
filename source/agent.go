@@ -21,6 +21,7 @@ import (
 	"github.com/anvil-dev/anvil/internal/llm"
 	"github.com/anvil-dev/anvil/internal/lsp"
 	"github.com/anvil-dev/anvil/internal/mcp"
+	"github.com/anvil-dev/anvil/internal/plugin"
 	"github.com/anvil-dev/anvil/internal/prompt"
 	"github.com/anvil-dev/anvil/internal/rules"
 	"github.com/anvil-dev/anvil/internal/runtime"
@@ -30,6 +31,7 @@ import (
 	"github.com/anvil-dev/anvil/internal/verify"
 	"github.com/anvil-dev/anvil/internal/vision"
 	"github.com/anvil-dev/anvil/internal/websearch"
+	"github.com/anvil-dev/anvil/plugins/sample"
 )
 
 // Agent is a durable local agent handle bound to a working directory.
@@ -48,6 +50,7 @@ type Agent struct {
 	complete     llm.Completer
 	registry     *tools.Registry
 	mcp          []*mcp.Session
+	plugins      *plugin.Manager
 	lsp          *lsp.Supervisor
 	systemPrompt string
 	hookFile     *hooks.File
@@ -67,24 +70,14 @@ func Create(ctx context.Context, opts Options) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	reg, sessions, hookFile, lspSup, err := buildRegistry(ctx, cwd, opts)
+	reg, sessions, plugMgr, hookFile, lspSup, err := buildRegistry(ctx, cwd, opts)
 	if err != nil {
-		for _, s := range sessions {
-			_ = s.Close()
-		}
-		if lspSup != nil {
-			lspSup.Close()
-		}
+		cleanupRegistry(sessions, plugMgr, lspSup)
 		return nil, err
 	}
 	st, err := store.Open(cwd, opts.Local.Store)
 	if err != nil {
-		for _, s := range sessions {
-			_ = s.Close()
-		}
-		if lspSup != nil {
-			lspSup.Close()
-		}
+		cleanupRegistry(sessions, plugMgr, lspSup)
 		return nil, newError("open store", false, err)
 	}
 	agentID := "agent-" + id.New()
@@ -99,23 +92,13 @@ func Create(ctx context.Context, opts Options) (*Agent, error) {
 		AllowShell: &allowShell,
 	}); err != nil {
 		_ = st.Close()
-		for _, s := range sessions {
-			_ = s.Close()
-		}
-		if lspSup != nil {
-			lspSup.Close()
-		}
+		cleanupRegistry(sessions, plugMgr, lspSup)
 		return nil, newError("persist agent meta", false, err)
 	}
 	sysPrompt, err := buildSystemPrompt(cwd, opts)
 	if err != nil {
 		_ = st.Close()
-		for _, s := range sessions {
-			_ = s.Close()
-		}
-		if lspSup != nil {
-			lspSup.Close()
-		}
+		cleanupRegistry(sessions, plugMgr, lspSup)
 		return nil, newError("load project rules", false, err)
 	}
 	return &Agent{
@@ -126,6 +109,7 @@ func Create(ctx context.Context, opts Options) (*Agent, error) {
 		complete:     completer,
 		registry:     reg,
 		mcp:          sessions,
+		plugins:      plugMgr,
 		lsp:          lspSup,
 		history:      nil,
 		systemPrompt: sysPrompt,
@@ -169,35 +153,20 @@ func Resume(ctx context.Context, agentID string, opts Options) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	reg, sessions, hookFile, lspSup, err := buildRegistry(ctx, cwd, opts)
+	reg, sessions, plugMgr, hookFile, lspSup, err := buildRegistry(ctx, cwd, opts)
 	if err != nil {
-		for _, s := range sessions {
-			_ = s.Close()
-		}
-		if lspSup != nil {
-			lspSup.Close()
-		}
+		cleanupRegistry(sessions, plugMgr, lspSup)
 		return nil, err
 	}
 	st, err := store.Open(cwd, opts.Local.Store)
 	if err != nil {
-		for _, s := range sessions {
-			_ = s.Close()
-		}
-		if lspSup != nil {
-			lspSup.Close()
-		}
+		cleanupRegistry(sessions, plugMgr, lspSup)
 		return nil, newError("open store", false, err)
 	}
 	records, err := st.Load(agentID)
 	if err != nil {
 		_ = st.Close()
-		for _, s := range sessions {
-			_ = s.Close()
-		}
-		if lspSup != nil {
-			lspSup.Close()
-		}
+		cleanupRegistry(sessions, plugMgr, lspSup)
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, newError("agent not found: "+agentID, false, nil)
 		}
@@ -206,12 +175,7 @@ func Resume(ctx context.Context, agentID string, opts Options) (*Agent, error) {
 	sysPrompt, err := buildSystemPrompt(cwd, opts)
 	if err != nil {
 		_ = st.Close()
-		for _, s := range sessions {
-			_ = s.Close()
-		}
-		if lspSup != nil {
-			lspSup.Close()
-		}
+		cleanupRegistry(sessions, plugMgr, lspSup)
 		return nil, newError("load project rules", false, err)
 	}
 	return &Agent{
@@ -222,6 +186,7 @@ func Resume(ctx context.Context, agentID string, opts Options) (*Agent, error) {
 		complete:     completer,
 		registry:     reg,
 		mcp:          sessions,
+		plugins:      plugMgr,
 		lsp:          lspSup,
 		history:      historyFromRecords(records),
 		systemPrompt: sysPrompt,
@@ -312,7 +277,39 @@ func routerSkillsText(cwd string, opts Options, userMsg string) string {
 	return skills.FormatRouter(picked, 0)
 }
 
-func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Registry, []*mcp.Session, *hooks.File, *lsp.Supervisor, error) {
+func cleanupRegistry(sessions []*mcp.Session, plugMgr *plugin.Manager, lspSup *lsp.Supervisor) {
+	for _, s := range sessions {
+		_ = s.Close()
+	}
+	if plugMgr != nil {
+		_ = plugMgr.Close(context.Background())
+	}
+	if lspSup != nil {
+		lspSup.Close()
+	}
+}
+
+func builtinPluginFactories() map[string]plugin.Factory {
+	return map[string]plugin.Factory{
+		"sample": sample.New,
+	}
+}
+
+func toPluginPolicy(p *PluginPolicy) *plugin.Policy {
+	if p == nil {
+		return nil
+	}
+	out := &plugin.Policy{
+		Available: append([]string(nil), p.Available...),
+		Deny:      append([]string(nil), p.Deny...),
+	}
+	for _, s := range p.MaxPermissions {
+		out.MaxPermissions = append(out.MaxPermissions, plugin.Permission(s))
+	}
+	return out
+}
+
+func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Registry, []*mcp.Session, *plugin.Manager, *hooks.File, *lsp.Supervisor, error) {
 	reg := tools.NewRegistry(cwd, opts.Local.AllowShellEnabled())
 	embedKey := opts.EmbedAPIKey
 	if embedKey == "" {
@@ -337,15 +334,15 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 		ScanUser:    skillDiscoverOpts(opts).ScanUser,
 	})
 	if err := configureWebTools(reg, opts); err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, err
 	}
 	if err := configureVerifyTools(reg, cwd, opts); err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, err
 	}
 	configureVisionTools(reg, opts)
 	lspSup, err := configureLSP(ctx, reg, cwd, opts)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, err
 	}
 
 	var hookFile *hooks.File
@@ -355,7 +352,7 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 			if lspSup != nil {
 				lspSup.Close()
 			}
-			return nil, nil, nil, nil, newError("load hooks", false, err)
+			return nil, nil, nil, nil, nil, newError("load hooks", false, err)
 		}
 		hookFile = hf
 	}
@@ -417,7 +414,7 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 			if lspSup != nil {
 				lspSup.Close()
 			}
-			return nil, nil, nil, nil, newError("tool "+spec.Name+": handler is required", false, nil)
+			return nil, nil, nil, nil, nil, newError("tool "+spec.Name+": handler is required", false, nil)
 		}
 		if err := reg.Register(&tools.FuncTool{
 			Name:        spec.Name,
@@ -428,7 +425,7 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 			if lspSup != nil {
 				lspSup.Close()
 			}
-			return nil, nil, nil, nil, newError(err.Error(), false, nil)
+			return nil, nil, nil, nil, nil, newError(err.Error(), false, nil)
 		}
 	}
 	var sessions []*mcp.Session
@@ -443,13 +440,8 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 			Headers:   cfg.Headers,
 		})
 		if err != nil {
-			for _, s := range sessions {
-				_ = s.Close()
-			}
-			if lspSup != nil {
-				lspSup.Close()
-			}
-			return nil, nil, nil, nil, newError("mcp server "+name, false, err)
+			cleanupRegistry(sessions, nil, lspSup)
+			return nil, nil, nil, nil, nil, newError("mcp server "+name, false, err)
 		}
 		sessions = append(sessions, sess)
 		for _, t := range sess.Tools() {
@@ -464,18 +456,23 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 					return session.Call(ctx, mcpName, args)
 				},
 			}); err != nil {
-				for _, s := range sessions {
-					_ = s.Close()
-				}
-				if lspSup != nil {
-					lspSup.Close()
-				}
-				return nil, nil, nil, nil, newError(err.Error(), false, nil)
+				cleanupRegistry(sessions, nil, lspSup)
+				return nil, nil, nil, nil, nil, newError(err.Error(), false, nil)
 			}
 		}
 	}
+	// Filter builtins/MCP before plugins so Options.Plugins tools are never stripped.
 	applyBuiltinToolFilters(reg, opts)
-	return reg, sessions, hookFile, lspSup, nil
+	plugMgr, err := plugin.Load(ctx, cwd, opts.Plugins, reg, plugin.LoadOptions{
+		Factories:   builtinPluginFactories(),
+		SearchPaths: opts.PluginDirs,
+		Policy:      toPluginPolicy(opts.PluginPolicy),
+	})
+	if err != nil {
+		cleanupRegistry(sessions, nil, lspSup)
+		return nil, nil, nil, nil, nil, newError("load plugins", false, err)
+	}
+	return reg, sessions, plugMgr, hookFile, lspSup, nil
 }
 
 func configureLSP(ctx context.Context, reg *tools.Registry, cwd string, opts Options) (*lsp.Supervisor, error) {
@@ -786,6 +783,7 @@ func (a *Agent) Reload(ctx context.Context) error {
 	opts := a.opts
 	cwd := a.cwd
 	oldSessions := a.mcp
+	oldPlugins := a.plugins
 	oldLSP := a.lsp
 	a.mu.Unlock()
 
@@ -793,40 +791,28 @@ func (a *Agent) Reload(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	reg, sessions, hookFile, lspSup, err := buildRegistry(ctx, cwd, opts)
+	reg, sessions, plugMgr, hookFile, lspSup, err := buildRegistry(ctx, cwd, opts)
 	if err != nil {
-		for _, s := range sessions {
-			_ = s.Close()
-		}
-		if lspSup != nil {
-			lspSup.Close()
-		}
+		cleanupRegistry(sessions, plugMgr, lspSup)
 		return err
 	}
 	sysPrompt, err := buildSystemPrompt(cwd, opts)
 	if err != nil {
-		for _, s := range sessions {
-			_ = s.Close()
-		}
-		if lspSup != nil {
-			lspSup.Close()
-		}
+		cleanupRegistry(sessions, plugMgr, lspSup)
 		return newError("load project rules", false, err)
 	}
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.running {
-		for _, s := range sessions {
-			_ = s.Close()
-		}
-		if lspSup != nil {
-			lspSup.Close()
-		}
+		cleanupRegistry(sessions, plugMgr, lspSup)
 		return newError("cannot reload while a run is in progress", false, nil)
 	}
 	for _, s := range oldSessions {
 		_ = s.Close()
+	}
+	if oldPlugins != nil {
+		_ = oldPlugins.Close(context.Background())
 	}
 	if oldLSP != nil {
 		oldLSP.Close()
@@ -834,6 +820,7 @@ func (a *Agent) Reload(ctx context.Context) error {
 	a.opts = opts
 	a.registry = reg
 	a.mcp = sessions
+	a.plugins = plugMgr
 	a.lsp = lspSup
 	a.systemPrompt = sysPrompt
 	a.hookFile = hookFile
@@ -997,6 +984,8 @@ func (a *Agent) Close() error {
 	a.store = nil
 	sessions := a.mcp
 	a.mcp = nil
+	plugMgr := a.plugins
+	a.plugins = nil
 	lspSup := a.lsp
 	a.lsp = nil
 	a.mu.Unlock()
@@ -1006,6 +995,9 @@ func (a *Agent) Close() error {
 	}
 	for _, s := range sessions {
 		_ = s.Close()
+	}
+	if plugMgr != nil {
+		_ = plugMgr.Close(context.Background())
 	}
 	if lspSup != nil {
 		lspSup.Close()

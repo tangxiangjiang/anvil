@@ -77,14 +77,15 @@ type WorkerListResultBody struct {
 
 // JobAssignBody assigns work to an allowlisted repo.
 type JobAssignBody struct {
-	JobID      string `json:"job_id"`
-	RepoID     string `json:"repo_id"`
-	Prompt     string `json:"prompt"`
-	ResumeID   string `json:"resume_id,omitempty"`
-	MaxSteps   int    `json:"max_steps,omitempty"`
-	Model      string `json:"model,omitempty"`
-	Provider   string `json:"provider,omitempty"`
-	ForceStub  bool   `json:"force_stub,omitempty"` // test: skip LLM
+	JobID      string   `json:"job_id"`
+	RepoID     string   `json:"repo_id"`
+	Prompt     string   `json:"prompt"`
+	ResumeID   string   `json:"resume_id,omitempty"`
+	MaxSteps   int      `json:"max_steps,omitempty"`
+	Model      string   `json:"model,omitempty"`
+	Provider   string   `json:"provider,omitempty"`
+	Plugins    []string `json:"plugins,omitempty"` // 0.20+ intersected with daemon policy
+	ForceStub  bool     `json:"force_stub,omitempty"` // test: skip LLM
 }
 
 // JobEventBody streams one run event to the controller.
@@ -132,10 +133,11 @@ type ClusterJoinBody struct {
 
 // ClusterHeartbeatBody advertises capacity.
 type ClusterHeartbeatBody struct {
-	NodeID string `json:"node_id"`
-	Idle   int    `json:"idle"`
-	Busy   int    `json:"busy"`
-	Max    int    `json:"max_workers"`
+	NodeID       string   `json:"node_id"`
+	Idle         int      `json:"idle"`
+	Busy         int      `json:"busy"`
+	Max          int      `json:"max_workers"`
+	Capabilities []string `json:"capabilities,omitempty"` // 0.20+ plugin labels
 }
 
 // MustMarshalBody encodes v as JSON RawMessage; panics only on programmer error in tests — prefer MarshalBody.

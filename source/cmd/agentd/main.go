@@ -63,7 +63,7 @@ LLM credentials for embedded workers: ANVIL_API_KEY, ANVIL_BASE_URL, ANVIL_MODEL
 		os.Exit(1)
 	}
 
-	srv, err := daemon.NewServer(cfg, daemon.EmbeddedRunner{}, log.Default())
+	srv, err := daemon.NewServer(cfg, nil, log.Default())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

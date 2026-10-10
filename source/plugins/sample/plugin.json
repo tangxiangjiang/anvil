@@ -1,0 +1,7 @@
+{
+  "id": "sample",
+  "version": "0.1.0",
+  "anvil_api": 1,
+  "capabilities": ["tools.plugin_ping"],
+  "permissions": ["fs.read", "net.none"]
+}

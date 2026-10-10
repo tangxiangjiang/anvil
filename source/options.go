@@ -104,6 +104,20 @@ type Options struct {
 	// Attachments are images included on Prompt (and Create→first Send via Prompt helper).
 	// Prefer WithAttachments on Agent.Send for multi-turn.
 	Attachments []ImageAttachment
+
+	// Plugins lists in-tree or discovered plugin ids to load (0.20+).
+	Plugins []string
+	// PluginDirs are search roots containing <id>/plugin.json for exec plugins.
+	PluginDirs []string
+	// PluginPolicy optionally gates ids/permissions (daemon/worker); nil = allow requested.
+	PluginPolicy *PluginPolicy
+}
+
+// PluginPolicy mirrors daemon allowlist gates for in-process hosts (0.20+).
+type PluginPolicy struct {
+	Available      []string
+	Deny           []string
+	MaxPermissions []string // permission strings; empty = no cap
 }
 
 // VisionOptions controls image attachments / read_image (0.19+).

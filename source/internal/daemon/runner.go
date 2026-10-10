@@ -19,10 +19,13 @@ type JobRunner interface {
 }
 
 // EmbeddedRunner runs Anvil in-process (default when WorkerBin is empty).
-type EmbeddedRunner struct{}
+type EmbeddedRunner struct {
+	PluginDirs []string
+	Deny       []string
+}
 
 // Run implements JobRunner.
-func (EmbeddedRunner) Run(ctx context.Context, job JobAssignBody, cwd string, emit func(JobEventBody)) JobDoneBody {
+func (r EmbeddedRunner) Run(ctx context.Context, job JobAssignBody, cwd string, emit func(JobEventBody)) JobDoneBody {
 	if job.ForceStub {
 		return runStub(ctx, job, emit)
 	}
@@ -36,6 +39,16 @@ func (EmbeddedRunner) Run(ctx context.Context, job JobAssignBody, cwd string, em
 	}
 	if job.Provider != "" {
 		opts.Provider = anvil.Provider(job.Provider)
+	}
+	opts.Plugins = append([]string(nil), job.Plugins...)
+	opts.PluginDirs = append([]string(nil), r.PluginDirs...)
+	// Daemon already intersected allowlist; pin Available to resolved set so Init cannot expand.
+	opts.PluginPolicy = &anvil.PluginPolicy{
+		Available: append([]string(nil), job.Plugins...),
+		Deny:      append([]string(nil), r.Deny...),
+	}
+	if len(job.Plugins) == 0 {
+		opts.PluginPolicy = &anvil.PluginPolicy{Available: []string{}, Deny: append([]string(nil), r.Deny...)}
 	}
 	done := worker.RunJob(ctx, opts, worker.Job{
 		JobID:    job.JobID,

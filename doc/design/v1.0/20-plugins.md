@@ -1,7 +1,7 @@
 # 20 — Agent plugins (worker-side)
 
 **Product version focus:** **0.20** ([m_0.20_plugins.md](../../roadmaps/v1.0/m_0.20_plugins.md))  
-**Status:** planned
+**Status:** done
 
 ## Intent
 

@@ -134,6 +134,22 @@ set ANVIL_MODEL=private/demo
 
 `anvil.ListModels` hits `GET {BaseURL}/models`. See [`doc/design/v1.0/12-model-gateway.md`](doc/design/v1.0/12-model-gateway.md).
 
+### Plugins (0.20)
+
+Optional capability packs on the worker / in-process SDK (not inside `agentd`). General coding tools stay builtins; plugins are for optional/heavy/org-specific tools.
+
+- In-tree sample: `Options.Plugins: []string{"sample"}` registers `plugin_ping`.
+- Exec plugins: put `<id>/plugin.json` under `Options.PluginDirs` (or agentd `plugins.search_paths`) with a `command` speaking stdio JSON-RPC (`initialize` / `list_tools` / `call_tool` / `shutdown`).
+- Daemon policy: `plugins.available` / `plugins.deny`; `job.assign.plugins` is intersected — denied ids never Init. `hello_ok` / cluster heartbeat advertise `plugin.<id>` capabilities.
+
+```go
+Plugins: []string{"sample"},
+// PluginDirs: []string{"/path/to/plugin-roots"},
+// PluginPolicy: &anvil.PluginPolicy{Deny: []string{"untrusted"}},
+```
+
+Crash of an exec plugin fails that tool call / job path; it does not take down agentd (worker/embedded runner reports the error). See [`doc/design/v1.0/20-plugins.md`](doc/design/v1.0/20-plugins.md).
+
 ### Vision / images (0.19)
 
 Opt-in multimodal attachments (off by default). Set `Options.Vision.Enabled` and pass images via `WithAttachments` / `Options.Attachments` (path under cwd or in-memory bytes). Optional builtin `read_image` (tool group `vision`) queues a sandbox file for the next Completer turn. Images are downscaled (default longest side 2048, ~4MiB encoded budget). Gateway catalog may advertise `anvil.vision: true` on models.

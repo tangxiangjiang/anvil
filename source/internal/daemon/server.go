@@ -29,7 +29,10 @@ func NewServer(cfg Config, runner JobRunner, logger *log.Logger) (*Server, error
 		return nil, err
 	}
 	if runner == nil {
-		runner = EmbeddedRunner{}
+		runner = EmbeddedRunner{
+			PluginDirs: append([]string(nil), cfg.Plugins.SearchPaths...),
+			Deny:       append([]string(nil), cfg.Plugins.Deny...),
+		}
 	}
 	if logger == nil {
 		logger = log.Default()
@@ -138,10 +141,12 @@ func (s *Server) handleHello(w *connWriter, env Envelope) bool {
 		_ = w.WriteEnvelope(Envelope{Kind: KindHelloFail, ID: env.ID, Body: mustBody(HelloFailBody{Message: "invalid token"})})
 		return false
 	}
+	caps := []string{"job.assign", "job.cancel", "worker.list"}
+	caps = append(caps, s.cfg.PluginCapabilityLabels()...)
 	ok := HelloOKBody{
 		NodeID:       s.cfg.NodeID,
 		MaxWorkers:   s.cfg.MaxWorkers,
-		Capabilities: []string{"job.assign", "job.cancel", "worker.list"},
+		Capabilities: caps,
 	}
 	_ = w.WriteEnvelope(Envelope{Kind: KindHelloOK, ID: env.ID, Body: mustBody(ok)})
 	return true
@@ -163,6 +168,12 @@ func (s *Server) handleJobAssign(parent context.Context, w *connWriter, env Enve
 		_ = s.writeErr(w, env.ID, err.Error(), job.JobID)
 		return
 	}
+	resolvedPlugins, err := s.cfg.ResolvePlugins(job.Plugins)
+	if err != nil {
+		_ = s.writeErr(w, env.ID, err.Error(), job.JobID)
+		return
+	}
+	job.Plugins = resolvedPlugins
 
 	ctx, cancel := context.WithCancel(parent)
 	_, err = s.slots.TryAcquire(job.JobID, cancel)

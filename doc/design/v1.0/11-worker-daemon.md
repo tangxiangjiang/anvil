@@ -93,7 +93,7 @@ Cluster scheduling **strategy** lives in the scheduler; agentd only **advertises
 
 Workers are **not** a second public API surface for app authors. Authors either use `anvil` in-process or speak **agentd**.
 
-**Plugins (0.20):** optional capability packs **Init inside the worker** (or in-process SDK), not inside agentd. Daemon only allowlists plugin ids and may advertise capabilities on heartbeat — see [20-plugins.md](20-plugins.md).
+**Plugins (0.20):** optional capability packs **Init inside the worker** (or in-process SDK), not inside agentd. Daemon config `plugins.available` / `deny` / `search_paths` intersects `job.assign.plugins`; denied ids never Init. `hello_ok` and cluster heartbeat advertise `plugin.<id>` labels — see [20-plugins.md](20-plugins.md).
 
 ## Control protocol (sketch)
 

@@ -10,7 +10,16 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/anvil-dev/anvil/internal/plugin"
 )
+
+func pluginPolicyFrom(c PluginsConfig) *plugin.Policy {
+	return &plugin.Policy{
+		Available: append([]string(nil), c.Available...),
+		Deny:      append([]string(nil), c.Deny...),
+	}
+}
 
 // OverloadPolicy is what happens when all workers are busy.
 type OverloadPolicy string
@@ -57,6 +66,18 @@ type Config struct {
 	Cluster ClusterConfig `json:"cluster"`
 	// NodeID labels this daemon in hello_ok (defaults to hostname).
 	NodeID string `json:"node_id"`
+	// Plugins is the worker-side plugin allowlist (0.20+).
+	Plugins PluginsConfig `json:"plugins"`
+}
+
+// PluginsConfig gates which plugin ids jobs may load.
+type PluginsConfig struct {
+	// Available is the allowlist. Empty → no plugins unless job is rejected when requesting any.
+	// When non-empty, job.plugins must be a subset (empty job.plugins → load Available).
+	Available []string `json:"available"`
+	Deny      []string `json:"deny"`
+	// SearchPaths are roots containing <id>/plugin.json for exec plugins.
+	SearchPaths []string `json:"search_paths"`
 }
 
 // DefaultConfig returns sensible defaults (listen path filled by caller/platform).
@@ -155,6 +176,40 @@ func (c Config) ResolveRepo(repoID string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("unknown repo_id %q", repoID)
+}
+
+// ResolvePlugins intersects job plugin ids with daemon policy.
+func (c Config) ResolvePlugins(requested []string) ([]string, error) {
+	pol := pluginPolicyFrom(c.Plugins)
+	return pol.ResolveIDs(requested)
+}
+
+// PluginCapabilityLabels returns hello/heartbeat labels for available plugins.
+func (c Config) PluginCapabilityLabels() []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, id := range c.Plugins.Available {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		denied := false
+		for _, d := range c.Plugins.Deny {
+			if strings.TrimSpace(d) == id {
+				denied = true
+				break
+			}
+		}
+		if denied {
+			continue
+		}
+		label := "plugin." + id
+		if !seen[label] {
+			seen[label] = true
+			out = append(out, label)
+		}
+	}
+	return out
 }
 
 // Token returns the controller auth token from the environment.
