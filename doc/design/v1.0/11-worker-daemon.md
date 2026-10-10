@@ -1,7 +1,7 @@
 # 11 — Worker daemon & agent-worker
 
 **Product version focus:** **0.11** ([m_0.11_worker_daemon.md](../../roadmaps/v1.0/m_0.11_worker_daemon.md))  
-**Status:** planned
+**Status:** done (implementation through p_0.11.1–p_0.11.5)
 
 ## Intent
 

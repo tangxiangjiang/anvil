@@ -1,0 +1,97 @@
+// Copyright (c) 2026 TangXiangjiang.
+// SPDX-License-Identifier: MIT
+
+package daemon
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"time"
+
+	"github.com/anvil-dev/anvil"
+	"github.com/anvil-dev/anvil/internal/worker"
+)
+
+// JobRunner executes an assigned job and streams events.
+type JobRunner interface {
+	Run(ctx context.Context, job JobAssignBody, cwd string, emit func(JobEventBody)) JobDoneBody
+}
+
+// EmbeddedRunner runs Anvil in-process (default when WorkerBin is empty).
+type EmbeddedRunner struct{}
+
+// Run implements JobRunner.
+func (EmbeddedRunner) Run(ctx context.Context, job JobAssignBody, cwd string, emit func(JobEventBody)) JobDoneBody {
+	if job.ForceStub {
+		return runStub(ctx, job, emit)
+	}
+	opts := worker.OptionsFromEnv()
+	opts.Local.CWD = cwd
+	if job.MaxSteps > 0 {
+		opts.MaxSteps = job.MaxSteps
+	}
+	if job.Model != "" {
+		opts.Model.ID = job.Model
+	}
+	if job.Provider != "" {
+		opts.Provider = anvil.Provider(job.Provider)
+	}
+	done := worker.RunJob(ctx, opts, worker.Job{
+		JobID:    job.JobID,
+		Prompt:   job.Prompt,
+		ResumeID: job.ResumeID,
+	}, func(ev worker.Event) {
+		emit(JobEventBody{
+			JobID:      job.JobID,
+			Type:       string(ev.Type),
+			Text:       ev.Text,
+			ToolCallID: ev.ToolCallID,
+			Name:       ev.Name,
+			Args:       ev.Args,
+			Content:    ev.Content,
+			IsError:    ev.IsError,
+			Step:       ev.Step,
+			MaxSteps:   ev.MaxSteps,
+			Code:       string(ev.Code),
+		})
+	})
+	return JobDoneBody{
+		JobID:  done.JobID,
+		Status: done.Status,
+		Result: done.Result,
+		Error:  done.Error,
+		Code:   done.Code,
+		Steps:  done.Steps,
+	}
+}
+
+func runStub(ctx context.Context, job JobAssignBody, emit func(JobEventBody)) JobDoneBody {
+	emit(JobEventBody{JobID: job.JobID, Type: string(anvil.EventAssistant), Text: "stub:" + job.Prompt})
+	select {
+	case <-ctx.Done():
+		return JobDoneBody{JobID: job.JobID, Status: string(anvil.StatusCancelled), Code: string(anvil.CodeCancelled), Error: context.Cause(ctx).Error()}
+	case <-time.After(10 * time.Millisecond):
+	}
+	emit(JobEventBody{JobID: job.JobID, Type: string(anvil.EventDone), Text: "stub:" + job.Prompt})
+	return JobDoneBody{JobID: job.JobID, Status: string(anvil.StatusFinished), Result: "stub:" + job.Prompt, Steps: 1}
+}
+
+// EnvPassthrough lists LLM-related env names workers inherit.
+func EnvPassthrough() []string {
+	return []string{
+		"ANVIL_API_KEY", "ANVIL_BASE_URL", "ANVIL_MODEL", "ANVIL_PROVIDER",
+		"ANVIL_MAX_STEPS", "ANVIL_MAX_WALL",
+	}
+}
+
+// LookPathWorker resolves WorkerBin or empty for embedded.
+func LookPathWorker(bin string) (string, error) {
+	if bin == "" {
+		return "", nil
+	}
+	if _, err := os.Stat(bin); err != nil {
+		return "", fmt.Errorf("worker_bin: %w", err)
+	}
+	return bin, nil
+}

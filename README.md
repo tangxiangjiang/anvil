@@ -112,7 +112,21 @@ Local: anvil.LocalOptions{
 // anvil.Prewarm(ctx, cwd, sources)
 ```
 
-Still deferred: Bridge, cloud agents, full hooks catalog, sub-agents, IDE plugin.
+### Worker daemon (0.11)
+
+`agentd` accepts local controller connections (unix socket or `tcp://127.0.0.1:…`), allowlists repos, and runs jobs via an embedded Anvil worker (`ForceStub` in tests; real LLM via `ANVIL_*` env).
+
+```bash
+cd source
+go build -o ../bin/agentd.exe ./cmd/agentd
+# edit cmd/agentd/agentd.example.json → absolute repos[].cwd
+set ANVIL_AGENTD_TOKEN=dev-token
+../bin/agentd.exe --config cmd/agentd/agentd.example.json
+```
+
+Protocol: length-prefixed JSON (`hello`, `worker.list`, `job.assign` / `job.event` / `job.cancel` / `job.done`). See [`doc/design/v1.0/11-worker-daemon.md`](doc/design/v1.0/11-worker-daemon.md).
+
+Still deferred: Bridge, cloud agents, full hooks catalog, IDE plugin.
 
 ## License
 

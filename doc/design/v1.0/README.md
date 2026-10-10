@@ -19,7 +19,7 @@ This tree is the **design cutoff** for 0.1–0.22 delivery. Later product lines 
 | 08 | [08-security.md](08-security.md) | Path escape, shell, secrets → roadmap 0.8 |
 | 09 | [09-extensibility.md](09-extensibility.md) | Custom tools, MCP, hooks → roadmap 0.3 / 0.9 |
 | 10 | [10-sdk-parity.md](10-sdk-parity.md) | Cursor SDK **local** parity → roadmap **0.10** (done) |
-| 11 | [11-worker-daemon.md](11-worker-daemon.md) | agentd + agent-worker → **0.11** |
+| 11 | [11-worker-daemon.md](11-worker-daemon.md) | agentd + agent-worker → **0.11** (done) |
 | 12 | [12-model-gateway.md](12-model-gateway.md) | Model gateway → **0.12** |
 | 13 | [13-retrieval.md](13-retrieval.md) | Index / semantic search → **0.13** |
 | 14 | [14-hooks-skills.md](14-hooks-skills.md) | Hooks & skills → **0.14** |
