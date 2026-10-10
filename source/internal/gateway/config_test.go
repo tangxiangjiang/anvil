@@ -53,6 +53,53 @@ func TestLoadJSONFile(t *testing.T) {
 	}
 }
 
+func TestLoadYAMLFileParity(t *testing.T) {
+	dir := t.TempDir()
+	jsonPath := filepath.Join(dir, "gw.json")
+	yamlPath := filepath.Join(dir, "gw.yaml")
+	jsonBody := `{
+  "listen":"127.0.0.1:0",
+  "token_env":"ANVIL_GATEWAY_TOKEN",
+  "default_model":"demo",
+  "upstreams":{"u1":{"base_url":"http://127.0.0.1:9/v1","api_key_env":"UP_KEY"}},
+  "models":[{"id":"demo","upstream":"u1","upstream_model":"real","provider":"openai","vision":true}]
+}`
+	yamlBody := `listen: 127.0.0.1:0
+token_env: ANVIL_GATEWAY_TOKEN
+default_model: demo
+upstreams:
+  u1:
+    base_url: http://127.0.0.1:9/v1
+    api_key_env: UP_KEY
+models:
+  - id: demo
+    upstream: u1
+    upstream_model: real
+    provider: openai
+    vision: true
+`
+	if err := os.WriteFile(jsonPath, []byte(jsonBody), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(yamlPath, []byte(yamlBody), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	j, err := LoadFile(jsonPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	y, err := LoadFile(yamlPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j.DefaultModel != y.DefaultModel || j.Models[0].UpstreamModel != y.Models[0].UpstreamModel || j.Models[0].Vision != y.Models[0].Vision {
+		t.Fatalf("json=%+v yaml=%+v", j, y)
+	}
+	if j.Upstreams["u1"].BaseURL != y.Upstreams["u1"].BaseURL {
+		t.Fatalf("upstream mismatch")
+	}
+}
+
 func fixtureConfig() Config {
 	cfg := DefaultConfig()
 	cfg.Listen = "127.0.0.1:0"

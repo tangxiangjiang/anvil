@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/anvil-dev/anvil/internal/worker"
 )
 
 func TestConfigNormalizeRejectsZeroWorkers(t *testing.T) {
@@ -74,6 +76,45 @@ func TestLoadJSONFile(t *testing.T) {
 		if cwd != want {
 			t.Fatalf("resolve=%q want=%q err=%v", cwd, want, err)
 		}
+	}
+}
+
+func TestLoadYAMLFileWithLLM(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agentd.yaml")
+	body := "listen: tcp://127.0.0.1:19877\nmax_workers: 2\nrepos:\n  - id: demo\n    cwd: " + filepath.ToSlash(dir) + "\nllm:\n  base_url: http://127.0.0.1:8080/v1\n  model: private/demo\n  provider: openai\n  max_steps: 64\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.LLM.BaseURL != "http://127.0.0.1:8080/v1" || cfg.LLM.Model != "private/demo" || cfg.LLM.MaxSteps != 64 {
+		t.Fatalf("llm=%+v", cfg.LLM)
+	}
+	if cfg.LLM.APIKeyEnv != "ANVIL_API_KEY" {
+		t.Fatalf("api_key_env default=%q", cfg.LLM.APIKeyEnv)
+	}
+}
+
+func TestApplyLLMDefaultsFillsBaseURL(t *testing.T) {
+	t.Setenv("ANVIL_BASE_URL", "")
+	t.Setenv("ANVIL_MODEL", "")
+	t.Setenv("ANVIL_PROVIDER", "")
+	t.Setenv("ANVIL_MAX_STEPS", "")
+	opts := worker.OptionsFromEnv()
+	applyLLMDefaults(&opts, LLMConfig{
+		BaseURL:  "http://gw.local/v1",
+		Model:    "m1",
+		Provider: "anthropic",
+		MaxSteps: 10,
+	})
+	if opts.BaseURL != "http://gw.local/v1" || opts.Model.ID != "m1" || opts.MaxSteps != 10 {
+		t.Fatalf("%+v", opts)
+	}
+	if string(opts.Provider) != "anthropic" {
+		t.Fatalf("provider=%s", opts.Provider)
 	}
 }
 

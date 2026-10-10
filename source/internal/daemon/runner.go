@@ -22,6 +22,7 @@ type JobRunner interface {
 type EmbeddedRunner struct {
 	PluginDirs []string
 	Deny       []string
+	LLM        LLMConfig
 }
 
 // Run implements JobRunner.
@@ -30,6 +31,7 @@ func (r EmbeddedRunner) Run(ctx context.Context, job JobAssignBody, cwd string, 
 		return runStub(ctx, job, emit)
 	}
 	opts := worker.OptionsFromEnv()
+	applyLLMDefaults(&opts, r.LLM)
 	opts.Local.CWD = cwd
 	if job.MaxSteps > 0 {
 		opts.MaxSteps = job.MaxSteps
@@ -76,6 +78,32 @@ func (r EmbeddedRunner) Run(ctx context.Context, job JobAssignBody, cwd string, 
 		Error:  done.Error,
 		Code:   done.Code,
 		Steps:  done.Steps,
+	}
+}
+
+// applyLLMDefaults fills Options from agentd llm config when env left them empty.
+func applyLLMDefaults(opts *anvil.Options, llm LLMConfig) {
+	if opts == nil {
+		return
+	}
+	if opts.BaseURL == "" && llm.BaseURL != "" {
+		opts.BaseURL = llm.BaseURL
+	}
+	keyEnv := llm.APIKeyEnv
+	if keyEnv == "" {
+		keyEnv = "ANVIL_API_KEY"
+	}
+	if opts.APIKey == "" {
+		opts.APIKey = os.Getenv(keyEnv)
+	}
+	if opts.Model.ID == "" && llm.Model != "" {
+		opts.Model.ID = llm.Model
+	}
+	if llm.Provider != "" && os.Getenv("ANVIL_PROVIDER") == "" {
+		opts.Provider = anvil.Provider(llm.Provider)
+	}
+	if opts.MaxSteps == 0 && llm.MaxSteps > 0 {
+		opts.MaxSteps = llm.MaxSteps
 	}
 }
 

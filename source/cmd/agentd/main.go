@@ -19,7 +19,7 @@ import (
 
 func main() {
 	var (
-		configPath = flag.String("config", "", "path to agentd JSON config")
+		configPath = flag.String("config", "", "path to agentd config (.json / .yaml / .yml)")
 		listen     = flag.String("listen", "", "override listen (unix path or tcp://host:port)")
 		showVer    = flag.Bool("version", false, "print version")
 	)
@@ -27,11 +27,12 @@ func main() {
 		fmt.Fprintf(os.Stderr, `agentd — Anvil local worker daemon
 
 Usage:
-  agentd --config agentd.json
+  agentd --config agentd.yaml
   agentd --listen tcp://127.0.0.1:17654 --config agentd.json
 
 Auth token is read from the env named by config token_env (default ANVIL_AGENTD_TOKEN).
-LLM credentials for embedded workers: ANVIL_API_KEY, ANVIL_BASE_URL, ANVIL_MODEL, ANVIL_PROVIDER.
+Config: JSON or YAML. llm.base_url / model / provider defaults are injected into embedded
+workers (env and job.assign may override). agentd does not proxy LLM HTTP.
 
 `)
 		flag.PrintDefaults()
@@ -46,7 +47,7 @@ LLM credentials for embedded workers: ANVIL_API_KEY, ANVIL_BASE_URL, ANVIL_MODEL
 		os.Exit(2)
 	}
 
-	cfg, err := daemon.LoadJSONFile(*configPath)
+	cfg, err := daemon.LoadFile(*configPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

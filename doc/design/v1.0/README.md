@@ -1,8 +1,8 @@
 # Design v1.0 (cutoff)
 
-Anvil **local-only** Go Agent SDK design through product milestone **0.22** (project search). Read chapters in order before implementing the matching roadmap phase.
+Anvil **local-only** Go Agent SDK design through product milestone **0.23** (YAML ops config). Read chapters in order before implementing the matching roadmap phase.
 
-This tree is the **design cutoff** for 0.1–0.22 delivery. Later product lines get a new `doc/design/v…/` directory.
+This tree is the **design cutoff** for 0.1–0.23 delivery. Later product lines get a new `doc/design/v…/` directory.
 
 ## Read order
 
@@ -31,6 +31,7 @@ This tree is the **design cutoff** for 0.1–0.22 delivery. Later product lines 
 | 20 | [20-plugins.md](20-plugins.md) | Worker-side agent plugins → **0.20** |
 | 21 | [21-dev-memory.md](21-dev-memory.md) | Dev memory **plugin** → **0.21** |
 | 22 | [22-project-search.md](22-project-search.md) | Project search SQLite+VDB → **0.22** |
+| 23 | [23-yaml-config.md](23-yaml-config.md) | YAML ops config (agentd + gateway) → **0.23** |
 
 Parent index: [`doc/design/README.md`](../README.md).
 
@@ -38,4 +39,4 @@ Parent index: [`doc/design/README.md`](../README.md).
 
 - Design describes **what** and **why** for this cutoff.
 - [`doc/roadmaps/v1.0/`](../../roadmaps/v1.0/) describes **when**.
-- Chapters 11–22 map to [m_0.11](../../roadmaps/v1.0/m_0.11_worker_daemon.md) … [m_0.22](../../roadmaps/v1.0/m_0.22_project_search.md).
+- Chapters 11–23 map to [m_0.11](../../roadmaps/v1.0/m_0.11_worker_daemon.md) … [m_0.23](../../roadmaps/v1.0/m_0.23_yaml_config.md).

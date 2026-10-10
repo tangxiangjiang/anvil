@@ -119,10 +119,10 @@ OpenAI-compatible catalog + auth + proxy (`cmd/anvil-gateway`). Point Anvil at t
 ```bash
 cd source
 go build -o ../bin/anvil-gateway.exe ./cmd/anvil-gateway
-# edit cmd/anvil-gateway/gateway.example.json (upstreams + models)
+# edit cmd/anvil-gateway/gateway.example.yaml (or .json) — upstreams + models
 set ANVIL_GATEWAY_TOKEN=gw-token
 set UPSTREAM_OPENAI_KEY=sk-...
-../bin/anvil-gateway.exe --config cmd/anvil-gateway/gateway.example.json
+../bin/anvil-gateway.exe --config cmd/anvil-gateway/gateway.example.yaml
 
 set ANVIL_BASE_URL=http://127.0.0.1:8080/v1
 set ANVIL_API_KEY=gw-token
@@ -132,7 +132,7 @@ set ANVIL_MODEL=private/demo
 ../bin/anvil.exe prompt /path/to/repo "hello"
 ```
 
-`anvil.ListModels` hits `GET {BaseURL}/models`. See [`doc/design/v1.0/12-model-gateway.md`](doc/design/v1.0/12-model-gateway.md).
+`anvil.ListModels` hits `GET {BaseURL}/models`. Config is JSON or YAML (0.23). See [`doc/design/v1.0/12-model-gateway.md`](doc/design/v1.0/12-model-gateway.md).
 
 ### Plugins (0.20)
 
@@ -265,19 +265,20 @@ See [`doc/design/v1.0/22-project-search.md`](doc/design/v1.0/22-project-search.m
 
 ### Worker daemon (0.11)
 
-`agentd` accepts local controller connections (unix socket or `tcp://127.0.0.1:…`), allowlists repos, and runs jobs via an embedded Anvil worker (`ForceStub` in tests; real LLM via `ANVIL_*` env).
+`agentd` accepts local controller connections (unix socket or `tcp://127.0.0.1:…`), allowlists repos, and runs jobs via an embedded Anvil worker. Ops config is JSON or YAML (0.23); put LLM/gateway defaults under `llm:` (injected into workers — agentd does not proxy chat). Env / `job.assign` may override.
 
 ```bash
 cd source
 go build -o ../bin/agentd.exe ./cmd/agentd
-# edit cmd/agentd/agentd.example.json → absolute repos[].cwd
+# edit cmd/agentd/agentd.example.yaml → absolute repos[].cwd + llm.base_url
 set ANVIL_AGENTD_TOKEN=dev-token
-../bin/agentd.exe --config cmd/agentd/agentd.example.json
+set ANVIL_API_KEY=gw-token
+../bin/agentd.exe --config cmd/agentd/agentd.example.yaml
 ```
 
-Protocol: length-prefixed JSON (`hello`, `worker.list`, `job.assign` / `job.event` / `job.cancel` / `job.done`). See [`doc/design/v1.0/11-worker-daemon.md`](doc/design/v1.0/11-worker-daemon.md).
+Protocol: length-prefixed JSON (`hello`, `worker.list`, `job.assign` / `job.event` / `job.cancel` / `job.done`). See [`doc/design/v1.0/11-worker-daemon.md`](doc/design/v1.0/11-worker-daemon.md) and [`doc/design/v1.0/23-yaml-config.md`](doc/design/v1.0/23-yaml-config.md).
 
-Still deferred: Bridge, cloud agents, full hooks catalog, IDE plugin.
+Still deferred: Bridge, cloud agents, full hooks catalog, IDE plugin, web admin.
 
 ## License
 

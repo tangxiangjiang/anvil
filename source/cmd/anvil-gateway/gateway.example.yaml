@@ -1,0 +1,15 @@
+listen: 127.0.0.1:8080
+token_env: ANVIL_GATEWAY_TOKEN
+default_model: private/demo
+upstreams:
+  openai_compat:
+    base_url: https://api.openai.com/v1
+    api_key_env: UPSTREAM_OPENAI_KEY
+models:
+  - id: private/demo
+    upstream: openai_compat
+    upstream_model: gpt-4o-mini
+    provider: openai
+    params:
+      - temperature
+    vision: true

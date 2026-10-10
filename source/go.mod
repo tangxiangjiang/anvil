@@ -2,7 +2,10 @@ module github.com/anvil-dev/anvil
 
 go 1.26.4
 
-require modernc.org/sqlite v1.60.1
+require (
+	gopkg.in/yaml.v3 v3.0.1
+	modernc.org/sqlite v1.60.1
+)
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect

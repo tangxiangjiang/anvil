@@ -131,7 +131,7 @@ source/
 
 - Library import path stays `github.com/anvil-dev/anvil`.
 - Daemon must not require Cursor SDK or Cursor runtime.
-- Model catalog / routing stays outside: `ANVIL_BASE_URL` (or worker env) points at a **model gateway** or provider.
+- Model catalog / routing stays outside: agentd `llm.base_url` (0.23+) or `ANVIL_BASE_URL` / worker env points at a **model gateway** or provider. agentd does not proxy LLM HTTP — the worker Completer calls that URL. Ops config is JSON or YAML ([23-yaml-config.md](23-yaml-config.md)).
 
 ## Security
 

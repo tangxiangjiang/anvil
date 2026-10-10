@@ -4,13 +4,13 @@
 package daemon
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/anvil-dev/anvil/internal/configfile"
 	"github.com/anvil-dev/anvil/internal/plugin"
 )
 
@@ -31,53 +31,65 @@ const (
 
 // RepoEntry maps a stable repo id to an absolute cwd.
 type RepoEntry struct {
-	ID  string `json:"id"`
-	CWD string `json:"cwd"`
+	ID  string `json:"id" yaml:"id"`
+	CWD string `json:"cwd" yaml:"cwd"`
 }
 
 // ClusterConfig enables the optional cluster edge (p_0.11.4).
 type ClusterConfig struct {
-	Enabled      bool   `json:"enabled"`
-	URL          string `json:"url"` // e.g. tcp://127.0.0.1:17777
-	NodeID       string `json:"node_id"`
-	TokenEnv     string `json:"token_env"` // default ANVIL_CLUSTER_TOKEN
-	HeartbeatSec int    `json:"heartbeat_sec"`
+	Enabled      bool   `json:"enabled" yaml:"enabled"`
+	URL          string `json:"url" yaml:"url"` // e.g. tcp://127.0.0.1:17777
+	NodeID       string `json:"node_id" yaml:"node_id"`
+	TokenEnv     string `json:"token_env" yaml:"token_env"` // default ANVIL_CLUSTER_TOKEN
+	HeartbeatSec int    `json:"heartbeat_sec" yaml:"heartbeat_sec"`
 }
 
-// Config is agentd configuration (JSON file + flags).
+// LLMConfig holds defaults injected into embedded workers (0.23+).
+// Secrets stay in env named by APIKeyEnv; agentd does not proxy LLM HTTP.
+type LLMConfig struct {
+	BaseURL   string `json:"base_url" yaml:"base_url"`
+	APIKeyEnv string `json:"api_key_env" yaml:"api_key_env"` // default ANVIL_API_KEY
+	Model     string `json:"model" yaml:"model"`
+	Provider  string `json:"provider" yaml:"provider"`
+	MaxSteps  int    `json:"max_steps" yaml:"max_steps"`
+}
+
+// Config is agentd configuration (JSON or YAML file + flags).
 type Config struct {
 	// Listen is a unix socket path, or tcp://host:port for loopback testing.
-	Listen string `json:"listen"`
+	Listen string `json:"listen" yaml:"listen"`
 	// TokenEnv is the env var holding the controller auth token (default ANVIL_AGENTD_TOKEN).
-	TokenEnv string `json:"token_env"`
+	TokenEnv string `json:"token_env" yaml:"token_env"`
 	// MaxWorkers is concurrent job capacity (required >= 1).
-	MaxWorkers int `json:"max_workers"`
+	MaxWorkers int `json:"max_workers" yaml:"max_workers"`
 	// Overload is reject (default) when at capacity.
-	Overload OverloadPolicy `json:"overload"`
+	Overload OverloadPolicy `json:"overload" yaml:"overload"`
 	// WorkerBin is the agent-worker executable; empty = embedded runner.
-	WorkerBin string `json:"worker_bin"`
+	WorkerBin string `json:"worker_bin" yaml:"worker_bin"`
 	// Repos is the cwd allowlist.
-	Repos []RepoEntry `json:"repos"`
+	Repos []RepoEntry `json:"repos" yaml:"repos"`
 	// CancelGrace is how long to wait after cancel before force-kill (worker process).
 	CancelGrace time.Duration `json:"-"`
 	// CancelGraceSec is JSON-friendly seconds for CancelGrace.
-	CancelGraceSec int `json:"cancel_grace_sec"`
+	CancelGraceSec int `json:"cancel_grace_sec" yaml:"cancel_grace_sec"`
 	// Cluster optional edge.
-	Cluster ClusterConfig `json:"cluster"`
+	Cluster ClusterConfig `json:"cluster" yaml:"cluster"`
 	// NodeID labels this daemon in hello_ok (defaults to hostname).
-	NodeID string `json:"node_id"`
+	NodeID string `json:"node_id" yaml:"node_id"`
 	// Plugins is the worker-side plugin allowlist (0.20+).
-	Plugins PluginsConfig `json:"plugins"`
+	Plugins PluginsConfig `json:"plugins" yaml:"plugins"`
+	// LLM defaults for embedded workers (0.23+). Env / job.assign may override.
+	LLM LLMConfig `json:"llm" yaml:"llm"`
 }
 
 // PluginsConfig gates which plugin ids jobs may load.
 type PluginsConfig struct {
 	// Available is the allowlist. Empty → no plugins unless job is rejected when requesting any.
 	// When non-empty, job.plugins must be a subset (empty job.plugins → load Available).
-	Available []string `json:"available"`
-	Deny      []string `json:"deny"`
+	Available []string `json:"available" yaml:"available"`
+	Deny      []string `json:"deny" yaml:"deny"`
 	// SearchPaths are roots containing <id>/plugin.json for exec plugins.
-	SearchPaths []string `json:"search_paths"`
+	SearchPaths []string `json:"search_paths" yaml:"search_paths"`
 }
 
 // DefaultConfig returns sensible defaults (listen path filled by caller/platform).
@@ -91,23 +103,27 @@ func DefaultConfig() Config {
 			TokenEnv:     "ANVIL_CLUSTER_TOKEN",
 			HeartbeatSec: 10,
 		},
+		LLM: LLMConfig{
+			APIKeyEnv: "ANVIL_API_KEY",
+		},
 	}
 }
 
-// LoadJSONFile reads config from path.
-func LoadJSONFile(path string) (Config, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return Config{}, err
-	}
+// LoadFile reads JSON or YAML config by extension and normalizes.
+func LoadFile(path string) (Config, error) {
 	cfg := DefaultConfig()
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return Config{}, fmt.Errorf("parse config: %w", err)
+	if err := configfile.Load(path, &cfg); err != nil {
+		return Config{}, err
 	}
 	if err := cfg.Normalize(); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+// LoadJSONFile is an alias for LoadFile.
+func LoadJSONFile(path string) (Config, error) {
+	return LoadFile(path)
 }
 
 // Normalize validates and fills defaults.
@@ -137,6 +153,9 @@ func (c *Config) Normalize() error {
 	}
 	if c.Cluster.HeartbeatSec <= 0 {
 		c.Cluster.HeartbeatSec = 10
+	}
+	if c.LLM.APIKeyEnv == "" {
+		c.LLM.APIKeyEnv = "ANVIL_API_KEY"
 	}
 	seen := make(map[string]struct{})
 	for i := range c.Repos {

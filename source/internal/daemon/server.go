@@ -32,6 +32,7 @@ func NewServer(cfg Config, runner JobRunner, logger *log.Logger) (*Server, error
 		runner = EmbeddedRunner{
 			PluginDirs: append([]string(nil), cfg.Plugins.SearchPaths...),
 			Deny:       append([]string(nil), cfg.Plugins.Deny...),
+			LLM:        cfg.LLM,
 		}
 	}
 	if logger == nil {

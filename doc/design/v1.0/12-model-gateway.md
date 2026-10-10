@@ -68,7 +68,7 @@ anvil / agent-worker / CLI
 
 - Public `id` is what Anvil/`Options.Model` use.
 - Optional `anvil` extension object is advisory (provider hint, param names, `vision` multimodal flag for **0.19+**); clients may ignore unknown fields. `ListModels` maps `anvil.vision` → `ModelInfo.Vision`.
-- Catalog is **config-driven** (YAML/JSON on gateway); no live scrape of Cursor Dashboard.
+- Catalog is **config-driven** (YAML/JSON via `gateway.LoadFile`, 0.23+; see [23-yaml-config.md](23-yaml-config.md)); no live scrape of Cursor Dashboard.
 
 ### Proxy
 

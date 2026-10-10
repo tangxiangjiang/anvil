@@ -5,36 +5,37 @@
 package gateway
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/anvil-dev/anvil/internal/configfile"
 )
 
 // UpstreamConfig describes one LLM HTTP backend.
 type UpstreamConfig struct {
-	BaseURL   string `json:"base_url"`
-	APIKeyEnv string `json:"api_key_env"`
+	BaseURL   string `json:"base_url" yaml:"base_url"`
+	APIKeyEnv string `json:"api_key_env" yaml:"api_key_env"`
 }
 
 // ModelRoute maps a public model id to an upstream.
 type ModelRoute struct {
-	ID            string   `json:"id"`
-	Upstream      string   `json:"upstream"`
-	UpstreamModel string   `json:"upstream_model"`
-	Provider      string   `json:"provider"` // advisory: openai (default)
-	Params        []string `json:"params,omitempty"`
-	Vision        bool     `json:"vision,omitempty"` // advisory: model accepts image parts (0.19+)
-	OwnedBy       string   `json:"owned_by,omitempty"`
+	ID            string   `json:"id" yaml:"id"`
+	Upstream      string   `json:"upstream" yaml:"upstream"`
+	UpstreamModel string   `json:"upstream_model" yaml:"upstream_model"`
+	Provider      string   `json:"provider" yaml:"provider"` // advisory: openai (default)
+	Params        []string `json:"params,omitempty" yaml:"params,omitempty"`
+	Vision        bool     `json:"vision,omitempty" yaml:"vision,omitempty"` // advisory: model accepts image parts (0.19+)
+	OwnedBy       string   `json:"owned_by,omitempty" yaml:"owned_by,omitempty"`
 }
 
-// Config is anvil-gateway configuration (JSON).
+// Config is anvil-gateway configuration (JSON or YAML).
 type Config struct {
-	Listen       string                    `json:"listen"`
-	TokenEnv     string                    `json:"token_env"`
-	DefaultModel string                    `json:"default_model,omitempty"`
-	Upstreams    map[string]UpstreamConfig `json:"upstreams"`
-	Models       []ModelRoute              `json:"models"`
+	Listen       string                    `json:"listen" yaml:"listen"`
+	TokenEnv     string                    `json:"token_env" yaml:"token_env"`
+	DefaultModel string                    `json:"default_model,omitempty" yaml:"default_model,omitempty"`
+	Upstreams    map[string]UpstreamConfig `json:"upstreams" yaml:"upstreams"`
+	Models       []ModelRoute              `json:"models" yaml:"models"`
 }
 
 // DefaultConfig returns defaults.
@@ -46,20 +47,21 @@ func DefaultConfig() Config {
 	}
 }
 
-// LoadJSONFile loads and normalizes config.
-func LoadJSONFile(path string) (Config, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return Config{}, err
-	}
+// LoadFile loads JSON or YAML config by extension and normalizes.
+func LoadFile(path string) (Config, error) {
 	cfg := DefaultConfig()
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return Config{}, fmt.Errorf("parse config: %w", err)
+	if err := configfile.Load(path, &cfg); err != nil {
+		return Config{}, err
 	}
 	if err := cfg.Normalize(); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+// LoadJSONFile is an alias for LoadFile (kept for callers).
+func LoadJSONFile(path string) (Config, error) {
+	return LoadFile(path)
 }
 
 // Normalize validates config.

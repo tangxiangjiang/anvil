@@ -19,7 +19,7 @@ import (
 
 func main() {
 	var (
-		configPath = flag.String("config", "", "path to gateway JSON config")
+		configPath = flag.String("config", "", "path to gateway config (.json / .yaml / .yml)")
 		listen     = flag.String("listen", "", "override listen addr (host:port)")
 		showVer    = flag.Bool("version", false, "print version")
 	)
@@ -27,10 +27,12 @@ func main() {
 		fmt.Fprintf(os.Stderr, `anvil-gateway — model catalog + auth + OpenAI-compatible proxy
 
 Usage:
+  anvil-gateway --config gateway.yaml
   anvil-gateway --config gateway.json
 
 Client auth: Bearer token from env named by token_env (default ANVIL_GATEWAY_TOKEN).
 Upstream keys: per-upstream api_key_env (never accepted from clients).
+Config: JSON or YAML (same schema).
 
 Endpoints:
   GET  /v1/models
@@ -55,7 +57,7 @@ Point Anvil at the gateway:
 		flag.Usage()
 		os.Exit(2)
 	}
-	cfg, err := gateway.LoadJSONFile(*configPath)
+	cfg, err := gateway.LoadFile(*configPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

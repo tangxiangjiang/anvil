@@ -1,0 +1,28 @@
+listen: tcp://127.0.0.1:17654
+token_env: ANVIL_AGENTD_TOKEN
+max_workers: 2
+overload: reject
+cancel_grace_sec: 5
+node_id: local-1
+repos:
+  - id: demo
+    cwd: C:/path/to/repo
+cluster:
+  enabled: false
+  url: tcp://127.0.0.1:17777
+  node_id: local-1
+  token_env: ANVIL_CLUSTER_TOKEN
+  heartbeat_sec: 10
+plugins:
+  available:
+    - sample
+    - memory
+  deny: []
+  search_paths: []
+# LLM defaults for embedded workers (worker Completer calls base_url; agentd does not proxy).
+llm:
+  base_url: http://127.0.0.1:8080/v1
+  api_key_env: ANVIL_API_KEY
+  model: private/demo
+  provider: openai
+  max_steps: 128
