@@ -36,6 +36,8 @@ func main() {
 		err = cmdList(args)
 	case "get":
 		err = cmdGet(args)
+	case "models":
+		err = cmdModels(args)
 	case "help", "-h", "--help":
 		usage()
 		return
@@ -70,6 +72,7 @@ Usage:
   anvil chat [flags] [--resume agent-id] <cwd>
   anvil list [flags] <cwd>
   anvil get [flags] <cwd> <agent-id>
+  anvil models [flags]
 
 Flags (also via env / optional .anvil/config JSON):
   --provider  openai|anthropic     (ANVIL_PROVIDER)
@@ -439,4 +442,34 @@ func truncate(s string, maxRunes int) string {
 	}
 	runes := []rune(s)
 	return string(runes[:maxRunes]) + "…"
+}
+
+func cmdModels(args []string) error {
+	f, err := parseFlags(args)
+	if err != nil {
+		return err
+	}
+	baseURL := firstNonEmpty(f.baseURL, os.Getenv("ANVIL_BASE_URL"))
+	apiKey := firstNonEmpty(f.apiKey, os.Getenv("ANVIL_API_KEY"))
+	if baseURL == "" {
+		return fmt.Errorf("ANVIL_BASE_URL or --base-url required (gateway root ending in /v1)")
+	}
+	list, err := anvil.ListModels(context.Background(), anvil.ListModelsOptions{
+		BaseURL: baseURL,
+		APIKey:  apiKey,
+	})
+	if err != nil {
+		return err
+	}
+	for _, m := range list {
+		extra := ""
+		if m.UpstreamModel != "" {
+			extra = " upstream=" + m.UpstreamModel
+		}
+		if m.Provider != "" {
+			extra += " provider=" + m.Provider
+		}
+		fmt.Printf("%s%s\n", m.ID, extra)
+	}
+	return nil
 }

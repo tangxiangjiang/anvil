@@ -112,6 +112,28 @@ Local: anvil.LocalOptions{
 // anvil.Prewarm(ctx, cwd, sources)
 ```
 
+### Model gateway (0.12)
+
+OpenAI-compatible catalog + auth + proxy (`cmd/anvil-gateway`). Point Anvil at the gateway:
+
+```bash
+cd source
+go build -o ../bin/anvil-gateway.exe ./cmd/anvil-gateway
+# edit cmd/anvil-gateway/gateway.example.json (upstreams + models)
+set ANVIL_GATEWAY_TOKEN=gw-token
+set UPSTREAM_OPENAI_KEY=sk-...
+../bin/anvil-gateway.exe --config cmd/anvil-gateway/gateway.example.json
+
+set ANVIL_BASE_URL=http://127.0.0.1:8080/v1
+set ANVIL_API_KEY=gw-token
+set ANVIL_PROVIDER=openai
+set ANVIL_MODEL=private/demo
+../bin/anvil.exe models
+../bin/anvil.exe prompt /path/to/repo "hello"
+```
+
+`anvil.ListModels` hits `GET {BaseURL}/models`. See [`doc/design/v1.0/12-model-gateway.md`](doc/design/v1.0/12-model-gateway.md).
+
 ### Worker daemon (0.11)
 
 `agentd` accepts local controller connections (unix socket or `tcp://127.0.0.1:…`), allowlists repos, and runs jobs via an embedded Anvil worker (`ForceStub` in tests; real LLM via `ANVIL_*` env).

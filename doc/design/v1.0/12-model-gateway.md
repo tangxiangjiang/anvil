@@ -1,7 +1,7 @@
 # 12 — Model gateway (catalog + auth)
 
 **Product version focus:** **0.12** ([m_0.12_model_gateway.md](../../roadmaps/v1.0/m_0.12_model_gateway.md))  
-**Status:** planned
+**Status:** done (implementation through p_0.12.1–p_0.12.4; OpenAI-compat primary)
 
 ## Intent
 

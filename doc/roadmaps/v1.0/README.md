@@ -17,7 +17,7 @@ Versioned delivery for Anvil through product **0.22**. Design cutoff: [`doc/desi
 | 0.9 | Extensibility depth | done | [m_0.9_extensibility.md](m_0.9_extensibility.md) | [09](../../design/v1.0/09-extensibility.md) |
 | 0.10 | Cursor SDK local parity | done | [m_0.10_sdk_parity.md](m_0.10_sdk_parity.md) | [10](../../design/v1.0/10-sdk-parity.md) |
 | 0.11 | Worker daemon & agent-worker | done | [m_0.11_worker_daemon.md](m_0.11_worker_daemon.md) | [11](../../design/v1.0/11-worker-daemon.md) |
-| 0.12 | Model gateway | planned | [m_0.12_model_gateway.md](m_0.12_model_gateway.md) | [12](../../design/v1.0/12-model-gateway.md) |
+| 0.12 | Model gateway | done | [m_0.12_model_gateway.md](m_0.12_model_gateway.md) | [12](../../design/v1.0/12-model-gateway.md) |
 | 0.13 | Retrieval quality | planned | [m_0.13_retrieval.md](m_0.13_retrieval.md) | [13](../../design/v1.0/13-retrieval.md) |
 | 0.14 | Hooks & skills deepen | planned | [m_0.14_hooks_skills.md](m_0.14_hooks_skills.md) | [14](../../design/v1.0/14-hooks-skills.md) |
 | 0.15 | Web search | planned | [m_0.15_web_search.md](m_0.15_web_search.md) | [15](../../design/v1.0/15-web-search.md) |
