@@ -91,6 +91,9 @@ func NewRegistry(cwd string, allowShell bool) *Registry {
 	r.register(&semanticSearchTool{r: r})
 	r.register(&listSkillsTool{r: r})
 	r.register(&readSkillTool{r: r})
+	r.register(&gitStatusTool{r: r})
+	r.register(&gitDiffTool{r: r})
+	r.register(&gitLogTool{r: r})
 	if allowShell {
 		r.register(&shellTool{r: r})
 	}

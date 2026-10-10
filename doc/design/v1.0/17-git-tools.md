@@ -1,7 +1,7 @@
 # 17 — Git tools
 
 **Product version focus:** **0.17** ([m_0.17_git_tools.md](../../roadmaps/v1.0/m_0.17_git_tools.md))  
-**Status:** planned
+**Status:** done
 
 ## Intent
 

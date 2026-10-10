@@ -65,7 +65,7 @@ type Options struct {
 	SystemPrompt string
 
 	// BuiltinTools, when non-empty, is an allow-list of built-in tool names or groups (0.10+).
-	// Groups: shell, read, write, edit, search, skills, web, lsp, mcp. Custom Tools entries are never filtered out.
+	// Groups: shell, read, write, edit, search, skills, web, lsp, git, mcp. Custom Tools entries are never filtered out.
 	BuiltinTools []string
 	// DisallowedTools denies built-in names or groups after allow-list (0.10+).
 	DisallowedTools []string

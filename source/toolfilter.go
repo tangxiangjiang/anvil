@@ -70,6 +70,10 @@ func expandToolSelectors(selectors []string) map[string]bool {
 			out["references"] = true
 			out["hover"] = true
 			out["rename_symbol"] = true
+		case "git":
+			out["git_status"] = true
+			out["git_diff"] = true
+			out["git_log"] = true
 		case "mcp":
 			out["__mcp__"] = true
 		default:

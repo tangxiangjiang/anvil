@@ -134,6 +134,16 @@ set ANVIL_MODEL=private/demo
 
 `anvil.ListModels` hits `GET {BaseURL}/models`. See [`doc/design/v1.0/12-model-gateway.md`](doc/design/v1.0/12-model-gateway.md).
 
+### Git tools (0.17)
+
+Read-only builtins `git_status`, `git_diff`, `git_log` (tool group `git`). Invokes the `git` binary with fixed argv (`GIT_TERMINAL_PROMPT=0`); non-git cwd returns a clear error. Diffs are size-capped and redacted.
+
+```go
+// DisallowedTools: []string{"git"},
+```
+
+See [`doc/design/v1.0/17-git-tools.md`](doc/design/v1.0/17-git-tools.md).
+
 ### LSP (0.16)
 
 Language-server tools (`diagnostics`, `definition`, `references`, `hover`, `rename_symbol`) when servers are configured. Tool group `lsp`. Missing binaries → tool error (Create still ok unless `LSP.Required`).
