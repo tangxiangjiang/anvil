@@ -61,6 +61,9 @@ func expandToolSelectors(selectors []string) map[string]bool {
 		case "skills":
 			out["list_skills"] = true
 			out["read_skill"] = true
+		case "web":
+			out["web_search"] = true
+			out["fetch_url"] = true
 		case "mcp":
 			out["__mcp__"] = true
 		default:

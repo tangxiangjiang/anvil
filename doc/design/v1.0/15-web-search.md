@@ -1,7 +1,27 @@
 # 15 — Web search
 
 **Product version focus:** **0.15** ([m_0.15_web_search.md](../../roadmaps/v1.0/m_0.15_web_search.md))  
-**Status:** planned
+**Status:** done
+
+## HTTP JSON wire shape (builtin `http` provider)
+
+```http
+POST {BaseURL}
+Authorization: Bearer <ANVIL_WEB_SEARCH_KEY or Options.WebSearch.APIKey>
+Content-Type: application/json
+
+{"query":"…","max_results":5,"freshness":"week"}
+```
+
+```json
+{"results":[{"title":"…","url":"https://…","snippet":"…","published_at":"…"}]}
+```
+
+Gateway operators may expose the same shape at `{gateway}/v1/web/search` and set `WebSearch.BaseURL` there (same Bearer as chat is fine).
+
+## MCP contract (alternative)
+
+When `WebSearch.Provider` is `mcp` (or builtins are denied), register MCP tools with the same names/args as builtins: `web_search` (`query`, `max_results?`, `freshness?`) and optional `fetch_url` (`url`, `max_bytes?`).
 
 ## Intent
 

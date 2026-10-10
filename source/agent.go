@@ -26,6 +26,7 @@ import (
 	"github.com/anvil-dev/anvil/internal/skills"
 	"github.com/anvil-dev/anvil/internal/store"
 	"github.com/anvil-dev/anvil/internal/tools"
+	"github.com/anvil-dev/anvil/internal/websearch"
 )
 
 // Agent is a durable local agent handle bound to a working directory.
@@ -300,6 +301,9 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 		ScanProject: skillDiscoverOpts(opts).ScanProject,
 		ScanUser:    skillDiscoverOpts(opts).ScanUser,
 	})
+	if err := configureWebTools(reg, opts); err != nil {
+		return nil, nil, nil, err
+	}
 
 	var hookFile *hooks.File
 	if opts.Local.HasSettingSource(SettingSourceProject) {
@@ -414,6 +418,45 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 	}
 	applyBuiltinToolFilters(reg, opts)
 	return reg, sessions, hookFile, nil
+}
+
+func configureWebTools(reg *tools.Registry, opts Options) error {
+	ws := opts.WebSearch
+	if !ws.Enabled {
+		return nil
+	}
+	providerName := strings.ToLower(strings.TrimSpace(ws.Provider))
+	if providerName == "" {
+		providerName = "http"
+	}
+	if providerName == "mcp" {
+		// Host supplies web_search via MCPServers; no builtin registration.
+		return nil
+	}
+	if providerName != "http" {
+		return newError("unsupported WebSearch.Provider: "+ws.Provider+" (use http or mcp)", false, nil)
+	}
+	keyEnv := ws.APIKeyEnv
+	if keyEnv == "" && ws.APIKey == "" {
+		keyEnv = "ANVIL_WEB_SEARCH_KEY"
+	}
+	p, err := websearch.NewHTTP(websearch.HTTPConfig{
+		BaseURL:    ws.BaseURL,
+		APIKey:     ws.APIKey,
+		APIKeyEnv:  keyEnv,
+		Method:     ws.Method,
+		Timeout:    ws.Timeout,
+		MaxResults: ws.MaxResults,
+	})
+	if err != nil {
+		return newError("web search config", false, err)
+	}
+	reg.SetWebConfig(tools.WebConfig{
+		Provider:         p,
+		AllowFetchURL:    ws.AllowFetchURL,
+		AllowPrivateURLs: ws.AllowPrivateURLs,
+	})
+	return nil
 }
 
 func composePermission(user PermissionFunc, hookFile *hooks.File, hookOpts hooks.CheckOpts) PermissionFunc {
@@ -746,27 +789,35 @@ func (a *Agent) persist(rec store.Record) {
 }
 
 // Close releases agent resources including MCP servers and the store backend.
+// Concurrent Close calls are safe: only the first performs cleanup and sessionEnd.
 func (a *Agent) Close() error {
 	if a == nil {
 		return nil
 	}
 	a.mu.Lock()
-	hf := a.hookFile
-	opts := a.opts
-	cwd := a.cwd
+	if a.closed {
+		a.mu.Unlock()
+		return nil
+	}
 	a.closed = true
-	if a.store != nil {
-		_ = a.store.Close()
-		a.store = nil
-	}
-	for _, s := range a.mcp {
-		_ = s.Close()
-	}
+	hf := a.hookFile
+	allowCmds := a.opts.AllowHookCommands
+	cwd := a.cwd
+	st := a.store
+	a.store = nil
+	sessions := a.mcp
 	a.mcp = nil
 	a.mu.Unlock()
+
+	if st != nil {
+		_ = st.Close()
+	}
+	for _, s := range sessions {
+		_ = s.Close()
+	}
 	if hf != nil {
 		hf.FireSessionEnd(hooks.CheckOpts{
-			AllowCommands: opts.AllowHookCommands,
+			AllowCommands: allowCmds,
 			CWD:           cwd,
 			Ctx:           context.Background(),
 		})

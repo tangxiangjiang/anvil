@@ -65,7 +65,7 @@ type Options struct {
 	SystemPrompt string
 
 	// BuiltinTools, when non-empty, is an allow-list of built-in tool names or groups (0.10+).
-	// Groups: shell, read, write, edit, search, skills, mcp. Custom Tools entries are never filtered out.
+	// Groups: shell, read, write, edit, search, skills, web, mcp. Custom Tools entries are never filtered out.
 	BuiltinTools []string
 	// DisallowedTools denies built-in names or groups after allow-list (0.10+).
 	DisallowedTools []string
@@ -87,6 +87,32 @@ type Options struct {
 	SkillDirs []string
 	// SkillRouterTopK caps keyword-matched skills injected per Send (0 = default 3).
 	SkillRouterTopK int
+
+	// WebSearch enables web_search / optional fetch_url (0.15+). Disabled by default (no egress).
+	WebSearch WebSearchOptions
+}
+
+// WebSearchOptions configures the web_search provider (0.15+).
+type WebSearchOptions struct {
+	Enabled bool
+	// Provider is "http" (default when Enabled) or "mcp" (rely on MCPServers only; no builtin tools).
+	Provider string
+	// BaseURL is the search endpoint (POST JSON by default). May point at a gateway /v1/web/search.
+	BaseURL string
+	// APIKey is used as Bearer when non-empty; otherwise APIKeyEnv is read.
+	APIKey string
+	// APIKeyEnv defaults to ANVIL_WEB_SEARCH_KEY when empty and APIKey is empty.
+	APIKeyEnv string
+	// Method is POST (default) or GET.
+	Method string
+	// Timeout bounds each search/fetch call (0 = 15s).
+	Timeout time.Duration
+	// MaxResults default for web_search (0 = 5, hard max 10).
+	MaxResults int
+	// AllowFetchURL registers fetch_url when true (default false).
+	AllowFetchURL bool
+	// AllowPrivateURLs disables SSRF private-IP blocking (default false; tests only).
+	AllowPrivateURLs bool
 }
 
 // Model identifies the model id for the selected provider.

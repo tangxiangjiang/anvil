@@ -134,6 +134,22 @@ set ANVIL_MODEL=private/demo
 
 `anvil.ListModels` hits `GET {BaseURL}/models`. See [`doc/design/v1.0/12-model-gateway.md`](doc/design/v1.0/12-model-gateway.md).
 
+### Web search (0.15)
+
+Opt-in egress tools (off by default). Configure `Options.WebSearch` with an HTTP JSON provider; tool group `web` covers `web_search` / `fetch_url`.
+
+```go
+WebSearch: anvil.WebSearchOptions{
+  Enabled:       true,
+  BaseURL:       "https://search.example.com/v1/web/search", // or gateway proxy
+  APIKeyEnv:     "ANVIL_WEB_SEARCH_KEY", // Bearer; or set APIKey
+  AllowFetchURL: true,  // optional fetch_url (SSRF-guarded; private IPs blocked by default)
+},
+// DisallowedTools: []string{"web"},
+```
+
+Request/response shape and MCP alternative: [`doc/design/v1.0/15-web-search.md`](doc/design/v1.0/15-web-search.md).
+
 ### Hooks & skills (0.14)
 
 Extended `.anvil/hooks.json` / `.cursor/hooks.json`: `beforeMCP`, `beforeRead`, `afterTool`, `sessionStart` / `sessionEnd`. Optional `command` hooks require `Options.AllowHookCommands` (default off).

@@ -62,6 +62,7 @@ type Registry struct {
 	postExec   PostExecFunc
 	indexEmbed IndexEmbed
 	skillsCfg  SkillsConfig
+	webCfg     WebConfig
 }
 
 // PreExecFunc runs before every tool (hooks like beforeMCP / beforeRead).
