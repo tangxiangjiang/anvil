@@ -1,7 +1,7 @@
 # 16 — LSP & language intelligence
 
 **Product version focus:** **0.16** ([m_0.16_lsp.md](../../roadmaps/v1.0/m_0.16_lsp.md))  
-**Status:** planned
+**Status:** done
 
 ## Intent
 

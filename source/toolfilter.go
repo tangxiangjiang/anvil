@@ -64,6 +64,12 @@ func expandToolSelectors(selectors []string) map[string]bool {
 		case "web":
 			out["web_search"] = true
 			out["fetch_url"] = true
+		case "lsp":
+			out["diagnostics"] = true
+			out["definition"] = true
+			out["references"] = true
+			out["hover"] = true
+			out["rename_symbol"] = true
 		case "mcp":
 			out["__mcp__"] = true
 		default:

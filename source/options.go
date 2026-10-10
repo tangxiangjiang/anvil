@@ -65,7 +65,7 @@ type Options struct {
 	SystemPrompt string
 
 	// BuiltinTools, when non-empty, is an allow-list of built-in tool names or groups (0.10+).
-	// Groups: shell, read, write, edit, search, skills, web, mcp. Custom Tools entries are never filtered out.
+	// Groups: shell, read, write, edit, search, skills, web, lsp, mcp. Custom Tools entries are never filtered out.
 	BuiltinTools []string
 	// DisallowedTools denies built-in names or groups after allow-list (0.10+).
 	DisallowedTools []string
@@ -90,6 +90,27 @@ type Options struct {
 
 	// WebSearch enables web_search / optional fetch_url (0.15+). Disabled by default (no egress).
 	WebSearch WebSearchOptions
+
+	// LSP enables language-server tools (0.16+). Disabled by default unless configured.
+	LSP LSPOptions
+}
+
+// LSPOptions configures language servers (0.16+).
+type LSPOptions struct {
+	Enabled  bool
+	Required bool // if true, Create fails when a server cannot start
+	Servers  []LSPServerConfig
+	// InitTimeout / RequestTimeout; zero uses package defaults (~15s / ~20s).
+	InitTimeout    time.Duration
+	RequestTimeout time.Duration
+}
+
+// LSPServerConfig maps a language/glob to a stdio language server command.
+type LSPServerConfig struct {
+	Language string
+	Pattern  string // e.g. **/*.go
+	Command  string
+	Args     []string
 }
 
 // WebSearchOptions configures the web_search provider (0.15+).

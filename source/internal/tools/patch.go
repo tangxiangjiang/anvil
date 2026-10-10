@@ -62,7 +62,6 @@ Prefer apply_patch for multi-hunk edits; use edit_file for a single unique strin
 }
 
 func (t *applyPatchTool) Execute(ctx context.Context, args json.RawMessage) Result {
-	_ = ctx
 	var in struct {
 		Patch string `json:"patch"`
 	}
@@ -87,6 +86,7 @@ func (t *applyPatchTool) Execute(ctx context.Context, args json.RawMessage) Resu
 			if err := os.WriteFile(abs, []byte(op.AddContent), 0o644); err != nil {
 				return Result{Content: err.Error(), IsError: true}
 			}
+			t.r.notifyFileWrite(ctx, abs)
 			notes = append(notes, "added "+op.Path)
 		case patchDelete:
 			abs, err := t.r.resolvePath(op.Path)
@@ -117,6 +117,7 @@ func (t *applyPatchTool) Execute(ctx context.Context, args json.RawMessage) Resu
 			if err := os.WriteFile(abs, []byte(text), 0o644); err != nil {
 				return Result{Content: err.Error(), IsError: true}
 			}
+			t.r.notifyFileWrite(ctx, abs)
 			notes = append(notes, fmt.Sprintf("updated %s (%d hunks)", op.Path, len(op.Hunks)))
 		}
 	}

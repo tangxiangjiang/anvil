@@ -21,7 +21,7 @@ Versioned delivery for Anvil through product **0.22**. Design cutoff: [`doc/desi
 | 0.13 | Retrieval quality | done | [m_0.13_retrieval.md](m_0.13_retrieval.md) | [13](../../design/v1.0/13-retrieval.md) |
 | 0.14 | Hooks & skills deepen | done | [m_0.14_hooks_skills.md](m_0.14_hooks_skills.md) | [14](../../design/v1.0/14-hooks-skills.md) |
 | 0.15 | Web search | done | [m_0.15_web_search.md](m_0.15_web_search.md) | [15](../../design/v1.0/15-web-search.md) |
-| 0.16 | LSP & language intelligence | planned | [m_0.16_lsp.md](m_0.16_lsp.md) | [16](../../design/v1.0/16-lsp.md) |
+| 0.16 | LSP & language intelligence | done | [m_0.16_lsp.md](m_0.16_lsp.md) | [16](../../design/v1.0/16-lsp.md) |
 | 0.17 | Git tools | planned | [m_0.17_git_tools.md](m_0.17_git_tools.md) | [17](../../design/v1.0/17-git-tools.md) |
 | 0.18 | Test & build tools | planned | [m_0.18_test_build.md](m_0.18_test_build.md) | [18](../../design/v1.0/18-test-build.md) |
 | 0.19 | Vision (image / screenshot) | planned | [m_0.19_vision.md](m_0.19_vision.md) | [19](../../design/v1.0/19-vision.md) |

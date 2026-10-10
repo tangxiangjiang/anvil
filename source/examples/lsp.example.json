@@ -1,0 +1,14 @@
+{
+  "enabled": true,
+  "required": false,
+  "init_timeout_ms": 15000,
+  "request_timeout_ms": 20000,
+  "servers": [
+    {
+      "language": "go",
+      "pattern": "**/*.go",
+      "command": "gopls",
+      "args": []
+    }
+  ]
+}

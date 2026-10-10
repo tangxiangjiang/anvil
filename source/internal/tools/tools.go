@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/anvil-dev/anvil/internal/llm"
+	"github.com/anvil-dev/anvil/internal/lsp"
 )
 
 const defaultMaxOutput = 64 * 1024
@@ -63,6 +64,8 @@ type Registry struct {
 	indexEmbed IndexEmbed
 	skillsCfg  SkillsConfig
 	webCfg     WebConfig
+	lsp        *lsp.Supervisor
+	fileSync   func(ctx context.Context, absPath string)
 }
 
 // PreExecFunc runs before every tool (hooks like beforeMCP / beforeRead).
@@ -356,7 +359,6 @@ func (t *writeFileTool) Def() llm.ToolDef {
 }
 
 func (t *writeFileTool) Execute(ctx context.Context, args json.RawMessage) Result {
-	_ = ctx
 	var in struct {
 		Path    string `json:"path"`
 		Content string `json:"content"`
@@ -374,6 +376,7 @@ func (t *writeFileTool) Execute(ctx context.Context, args json.RawMessage) Resul
 	if err := os.WriteFile(abs, []byte(in.Content), 0o644); err != nil {
 		return Result{Content: err.Error(), IsError: true}
 	}
+	t.r.notifyFileWrite(ctx, abs)
 	return Result{Content: "wrote " + in.Path}
 }
 
@@ -398,7 +401,6 @@ func (t *editFileTool) Def() llm.ToolDef {
 }
 
 func (t *editFileTool) Execute(ctx context.Context, args json.RawMessage) Result {
-	_ = ctx
 	var in struct {
 		Path      string `json:"path"`
 		OldString string `json:"old_string"`
@@ -436,6 +438,7 @@ func (t *editFileTool) Execute(ctx context.Context, args json.RawMessage) Result
 	if err := os.WriteFile(abs, []byte(updated), 0o644); err != nil {
 		return Result{Content: err.Error(), IsError: true}
 	}
+	t.r.notifyFileWrite(ctx, abs)
 	return Result{Content: "edited " + in.Path}
 }
 

@@ -134,6 +134,22 @@ set ANVIL_MODEL=private/demo
 
 `anvil.ListModels` hits `GET {BaseURL}/models`. See [`doc/design/v1.0/12-model-gateway.md`](doc/design/v1.0/12-model-gateway.md).
 
+### LSP (0.16)
+
+Language-server tools (`diagnostics`, `definition`, `references`, `hover`, `rename_symbol`) when servers are configured. Tool group `lsp`. Missing binaries → tool error (Create still ok unless `LSP.Required`).
+
+```go
+LSP: anvil.LSPOptions{
+  Servers: []anvil.LSPServerConfig{{
+    Language: "go", Pattern: "**/*.go", Command: "gopls",
+  }},
+},
+// or project file .anvil/lsp.json with SettingSources: project
+// example: source/examples/lsp.example.json
+```
+
+Writes via `write_file` / `edit_file` / `apply_patch` sync `didChange` to open LSP docs. See [`doc/design/v1.0/16-lsp.md`](doc/design/v1.0/16-lsp.md).
+
 ### Web search (0.15)
 
 Opt-in egress tools (off by default). Configure `Options.WebSearch` with an HTTP JSON provider; tool group `web` covers `web_search` / `fetch_url`.
