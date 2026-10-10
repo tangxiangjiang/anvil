@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/anvil-dev/anvil/internal/prompt"
 	"github.com/anvil-dev/anvil/internal/rules"
 	"github.com/anvil-dev/anvil/internal/runtime"
+	"github.com/anvil-dev/anvil/internal/skills"
 	"github.com/anvil-dev/anvil/internal/store"
 	"github.com/anvil-dev/anvil/internal/tools"
 )
@@ -205,15 +207,73 @@ func buildSystemPrompt(cwd string, opts Options) (string, error) {
 			return "", err
 		}
 	}
+	var base string
 	if opts.SystemPrompt != "" {
 		if rulesText == "" {
-			return opts.SystemPrompt, nil
+			base = opts.SystemPrompt
+		} else {
+			base = opts.SystemPrompt + "\n\n# Project rules\n" + rulesText
 		}
-		return opts.SystemPrompt + "\n\n# Project rules\n" + rulesText, nil
+	} else {
+		base = prompt.SystemWithOptions(cwd, rulesText, prompt.Options{
+			AllowShell: opts.Local.AllowShellEnabled(),
+		})
 	}
-	return prompt.SystemWithOptions(cwd, rulesText, prompt.Options{
-		AllowShell: opts.Local.AllowShellEnabled(),
-	}), nil
+	if notes := sessionStartNotes(cwd, opts); notes != "" {
+		base += "\n\n# Session notes\n" + notes
+	}
+	if always := alwaysSkillsText(cwd, opts); always != "" {
+		base += "\n\n# Skills (always)\n" + always
+	}
+	return base, nil
+}
+
+func sessionStartNotes(cwd string, opts Options) string {
+	if !opts.Local.HasSettingSource(SettingSourceProject) {
+		return ""
+	}
+	hf, _, err := hooks.Load(cwd)
+	if err != nil || hf == nil {
+		return ""
+	}
+	return hf.SessionStartNotes()
+}
+
+func skillDiscoverOpts(opts Options) skills.DiscoverOpts {
+	return skills.DiscoverOpts{
+		SkillDirs:   opts.SkillDirs,
+		ScanProject: opts.Local.HasSettingSource(SettingSourceProject) || len(opts.SkillDirs) > 0 || len(opts.Skills) > 0,
+		ScanUser:    opts.Local.HasSettingSource(SettingSourceUser),
+	}
+}
+
+func alwaysSkillsText(cwd string, opts Options) string {
+	ids := append([]string{}, opts.Skills...)
+	ids = append(ids, skills.LoadAlwaysIDs(cwd)...)
+	if len(ids) == 0 && !skillDiscoverOpts(opts).ScanProject {
+		return ""
+	}
+	all, err := skills.Discover(cwd, skillDiscoverOpts(opts))
+	if err != nil || len(all) == 0 {
+		return ""
+	}
+	selected := skills.SelectByID(all, ids)
+	return skills.FormatAlways(selected, 0)
+}
+
+func routerSkillsText(cwd string, opts Options, userMsg string) string {
+	dopts := skillDiscoverOpts(opts)
+	if !dopts.ScanProject && !dopts.ScanUser && len(dopts.SkillDirs) == 0 {
+		return ""
+	}
+	all, err := skills.Discover(cwd, dopts)
+	if err != nil || len(all) == 0 {
+		return ""
+	}
+	exclude := append([]string{}, opts.Skills...)
+	exclude = append(exclude, skills.LoadAlwaysIDs(cwd)...)
+	picked := skills.Router(all, exclude, userMsg, opts.SkillRouterTopK, 0)
+	return skills.FormatRouter(picked, 0)
 }
 
 func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Registry, []*mcp.Session, *hooks.File, error) {
@@ -235,6 +295,12 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 		_, _ = index.Build(ctx, cwd, index.BuildOptions{})
 	}
 
+	reg.SetSkillsConfig(tools.SkillsConfig{
+		SkillDirs:   opts.SkillDirs,
+		ScanProject: skillDiscoverOpts(opts).ScanProject,
+		ScanUser:    skillDiscoverOpts(opts).ScanUser,
+	})
+
 	var hookFile *hooks.File
 	if opts.Local.HasSettingSource(SettingSourceProject) {
 		hf, _, err := hooks.Load(cwd)
@@ -244,7 +310,11 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 		hookFile = hf
 	}
 
-	perm := composePermission(opts.Permission, hookFile)
+	hookOpts := hooks.CheckOpts{
+		AllowCommands: opts.AllowHookCommands,
+		CWD:           cwd,
+	}
+	perm := composePermission(opts.Permission, hookFile, hookOpts)
 	if perm != nil {
 		reg.SetPermission(func(ctx context.Context, name string, args json.RawMessage) (json.RawMessage, error) {
 			dec, err := perm(ctx, PermissionRequest{ToolName: name, Args: args})
@@ -262,6 +332,34 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 				return dec.Args, nil
 			}
 			return args, nil
+		})
+	}
+	if hookFile != nil {
+		hf := hookFile
+		ho := hookOpts
+		reg.SetPreExec(func(ctx context.Context, name string, args json.RawMessage) error {
+			o := ho
+			o.Ctx = ctx
+			if name == "read_file" {
+				if deny, msg := hf.CheckRead(string(args), o); deny {
+					return fmt.Errorf("%s", msg)
+				}
+			}
+			if strings.HasPrefix(name, "mcp_") {
+				short := name
+				if i := strings.LastIndex(name, "_"); i >= 0 && i+1 < len(name) {
+					short = name[i+1:]
+				}
+				if deny, msg := hf.CheckMCP(name, short, string(args), o); deny {
+					return fmt.Errorf("%s", msg)
+				}
+			}
+			return nil
+		})
+		reg.SetPostExec(func(ctx context.Context, name string, args json.RawMessage, res tools.Result) tools.Result {
+			_ = ctx
+			res.Content = hf.ApplyAfter(name, string(args), res.Content)
+			return res
 		})
 	}
 	for _, spec := range opts.Tools {
@@ -318,23 +416,25 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 	return reg, sessions, hookFile, nil
 }
 
-func composePermission(user PermissionFunc, hookFile *hooks.File) PermissionFunc {
+func composePermission(user PermissionFunc, hookFile *hooks.File, hookOpts hooks.CheckOpts) PermissionFunc {
 	if user == nil && hookFile == nil {
 		return nil
 	}
 	return func(ctx context.Context, req PermissionRequest) (PermissionDecision, error) {
 		if hookFile != nil {
+			o := hookOpts
+			o.Ctx = ctx
 			switch req.ToolName {
 			case "shell":
 				var in struct {
 					Command string `json:"command"`
 				}
 				_ = json.Unmarshal(req.Args, &in)
-				if deny, msg := hookFile.CheckShell(in.Command); deny {
+				if deny, msg := hookFile.CheckShell(in.Command, o); deny {
 					return PermissionDecision{Allow: false, Message: msg}, nil
 				}
 			case "write_file", "edit_file", "apply_patch":
-				if deny, msg := hookFile.CheckMutate(req.ToolName, string(req.Args)); deny {
+				if deny, msg := hookFile.CheckMutate(req.ToolName, string(req.Args), o); deny {
 					return PermissionDecision{Allow: false, Message: msg}, nil
 				}
 			}
@@ -528,6 +628,11 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 
 	a.persist(store.Record{Type: store.TypeRunStart, RunID: run.id})
 
+	sysPrompt := a.systemPrompt
+	if routed := routerSkillsText(a.cwd, a.opts, message); routed != "" {
+		sysPrompt += "\n\n# Skills (matched)\n" + routed
+	}
+
 	result := runtime.Loop(loopCtx, a.complete, a.registry, runtime.Config{
 		CWD:               a.cwd,
 		Model:             a.opts.Model.ID,
@@ -537,7 +642,7 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 		RunID:             run.id,
 		HistoryMaxChars:   a.opts.HistoryMaxChars,
 		HistoryKeepRecent: a.opts.HistoryKeepRecent,
-		SystemPrompt:      a.systemPrompt,
+		SystemPrompt:      sysPrompt,
 		ParallelTools:     a.opts.ParallelTools,
 		ParallelToolsMax:  a.opts.ParallelToolsMax,
 		Sink:              func(m llm.Message) { a.persistMessage(run.id, m) },
@@ -646,7 +751,9 @@ func (a *Agent) Close() error {
 		return nil
 	}
 	a.mu.Lock()
-	defer a.mu.Unlock()
+	hf := a.hookFile
+	opts := a.opts
+	cwd := a.cwd
 	a.closed = true
 	if a.store != nil {
 		_ = a.store.Close()
@@ -656,6 +763,14 @@ func (a *Agent) Close() error {
 		_ = s.Close()
 	}
 	a.mcp = nil
+	a.mu.Unlock()
+	if hf != nil {
+		hf.FireSessionEnd(hooks.CheckOpts{
+			AllowCommands: opts.AllowHookCommands,
+			CWD:           cwd,
+			Ctx:           context.Background(),
+		})
+	}
 	return nil
 }
 

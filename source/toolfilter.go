@@ -58,6 +58,9 @@ func expandToolSelectors(selectors []string) map[string]bool {
 			out["grep"] = true
 			out["glob"] = true
 			out["semantic_search"] = true
+		case "skills":
+			out["list_skills"] = true
+			out["read_skill"] = true
 		case "mcp":
 			out["__mcp__"] = true
 		default:

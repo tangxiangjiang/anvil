@@ -1,7 +1,7 @@
 # 14 — Hooks & skills (deepen)
 
 **Product version focus:** **0.14** ([m_0.14_hooks_skills.md](../../roadmaps/v1.0/m_0.14_hooks_skills.md))  
-**Status:** planned
+**Status:** done
 
 ## Intent
 

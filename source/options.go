@@ -65,7 +65,7 @@ type Options struct {
 	SystemPrompt string
 
 	// BuiltinTools, when non-empty, is an allow-list of built-in tool names or groups (0.10+).
-	// Groups: shell, read, write, edit, search, mcp. Custom Tools entries are never filtered out.
+	// Groups: shell, read, write, edit, search, skills, mcp. Custom Tools entries are never filtered out.
 	BuiltinTools []string
 	// DisallowedTools denies built-in names or groups after allow-list (0.10+).
 	DisallowedTools []string
@@ -77,6 +77,16 @@ type Options struct {
 	EmbedModel string
 	// EmbedAPIKey overrides APIKey for embeddings when non-empty.
 	EmbedAPIKey string
+
+	// AllowHookCommands enables hooks.json `command` entries (default false / 0.14+).
+	AllowHookCommands bool
+
+	// Skills lists skill ids to always inject into the system prompt (0.14+).
+	Skills []string
+	// SkillDirs are extra directories that contain skill packages (each subdir with SKILL.md).
+	SkillDirs []string
+	// SkillRouterTopK caps keyword-matched skills injected per Send (0 = default 3).
+	SkillRouterTopK int
 }
 
 // Model identifies the model id for the selected provider.

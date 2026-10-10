@@ -58,8 +58,17 @@ type Registry struct {
 	maxOutput  int
 	tools      map[string]Tool
 	permission PermissionFunc
+	preExec    PreExecFunc
+	postExec   PostExecFunc
 	indexEmbed IndexEmbed
+	skillsCfg  SkillsConfig
 }
+
+// PreExecFunc runs before every tool (hooks like beforeMCP / beforeRead).
+type PreExecFunc func(ctx context.Context, name string, args json.RawMessage) error
+
+// PostExecFunc may rewrite tool results (afterTool).
+type PostExecFunc func(ctx context.Context, name string, args json.RawMessage, res Result) Result
 
 // NewRegistry builds the built-in tool set.
 func NewRegistry(cwd string, allowShell bool) *Registry {
@@ -76,10 +85,26 @@ func NewRegistry(cwd string, allowShell bool) *Registry {
 	r.register(&grepTool{r: r})
 	r.register(&globTool{r: r})
 	r.register(&semanticSearchTool{r: r})
+	r.register(&listSkillsTool{r: r})
+	r.register(&readSkillTool{r: r})
 	if allowShell {
 		r.register(&shellTool{r: r})
 	}
 	return r
+}
+
+// SetPreExec installs a gate that runs for all tools before execute.
+func (r *Registry) SetPreExec(fn PreExecFunc) {
+	if r != nil {
+		r.preExec = fn
+	}
+}
+
+// SetPostExec installs an after-tool rewriter.
+func (r *Registry) SetPostExec(fn PostExecFunc) {
+	if r != nil {
+		r.postExec = fn
+	}
 }
 
 func (r *Registry) register(t Tool) {
@@ -160,6 +185,11 @@ func (r *Registry) Execute(ctx context.Context, name string, args json.RawMessag
 		return Result{Content: "unknown tool: " + name, IsError: true}
 	}
 	execArgs := args
+	if r.preExec != nil {
+		if err := r.preExec(ctx, name, execArgs); err != nil {
+			return Result{Content: err.Error(), IsError: true}
+		}
+	}
 	if r.permission != nil && IsMutating(name) {
 		next, err := r.permission(ctx, name, args)
 		if err != nil {
@@ -171,6 +201,10 @@ func (r *Registry) Execute(ctx context.Context, name string, args json.RawMessag
 	}
 	res = t.Execute(ctx, execArgs)
 	res.Content = truncate(res.Content, r.maxOutput)
+	if r.postExec != nil {
+		res = r.postExec(ctx, name, execArgs, res)
+		res.Content = truncate(res.Content, r.maxOutput)
+	}
 	return res
 }
 

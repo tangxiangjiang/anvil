@@ -134,6 +134,23 @@ set ANVIL_MODEL=private/demo
 
 `anvil.ListModels` hits `GET {BaseURL}/models`. See [`doc/design/v1.0/12-model-gateway.md`](doc/design/v1.0/12-model-gateway.md).
 
+### Hooks & skills (0.14)
+
+Extended `.anvil/hooks.json` / `.cursor/hooks.json`: `beforeMCP`, `beforeRead`, `afterTool`, `sessionStart` / `sessionEnd`. Optional `command` hooks require `Options.AllowHookCommands` (default off).
+
+Skills live under `.anvil/skills/<id>/SKILL.md` (also `.cursor/skills/`, `Options.SkillDirs`, user `~/.anvil/skills` with `SettingSourceUser`). Builtins `list_skills` / `read_skill` (group `skills`). `Options.Skills` or `.anvil/skills.json` `always` inject into the system prompt; keyword router adds matched skills per `Send`.
+
+```go
+Local: anvil.LocalOptions{
+  CWD:            ".",
+  SettingSources: []anvil.SettingSource{anvil.SettingSourceProject},
+},
+Skills:             []string{"commit-style"},
+AllowHookCommands:  false, // set true only if you trust hooks.json command entries
+```
+
+See [`doc/design/v1.0/14-hooks-skills.md`](doc/design/v1.0/14-hooks-skills.md).
+
 ### Retrieval / semantic_search (0.13)
 
 Local project index at `{cwd}/.anvil/index/search.db` (SQLite + FTS5; optional embedding BLOBs). Builtin tool `semantic_search` (tool group `search`).
