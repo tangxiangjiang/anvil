@@ -28,8 +28,16 @@ const (
 	KindClusterHeartbeat = "cluster.heartbeat"
 	KindClusterAssign    = "cluster.assign"
 	KindClusterDone      = "cluster.done"
-	KindClusterConfig    = "cluster.config"
-	KindClusterControl   = "cluster.control"
+	KindClusterConfig       = "cluster.config"
+	KindClusterControl      = "cluster.control"
+	KindClusterWorkerAdd      = "cluster.worker_add"
+	KindClusterWorkerRemove   = "cluster.worker_remove"
+	KindClusterWorkerStart    = "cluster.worker_start"
+	KindClusterWorkerShutdown = "cluster.worker_shutdown"
+	KindClusterWorkerResult   = "cluster.worker_result"
+	KindClusterSandboxList   = "cluster.sandbox_list"
+	KindClusterSandboxMkdir  = "cluster.sandbox_mkdir"
+	KindClusterSandboxResult = "cluster.sandbox_result"
 )
 
 // Envelope is a length-framed JSON control message.
@@ -62,11 +70,18 @@ type HelloFailBody struct {
 // WorkerListBody is an empty request (reserved for filters).
 type WorkerListBody struct{}
 
-// WorkerState is one capacity slot.
+// WorkerState is one capacity slot (optionally bound to a project).
 type WorkerState struct {
-	ID     string `json:"id"`
-	Status string `json:"status"` // idle|busy|starting|unhealthy
-	JobID  string `json:"job_id,omitempty"`
+	ID          string `json:"id"`
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+	Status      string `json:"status"` // stopped|idle|busy|starting|unhealthy
+	JobID       string `json:"job_id,omitempty"`
+	ProjectPath string `json:"project_path,omitempty"`
+	ProjectRel  string `json:"project_rel,omitempty"` // path relative to sandbox_dir
+	GitRemote   string `json:"git_remote,omitempty"`
+	GitBranch   string `json:"git_branch,omitempty"` // current branch (or short SHA if detached)
+	RepoID      string `json:"repo_id,omitempty"`
 }
 
 // WorkerListResultBody lists slots and capacity.
@@ -119,13 +134,14 @@ type TokenUsage struct {
 
 // JobDoneBody is the terminal job status.
 type JobDoneBody struct {
-	JobID  string      `json:"job_id"`
-	Status string      `json:"status"` // finished|error|cancelled
-	Result string      `json:"result,omitempty"`
-	Error  string      `json:"error,omitempty"`
-	Code   string      `json:"code,omitempty"`
-	Steps  int         `json:"steps,omitempty"`
-	Usage  *TokenUsage `json:"usage,omitempty"`
+	JobID   string      `json:"job_id"`
+	AgentID string      `json:"agent_id,omitempty"` // for resume_id on the next turn
+	Status  string      `json:"status"`            // finished|error|cancelled
+	Result  string      `json:"result,omitempty"`
+	Error   string      `json:"error,omitempty"`
+	Code    string      `json:"code,omitempty"`
+	Steps   int         `json:"steps,omitempty"`
+	Usage   *TokenUsage `json:"usage,omitempty"`
 }
 
 // ErrorBody is a protocol-level error.
@@ -136,9 +152,12 @@ type ErrorBody struct {
 
 // ClusterJoinBody is sent to a scheduler (p_0.11.4).
 type ClusterJoinBody struct {
-	NodeID     string `json:"node_id"`
-	Token      string `json:"token"`
-	MaxWorkers int    `json:"max_workers"`
+	NodeID      string `json:"node_id"`
+	Token       string `json:"token"`
+	MaxWorkers  int    `json:"max_workers"`
+	Hostname    string `json:"hostname,omitempty"`
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
 }
 
 // ClusterLLMBody is LLM defaults pushed by the scheduler (0.24+).
@@ -176,6 +195,67 @@ type ClusterHeartbeatBody struct {
 	Accepting    bool          `json:"accepting"`
 	Workers      []WorkerState `json:"workers,omitempty"`
 	Capabilities []string      `json:"capabilities,omitempty"` // 0.20+ plugin labels
+	Hostname     string        `json:"hostname,omitempty"`
+	Name         string        `json:"name,omitempty"`
+	Description  string        `json:"description,omitempty"`
+	SandboxDir   string        `json:"sandbox_dir,omitempty"`
+}
+
+// ClusterWorkerAddBody creates a project-bound worker on agentd.
+type ClusterWorkerAddBody struct {
+	WorkerID    string `json:"worker_id,omitempty"`
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+	ProjectPath string `json:"project_path"` // absolute or relative to sandbox_dir
+	GitURL      string `json:"git_url,omitempty"`
+}
+
+// ClusterWorkerRemoveBody removes a project worker (stopped or idle).
+type ClusterWorkerRemoveBody struct {
+	WorkerID string `json:"worker_id"`
+}
+
+// ClusterWorkerControlBody starts or shuts down a project worker.
+type ClusterWorkerControlBody struct {
+	WorkerID string `json:"worker_id"`
+}
+
+// ClusterWorkerResultBody is the reply for worker add/remove/start/shutdown.
+type ClusterWorkerResultBody struct {
+	OK      bool        `json:"ok"`
+	Error   string      `json:"error,omitempty"`
+	Worker  WorkerState `json:"worker,omitempty"`
+	Request string      `json:"request,omitempty"` // add|remove|start|shutdown
+}
+
+// ClusterSandboxListBody lists entries under a sandbox-relative path.
+type ClusterSandboxListBody struct {
+	Path string `json:"path,omitempty"`
+}
+
+// ClusterSandboxMkdirBody creates a directory under the sandbox.
+type ClusterSandboxMkdirBody struct {
+	Path string `json:"path"`
+}
+
+// SandboxEntry is one filesystem entry inside the sandbox.
+type SandboxEntry struct {
+	Name  string `json:"name"`
+	Path  string `json:"path"` // relative to sandbox_dir
+	IsDir bool   `json:"is_dir"`
+	IsGit bool   `json:"is_git,omitempty"`
+	Size  int64  `json:"size,omitempty"`
+	Mtime int64  `json:"mtime,omitempty"` // unix seconds
+}
+
+// ClusterSandboxResultBody is the reply for sandbox list/mkdir.
+type ClusterSandboxResultBody struct {
+	OK          bool           `json:"ok"`
+	Error       string         `json:"error,omitempty"`
+	Request     string         `json:"request,omitempty"` // list|mkdir
+	SandboxDir  string         `json:"sandbox_dir,omitempty"`
+	Path        string         `json:"path,omitempty"`
+	Entries     []SandboxEntry `json:"entries,omitempty"`
 }
 
 // MustMarshalBody encodes v as JSON RawMessage; panics only on programmer error in tests — prefer MarshalBody.

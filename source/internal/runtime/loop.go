@@ -28,14 +28,14 @@ type Event struct {
 	Content    string
 	IsError    bool
 	Step       int
-	MaxSteps   int
+	MaxSteps   int // 0 = unlimited
 	Code       string
 }
 
-// DefaultMaxSteps is used when Config.MaxSteps is unset.
-const DefaultMaxSteps = 128
+// DefaultMaxSteps is deprecated: MaxSteps 0 means unlimited. Kept as 0 for callers.
+const DefaultMaxSteps = 0
 
-// MaxStepsExceededPrefix is the stable prefix of Result.Err when the step limit is hit.
+// MaxStepsExceededPrefix is the stable prefix of Result.Err when an optional step limit is hit.
 const MaxStepsExceededPrefix = "max steps exceeded"
 
 // Result is the terminal run result.
@@ -54,7 +54,7 @@ type Result struct {
 type Config struct {
 	CWD      string
 	Model    string
-	MaxSteps int
+	MaxSteps int // 0 = unlimited (default); optional hard ceiling only
 	History  []llm.Message
 	UserMsg  string
 	// UserParts are optional multimodal parts on the initial user message (0.19+).
@@ -79,13 +79,11 @@ type Config struct {
 type Emitter func(Event)
 
 // Loop runs the tool-calling agent loop.
+// Convergence: model stops calling tools, loop guard fires, optional MaxSteps, or cancel.
 func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry, cfg Config, emit Emitter) Result {
 	runID := cfg.RunID
 	if runID == "" {
 		runID = "run-" + id.New()
-	}
-	if cfg.MaxSteps <= 0 {
-		cfg.MaxSteps = DefaultMaxSteps
 	}
 	if emit == nil {
 		emit = func(Event) {}
@@ -121,8 +119,6 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 		})
 		if err == nil && cr.DidCompress {
 			messages = cr.Messages
-			// Persist summary marker, then re-persist recent tail so Resume rebuilds
-			// summary+recent without the pre-compression transcript.
 			sink(llm.Message{Role: llm.RoleUser, Name: compress.SummaryMarker, Content: cr.Summary})
 			for _, m := range cr.Recent {
 				sink(m)
@@ -132,8 +128,14 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 
 	var usageAcc *llm.Usage
 	toolDefs := registry.Defs()
+	guard := newLoopGuard()
 
-	for step := 0; step < cfg.MaxSteps; step++ {
+	for step := 0; ; step++ {
+		if cfg.MaxSteps > 0 && step >= cfg.MaxSteps {
+			msg := fmt.Sprintf("%s (%d)", MaxStepsExceededPrefix, cfg.MaxSteps)
+			emit(Event{Type: "error", Text: msg, Code: CodeMaxSteps})
+			return Result{ID: runID, Status: "error", Steps: cfg.MaxSteps, Usage: usageAcc, Err: msg, Code: CodeMaxSteps, Messages: messages}
+		}
 		if err := ctx.Err(); err != nil {
 			return cancelledResult(ctx, runID, step, usageAcc, messages, err, emit)
 		}
@@ -194,7 +196,8 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 			}
 		}
 
-		messages = runToolCalls(ctx, registry, assistant.ToolCalls, cfg, messages, sink, emit)
+		var results []tools.Result
+		messages, results = runToolCalls(ctx, registry, assistant.ToolCalls, cfg, messages, sink, emit)
 		if parts := registry.TakeVisionParts(); len(parts) > 0 {
 			inj := llm.Message{
 				Role:    llm.RoleUser,
@@ -204,11 +207,22 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 			messages = append(messages, inj)
 			sink(inj)
 		}
-	}
 
-	msg := fmt.Sprintf("%s (%d)", MaxStepsExceededPrefix, cfg.MaxSteps)
-	emit(Event{Type: "error", Text: msg, Code: CodeMaxSteps})
-	return Result{ID: runID, Status: "error", Steps: cfg.MaxSteps, Usage: usageAcc, Err: msg, Code: CodeMaxSteps, Messages: messages}
+		switch action, reason := guard.Observe(assistant.ToolCalls, results); action {
+		case loopWarn:
+			inj := llm.Message{Role: llm.RoleUser, Content: loopWarnMessage(reason)}
+			messages = append(messages, inj)
+			sink(inj)
+			emit(Event{Type: "assistant", Text: inj.Content, Code: CodeLoopDetected})
+		case loopStop:
+			msg := fmt.Sprintf("%s: %s", LoopDetectedPrefix, reason)
+			emit(Event{Type: "error", Text: msg, Code: CodeLoopDetected})
+			return Result{
+				ID: runID, Status: "error", Steps: step + 1, Usage: usageAcc,
+				Err: msg, Code: CodeLoopDetected, Messages: messages,
+			}
+		}
+	}
 }
 
 func runToolCalls(
@@ -219,8 +233,7 @@ func runToolCalls(
 	messages []llm.Message,
 	sink func(llm.Message),
 	emit Emitter,
-) []llm.Message {
-	// Always emit tool_call events in assistant order first.
+) ([]llm.Message, []tools.Result) {
 	for _, tc := range calls {
 		emit(Event{
 			Type:       "tool_call",
@@ -230,15 +243,12 @@ func runToolCalls(
 		})
 	}
 
-	type outcome struct {
-		res tools.Result
-	}
-	outcomes := make([]outcome, len(calls))
+	results := make([]tools.Result, len(calls))
 
 	parallel := cfg.ParallelTools && len(calls) > 1 && !batchHasMutating(calls)
 	if !parallel {
 		for i, tc := range calls {
-			outcomes[i].res = registry.Execute(ctx, tc.Name, tc.Args)
+			results[i] = registry.Execute(ctx, tc.Name, tc.Args)
 		}
 	} else {
 		maxConc := cfg.ParallelToolsMax
@@ -254,21 +264,20 @@ func runToolCalls(
 				defer wg.Done()
 				sem <- struct{}{}
 				defer func() { <-sem }()
-				outcomes[i].res = registry.Execute(ctx, tc.Name, tc.Args)
+				results[i] = registry.Execute(ctx, tc.Name, tc.Args)
 			}()
 		}
 		wg.Wait()
 	}
 
-	// Emit tool_result in the same start order (not completion order).
 	for i, tc := range calls {
-		content := redact.String(outcomes[i].res.Content)
+		content := redact.String(results[i].Content)
 		emit(Event{
 			Type:       "tool_result",
 			ToolCallID: tc.ID,
 			Name:       tc.Name,
 			Content:    content,
-			IsError:    outcomes[i].res.IsError,
+			IsError:    results[i].IsError,
 		})
 		toolMsg := llm.Message{
 			Role:       llm.RoleTool,
@@ -279,7 +288,7 @@ func runToolCalls(
 		messages = append(messages, toolMsg)
 		sink(toolMsg)
 	}
-	return messages
+	return messages, results
 }
 
 func batchHasMutating(calls []llm.ToolCall) bool {

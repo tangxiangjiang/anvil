@@ -26,22 +26,40 @@
     document.getElementById("view-shell").hidden = false;
   }
 
+  function showSetupBlocked(msg) {
+    hideAll();
+    document.getElementById("view-login").hidden = false;
+    document.getElementById("login-err").textContent =
+      msg || "Install wizard only allowed from localhost or 192.168.x.x";
+  }
+
   async function route() {
     let needsSetup = false;
+    let setupAllowed = true;
     try {
       const st = await api.v1.setupStatus();
       needsSetup = !!st.needs_setup;
+      setupAllowed = st.setup_allowed !== false;
     } catch (_) {
       // treat as not setup if status fails after install
     }
     if (needsSetup) {
       api.setToken("");
+      if (!setupAllowed) {
+        location.hash = "#/login";
+        showSetupBlocked();
+        return;
+      }
       location.hash = "#/setup";
       showSetup();
       return;
     }
 
-    const hash = location.hash || "#/nodes";
+    let hash = location.hash || "#/clusters";
+    if (hash === "#/nodes") {
+      hash = "#/clusters";
+      location.hash = "#/clusters";
+    }
     if (hash === "#/setup") {
       location.hash = "#/login";
     }

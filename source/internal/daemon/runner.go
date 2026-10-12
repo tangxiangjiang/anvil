@@ -97,12 +97,13 @@ func (r *EmbeddedRunner) Run(ctx context.Context, job JobAssignBody, cwd string,
 		})
 	})
 	out := JobDoneBody{
-		JobID:  done.JobID,
-		Status: done.Status,
-		Result: done.Result,
-		Error:  done.Error,
-		Code:   done.Code,
-		Steps:  done.Steps,
+		JobID:   done.JobID,
+		AgentID: done.AgentID,
+		Status:  done.Status,
+		Result:  done.Result,
+		Error:   done.Error,
+		Code:    done.Code,
+		Steps:   done.Steps,
 	}
 	if done.Usage != nil {
 		out.Usage = &TokenUsage{
@@ -114,13 +115,15 @@ func (r *EmbeddedRunner) Run(ctx context.Context, job JobAssignBody, cwd string,
 	return out
 }
 
-// applyLLMDefaults fills Options from agentd llm config when env left them empty.
-// Provisioned APIKey (scheduler) wins over env when set.
+// applyLLMDefaults fills Options from agentd llm config.
+// Scheduler-provisioned BaseURL/APIKey always win over process env — otherwise a
+// leftover ANVIL_BASE_URL (e.g. upstream Athene) + gateway token yields 401
+// "invalid api key" from the upstream proxy.
 func applyLLMDefaults(opts *anvil.Options, llm LLMConfig) {
 	if opts == nil {
 		return
 	}
-	if opts.BaseURL == "" && llm.BaseURL != "" {
+	if llm.BaseURL != "" {
 		opts.BaseURL = llm.BaseURL
 	}
 	if llm.APIKey != "" {

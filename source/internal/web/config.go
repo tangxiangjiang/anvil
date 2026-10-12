@@ -12,15 +12,23 @@ import (
 	"github.com/anvil-dev/anvil/internal/configfile"
 )
 
+// FleetEntry is a scheduler fleet advertised to mobile clients.
+type FleetEntry struct {
+	ID           string `json:"id" yaml:"id"`
+	Name         string `json:"name" yaml:"name"`
+	SchedulerURL string `json:"scheduler_url" yaml:"scheduler_url"`
+}
+
 // Config is anvil-web configuration.
 type Config struct {
-	Listen            string `json:"listen" yaml:"listen"`
-	DBPath            string `json:"db_path" yaml:"db_path"`
-	SchedulerURL      string `json:"scheduler_url" yaml:"scheduler_url"`
-	SchedulerTokenEnv string `json:"scheduler_token_env" yaml:"scheduler_token_env"`
-	SessionTTLHours   int    `json:"session_ttl_hours" yaml:"session_ttl_hours"`
-	AdminUserEnv      string `json:"admin_user_env" yaml:"admin_user_env"`
-	AdminPasswordEnv  string `json:"admin_password_env" yaml:"admin_password_env"`
+	Listen            string       `json:"listen" yaml:"listen"`
+	DBPath            string       `json:"db_path" yaml:"db_path"`
+	SchedulerURL      string       `json:"scheduler_url" yaml:"scheduler_url"`
+	SchedulerTokenEnv string       `json:"scheduler_token_env" yaml:"scheduler_token_env"`
+	SessionTTLHours   int          `json:"session_ttl_hours" yaml:"session_ttl_hours"`
+	AdminUserEnv      string       `json:"admin_user_env" yaml:"admin_user_env"`
+	AdminPasswordEnv  string       `json:"admin_password_env" yaml:"admin_password_env"`
+	Fleets            []FleetEntry `json:"fleets" yaml:"fleets"` // optional; default = one fleet from scheduler_url
 }
 
 // DefaultConfig returns defaults.
@@ -71,7 +79,40 @@ func (c *Config) Normalize() error {
 	if c.AdminPasswordEnv == "" {
 		c.AdminPasswordEnv = "ANVIL_WEB_ADMIN_PASSWORD"
 	}
+	c.Fleets = normalizeFleets(c.Fleets, c.SchedulerURL)
 	return nil
+}
+
+func normalizeFleets(in []FleetEntry, fallbackURL string) []FleetEntry {
+	if len(in) == 0 {
+		return []FleetEntry{{
+			ID:           "default",
+			Name:         "Default fleet",
+			SchedulerURL: strings.TrimRight(fallbackURL, "/"),
+		}}
+	}
+	out := make([]FleetEntry, 0, len(in))
+	for i, f := range in {
+		id := strings.TrimSpace(f.ID)
+		name := strings.TrimSpace(f.Name)
+		url := strings.TrimRight(strings.TrimSpace(f.SchedulerURL), "/")
+		if url == "" {
+			url = strings.TrimRight(fallbackURL, "/")
+		}
+		if id == "" {
+			id = fmt.Sprintf("fleet-%d", i+1)
+		}
+		if name == "" {
+			name = id
+		}
+		out = append(out, FleetEntry{ID: id, Name: name, SchedulerURL: url})
+	}
+	return out
+}
+
+// FleetList returns fleets for the mobile/API catalog.
+func (c Config) FleetList() []FleetEntry {
+	return append([]FleetEntry(nil), c.Fleets...)
 }
 
 // SchedulerToken returns the server-side scheduler bearer.

@@ -7,7 +7,8 @@ import "errors"
 
 // Stable run / stream error codes (0.7+). Values are part of the public contract.
 const (
-	CodeMaxSteps         = "max_steps"
+	CodeMaxSteps         = "max_steps" // optional hard cap only (0 = unlimited)
+	CodeLoopDetected     = "loop_detected"
 	CodeCancelled        = "cancelled"
 	CodeContextDeadline  = "context_deadline"
 	CodeMaxWallTime      = "max_wall_time"

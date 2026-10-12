@@ -262,7 +262,11 @@ func cmdPrompt(args []string) error {
 	}
 	defer agent.Close()
 
-	fmt.Printf("agent=%s max_steps=%d store=%s\n", agent.AgentID(), opts.MaxSteps, opts.Local.Store)
+	if opts.MaxSteps > 0 {
+		fmt.Printf("agent=%s max_steps=%d store=%s\n", agent.AgentID(), opts.MaxSteps, opts.Local.Store)
+	} else {
+		fmt.Printf("agent=%s max_steps=unlimited store=%s\n", agent.AgentID(), opts.Local.Store)
+	}
 	run, err := agent.Send(ctx, msg)
 	if err != nil {
 		return err

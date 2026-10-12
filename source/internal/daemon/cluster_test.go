@@ -92,8 +92,7 @@ func TestClusterJoinHeartbeatAndAssign(t *testing.T) {
 
 	cfg := DefaultConfig()
 	cfg.Listen = localAddr
-	cfg.MaxWorkers = 2
-	cfg.Repos = []RepoEntry{{ID: "demo", CWD: dir}}
+	cfg.MaxWorkers = 0
 	cfg.Cluster = ClusterConfig{
 		Enabled:      true,
 		URL:          schedAddr,
@@ -105,6 +104,9 @@ func TestClusterJoinHeartbeatAndAssign(t *testing.T) {
 
 	srv, err := NewServer(cfg, &EmbeddedRunner{}, nil)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.SeedBoundWorker("demo", dir); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())

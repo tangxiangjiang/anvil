@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Execute one user message as a **tool-calling loop** until the model stops requesting tools, hits a limit, errors, or is cancelled.
+Execute one user message as a **tool-calling loop** until the model stops requesting tools, the **loop guard** stops a runaway, an optional step ceiling is hit, errors, or is cancelled.
 
 ## Algorithm
 
@@ -13,7 +13,7 @@ Execute one user message as a **tool-calling loop** until the model stops reques
    - Emit `tool_call` events in assistant order.
    - Execute via registry: sequential by default; `Options.ParallelTools` (0.9+) may run a non-mutating batch concurrently.
    - Emit `tool_result` events in the same start order; append tool results to history.
-   - Increment step counter; if `steps >= MaxSteps`, finish with error/limit status.
+   - **Loop guard** (0.30+): detect repeated identical `(tool,args)`, stalled identical results, or short tool-name cycles. First hit injects a corrective user message; second hit ends with `loop_detected`.
    - Go to 3.
 5. If response is assistant text only:
    - Emit `assistant` (and deltas if streaming tokens).
@@ -24,11 +24,12 @@ Execute one user message as a **tool-calling loop** until the model stops reques
 
 | Limit | Default | Notes |
 |-------|---------|--------|
-| `MaxSteps` | **128** (0.6+; was 32 in MVP) | LLM rounds; `0` in Options means default |
+| Loop guard | on | Repeat / stall / ping-pong — primary convergence for long jobs |
+| `MaxSteps` | **0 (unlimited)** | Optional hard ceiling only; do not set for normal coding jobs |
 | `MaxWallTime` | none unless set | Added in 0.2; cancel semantics |
 | Per-tool timeout | shell: 60s | Others bound by ctx |
 
-Each LLM round emits a `progress` event with current step and MaxSteps (0.6+).
+Each LLM round emits a `progress` event with current step (`MaxSteps` is 0 when unlimited).
 
 ## Completion conditions
 
@@ -36,7 +37,8 @@ Each LLM round emits a `progress` event with current step and MaxSteps (0.6+).
 |-----------|--------|
 | Model returns no tool calls | `finished` |
 | Context cancelled / Cancel | `cancelled` (0.2) |
-| MaxSteps exceeded | `error` |
+| Loop guard stop | `error` (`loop_detected`) |
+| Optional MaxSteps exceeded | `error` (`max_steps`) |
 | LLM or tool hard failure | `error` |
 
 ## System prompt responsibilities

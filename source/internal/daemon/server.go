@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -22,6 +24,7 @@ type Server struct {
 	mu        sync.Mutex
 	listener  net.Listener
 	accepting bool // false = drain (reject new assigns)
+	restoring bool // true while hydrating workers.json (skip persist)
 }
 
 // NewServer constructs a server (does not listen yet).
@@ -39,17 +42,53 @@ func NewServer(cfg Config, runner JobRunner, logger *log.Logger) (*Server, error
 	if logger == nil {
 		logger = log.Default()
 	}
-	return &Server{
+	// Start with zero workers; capacity grows only via project worker add (no anonymous slots).
+	cfg.MaxWorkers = 0
+	s := &Server{
 		cfg:       cfg,
-		slots:     NewSlots(cfg.MaxWorkers),
+		slots:     NewSlots(0),
 		runner:    runner,
 		log:       logger,
 		accepting: true,
-	}, nil
+	}
+	s.restoreProjectWorkers()
+	return s, nil
 }
 
 // Config returns a copy of the config.
 func (s *Server) Config() Config { return s.cfg }
+
+// ResolveJobRepo maps a job repo_id to an absolute project cwd.
+// Accepts allowlist ids, worker ids, and sandbox-relative project paths
+// (e.g. "flutter-chat-local" when the worker id is a display name).
+func (s *Server) ResolveJobRepo(repoID string) (string, error) {
+	repoID = strings.TrimSpace(repoID)
+	if repoID == "" {
+		return "", fmt.Errorf("unknown repo_id %q", repoID)
+	}
+	s.mu.Lock()
+	cfg := s.cfg
+	s.mu.Unlock()
+	if cwd, err := cfg.ResolveRepo(repoID); err == nil {
+		return cwd, nil
+	}
+	for _, w := range s.slots.Snapshot().Workers {
+		if w.ID == repoID || w.RepoID == repoID {
+			if w.ProjectPath != "" {
+				return w.ProjectPath, nil
+			}
+		}
+		if w.ProjectRel != "" && (w.ProjectRel == repoID || filepath.Base(w.ProjectRel) == repoID) {
+			if w.ProjectPath != "" {
+				return w.ProjectPath, nil
+			}
+		}
+		if w.ProjectPath != "" && filepath.Base(w.ProjectPath) == repoID {
+			return w.ProjectPath, nil
+		}
+	}
+	return "", fmt.Errorf("unknown repo_id %q", repoID)
+}
 
 // ApplyClusterLLM merges scheduler-provisioned llm into the embedded runner.
 func (s *Server) ApplyClusterLLM(body *ClusterLLMBody) {
@@ -74,6 +113,38 @@ func (s *Server) RunnerLLM() (LLMConfig, bool) {
 // Slots exposes the slot registry (tests).
 func (s *Server) Slots() *Slots { return s.slots }
 
+// SeedBoundWorker registers a repo allowlist entry and one idle project slot (tests / bootstrap).
+func (s *Server) SeedBoundWorker(id, cwd string) error {
+	if id == "" || cwd == "" {
+		return fmt.Errorf("id and cwd required")
+	}
+	abs, err := filepath.Abs(cwd)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	if s.repoIndexLocked(id) < 0 {
+		s.cfg.Repos = append(s.cfg.Repos, RepoEntry{ID: id, CWD: abs})
+	}
+	s.mu.Unlock()
+	if _, err := s.slots.AddBoundWorker(id, id, "", abs, "", id, true); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.cfg.MaxWorkers = s.slots.Max()
+	s.mu.Unlock()
+	return nil
+}
+
+// WorkerSnapshot returns capacity plus sandbox-relative project paths.
+func (s *Server) WorkerSnapshot() WorkerListResultBody {
+	snap := s.slots.Snapshot()
+	for i := range snap.Workers {
+		snap.Workers[i] = s.decorateWorker(snap.Workers[i])
+	}
+	return snap
+}
+
 // Accepting reports whether new jobs are accepted (not draining).
 func (s *Server) Accepting() bool {
 	s.mu.Lock()
@@ -92,11 +163,12 @@ func (s *Server) ApplyClusterControl(body *ClusterControlBody) error {
 		s.mu.Unlock()
 	}
 	if body.SetMaxWorkers != nil {
+		// Capacity is project-bound only; reject anonymous scale-up.
 		if err := s.slots.Resize(*body.SetMaxWorkers); err != nil {
 			return err
 		}
 		s.mu.Lock()
-		s.cfg.MaxWorkers = *body.SetMaxWorkers
+		s.cfg.MaxWorkers = s.slots.Max()
 		s.mu.Unlock()
 	}
 	return nil
@@ -196,7 +268,7 @@ func (s *Server) handleHello(w *connWriter, env Envelope) bool {
 	caps = append(caps, s.cfg.PluginCapabilityLabels()...)
 	ok := HelloOKBody{
 		NodeID:       s.cfg.NodeID,
-		MaxWorkers:   s.cfg.MaxWorkers,
+		MaxWorkers:   s.slots.Max(),
 		Capabilities: caps,
 	}
 	_ = w.WriteEnvelope(Envelope{Kind: KindHelloOK, ID: env.ID, Body: mustBody(ok)})
@@ -204,7 +276,7 @@ func (s *Server) handleHello(w *connWriter, env Envelope) bool {
 }
 
 func (s *Server) handleWorkerList(w *connWriter, env Envelope) {
-	snap := s.slots.Snapshot()
+	snap := s.WorkerSnapshot()
 	_ = w.WriteEnvelope(Envelope{Kind: KindWorkerListR, ID: env.ID, Body: mustBody(snap)})
 }
 
@@ -218,7 +290,7 @@ func (s *Server) handleJobAssign(parent context.Context, w *connWriter, env Enve
 		_ = s.writeErr(w, env.ID, "node is draining (not accepting jobs)", job.JobID)
 		return
 	}
-	cwd, err := s.cfg.ResolveRepo(job.RepoID)
+	cwd, err := s.ResolveJobRepo(job.RepoID)
 	if err != nil {
 		_ = s.writeErr(w, env.ID, err.Error(), job.JobID)
 		return

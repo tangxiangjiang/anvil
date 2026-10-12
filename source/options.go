@@ -32,11 +32,12 @@ type Options struct {
 	BaseURL  string
 	Model    Model
 	Local    LocalOptions
-	MaxSteps int // 0 = default (128)
+	// MaxSteps is an optional hard ceiling on LLM rounds (0 = unlimited, default).
+	// Runaway loops are stopped by the runtime loop guard (repeated tool calls / stalls).
+	MaxSteps int
 	// MaxWallTime bounds a single Send/Prompt run. Zero means no wall-time limit.
 	// When exceeded, the run ends with StatusCancelled and CodeMaxWallTime.
 	// Parent context deadline → CodeContextDeadline; explicit Cancel → CodeCancelled.
-	// MaxSteps still applies independently (whichever hits first wins).
 	MaxWallTime time.Duration
 
 	// Tools are caller-registered tools merged with built-ins (0.3+).

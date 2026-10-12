@@ -20,9 +20,11 @@ import (
 func (h *Hub) AppHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/health", h.withAuth(h.handleHealth))
+	mux.HandleFunc("/v1/meta", h.withAuth(h.handleMeta))
 	mux.HandleFunc("/v1/llm", h.withAuth(h.handleLLM))
+	mux.HandleFunc("/v1/llm/selection", h.withAuth(h.handleLLMSelection))
 	mux.HandleFunc("/v1/nodes", h.withAuth(h.handleNodes))
-	mux.HandleFunc("/v1/nodes/", h.withAuth(h.handleNodeByID))
+	mux.HandleFunc("/v1/nodes/", h.withAuth(h.handleNodeRoutes))
 	mux.HandleFunc("/v1/models", h.withAuth(h.handleModels))
 	mux.HandleFunc("/v1/jobs", h.withAuth(h.handleJobs))
 	mux.HandleFunc("/v1/usage", h.withAuth(h.handleUsage))
@@ -116,6 +118,7 @@ type llmPut struct {
 func (h *Hub) handleLLM(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
+		_ = h.EnsureDefaultModel(r.Context())
 		llm := h.GetLLM()
 		writeJSON(w, http.StatusOK, llmPublic{
 			BaseURL:   llm.BaseURL,
@@ -159,6 +162,43 @@ func (h *Hub) handleLLM(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+type llmSelectionPut struct {
+	Model    string `json:"model"`
+	Provider string `json:"provider"`
+}
+
+func (h *Hub) handleLLMSelection(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body llmSelectionPut
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+	if err := h.SelectModel(body.Model, body.Provider); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	llm := h.GetLLM()
+	writeJSON(w, http.StatusOK, llmPublic{
+		BaseURL:   llm.BaseURL,
+		APIKeySet: llm.APIKey != "",
+		Model:     llm.Model,
+		Provider:  llm.Provider,
+		MaxSteps:  llm.MaxSteps,
+	})
+}
+
+func (h *Hub) handleMeta(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, http.StatusOK, h.Meta())
+}
+
 func (h *Hub) handleNodes(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -167,13 +207,92 @@ func (h *Hub) handleNodes(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"nodes": h.ListNodes()})
 }
 
-func (h *Hub) handleNodeByID(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimPrefix(r.URL.Path, "/v1/nodes/")
-	id = strings.Trim(id, "/")
-	if id == "" || strings.Contains(id, "/") {
+func (h *Hub) handleNodeRoutes(w http.ResponseWriter, r *http.Request) {
+	rest := strings.TrimPrefix(r.URL.Path, "/v1/nodes/")
+	rest = strings.Trim(rest, "/")
+	if rest == "" {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
+	parts := strings.Split(rest, "/")
+	nodeID := parts[0]
+	if len(parts) == 1 {
+		h.handleNodeByID(w, r, nodeID)
+		return
+	}
+	switch parts[1] {
+	case "workers":
+		if len(parts) == 2 && r.Method == http.MethodPost {
+			var req daemon.ClusterWorkerAddBody
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "bad json", http.StatusBadRequest)
+				return
+			}
+			res, err := h.AddWorker(r.Context(), nodeID, req)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			writeJSON(w, http.StatusOK, res)
+			return
+		}
+		if len(parts) == 3 && r.Method == http.MethodDelete {
+			res, err := h.RemoveWorker(r.Context(), nodeID, parts[2])
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusConflict)
+				return
+			}
+			writeJSON(w, http.StatusOK, res)
+			return
+		}
+		if len(parts) == 4 && r.Method == http.MethodPost {
+			var res daemon.ClusterWorkerResultBody
+			var err error
+			switch parts[3] {
+			case "start":
+				res, err = h.StartWorker(r.Context(), nodeID, parts[2])
+			case "shutdown":
+				res, err = h.ShutdownWorker(r.Context(), nodeID, parts[2])
+			default:
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusConflict)
+				return
+			}
+			writeJSON(w, http.StatusOK, res)
+			return
+		}
+	case "sandbox":
+		if len(parts) == 2 && r.Method == http.MethodGet {
+			res, err := h.ListSandbox(r.Context(), nodeID, r.URL.Query().Get("path"))
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			writeJSON(w, http.StatusOK, res)
+			return
+		}
+		if len(parts) == 3 && parts[2] == "mkdir" && r.Method == http.MethodPost {
+			var req daemon.ClusterSandboxMkdirBody
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "bad json", http.StatusBadRequest)
+				return
+			}
+			res, err := h.MkdirSandbox(r.Context(), nodeID, req.Path)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			writeJSON(w, http.StatusOK, res)
+			return
+		}
+	}
+	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+}
+
+func (h *Hub) handleNodeByID(w http.ResponseWriter, r *http.Request, id string) {
 	switch r.Method {
 	case http.MethodPatch:
 		var req PatchNodeRequest
@@ -221,7 +340,13 @@ func (h *Hub) handleModels(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"data": list})
+	_ = h.EnsureDefaultModel(r.Context())
+	llm := h.GetLLM()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"data":             list,
+		"selected_model":   llm.Model,
+		"selected_provider": llm.Provider,
+	})
 }
 
 type jobRequest struct {
@@ -266,8 +391,15 @@ func (h *Hub) handleJobs(w http.ResponseWriter, r *http.Request) {
 		Plugins:   req.Plugins,
 		ForceStub: req.ForceStub,
 	}
-	if job.Model == "" {
-		job.Model = h.GetLLM().Model
+	if job.Model == "" || job.Provider == "" {
+		_ = h.EnsureDefaultModel(r.Context())
+		llm := h.GetLLM()
+		if job.Model == "" {
+			job.Model = llm.Model
+		}
+		if job.Provider == "" {
+			job.Provider = llm.Provider
+		}
 	}
 	done, err := h.AssignJobTo(r.Context(), job, req.NodeID)
 	if err != nil {

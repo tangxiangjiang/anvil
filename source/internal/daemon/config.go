@@ -101,6 +101,13 @@ type Config struct {
 	Cluster ClusterConfig `json:"cluster" yaml:"cluster"`
 	// NodeID labels this daemon in hello_ok (defaults to hostname).
 	NodeID string `json:"node_id" yaml:"node_id"`
+	// Name is a human label for the node (fleet UI).
+	Name string `json:"name" yaml:"name"`
+	// Description is optional operator text for the node.
+	Description string `json:"description" yaml:"description"`
+	// SandboxDir is the root directory for all project workers (0.29+).
+	// Worker project paths must resolve under this directory.
+	SandboxDir string `json:"sandbox_dir" yaml:"sandbox_dir"`
 	// Plugins is the worker-side plugin allowlist (0.20+).
 	Plugins PluginsConfig `json:"plugins" yaml:"plugins"`
 	// LLM defaults for embedded workers (0.23+). Env / job.assign may override.
@@ -121,7 +128,7 @@ type PluginsConfig struct {
 func DefaultConfig() Config {
 	return Config{
 		TokenEnv:       "ANVIL_AGENTD_TOKEN",
-		MaxWorkers:     2,
+		MaxWorkers:     0,
 		Overload:       OverloadReject,
 		CancelGraceSec: 5,
 		Cluster: ClusterConfig{
@@ -156,8 +163,8 @@ func (c *Config) Normalize() error {
 	if c.TokenEnv == "" {
 		c.TokenEnv = "ANVIL_AGENTD_TOKEN"
 	}
-	if c.MaxWorkers < 1 {
-		return fmt.Errorf("max_workers must be >= 1, got %d", c.MaxWorkers)
+	if c.MaxWorkers < 0 {
+		return fmt.Errorf("max_workers must be >= 0, got %d", c.MaxWorkers)
 	}
 	if c.Overload == "" {
 		c.Overload = OverloadReject
@@ -209,11 +216,26 @@ func (c *Config) Normalize() error {
 		h, _ := os.Hostname()
 		c.NodeID = h
 	}
+	c.SandboxDir = strings.TrimSpace(c.SandboxDir)
+	if c.SandboxDir != "" {
+		abs, err := filepath.Abs(c.SandboxDir)
+		if err != nil {
+			return fmt.Errorf("sandbox_dir: %w", err)
+		}
+		c.SandboxDir = abs
+		if err := os.MkdirAll(c.SandboxDir, 0o755); err != nil {
+			return fmt.Errorf("sandbox_dir mkdir: %w", err)
+		}
+	}
 	return nil
 }
 
 // ResolveRepo returns the absolute cwd for repoID.
 func (c Config) ResolveRepo(repoID string) (string, error) {
+	repoID = strings.TrimSpace(repoID)
+	if repoID == "" {
+		return "", fmt.Errorf("unknown repo_id %q", repoID)
+	}
 	for _, r := range c.Repos {
 		if r.ID == repoID {
 			return r.CWD, nil

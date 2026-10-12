@@ -32,6 +32,11 @@ func startTestServer(t *testing.T, maxWorkers int, repos []RepoEntry) (*Server, 
 	if err != nil {
 		t.Fatal(err)
 	}
+	for _, r := range repos {
+		if err := srv.SeedBoundWorker(r.ID, r.CWD); err != nil {
+			t.Fatal(err)
+		}
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Serve(ctx) }()
@@ -54,7 +59,7 @@ func startTestServer(t *testing.T, maxWorkers int, repos []RepoEntry) (*Server, 
 
 func TestHelloAndWorkerList(t *testing.T) {
 	dir := t.TempDir()
-	_, addr, _ := startTestServer(t, 2, []RepoEntry{{ID: "demo", CWD: dir}})
+	_, addr, _ := startTestServer(t, 0, []RepoEntry{{ID: "demo", CWD: dir}})
 
 	conn, err := Dial(addr)
 	if err != nil {
@@ -66,14 +71,38 @@ func TestHelloAndWorkerList(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ok.MaxWorkers != 2 {
+	if ok.MaxWorkers != 1 {
 		t.Fatalf("max=%d", ok.MaxWorkers)
 	}
 	list, err := cl.WorkerList()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if list.Idle != 2 || list.Busy != 0 {
+	if list.Idle != 1 || list.Busy != 0 {
+		t.Fatalf("list %+v", list)
+	}
+}
+
+func TestHelloStartsWithZeroWorkers(t *testing.T) {
+	_, addr, _ := startTestServer(t, 0, nil)
+	conn, err := Dial(addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	cl := NewClient(conn)
+	ok, err := cl.Hello("test-token", "unit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok.MaxWorkers != 0 {
+		t.Fatalf("max=%d", ok.MaxWorkers)
+	}
+	list, err := cl.WorkerList()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if list.Idle != 0 || len(list.Workers) != 0 {
 		t.Fatalf("list %+v", list)
 	}
 }
@@ -138,13 +167,15 @@ func TestCapacityReject(t *testing.T) {
 
 	cfg := DefaultConfig()
 	cfg.Listen = addr
-	cfg.MaxWorkers = 1
-	cfg.Repos = []RepoEntry{{ID: "demo", CWD: dir}}
+	cfg.MaxWorkers = 0
 	_ = cfg.Normalize()
 
 	started := make(chan struct{})
 	srv, err := NewServer(cfg, hangRunner{started: started}, nil)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.SeedBoundWorker("demo", dir); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -236,12 +267,14 @@ func TestCancelStubJob(t *testing.T) {
 
 	cfg := DefaultConfig()
 	cfg.Listen = addr
-	cfg.MaxWorkers = 1
-	cfg.Repos = []RepoEntry{{ID: "demo", CWD: dir}}
+	cfg.MaxWorkers = 0
 	_ = cfg.Normalize()
 	started := make(chan struct{})
 	srv, err := NewServer(cfg, hangRunner{started: started}, nil)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.SeedBoundWorker("demo", dir); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())

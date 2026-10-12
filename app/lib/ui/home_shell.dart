@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../auth/auth_controller.dart';
 import 'job_chat_page.dart';
 import 'models_page.dart';
+import 'nodes_page.dart';
 
 class HomeShell extends StatefulWidget {
   const HomeShell({super.key, required this.auth});
@@ -19,13 +20,21 @@ class _HomeShellState extends State<HomeShell> {
   @override
   Widget build(BuildContext context) {
     final session = widget.auth.session!;
+    final fleetTitle = session.fleetName ?? session.fleetId ?? 'Fleet';
+    final titles = ['Cluster', 'Jobs', 'Models'];
     final pages = [
+      NodesPage(session: session),
       JobChatPage(session: session),
       ModelsPage(session: session),
     ];
     return Scaffold(
       appBar: AppBar(
-        title: Text(_index == 0 ? 'Jobs' : 'Models'),
+        title: Text('${titles[_index]} · $fleetTitle'),
+        leading: IconButton(
+          tooltip: 'Fleets',
+          onPressed: () => widget.auth.leaveFleet(),
+          icon: const Icon(Icons.arrow_back),
+        ),
         actions: [
           if (session.username != null)
             Padding(
@@ -44,6 +53,11 @@ class _HomeShellState extends State<HomeShell> {
         selectedIndex: _index,
         onDestinationSelected: (i) => setState(() => _index = i),
         destinations: const [
+          NavigationDestination(
+            icon: Icon(Icons.hub_outlined),
+            selectedIcon: Icon(Icons.hub),
+            label: 'Cluster',
+          ),
           NavigationDestination(
             icon: Icon(Icons.chat_bubble_outline),
             selectedIcon: Icon(Icons.chat_bubble),

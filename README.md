@@ -316,7 +316,7 @@ cd source
 go build -o ../bin/anvil-web.exe ./cmd/anvil-web
 set ANVIL_SCHEDULER_TOKEN=sched-token
 ../bin/anvil-web.exe --config cmd/anvil-web/web.example.yaml
-# open http://127.0.0.1:17900 → install wizard (create root admin) → Nodes / Usage
+# open http://127.0.0.1:17900 → install wizard (create root admin) → Clusters / Usage
 # optional env bootstrap instead of wizard: ANVIL_WEB_ADMIN_USER / ANVIL_WEB_ADMIN_PASSWORD
 ```
 
@@ -326,18 +326,33 @@ Scheduler also exposes `GET /v1/usage` and `PATCH /v1/nodes/{id}` (`max_workers`
 
 ### Flutter mobile app (0.26)
 
-Phone client under [`app/`](app/): sign in to anvil-web, then call scheduler `/v1/jobs` and `/v1/models` with the session Bearer. No fleet UI (use the web console).
+Phone client under [`app/`](app/): web URL is baked via `--dart-define=ANVIL_WEB_URL=...` (default `http://127.0.0.1:17900`). Sign in with username/password, pick a **fleet** from `GET /api/v1/fleets`, then call that scheduler for cluster (nodes scale/drain), jobs, and models.
+
+**Joint debug (recommended):** one script builds binaries and starts **gateway + scheduler + agentd + web** with a shared sessions DB under `.dev/`. After start it `PUT /v1/llm` so workers call the local gateway.
 
 ```bash
-# 1) Point scheduler at the web DB (same file as anvil-web db_path)
-#    web_sessions_db: anvil-web.db
-# 2) Run web + scheduler + agentd (see above)
+# required for real LLM through gateway:
+set UPSTREAM_OPENAI_KEY=sk-...
+# optional OpenAI-compatible upstream (default https://api.openai.com/v1):
+set UPSTREAM_OPENAI_URL=https://api.openai.com/v1
+# or write both into .dev/upstream.env
+
+python scripts/dev_stack.py
+# python scripts/dev_stack.py --upstream-key sk-... --upstream-url https://...
+# python scripts/dev_stack.py --repo E:/path/to/work/repo
+# python scripts/dev_stack.py --wizard       # browser install wizard (resets web DB)
+# python scripts/dev_stack.py --no-gateway   # skip LLM path
+# Install wizard is only allowed from localhost or 192.168.0.0/16.
+
+# another terminal
 cd app
 flutter pub get
 flutter run
-# Login: web URL, scheduler URL, username, password from the web wizard
-flutter test
+# login: http://127.0.0.1:17900 + http://127.0.0.1:17800
+# user/pass default: admin / adminadmin
 ```
+
+Logs: `.dev/*.log`. Ctrl+C in the script terminal stops the stack.
 
 See [`doc/design/v1.0/26-mobile-app.md`](doc/design/v1.0/26-mobile-app.md) and [`app/README.md`](app/README.md).
 

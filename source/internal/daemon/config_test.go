@@ -11,12 +11,12 @@ import (
 	"github.com/anvil-dev/anvil/internal/worker"
 )
 
-func TestConfigNormalizeRejectsZeroWorkers(t *testing.T) {
+func TestConfigNormalizeAllowsZeroWorkers(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Listen = "tcp://127.0.0.1:0"
 	cfg.MaxWorkers = 0
-	if err := cfg.Normalize(); err == nil {
-		t.Fatal("expected error for max_workers=0")
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -123,6 +123,19 @@ func TestApplyLLMDefaultsProvisionedAPIKeyWins(t *testing.T) {
 	opts := worker.OptionsFromEnv()
 	applyLLMDefaults(&opts, LLMConfig{APIKey: "sched-key", BaseURL: "http://gw/v1"})
 	if opts.APIKey != "sched-key" {
+		t.Fatalf("api_key=%q", opts.APIKey)
+	}
+}
+
+func TestApplyLLMDefaultsProvisionedBaseURLWinsOverEnv(t *testing.T) {
+	t.Setenv("ANVIL_BASE_URL", "https://athenai.example/v1")
+	t.Setenv("ANVIL_API_KEY", "env-key")
+	opts := worker.OptionsFromEnv()
+	applyLLMDefaults(&opts, LLMConfig{APIKey: "gw-token", BaseURL: "http://127.0.0.1:8080/v1"})
+	if opts.BaseURL != "http://127.0.0.1:8080/v1" {
+		t.Fatalf("base_url=%q", opts.BaseURL)
+	}
+	if opts.APIKey != "gw-token" {
 		t.Fatalf("api_key=%q", opts.APIKey)
 	}
 }

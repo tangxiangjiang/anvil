@@ -92,8 +92,7 @@ func TestE2EConfigureJoinJobModels(t *testing.T) {
 	agentListen := freeTCP(t)
 	agentCfg := daemon.DefaultConfig()
 	agentCfg.Listen = "tcp://" + agentListen
-	agentCfg.MaxWorkers = 2
-	agentCfg.Repos = []daemon.RepoEntry{{ID: "demo", CWD: dir}}
+	agentCfg.MaxWorkers = 0
 	agentCfg.Cluster = daemon.ClusterConfig{
 		Enabled:      true,
 		URL:          "tcp://" + clusterHost,
@@ -106,6 +105,9 @@ func TestE2EConfigureJoinJobModels(t *testing.T) {
 	}
 	srv, err := daemon.NewServer(agentCfg, &daemon.EmbeddedRunner{}, nil)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.SeedBoundWorker("demo", dir); err != nil {
 		t.Fatal(err)
 	}
 	go func() { _ = srv.Serve(ctx) }()

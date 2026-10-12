@@ -28,6 +28,49 @@ void main() {
     expect(list.first.id, 'm1');
   });
 
+  test('listNodes parses workers', () async {
+    final api = SchedulerApi(
+      baseUrl: 'http://127.0.0.1:17800',
+      token: 'tok',
+      get: (uri, {headers}) async {
+        expect(uri.path, '/v1/nodes');
+        return http.Response(
+          jsonEncode({
+            'nodes': [
+              {
+                'id': 'local-1',
+                'max_workers': 2,
+                'idle': 1,
+                'busy': 1,
+                'accepting': true,
+                'stale': false,
+                'name': 'local',
+                'hostname': 'PC-1',
+                'description': 'dev node',
+                'workers': [
+                  {
+                    'id': 'worker-1',
+                    'name': 'Demo',
+                    'status': 'idle',
+                    'repo_id': 'r1',
+                  },
+                ],
+              },
+            ],
+          }),
+          200,
+          headers: {'content-type': 'application/json'},
+        );
+      },
+    );
+    final nodes = await api.listNodes();
+    expect(nodes.length, 1);
+    expect(nodes.first.id, 'local-1');
+    expect(nodes.first.hostname, 'PC-1');
+    expect(nodes.first.workers.first.status, 'idle');
+    expect(nodes.first.workers.first.repoId, 'r1');
+  });
+
   test('submitJob posts body and parses done', () async {
     final api = SchedulerApi(
       baseUrl: 'http://127.0.0.1:17800',
@@ -40,6 +83,7 @@ void main() {
         return http.Response(
           jsonEncode({
             'job_id': 'j1',
+            'agent_id': 'agent-abc',
             'status': 'finished',
             'result': 'ok',
             'steps': 1,
@@ -51,6 +95,7 @@ void main() {
     );
     final done = await api.submitJob(repoId: 'demo', prompt: 'hi');
     expect(done.jobId, 'j1');
+    expect(done.agentId, 'agent-abc');
     expect(done.status, 'finished');
     expect(done.result, 'ok');
   });

@@ -1074,9 +1074,7 @@ func normalizeOptions(opts Options) (Options, string, error) {
 		return opts, "", newError("cwd is not a directory", false, nil)
 	}
 	opts.Local.CWD = abs
-	if opts.MaxSteps <= 0 {
-		opts.MaxSteps = runtime.DefaultMaxSteps
-	}
+	// MaxSteps 0 = unlimited; loop guard stops runaway tool repetition.
 	if opts.HistoryKeepRecent < 0 {
 		opts.HistoryKeepRecent = 0
 	}

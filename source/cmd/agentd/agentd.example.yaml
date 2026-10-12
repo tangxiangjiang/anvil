@@ -1,12 +1,14 @@
 listen: tcp://127.0.0.1:17654
 token_env: ANVIL_AGENTD_TOKEN
-max_workers: 2
+# Starts with zero workers; add project workers via scheduler/web (sandbox FS).
+max_workers: 0
 overload: reject
 cancel_grace_sec: 5
 node_id: local-1
-repos:
-  - id: demo
-    cwd: C:/path/to/repo
+name: Local node
+description: Desktop agentd for the local scheduler
+# All project workers must live under this directory (web FS browser root).
+sandbox_dir: C:/anvil-sandbox
 cluster:
   # Set enabled: true and point url at anvil-scheduler listen_cluster.
   # Use the same token as ANVIL_SCHEDULER_TOKEN (token_env below).
@@ -21,10 +23,8 @@ plugins:
     - memory
   deny: []
   search_paths: []
-# LLM defaults for embedded workers (worker Completer calls base_url; agentd does not proxy).
-llm:
-  base_url: http://127.0.0.1:8080/v1
-  api_key_env: ANVIL_API_KEY
-  model: private/demo
-  provider: openai
-  max_steps: 128
+# Optional offline LLM (not needed when cluster-joined — scheduler provisions gateway URL/key).
+# Model/provider are chosen in the app from the gateway catalog.
+# llm:
+#   base_url: http://127.0.0.1:8080/v1
+#   api_key_env: ANVIL_API_KEY

@@ -57,11 +57,14 @@ func (h *Hub) handleClusterConn(ctx context.Context, conn net.Conn) {
 	}
 
 	n := &nodeConn{
-		id:     join.NodeID,
-		max:    join.MaxWorkers,
-		idle:   join.MaxWorkers,
-		conn:   conn,
-		lastHB: time.Now(),
+		id:          join.NodeID,
+		name:        join.Name,
+		description: join.Description,
+		hostname:    join.Hostname,
+		max:         join.MaxWorkers,
+		idle:        join.MaxWorkers,
+		conn:        conn,
+		lastHB:      time.Now(),
 	}
 	h.registerNode(n)
 	defer h.unregisterNode(n.id, conn)
@@ -94,6 +97,10 @@ func (h *Hub) handleClusterConn(ctx context.Context, conn net.Conn) {
 			var done daemon.JobDoneBody
 			_ = daemon.DecodeBody(msg, &done)
 			h.deliverDone(done)
+		case daemon.KindClusterWorkerResult:
+			h.deliverWorkerResult(msg)
+		case daemon.KindClusterSandboxResult:
+			h.deliverSandboxResult(msg)
 		}
 	}
 }

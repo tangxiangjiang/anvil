@@ -7,7 +7,7 @@ import 'web_api.dart';
 
 enum AuthStatus { unknown, signedOut, signedIn }
 
-/// Owns session lifecycle: load secure store → web login → clear.
+/// Owns session lifecycle: web login → fleet select → clear.
 class AuthController extends ChangeNotifier {
   AuthController({
     required SessionStore store,
@@ -23,18 +23,20 @@ class AuthController extends ChangeNotifier {
   String? lastError;
 
   bool get isSignedIn =>
-      status == AuthStatus.signedIn && session?.isAuthenticated == true;
+      status == AuthStatus.signedIn && session?.isSignedIn == true;
+
+  bool get hasFleet => isSignedIn && session?.hasFleet == true;
 
   Future<void> bootstrap() async {
     lastError = null;
     try {
       final loaded = await _store.load();
-      if (loaded != null && loaded.isAuthenticated) {
+      if (loaded != null && loaded.isSignedIn) {
         session = loaded;
         status = AuthStatus.signedIn;
         debugPrint(
           'session restored token=${redactSecret(loaded.token)} '
-          'web=${loaded.webBaseUrl} sched=${loaded.schedulerBaseUrl}',
+          'web=${loaded.webBaseUrl} fleet=${loaded.fleetId}',
         );
       } else {
         session = null;
@@ -51,7 +53,6 @@ class AuthController extends ChangeNotifier {
 
   Future<bool> login({
     required String webBaseUrl,
-    required String schedulerBaseUrl,
     required String username,
     required String password,
   }) async {
@@ -60,7 +61,6 @@ class AuthController extends ChangeNotifier {
     try {
       final next = await _api.login(
         webBaseUrl: webBaseUrl,
-        schedulerBaseUrl: schedulerBaseUrl,
         username: username,
         password: password,
       );
@@ -82,6 +82,47 @@ class AuthController extends ChangeNotifier {
       notifyListeners();
       return false;
     }
+  }
+
+  Future<List<FleetInfo>> listFleets() async {
+    final s = session;
+    if (s == null || !s.isSignedIn) {
+      throw AuthException('Not signed in');
+    }
+    return _api.listFleets(webBaseUrl: s.webBaseUrl, token: s.token);
+  }
+
+  Future<List<ClusterInfo>> listClusters() async {
+    final s = session;
+    if (s == null || !s.isSignedIn) {
+      throw AuthException('Not signed in');
+    }
+    return _api.listClusters(webBaseUrl: s.webBaseUrl, token: s.token);
+  }
+
+  Future<void> selectFleet(FleetInfo fleet) async {
+    final s = session;
+    if (s == null || !s.isSignedIn) {
+      throw AuthException('Not signed in');
+    }
+    final sched = normalizeBaseUrl(fleet.schedulerUrl, label: 'Scheduler URL');
+    final next = s.copyWith(
+      schedulerBaseUrl: sched,
+      fleetId: fleet.id,
+      fleetName: fleet.name.isEmpty ? fleet.id : fleet.name,
+    );
+    await _store.save(next);
+    session = next;
+    notifyListeners();
+  }
+
+  Future<void> leaveFleet() async {
+    final s = session;
+    if (s == null) return;
+    final next = s.copyWith(clearFleet: true);
+    await _store.save(next);
+    session = next;
+    notifyListeners();
   }
 
   Future<void> signOut() async {

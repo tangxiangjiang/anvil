@@ -12,12 +12,17 @@ import (
 	"time"
 
 	"github.com/anvil-dev/anvil/internal/daemon"
+	"github.com/anvil-dev/anvil/internal/id"
 	"github.com/anvil-dev/anvil/internal/web/auth"
 )
 
 // NodeInfo is a public snapshot of a joined agentd.
 type NodeInfo struct {
 	ID            string               `json:"id"`
+	Name          string               `json:"name,omitempty"`
+	Description   string               `json:"description,omitempty"`
+	Hostname      string               `json:"hostname,omitempty"`
+	SandboxDir    string               `json:"sandbox_dir,omitempty"`
 	MaxWorkers    int                  `json:"max_workers"`
 	Idle          int                  `json:"idle"`
 	Busy          int                  `json:"busy"`
@@ -43,16 +48,20 @@ type UsageReport struct {
 }
 
 type nodeConn struct {
-	id        string
-	max       int
-	idle      int
-	busy      int
-	accepting bool
-	workers   []daemon.WorkerState
-	caps      []string
-	lastHB    time.Time
-	conn      net.Conn
-	writeMu   sync.Mutex
+	id          string
+	name        string
+	description string
+	hostname    string
+	sandboxDir  string
+	max         int
+	idle        int
+	busy        int
+	accepting   bool
+	workers     []daemon.WorkerState
+	caps        []string
+	lastHB      time.Time
+	conn        net.Conn
+	writeMu     sync.Mutex
 }
 
 // Hub is the scheduler control plane (cluster + app state).
@@ -70,6 +79,12 @@ type Hub struct {
 	waitMu  sync.Mutex
 	waiters map[string]chan daemon.JobDoneBody
 	jobNode map[string]string // jobID -> nodeID
+
+	workerWaitMu sync.Mutex
+	workerWait   map[string]chan daemon.ClusterWorkerResultBody // req id -> result
+
+	sandboxWaitMu sync.Mutex
+	sandboxWait   map[string]chan daemon.ClusterSandboxResultBody
 
 	usageMu sync.Mutex
 	usageG  UsageTotals
@@ -92,9 +107,11 @@ func NewHub(cfg Config, logger *log.Logger) *Hub {
 		log:     logger,
 		llm:     cfg.BootstrapLLM(),
 		nodes:   make(map[string]*nodeConn),
-		waiters: make(map[string]chan daemon.JobDoneBody),
-		jobNode: make(map[string]string),
-		usageN:  make(map[string]UsageTotals),
+		waiters:    make(map[string]chan daemon.JobDoneBody),
+		jobNode:    make(map[string]string),
+		usageN:     make(map[string]UsageTotals),
+		workerWait:  make(map[string]chan daemon.ClusterWorkerResultBody),
+		sandboxWait: make(map[string]chan daemon.ClusterSandboxResultBody),
 	}
 }
 
@@ -156,6 +173,10 @@ func (h *Hub) ListNodes() []NodeInfo {
 	for _, n := range h.nodes {
 		out = append(out, NodeInfo{
 			ID:            n.id,
+			Name:          n.name,
+			Description:   n.description,
+			Hostname:      n.hostname,
+			SandboxDir:    n.sandboxDir,
 			MaxWorkers:    n.max,
 			Idle:          n.idle,
 			Busy:          n.busy,
@@ -184,6 +205,225 @@ func (h *Hub) UsageSnapshot() UsageReport {
 type PatchNodeRequest struct {
 	MaxWorkers *int  `json:"max_workers,omitempty"`
 	Accepting  *bool `json:"accepting,omitempty"`
+}
+
+// Meta is GET /v1/meta.
+type Meta struct {
+	Name          string `json:"name,omitempty"`
+	Description   string `json:"description,omitempty"`
+	ListenApp     string `json:"listen_app"`
+	ListenCluster string `json:"listen_cluster"`
+}
+
+// Meta returns scheduler identity for the fleet UI.
+func (h *Hub) Meta() Meta {
+	name := h.cfg.Name
+	if name == "" {
+		name = "scheduler"
+	}
+	return Meta{
+		Name:          name,
+		Description:   h.cfg.Description,
+		ListenApp:     h.cfg.ListenApp,
+		ListenCluster: h.cfg.ListenCluster,
+	}
+}
+
+func (h *Hub) deliverWorkerResult(msg daemon.Envelope) {
+	var res daemon.ClusterWorkerResultBody
+	_ = daemon.DecodeBody(msg, &res)
+	h.workerWaitMu.Lock()
+	ch := h.workerWait[msg.ID]
+	delete(h.workerWait, msg.ID)
+	h.workerWaitMu.Unlock()
+	if ch != nil {
+		select {
+		case ch <- res:
+		default:
+		}
+	}
+}
+
+func (h *Hub) deliverSandboxResult(msg daemon.Envelope) {
+	var res daemon.ClusterSandboxResultBody
+	_ = daemon.DecodeBody(msg, &res)
+	h.sandboxWaitMu.Lock()
+	ch := h.sandboxWait[msg.ID]
+	delete(h.sandboxWait, msg.ID)
+	h.sandboxWaitMu.Unlock()
+	if ch != nil {
+		select {
+		case ch <- res:
+		default:
+		}
+	}
+}
+
+func (h *Hub) workerRPC(ctx context.Context, nodeID, kind string, req any, timeout time.Duration) (daemon.ClusterWorkerResultBody, error) {
+	h.nodesMu.Lock()
+	n, ok := h.nodes[nodeID]
+	h.nodesMu.Unlock()
+	if !ok {
+		return daemon.ClusterWorkerResultBody{}, fmt.Errorf("unknown node_id %q", nodeID)
+	}
+	reqID := id.New()
+	ch := make(chan daemon.ClusterWorkerResultBody, 1)
+	h.workerWaitMu.Lock()
+	h.workerWait[reqID] = ch
+	h.workerWaitMu.Unlock()
+	defer func() {
+		h.workerWaitMu.Lock()
+		delete(h.workerWait, reqID)
+		h.workerWaitMu.Unlock()
+	}()
+	body, _ := daemon.MarshalBody(req)
+	if err := h.writeNode(n, daemon.Envelope{Kind: kind, ID: reqID, Body: body}); err != nil {
+		return daemon.ClusterWorkerResultBody{}, err
+	}
+	select {
+	case <-ctx.Done():
+		return daemon.ClusterWorkerResultBody{}, ctx.Err()
+	case res := <-ch:
+		if !res.OK {
+			return res, fmt.Errorf("%s", res.Error)
+		}
+		return res, nil
+	case <-time.After(timeout):
+		return daemon.ClusterWorkerResultBody{}, fmt.Errorf("worker rpc timed out")
+	}
+}
+
+func (h *Hub) applyWorkerResult(nodeID string, res daemon.ClusterWorkerResultBody) {
+	h.nodesMu.Lock()
+	defer h.nodesMu.Unlock()
+	n, ok := h.nodes[nodeID]
+	if !ok {
+		return
+	}
+	switch res.Request {
+	case "remove":
+		out := n.workers[:0]
+		for _, w := range n.workers {
+			if w.ID != res.Worker.ID {
+				out = append(out, w)
+			}
+		}
+		n.workers = out
+	default:
+		if res.Worker.ID == "" {
+			return
+		}
+		found := false
+		for i, w := range n.workers {
+			if w.ID == res.Worker.ID {
+				n.workers[i] = res.Worker
+				found = true
+				break
+			}
+		}
+		if !found {
+			n.workers = append(n.workers, res.Worker)
+		}
+	}
+	idle, busy := 0, 0
+	for _, w := range n.workers {
+		switch w.Status {
+		case daemon.SlotIdle:
+			idle++
+		case daemon.SlotBusy, daemon.SlotStarting:
+			busy++
+		}
+	}
+	n.idle = idle
+	n.busy = busy
+	n.max = len(n.workers)
+}
+
+// AddWorker asks agentd to create a project worker (stopped until Start).
+func (h *Hub) AddWorker(ctx context.Context, nodeID string, req daemon.ClusterWorkerAddBody) (daemon.ClusterWorkerResultBody, error) {
+	res, err := h.workerRPC(ctx, nodeID, daemon.KindClusterWorkerAdd, req, 3*time.Minute)
+	if err != nil {
+		return res, err
+	}
+	h.applyWorkerResult(nodeID, res)
+	return res, nil
+}
+
+// RemoveWorker asks agentd to remove a project worker.
+func (h *Hub) RemoveWorker(ctx context.Context, nodeID, workerID string) (daemon.ClusterWorkerResultBody, error) {
+	res, err := h.workerRPC(ctx, nodeID, daemon.KindClusterWorkerRemove, daemon.ClusterWorkerRemoveBody{WorkerID: workerID}, 60*time.Second)
+	if err != nil {
+		return res, err
+	}
+	if res.Worker.ID == "" {
+		res.Worker.ID = workerID
+	}
+	h.applyWorkerResult(nodeID, res)
+	return res, nil
+}
+
+// StartWorker enables a stopped project worker.
+func (h *Hub) StartWorker(ctx context.Context, nodeID, workerID string) (daemon.ClusterWorkerResultBody, error) {
+	res, err := h.workerRPC(ctx, nodeID, daemon.KindClusterWorkerStart, daemon.ClusterWorkerControlBody{WorkerID: workerID}, 30*time.Second)
+	if err != nil {
+		return res, err
+	}
+	h.applyWorkerResult(nodeID, res)
+	return res, nil
+}
+
+// ShutdownWorker stops an idle project worker (keeps config).
+func (h *Hub) ShutdownWorker(ctx context.Context, nodeID, workerID string) (daemon.ClusterWorkerResultBody, error) {
+	res, err := h.workerRPC(ctx, nodeID, daemon.KindClusterWorkerShutdown, daemon.ClusterWorkerControlBody{WorkerID: workerID}, 30*time.Second)
+	if err != nil {
+		return res, err
+	}
+	h.applyWorkerResult(nodeID, res)
+	return res, nil
+}
+
+func (h *Hub) sandboxRPC(ctx context.Context, nodeID, kind string, req any) (daemon.ClusterSandboxResultBody, error) {
+	h.nodesMu.Lock()
+	n, ok := h.nodes[nodeID]
+	h.nodesMu.Unlock()
+	if !ok {
+		return daemon.ClusterSandboxResultBody{}, fmt.Errorf("unknown node_id %q", nodeID)
+	}
+	reqID := id.New()
+	ch := make(chan daemon.ClusterSandboxResultBody, 1)
+	h.sandboxWaitMu.Lock()
+	h.sandboxWait[reqID] = ch
+	h.sandboxWaitMu.Unlock()
+	defer func() {
+		h.sandboxWaitMu.Lock()
+		delete(h.sandboxWait, reqID)
+		h.sandboxWaitMu.Unlock()
+	}()
+	body, _ := daemon.MarshalBody(req)
+	if err := h.writeNode(n, daemon.Envelope{Kind: kind, ID: reqID, Body: body}); err != nil {
+		return daemon.ClusterSandboxResultBody{}, err
+	}
+	select {
+	case <-ctx.Done():
+		return daemon.ClusterSandboxResultBody{}, ctx.Err()
+	case res := <-ch:
+		if !res.OK {
+			return res, fmt.Errorf("%s", res.Error)
+		}
+		return res, nil
+	case <-time.After(30 * time.Second):
+		return daemon.ClusterSandboxResultBody{}, fmt.Errorf("sandbox rpc timed out")
+	}
+}
+
+// ListSandbox lists directories under the node's sandbox.
+func (h *Hub) ListSandbox(ctx context.Context, nodeID, path string) (daemon.ClusterSandboxResultBody, error) {
+	return h.sandboxRPC(ctx, nodeID, daemon.KindClusterSandboxList, daemon.ClusterSandboxListBody{Path: path})
+}
+
+// MkdirSandbox creates a directory under the node's sandbox.
+func (h *Hub) MkdirSandbox(ctx context.Context, nodeID, path string) (daemon.ClusterSandboxResultBody, error) {
+	return h.sandboxRPC(ctx, nodeID, daemon.KindClusterSandboxMkdir, daemon.ClusterSandboxMkdirBody{Path: path})
 }
 
 // PatchNode sends cluster.control to a node.
@@ -245,6 +485,18 @@ func (h *Hub) updateHeartbeat(id string, hb daemon.ClusterHeartbeatBody) {
 	n.accepting = hb.Accepting
 	n.workers = append([]daemon.WorkerState(nil), hb.Workers...)
 	n.caps = append([]string(nil), hb.Capabilities...)
+	if hb.Hostname != "" {
+		n.hostname = hb.Hostname
+	}
+	if hb.Name != "" {
+		n.name = hb.Name
+	}
+	if hb.Description != "" {
+		n.description = hb.Description
+	}
+	if hb.SandboxDir != "" {
+		n.sandboxDir = hb.SandboxDir
+	}
 	n.lastHB = time.Now()
 }
 

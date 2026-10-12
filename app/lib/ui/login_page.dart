@@ -1,25 +1,7 @@
-import 'dart:io' show Platform;
-
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 import '../auth/auth_controller.dart';
-
-String defaultWebUrl() {
-  if (kIsWeb) return 'http://127.0.0.1:17900';
-  try {
-    if (Platform.isAndroid) return 'http://10.0.2.2:17900';
-  } catch (_) {}
-  return 'http://127.0.0.1:17900';
-}
-
-String defaultSchedulerUrl() {
-  if (kIsWeb) return 'http://127.0.0.1:17800';
-  try {
-    if (Platform.isAndroid) return 'http://10.0.2.2:17800';
-  } catch (_) {}
-  return 'http://127.0.0.1:17800';
-}
+import '../config.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key, required this.auth});
@@ -31,8 +13,6 @@ class LoginPage extends StatefulWidget {
 }
 
 class _LoginPageState extends State<LoginPage> {
-  late final TextEditingController _web;
-  late final TextEditingController _sched;
   late final TextEditingController _user;
   late final TextEditingController _pass;
   bool _busy = false;
@@ -40,16 +20,12 @@ class _LoginPageState extends State<LoginPage> {
   @override
   void initState() {
     super.initState();
-    _web = TextEditingController(text: defaultWebUrl());
-    _sched = TextEditingController(text: defaultSchedulerUrl());
     _user = TextEditingController(text: 'admin');
     _pass = TextEditingController();
   }
 
   @override
   void dispose() {
-    _web.dispose();
-    _sched.dispose();
     _user.dispose();
     _pass.dispose();
     super.dispose();
@@ -58,8 +34,7 @@ class _LoginPageState extends State<LoginPage> {
   Future<void> _submit() async {
     setState(() => _busy = true);
     final ok = await widget.auth.login(
-      webBaseUrl: _web.text,
-      schedulerBaseUrl: _sched.text,
+      webBaseUrl: kAnvilWebUrl,
       username: _user.text,
       password: _pass.text,
     );
@@ -75,79 +50,64 @@ class _LoginPageState extends State<LoginPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: SafeArea(
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 420),
-            child: ListView(
-              padding: const EdgeInsets.all(24),
-              children: [
-                Text(
-                  'Anvil',
-                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'Sign in with anvil-web, then run jobs on the scheduler.',
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                      ),
-                ),
-                const SizedBox(height: 24),
-                TextField(
-                  controller: _web,
-                  decoration: const InputDecoration(
-                    labelText: 'anvil-web URL',
-                    border: OutlineInputBorder(),
+      body: Container(
+        decoration: const BoxDecoration(
+          gradient: RadialGradient(
+            center: Alignment.topCenter,
+            radius: 1.2,
+            colors: [Color(0xFF1A2A3A), Color(0xFF0F1419)],
+            stops: [0.0, 0.55],
+          ),
+        ),
+        child: SafeArea(
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 420),
+              child: ListView(
+                padding: const EdgeInsets.all(24),
+                children: [
+                  const Text(
+                    'Anvil',
+                    style: TextStyle(
+                      fontSize: 28,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.4,
+                      color: Color(0xFFE7EEF7),
+                    ),
                   ),
-                  keyboardType: TextInputType.url,
-                  enabled: !_busy,
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _sched,
-                  decoration: const InputDecoration(
-                    labelText: 'anvil-scheduler URL',
-                    border: OutlineInputBorder(),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Sign in, then pick a scheduler cluster.',
+                    style: TextStyle(color: Color(0xFF8B9BB0), height: 1.35),
                   ),
-                  keyboardType: TextInputType.url,
-                  enabled: !_busy,
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _user,
-                  decoration: const InputDecoration(
-                    labelText: 'Username',
-                    border: OutlineInputBorder(),
+                  const SizedBox(height: 24),
+                  TextField(
+                    controller: _user,
+                    decoration: const InputDecoration(labelText: 'Username'),
+                    enabled: !_busy,
+                    textInputAction: TextInputAction.next,
                   ),
-                  enabled: !_busy,
-                  textInputAction: TextInputAction.next,
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _pass,
-                  decoration: const InputDecoration(
-                    labelText: 'Password',
-                    border: OutlineInputBorder(),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _pass,
+                    decoration: const InputDecoration(labelText: 'Password'),
+                    obscureText: true,
+                    enabled: !_busy,
+                    onSubmitted: (_) => _busy ? null : _submit(),
                   ),
-                  obscureText: true,
-                  enabled: !_busy,
-                  onSubmitted: (_) => _busy ? null : _submit(),
-                ),
-                const SizedBox(height: 20),
-                FilledButton(
-                  onPressed: _busy ? null : _submit,
-                  child: _busy
-                      ? const SizedBox(
-                          height: 20,
-                          width: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Text('Sign in'),
-                ),
-              ],
+                  const SizedBox(height: 20),
+                  FilledButton(
+                    onPressed: _busy ? null : _submit,
+                    child: _busy
+                        ? const SizedBox(
+                            height: 20,
+                            width: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Text('Sign in'),
+                  ),
+                ],
+              ),
             ),
           ),
         ),

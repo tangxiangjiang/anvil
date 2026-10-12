@@ -1,6 +1,6 @@
 # Roadmaps v1.0 (cutoff)
 
-Versioned delivery for Anvil through product **0.26**. Design cutoff: [`doc/design/v1.0/`](../../design/v1.0/).
+Versioned delivery for Anvil through product **0.30**. Design cutoff: [`doc/design/v1.0/`](../../design/v1.0/).
 
 ## Version index
 
@@ -32,6 +32,10 @@ Versioned delivery for Anvil through product **0.26**. Design cutoff: [`doc/desi
 | 0.24 | Scheduler hub (controller + catalog) | done | [m_0.24_scheduler.md](m_0.24_scheduler.md) | [24](../../design/v1.0/24-scheduler.md) |
 | 0.25 | Web fleet ops (anvil-web) | done | [m_0.25_web_admin.md](m_0.25_web_admin.md) | [25](../../design/v1.0/25-web-admin.md) |
 | 0.26 | Flutter mobile + auth bridge | done | [m_0.26_mobile_app.md](m_0.26_mobile_app.md) | [26](../../design/v1.0/26-mobile-app.md) |
+| 0.27 | App fleets + cluster ops | done | [m_0.27_app_fleets.md](m_0.27_app_fleets.md) | [27](../../design/v1.0/27-app-fleets.md) |
+| 0.28 | Web Clusters / Nodes / Workers | done | [m_0.28_clusters_workers.md](m_0.28_clusters_workers.md) | [28](../../design/v1.0/28-clusters-workers.md) |
+| 0.29 | Sandbox workers + web FS browser | done | [m_0.29_sandbox_workers.md](m_0.29_sandbox_workers.md) | [29](../../design/v1.0/29-sandbox-workers.md) |
+| 0.30 | Loop guard (unlimited steps) | done | [m_0.30_loop_guard.md](m_0.30_loop_guard.md) | [30](../../design/v1.0/30-loop-guard.md) |
 
 ## Naming
 

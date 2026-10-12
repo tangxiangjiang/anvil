@@ -47,10 +47,9 @@ func TestLoopToolThenFinish(t *testing.T) {
 	reg := tools.NewRegistry(dir, false)
 	var types []string
 	res := runtime.Loop(context.Background(), &scriptCompleter{}, reg, runtime.Config{
-		CWD:      dir,
-		Model:    "m",
-		MaxSteps: 8,
-		UserMsg:  "read note",
+		CWD:     dir,
+		Model:   "m",
+		UserMsg: "read note",
 	}, func(ev runtime.Event) {
 		types = append(types, ev.Type)
 	})
@@ -80,42 +79,46 @@ func (alwaysToolCompleter) Complete(ctx context.Context, req llm.Request) (*llm.
 	}}, nil
 }
 
-func TestProgressEventsAndMaxSteps(t *testing.T) {
+func TestLoopGuardStopsRepeatedTool(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "note.txt"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	reg := tools.NewRegistry(dir, false)
-	var progress []runtime.Event
 	res := runtime.Loop(context.Background(), alwaysToolCompleter{}, reg, runtime.Config{
-		CWD:      dir,
-		Model:    "m",
-		MaxSteps: 3,
-		UserMsg:  "loop",
-	}, func(ev runtime.Event) {
-		if ev.Type == "progress" {
-			progress = append(progress, ev)
-		}
-	})
+		CWD:     dir,
+		Model:   "m",
+		UserMsg: "loop",
+	}, nil)
 	if res.Status != "error" {
 		t.Fatalf("status=%s", res.Status)
 	}
-	if !runtime.IsMaxStepsExceeded(res.Err) || res.Code != runtime.CodeMaxSteps {
+	if !runtime.IsLoopDetected(res.Err) || res.Code != runtime.CodeLoopDetected {
 		t.Fatalf("err %q code %q", res.Err, res.Code)
-	}
-	if len(progress) != 3 {
-		t.Fatalf("progress count %d: %+v", len(progress), progress)
-	}
-	for i, ev := range progress {
-		if ev.Step != i+1 || ev.MaxSteps != 3 {
-			t.Fatalf("progress[%d]=%+v", i, ev)
-		}
 	}
 }
 
-func TestDefaultMaxSteps(t *testing.T) {
-	if runtime.DefaultMaxSteps != 128 {
-		t.Fatalf("default=%d", runtime.DefaultMaxSteps)
+func TestOptionalMaxStepsStillWorks(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "note.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reg := tools.NewRegistry(dir, false)
+	res := runtime.Loop(context.Background(), alwaysToolCompleter{}, reg, runtime.Config{
+		CWD:      dir,
+		Model:    "m",
+		MaxSteps: 2,
+		UserMsg:  "loop",
+	}, nil)
+	// MaxSteps=2 hits before loop guard needs 3 repeats + warn
+	if res.Status != "error" || !runtime.IsMaxStepsExceeded(res.Err) {
+		t.Fatalf("status=%s err=%q", res.Status, res.Err)
+	}
+}
+
+func TestDefaultMaxStepsUnlimited(t *testing.T) {
+	if runtime.DefaultMaxSteps != 0 {
+		t.Fatalf("default=%d want 0 (unlimited)", runtime.DefaultMaxSteps)
 	}
 }
 

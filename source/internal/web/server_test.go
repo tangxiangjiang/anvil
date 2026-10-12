@@ -35,14 +35,21 @@ func TestSetupWizardThenLogin(t *testing.T) {
 	h := srv.Handler()
 
 	res := httptest.NewRecorder()
-	h.ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/api/v1/setup/status", nil))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/setup/status", nil)
+	req.RemoteAddr = "127.0.0.1:1234"
+	h.ServeHTTP(res, req)
 	if res.Code != 200 || !bytes.Contains(res.Body.Bytes(), []byte(`"needs_setup":true`)) {
 		t.Fatalf("%d %s", res.Code, res.Body.String())
+	}
+	if !bytes.Contains(res.Body.Bytes(), []byte(`"setup_allowed":true`)) {
+		t.Fatalf("expected setup_allowed true: %s", res.Body.String())
 	}
 
 	body, _ := json.Marshal(map[string]string{"username": "root", "password": "password1"})
 	res = httptest.NewRecorder()
-	h.ServeHTTP(res, httptest.NewRequest(http.MethodPost, "/api/v1/setup/admin", bytes.NewReader(body)))
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/setup/admin", bytes.NewReader(body))
+	req.RemoteAddr = "192.168.1.10:9999"
+	h.ServeHTTP(res, req)
 	if res.Code != 200 {
 		t.Fatalf("setup %d %s", res.Code, res.Body.String())
 	}
@@ -55,9 +62,50 @@ func TestSetupWizardThenLogin(t *testing.T) {
 	}
 
 	res = httptest.NewRecorder()
-	h.ServeHTTP(res, httptest.NewRequest(http.MethodPost, "/api/v1/setup/admin", bytes.NewReader(body)))
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/setup/admin", bytes.NewReader(body))
+	req.RemoteAddr = "127.0.0.1:1"
+	h.ServeHTTP(res, req)
 	if res.Code != 409 {
 		t.Fatalf("want 409 got %d", res.Code)
+	}
+}
+
+func TestSetupBlockedFromPublicIP(t *testing.T) {
+	dir := t.TempDir()
+	cfg := web.DefaultConfig()
+	cfg.DBPath = filepath.Join(dir, "block.db")
+	cfg.SchedulerURL = "http://127.0.0.1:1"
+	_ = cfg.Normalize()
+	store, err := auth.Open(cfg.DBPath, 7*24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	static, err := web.StaticFS()
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := web.New(cfg, store, static, nil).Handler()
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/setup/status", nil)
+	req.RemoteAddr = "8.8.8.8:443"
+	h.ServeHTTP(res, req)
+	if res.Code != 200 {
+		t.Fatalf("%d %s", res.Code, res.Body.String())
+	}
+	if !bytes.Contains(res.Body.Bytes(), []byte(`"needs_setup":true`)) ||
+		!bytes.Contains(res.Body.Bytes(), []byte(`"setup_allowed":false`)) {
+		t.Fatalf("body %s", res.Body.String())
+	}
+
+	body, _ := json.Marshal(map[string]string{"username": "root", "password": "password1"})
+	res = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/setup/admin", bytes.NewReader(body))
+	req.RemoteAddr = "10.0.0.5:80"
+	h.ServeHTTP(res, req)
+	if res.Code != 403 {
+		t.Fatalf("want 403 got %d %s", res.Code, res.Body.String())
 	}
 }
 
@@ -117,5 +165,25 @@ func TestAuthLoginMe(t *testing.T) {
 	h.ServeHTTP(res, req)
 	if res.Code != 200 {
 		t.Fatalf("index %d", res.Code)
+	}
+
+	res = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/fleets", nil)
+	req.Header.Set("Authorization", "Bearer "+out.Token)
+	h.ServeHTTP(res, req)
+	if res.Code != 200 || !bytes.Contains(res.Body.Bytes(), []byte(`"fleets"`)) {
+		t.Fatalf("fleets %d %s", res.Code, res.Body.String())
+	}
+
+	res = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/clusters", nil)
+	req.Header.Set("Authorization", "Bearer "+out.Token)
+	h.ServeHTTP(res, req)
+	if res.Code != 200 || !bytes.Contains(res.Body.Bytes(), []byte(`"clusters"`)) {
+		t.Fatalf("clusters %d %s", res.Code, res.Body.String())
+	}
+	// scheduler at :1 is unreachable — expect online:false
+	if !bytes.Contains(res.Body.Bytes(), []byte(`"online":false`)) {
+		t.Fatalf("expected offline cluster: %s", res.Body.String())
 	}
 }

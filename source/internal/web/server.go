@@ -48,6 +48,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/auth/login", s.handleLogin)
 	mux.HandleFunc("/api/v1/auth/logout", s.requireAuth(s.handleLogout))
 	mux.HandleFunc("/api/v1/auth/me", s.requireAuth(s.handleMe))
+	mux.HandleFunc("/api/v1/fleets", s.requireAuth(s.handleFleets))
+	mux.HandleFunc("/api/v1/clusters", s.requireAuth(s.handleClusters))
+	mux.HandleFunc("/api/v1/clusters/", s.requireAuth(s.handleClusterRoutes))
 	mux.HandleFunc("/api/v1/nodes", s.requireAuth(s.handleNodes))
 	mux.HandleFunc("/api/v1/nodes/", s.requireAuth(s.handleNodePatch))
 	mux.HandleFunc("/api/v1/usage", s.requireAuth(s.handleUsage))
@@ -132,12 +135,20 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"needs_setup": need})
+	allowed := setupAllowed(r)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"needs_setup":   need,
+		"setup_allowed": allowed,
+	})
 }
 
 func (s *Server) handleSetupAdmin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !setupAllowed(r) {
+		http.Error(w, "setup only allowed from localhost or 192.168.0.0/16", http.StatusForbidden)
 		return
 	}
 	var body struct {
@@ -214,6 +225,14 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	}
 	u := userFrom(r.Context())
 	writeJSON(w, http.StatusOK, map[string]any{"id": u.ID, "username": u.Username})
+}
+
+func (s *Server) handleFleets(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"fleets": s.cfg.FleetList()})
 }
 
 func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {

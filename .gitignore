@@ -9,8 +9,15 @@
 .anvil/
 **/.anvil/
 
+# Local joint-debug stack (scripts/dev_stack.py)
+.dev/
+
 # Go
 source/vendor/
+
+# Python
+**/__pycache__/
+*.py[cod]
 
 # OS / IDE noise
 .DS_Store

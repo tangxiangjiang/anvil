@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'auth/auth_controller.dart';
+import 'theme.dart';
 import 'ui/auth_gate.dart';
 
 class AnvilApp extends StatelessWidget {
@@ -12,13 +13,7 @@ class AnvilApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Anvil',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF1B4D3E),
-          brightness: Brightness.light,
-        ),
-        useMaterial3: true,
-      ),
+      theme: anvilTheme(),
       home: AuthGate(auth: auth),
     );
   }

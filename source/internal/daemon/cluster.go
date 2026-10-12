@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
 	"sync"
 	"time"
 )
@@ -69,10 +70,14 @@ func (e *ClusterEdge) session(ctx context.Context, url string) error {
 
 	token := e.cfg.ClusterToken()
 	nodeID := e.cfg.Cluster.NodeIDOr(e.cfg.NodeID)
+	hostname, _ := os.Hostname()
 	join, _ := MarshalBody(ClusterJoinBody{
-		NodeID:     nodeID,
-		Token:      token,
-		MaxWorkers: e.cfg.MaxWorkers,
+		NodeID:      nodeID,
+		Token:       token,
+		MaxWorkers:  e.server.Slots().Max(),
+		Hostname:    hostname,
+		Name:        e.cfg.Name,
+		Description: e.cfg.Description,
 	})
 	if err := e.write(conn, Envelope{Kind: KindClusterJoin, Body: join}); err != nil {
 		return err
@@ -89,7 +94,7 @@ func (e *ClusterEdge) session(ctx context.Context, url string) error {
 	e.server.ApplyClusterLLM(okBody.LLM)
 
 	sendHB := func() error {
-		snap := e.server.Slots().Snapshot()
+		snap := e.server.WorkerSnapshot()
 		hb, _ := MarshalBody(ClusterHeartbeatBody{
 			NodeID:       nodeID,
 			Idle:         snap.Idle,
@@ -98,6 +103,10 @@ func (e *ClusterEdge) session(ctx context.Context, url string) error {
 			Accepting:    e.server.Accepting(),
 			Workers:      snap.Workers,
 			Capabilities: e.cfg.PluginCapabilityLabels(),
+			Hostname:     hostname,
+			Name:         e.cfg.Name,
+			Description:  e.cfg.Description,
+			SandboxDir:   e.cfg.SandboxDir,
 		})
 		return e.write(conn, Envelope{Kind: KindClusterHeartbeat, Body: hb})
 	}
@@ -131,6 +140,73 @@ func (e *ClusterEdge) session(ctx context.Context, url string) error {
 				if err := e.server.ApplyClusterControl(&ctl); err != nil {
 					e.log.Printf("cluster.control: %v", err)
 				}
+			case KindClusterWorkerAdd:
+				var req ClusterWorkerAddBody
+				_ = DecodeBody(msg, &req)
+				ws, err := e.server.AddProjectWorker(req.WorkerID, req.Name, req.Description, req.ProjectPath, req.GitURL)
+				res := ClusterWorkerResultBody{Request: "add", Worker: ws}
+				if err != nil {
+					res.Error = err.Error()
+				} else {
+					res.OK = true
+				}
+				body, _ := MarshalBody(res)
+				_ = e.write(conn, Envelope{Kind: KindClusterWorkerResult, ID: msg.ID, Body: body})
+			case KindClusterWorkerRemove:
+				var req ClusterWorkerRemoveBody
+				_ = DecodeBody(msg, &req)
+				err := e.server.RemoveProjectWorker(req.WorkerID)
+				res := ClusterWorkerResultBody{Request: "remove"}
+				if err != nil {
+					res.Error = err.Error()
+				} else {
+					res.OK = true
+					res.Worker = WorkerState{ID: req.WorkerID}
+				}
+				body, _ := MarshalBody(res)
+				_ = e.write(conn, Envelope{Kind: KindClusterWorkerResult, ID: msg.ID, Body: body})
+			case KindClusterWorkerStart:
+				var req ClusterWorkerControlBody
+				_ = DecodeBody(msg, &req)
+				ws, err := e.server.StartProjectWorker(req.WorkerID)
+				res := ClusterWorkerResultBody{Request: "start", Worker: ws}
+				if err != nil {
+					res.Error = err.Error()
+				} else {
+					res.OK = true
+				}
+				body, _ := MarshalBody(res)
+				_ = e.write(conn, Envelope{Kind: KindClusterWorkerResult, ID: msg.ID, Body: body})
+			case KindClusterWorkerShutdown:
+				var req ClusterWorkerControlBody
+				_ = DecodeBody(msg, &req)
+				ws, err := e.server.ShutdownProjectWorker(req.WorkerID)
+				res := ClusterWorkerResultBody{Request: "shutdown", Worker: ws}
+				if err != nil {
+					res.Error = err.Error()
+				} else {
+					res.OK = true
+				}
+				body, _ := MarshalBody(res)
+				_ = e.write(conn, Envelope{Kind: KindClusterWorkerResult, ID: msg.ID, Body: body})
+			case KindClusterSandboxList:
+				var req ClusterSandboxListBody
+				_ = DecodeBody(msg, &req)
+				res, err := e.server.ListSandbox(req.Path)
+				if err != nil {
+					res = ClusterSandboxResultBody{Request: "list", Error: err.Error()}
+				}
+				body, _ := MarshalBody(res)
+				_ = e.write(conn, Envelope{Kind: KindClusterSandboxResult, ID: msg.ID, Body: body})
+			case KindClusterSandboxMkdir:
+				var req ClusterSandboxMkdirBody
+				_ = DecodeBody(msg, &req)
+				res, err := e.server.MkdirSandbox(req.Path)
+				if err != nil {
+					res = ClusterSandboxResultBody{Request: "mkdir", Error: err.Error()}
+				}
+				body, _ := MarshalBody(res)
+				_ = e.write(conn, Envelope{Kind: KindClusterSandboxResult, ID: msg.ID, Body: body})
 			}
 		}
 	}()
@@ -155,13 +231,14 @@ func (e *ClusterEdge) forwardAssign(ctx context.Context, sched net.Conn, job Job
 		_ = e.write(sched, Envelope{Kind: KindClusterDone, Body: done})
 		return
 	}
-	cwd, err := e.cfg.ResolveRepo(job.RepoID)
+	cwd, err := e.server.ResolveJobRepo(job.RepoID)
 	if err != nil {
 		done, _ := MarshalBody(JobDoneBody{JobID: job.JobID, Status: "error", Error: err.Error()})
 		_ = e.write(sched, Envelope{Kind: KindClusterDone, Body: done})
 		return
 	}
-	resolved, err := e.cfg.ResolvePlugins(job.Plugins)
+	cfg := e.server.Config()
+	resolved, err := cfg.ResolvePlugins(job.Plugins)
 	if err != nil {
 		done, _ := MarshalBody(JobDoneBody{JobID: job.JobID, Status: "error", Error: err.Error()})
 		_ = e.write(sched, Envelope{Kind: KindClusterDone, Body: done})

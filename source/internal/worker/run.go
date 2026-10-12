@@ -37,13 +37,14 @@ type Event struct {
 
 // Done is the terminal job result.
 type Done struct {
-	JobID  string
-	Status string
-	Result string
-	Error  string
-	Code   string
-	Steps  int
-	Usage  *anvil.Usage
+	JobID   string
+	AgentID string
+	Status  string
+	Result  string
+	Error   string
+	Code    string
+	Steps   int
+	Usage   *anvil.Usage
 }
 
 // OptionsFromEnv builds Create options from ANVIL_* environment variables.
@@ -91,12 +92,13 @@ func RunJob(ctx context.Context, opts anvil.Options, job Job, emit func(Event)) 
 		emit(Event{Type: anvil.EventError, Text: err.Error(), IsError: true})
 		return Done{JobID: job.JobID, Status: string(anvil.StatusError), Error: err.Error()}
 	}
+	agentID := agent.AgentID()
 	defer func() { _ = agent.Close() }()
 
 	run, err := agent.Send(ctx, job.Prompt)
 	if err != nil {
 		emit(Event{Type: anvil.EventError, Text: err.Error(), IsError: true})
-		return Done{JobID: job.JobID, Status: string(anvil.StatusError), Error: err.Error()}
+		return Done{JobID: job.JobID, AgentID: agentID, Status: string(anvil.StatusError), Error: err.Error()}
 	}
 
 	streamDone := make(chan struct{})
@@ -130,15 +132,16 @@ func RunJob(ctx context.Context, opts anvil.Options, job Job, emit func(Event)) 
 		if err != nil {
 			msg = err.Error()
 		}
-		return Done{JobID: job.JobID, Status: string(anvil.StatusError), Error: msg}
+		return Done{JobID: job.JobID, AgentID: agentID, Status: string(anvil.StatusError), Error: msg}
 	}
 	return Done{
-		JobID:  job.JobID,
-		Status: string(res.Status),
-		Result: res.Result,
-		Error:  res.Err,
-		Code:   string(res.Code),
-		Steps:  res.Steps,
-		Usage:  res.Usage,
+		JobID:   job.JobID,
+		AgentID: agentID,
+		Status:  string(res.Status),
+		Result:  res.Result,
+		Error:   res.Err,
+		Code:    string(res.Code),
+		Steps:   res.Steps,
+		Usage:   res.Usage,
 	}
 }

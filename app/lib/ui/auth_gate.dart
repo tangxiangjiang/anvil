@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../auth/auth_controller.dart';
-import 'home_shell.dart';
+import 'fleet_page.dart';
 import 'login_page.dart';
 
 class AuthGate extends StatelessWidget {
@@ -22,7 +22,8 @@ class AuthGate extends StatelessWidget {
           case AuthStatus.signedOut:
             return LoginPage(auth: auth);
           case AuthStatus.signedIn:
-            return HomeShell(auth: auth);
+            // Cluster browser → node → workers → work platform (push routes).
+            return FleetPage(auth: auth);
         }
       },
     );

@@ -6,7 +6,7 @@ window.Features.nodes = {
       <h2>Nodes</h2>
       <div class="toolbar">
         <button type="button" id="n-refresh">Refresh</button>
-        <span class="muted" id="n-status">Loading…</span>
+        <span class="muted" id="n-status">Loading...</span>
       </div>
       <div class="card"><table class="table" id="n-table">
         <thead><tr>
