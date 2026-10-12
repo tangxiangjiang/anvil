@@ -89,13 +89,13 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
-            VALUE "CompanyName", "com.cloudagent" "\0"
-            VALUE "FileDescription", "cloud_agent_app" "\0"
+            VALUE "CompanyName", "Anvil" "\0"
+            VALUE "FileDescription", "Anvil" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "cloud_agent_app" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2026 com.cloudagent. All rights reserved." "\0"
-            VALUE "OriginalFilename", "cloud_agent_app.exe" "\0"
-            VALUE "ProductName", "cloud_agent_app" "\0"
+            VALUE "InternalName", "Anvil" "\0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 Anvil. All rights reserved." "\0"
+            VALUE "OriginalFilename", "Anvil.exe" "\0"
+            VALUE "ProductName", "Anvil" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END
