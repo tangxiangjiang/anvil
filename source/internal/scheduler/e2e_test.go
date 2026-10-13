@@ -169,6 +169,69 @@ func TestE2EConfigureJoinJobModels(t *testing.T) {
 	}
 
 	_ = os.WriteFile(filepath.Join(dir, "ok"), []byte("1"), 0o644)
+
+	// Wait for agentd heartbeat to restore idle after the first job.
+	deadline = time.Now().Add(3 * time.Second)
+	for {
+		nodes := getJSON(t, appAddr, "/v1/nodes")
+		list, _ := nodes["nodes"].([]any)
+		idleOK := false
+		for _, raw := range list {
+			m, _ := raw.(map[string]any)
+			if m == nil {
+				continue
+			}
+			switch v := m["idle"].(type) {
+			case float64:
+				idleOK = v > 0
+			case int:
+				idleOK = v > 0
+			}
+			if idleOK {
+				break
+			}
+		}
+		if idleOK {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("node idle not restored before stream job: %+v", nodes)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// Streaming SSE path: stub emits assistant then done.
+	streamBody := map[string]any{
+		"repo_id": "demo", "prompt": "stream-me", "force_stub": true, "stream": true,
+	}
+	rawStream, _ := json.Marshal(streamBody)
+	sreq, _ := http.NewRequest(http.MethodPost, "http://"+appAddr+"/v1/jobs", bytes.NewReader(rawStream))
+	sreq.Header.Set("Authorization", "Bearer sched-secret")
+	sreq.Header.Set("Content-Type", "application/json")
+	sreq.Header.Set("Accept", "text/event-stream")
+	sres, err := http.DefaultClient.Do(sreq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sres.Body.Close()
+	if sres.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(sres.Body)
+		t.Fatalf("stream jobs status=%d body=%s", sres.StatusCode, b)
+	}
+	sse, err := io.ReadAll(sres.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(sse)
+	if !bytes.Contains(sse, []byte("event: job.event")) {
+		t.Fatalf("missing job.event in SSE:\n%s", text)
+	}
+	if !bytes.Contains(sse, []byte("event: job.done")) {
+		t.Fatalf("missing job.done in SSE:\n%s", text)
+	}
+	if !bytes.Contains(sse, []byte("stub:stream-me")) {
+		t.Fatalf("missing stub assistant text in SSE:\n%s", text)
+	}
 }
 
 func freeTCP(t *testing.T) string {

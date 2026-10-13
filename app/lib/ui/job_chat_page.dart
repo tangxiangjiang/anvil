@@ -15,11 +15,33 @@ class _Turn {
     this.done,
     this.error,
     this.pending = false,
+    this.streamText = '',
+    this.statusLine,
   });
   final String prompt;
   final JobDone? done;
   final String? error;
   final bool pending;
+  final String streamText;
+  final String? statusLine;
+
+  _Turn copyWith({
+    JobDone? done,
+    String? error,
+    bool? pending,
+    String? streamText,
+    String? statusLine,
+    bool clearStatus = false,
+  }) {
+    return _Turn(
+      prompt: prompt,
+      done: done ?? this.done,
+      error: error ?? this.error,
+      pending: pending ?? this.pending,
+      streamText: streamText ?? this.streamText,
+      statusLine: clearStatus ? null : (statusLine ?? this.statusLine),
+    );
+  }
 }
 
 class JobChatPage extends StatefulWidget {
@@ -501,16 +523,27 @@ class JobChatPageState extends State<JobChatPage> {
         ? _activeAgentId
         : (_resume.text.trim().isEmpty ? null : _resume.text.trim());
     try {
-      final done = await _api.submitJob(
+      final done = await _api.submitJobStream(
         repoId: repo,
         prompt: prompt,
         model: model,
         provider: _selectedProvider,
         resumeId: resume,
+        onEvent: (ev) {
+          if (!mounted || idx >= _turns.length) return;
+          _applyStreamEvent(idx, ev);
+        },
       );
       if (!mounted) return;
+      final streamed = _turns[idx].streamText;
       setState(() {
-        _turns[idx] = _Turn(prompt: prompt, done: done);
+        _turns[idx] = _Turn(
+          prompt: prompt,
+          done: done,
+          streamText: streamed.isNotEmpty
+              ? streamed
+              : (done.result ?? ''),
+        );
         _busy = false;
       });
       _notifyToolbar();
@@ -519,13 +552,60 @@ class JobChatPageState extends State<JobChatPage> {
     } catch (e) {
       if (!mounted) return;
       final err = e.toString();
+      final streamed = idx < _turns.length ? _turns[idx].streamText : '';
       setState(() {
-        _turns[idx] = _Turn(prompt: prompt, error: err);
+        _turns[idx] = _Turn(
+          prompt: prompt,
+          error: err,
+          streamText: streamed,
+        );
         _busy = false;
       });
       _notifyToolbar();
       await _persistTurn(prompt: prompt, error: err);
       _scrollToEnd();
+    }
+  }
+
+  void _applyStreamEvent(int idx, JobEvent ev) {
+    if (idx < 0 || idx >= _turns.length) return;
+    switch (ev.type) {
+      case 'assistant':
+        final delta = ev.text ?? '';
+        if (delta.isEmpty) return;
+        setState(() {
+          final cur = _turns[idx];
+          _turns[idx] = cur.copyWith(
+            streamText: cur.streamText + delta,
+            clearStatus: true,
+          );
+        });
+        _scrollToEnd();
+      case 'tool_call':
+        final name = (ev.name ?? 'tool').trim();
+        setState(() {
+          _turns[idx] = _turns[idx].copyWith(statusLine: 'Running $name…');
+        });
+      case 'tool_result':
+        final name = (ev.name ?? 'tool').trim();
+        setState(() {
+          _turns[idx] = _turns[idx].copyWith(
+            statusLine: ev.isError ? '$name failed' : 'Finished $name',
+          );
+        });
+      case 'progress':
+        final step = ev.step;
+        if (step == null) return;
+        final max = ev.maxSteps;
+        setState(() {
+          _turns[idx] = _turns[idx].copyWith(
+            statusLine: max != null && max > 0
+                ? 'Thinking · step $step/$max'
+                : 'Thinking · step $step',
+          );
+        });
+      default:
+        break;
     }
   }
 
@@ -982,39 +1062,147 @@ class JobChatPageState extends State<JobChatPage> {
                 ),
               ),
               const SizedBox(height: 8),
-              if (t.pending)
-                const Align(
-                  alignment: Alignment.centerLeft,
-                  child: Padding(
-                    padding: EdgeInsets.all(8),
-                    child: CircularProgressIndicator(),
-                  ),
-                )
-              else if (t.error != null)
-                Text(
-                  t.error!,
-                  style: const TextStyle(color: AnvilColors.danger),
-                )
-              else if (t.done != null) ...[
-                Text(
-                  'status: ${t.done!.status}  job: ${t.done!.jobId}'
-                  '${t.done!.steps != null ? '  steps: ${t.done!.steps}' : ''}',
-                  style: const TextStyle(
-                    color: AnvilColors.muted,
-                    fontSize: 12,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                SelectableText(
-                  t.done!.error?.isNotEmpty == true
-                      ? t.done!.error!
-                      : (t.done!.result ?? '(no result)'),
-                ),
-              ],
+              Align(
+                alignment: Alignment.centerLeft,
+                child: _assistantBubble(t),
+              ),
             ],
           ),
         );
       },
+    );
+  }
+
+  Widget _assistantBubble(_Turn t) {
+    final live = t.streamText;
+    final finalText = t.done?.error?.isNotEmpty == true
+        ? t.done!.error!
+        : (t.done?.result ?? '');
+    final body = live.isNotEmpty ? live : finalText;
+    final err = t.error;
+
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 720),
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      decoration: BoxDecoration(
+        color: AnvilColors.panel,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AnvilColors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (t.statusLine != null && t.statusLine!.isNotEmpty) ...[
+            Row(
+              children: [
+                SizedBox(
+                  width: 12,
+                  height: 12,
+                  child: t.pending
+                      ? const CircularProgressIndicator(strokeWidth: 1.5)
+                      : const Icon(
+                          Icons.check_rounded,
+                          size: 12,
+                          color: AnvilColors.muted,
+                        ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    t.statusLine!,
+                    style: const TextStyle(
+                      color: AnvilColors.muted,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            if (body.isNotEmpty || err != null) const SizedBox(height: 8),
+          ],
+          if (err != null)
+            Text(err, style: const TextStyle(color: AnvilColors.danger))
+          else if (body.isEmpty && t.pending)
+            const Text(
+              'Thinking…',
+              style: TextStyle(color: AnvilColors.muted, fontSize: 13),
+            )
+          else if (body.isNotEmpty)
+            SelectableText.rich(
+              TextSpan(
+                children: [
+                  TextSpan(
+                    text: body,
+                    style: const TextStyle(
+                      color: AnvilColors.text,
+                      height: 1.45,
+                      fontSize: 14.5,
+                    ),
+                  ),
+                  if (t.pending)
+                    WidgetSpan(
+                      alignment: PlaceholderAlignment.middle,
+                      child: Padding(
+                        padding: const EdgeInsets.only(left: 2),
+                        child: _BlinkCaret(),
+                      ),
+                    ),
+                ],
+              ),
+            )
+          else
+            const Text(
+              '(no result)',
+              style: TextStyle(color: AnvilColors.muted),
+            ),
+          if (t.done != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              'status: ${t.done!.status}  job: ${t.done!.jobId}'
+              '${t.done!.steps != null ? '  steps: ${t.done!.steps}' : ''}',
+              style: const TextStyle(
+                color: AnvilColors.muted,
+                fontSize: 11,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _BlinkCaret extends StatefulWidget {
+  @override
+  State<_BlinkCaret> createState() => _BlinkCaretState();
+}
+
+class _BlinkCaretState extends State<_BlinkCaret>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 530),
+  )..repeat(reverse: true);
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FadeTransition(
+      opacity: _c,
+      child: Container(
+        width: 7,
+        height: 16,
+        margin: const EdgeInsets.only(bottom: 1),
+        decoration: BoxDecoration(
+          color: AnvilColors.accent,
+          borderRadius: BorderRadius.circular(1),
+        ),
+      ),
     );
   }
 }

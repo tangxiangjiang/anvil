@@ -27,6 +27,7 @@ const (
 	KindClusterJoinOK    = "cluster.join_ok"
 	KindClusterHeartbeat = "cluster.heartbeat"
 	KindClusterAssign    = "cluster.assign"
+	KindClusterEvent     = "cluster.event"
 	KindClusterDone      = "cluster.done"
 	KindClusterConfig       = "cluster.config"
 	KindClusterControl      = "cluster.control"

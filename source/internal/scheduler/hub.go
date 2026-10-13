@@ -76,9 +76,10 @@ type Hub struct {
 	nodes   map[string]*nodeConn
 	rr      int
 
-	waitMu  sync.Mutex
-	waiters map[string]chan daemon.JobDoneBody
-	jobNode map[string]string // jobID -> nodeID
+	waitMu     sync.Mutex
+	waiters    map[string]chan daemon.JobDoneBody
+	eventHooks map[string]func(daemon.JobEventBody)
+	jobNode    map[string]string // jobID -> nodeID
 
 	workerWaitMu sync.Mutex
 	workerWait   map[string]chan daemon.ClusterWorkerResultBody // req id -> result
@@ -108,6 +109,7 @@ func NewHub(cfg Config, logger *log.Logger) *Hub {
 		llm:     cfg.BootstrapLLM(),
 		nodes:   make(map[string]*nodeConn),
 		waiters:    make(map[string]chan daemon.JobDoneBody),
+		eventHooks: make(map[string]func(daemon.JobEventBody)),
 		jobNode:    make(map[string]string),
 		usageN:     make(map[string]UsageTotals),
 		workerWait:  make(map[string]chan daemon.ClusterWorkerResultBody),
@@ -543,11 +545,21 @@ func (h *Hub) pickNodeID(prefer string) (*nodeConn, error) {
 	return nil, fmt.Errorf("no idle accepting agentd workers")
 }
 
+func (h *Hub) deliverEvent(ev daemon.JobEventBody) {
+	h.waitMu.Lock()
+	hook := h.eventHooks[ev.JobID]
+	h.waitMu.Unlock()
+	if hook != nil {
+		hook(ev)
+	}
+}
+
 func (h *Hub) deliverDone(done daemon.JobDoneBody) {
 	h.waitMu.Lock()
 	ch := h.waiters[done.JobID]
 	nodeID := h.jobNode[done.JobID]
 	delete(h.jobNode, done.JobID)
+	delete(h.eventHooks, done.JobID)
 	h.waitMu.Unlock()
 	if done.Usage != nil {
 		h.recordUsage(nodeID, done.Usage)
@@ -582,7 +594,8 @@ func (h *Hub) recordUsage(nodeID string, u *daemon.TokenUsage) {
 }
 
 // AssignJobTo runs a job on preferNode (empty = round-robin idle).
-func (h *Hub) AssignJobTo(ctx context.Context, job daemon.JobAssignBody, preferNode string) (daemon.JobDoneBody, error) {
+// onEvent, if non-nil, receives live JobEventBody frames (assistant deltas, tools, …).
+func (h *Hub) AssignJobTo(ctx context.Context, job daemon.JobAssignBody, preferNode string, onEvent ...func(daemon.JobEventBody)) (daemon.JobDoneBody, error) {
 	if job.JobID == "" {
 		return daemon.JobDoneBody{}, fmt.Errorf("job_id is required")
 	}
@@ -591,14 +604,22 @@ func (h *Hub) AssignJobTo(ctx context.Context, job daemon.JobAssignBody, preferN
 		return daemon.JobDoneBody{}, err
 	}
 	ch := make(chan daemon.JobDoneBody, 1)
+	var hook func(daemon.JobEventBody)
+	if len(onEvent) > 0 {
+		hook = onEvent[0]
+	}
 	h.waitMu.Lock()
 	h.waiters[job.JobID] = ch
 	h.jobNode[job.JobID] = n.id
+	if hook != nil {
+		h.eventHooks[job.JobID] = hook
+	}
 	h.waitMu.Unlock()
 	defer func() {
 		h.waitMu.Lock()
 		delete(h.waiters, job.JobID)
 		delete(h.jobNode, job.JobID)
+		delete(h.eventHooks, job.JobID)
 		h.waitMu.Unlock()
 	}()
 

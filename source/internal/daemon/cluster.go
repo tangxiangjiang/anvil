@@ -257,7 +257,14 @@ func (e *ClusterEdge) forwardAssign(ctx context.Context, sched net.Conn, job Job
 	defer e.server.Slots().Release(job.JobID)
 	defer cancel()
 
-	doneBody := e.server.runner.Run(jobCtx, job, cwd, func(ev JobEventBody) { _ = ev })
+	doneBody := e.server.runner.Run(jobCtx, job, cwd, func(ev JobEventBody) {
+		ev.JobID = job.JobID
+		body, err := MarshalBody(ev)
+		if err != nil {
+			return
+		}
+		_ = e.write(sched, Envelope{Kind: KindClusterEvent, Body: body})
+	})
 	body, _ := MarshalBody(doneBody)
 	_ = e.write(sched, Envelope{Kind: KindClusterDone, Body: body})
 }

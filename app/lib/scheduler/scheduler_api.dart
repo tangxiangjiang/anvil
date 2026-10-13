@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
@@ -41,6 +42,42 @@ class JobDone {
       error: j['error'] as String?,
       code: j['code'] as String?,
       steps: j['steps'] as int?,
+    );
+  }
+}
+
+/// One SSE `job.event` frame from the scheduler.
+class JobEvent {
+  const JobEvent({
+    required this.jobId,
+    required this.type,
+    this.text,
+    this.name,
+    this.content,
+    this.isError = false,
+    this.step,
+    this.maxSteps,
+  });
+
+  final String jobId;
+  final String type; // assistant | tool_call | tool_result | progress | …
+  final String? text;
+  final String? name;
+  final String? content;
+  final bool isError;
+  final int? step;
+  final int? maxSteps;
+
+  factory JobEvent.fromJson(Map<String, dynamic> j) {
+    return JobEvent(
+      jobId: (j['job_id'] as String?) ?? '',
+      type: (j['type'] as String?) ?? '',
+      text: j['text'] as String?,
+      name: j['name'] as String?,
+      content: j['content'] as String?,
+      isError: j['is_error'] == true,
+      step: j['step'] as int?,
+      maxSteps: j['max_steps'] as int?,
     );
   }
 }
@@ -369,17 +406,14 @@ class SchedulerApi {
     String? resumeId,
     bool forceStub = false,
   }) async {
-    final body = <String, dynamic>{
-      'repo_id': repoId.trim(),
-      'prompt': prompt,
-      // Omit model/provider to use scheduler selection (gateway catalog default).
-      if (model != null && model.trim().isNotEmpty) 'model': model.trim(),
-      if (provider != null && provider.trim().isNotEmpty)
-        'provider': provider.trim(),
-      if (resumeId != null && resumeId.trim().isNotEmpty)
-        'resume_id': resumeId.trim(),
-      if (forceStub) 'force_stub': true,
-    };
+    final body = _jobBody(
+      repoId: repoId,
+      prompt: prompt,
+      model: model,
+      provider: provider,
+      resumeId: resumeId,
+      forceStub: forceStub,
+    );
     final res = await _post(
       Uri.parse('$_base/v1/jobs'),
       headers: _headers,
@@ -388,6 +422,136 @@ class SchedulerApi {
     _check(res, 'Job');
     final map = jsonDecode(res.body) as Map<String, dynamic>;
     return JobDone.fromJson(map);
+  }
+
+  /// Streaming submit (SSE). Calls [onEvent] for each `job.event`, returns `job.done`.
+  Future<JobDone> submitJobStream({
+    required String repoId,
+    required String prompt,
+    String? model,
+    String? provider,
+    String? resumeId,
+    bool forceStub = false,
+    void Function(JobEvent event)? onEvent,
+    http.Client? client,
+  }) async {
+    final body = _jobBody(
+      repoId: repoId,
+      prompt: prompt,
+      model: model,
+      provider: provider,
+      resumeId: resumeId,
+      forceStub: forceStub,
+      stream: true,
+    );
+    final req = http.Request('POST', Uri.parse('$_base/v1/jobs'));
+    req.headers.addAll({
+      ..._headers,
+      'Accept': 'text/event-stream',
+    });
+    req.body = jsonEncode(body);
+
+    final owned = client == null;
+    final c = client ?? http.Client();
+    try {
+      final streamed = await c.send(req);
+      if (streamed.statusCode == 401) {
+        throw SchedulerException('Unauthorized', statusCode: 401);
+      }
+      if (streamed.statusCode < 200 || streamed.statusCode >= 300) {
+        final errBody = await streamed.stream.bytesToString();
+        final msg = errBody.trim().isEmpty
+            ? 'Job stream failed (${streamed.statusCode})'
+            : errBody.trim();
+        throw SchedulerException(msg, statusCode: streamed.statusCode);
+      }
+
+      JobDone? done;
+      String? streamError;
+      await for (final frame in _parseSse(streamed.stream)) {
+        switch (frame.event) {
+          case 'job.event':
+            final map = jsonDecode(frame.data) as Map<String, dynamic>;
+            onEvent?.call(JobEvent.fromJson(map));
+          case 'job.done':
+            final map = jsonDecode(frame.data) as Map<String, dynamic>;
+            done = JobDone.fromJson(map);
+          case 'error':
+            final map = jsonDecode(frame.data) as Map<String, dynamic>;
+            streamError = (map['error'] as String?) ?? 'job stream error';
+        }
+      }
+      if (streamError != null) {
+        throw SchedulerException(streamError);
+      }
+      if (done == null) {
+        throw SchedulerException('Job stream ended without job.done');
+      }
+      return done;
+    } finally {
+      if (owned) c.close();
+    }
+  }
+
+  Map<String, dynamic> _jobBody({
+    required String repoId,
+    required String prompt,
+    String? model,
+    String? provider,
+    String? resumeId,
+    bool forceStub = false,
+    bool stream = false,
+  }) {
+    return <String, dynamic>{
+      'repo_id': repoId.trim(),
+      'prompt': prompt,
+      if (model != null && model.trim().isNotEmpty) 'model': model.trim(),
+      if (provider != null && provider.trim().isNotEmpty)
+        'provider': provider.trim(),
+      if (resumeId != null && resumeId.trim().isNotEmpty)
+        'resume_id': resumeId.trim(),
+      if (forceStub) 'force_stub': true,
+      if (stream) 'stream': true,
+    };
+  }
+
+  Stream<({String event, String data})> _parseSse(
+    Stream<List<int>> byteStream,
+  ) async* {
+    var buf = '';
+    String? event;
+    final dataLines = <String>[];
+    await for (final chunk in byteStream.transform(utf8.decoder)) {
+      buf += chunk;
+      while (true) {
+        final nl = buf.indexOf('\n');
+        if (nl < 0) break;
+        var line = buf.substring(0, nl);
+        buf = buf.substring(nl + 1);
+        if (line.endsWith('\r')) {
+          line = line.substring(0, line.length - 1);
+        }
+        if (line.isEmpty) {
+          if (event != null && dataLines.isNotEmpty) {
+            yield (event: event, data: dataLines.join('\n'));
+          }
+          event = null;
+          dataLines.clear();
+          continue;
+        }
+        if (line.startsWith(':')) continue;
+        if (line.startsWith('event:')) {
+          event = line.substring(6).trim();
+        } else if (line.startsWith('data:')) {
+          var v = line.substring(5);
+          if (v.startsWith(' ')) v = v.substring(1);
+          dataLines.add(v);
+        }
+      }
+    }
+    if (event != null && dataLines.isNotEmpty) {
+      yield (event: event, data: dataLines.join('\n'));
+    }
   }
 
   void _check(http.Response res, String label) {

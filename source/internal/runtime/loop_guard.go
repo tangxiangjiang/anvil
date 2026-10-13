@@ -114,6 +114,15 @@ func (g *loopGuard) detectCycle() string {
 	}
 	window := g.nameSeq[len(g.nameSeq)-need:]
 	pattern := window[:g.cycleLen]
+	// Ping-pong only: ignore degenerate [A A]… (same tool reused for different args;
+	// identical-call / stall fingerprints already cover true no-progress).
+	distinct := map[string]struct{}{}
+	for _, n := range pattern {
+		distinct[n] = struct{}{}
+	}
+	if len(distinct) < 2 {
+		return ""
+	}
 	for r := 1; r < g.cycleRepeats; r++ {
 		off := r * g.cycleLen
 		for i := 0; i < g.cycleLen; i++ {

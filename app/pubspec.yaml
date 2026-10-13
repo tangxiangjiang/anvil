@@ -1,7 +1,7 @@
 name: anvil_app
 description: "Anvil mobile client: web login, scheduler jobs and models."
 publish_to: "none"
-version: 0.26.0+1
+version: 0.31.0+1
 
 environment:
   sdk: ^3.9.0

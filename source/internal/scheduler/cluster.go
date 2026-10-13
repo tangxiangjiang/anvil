@@ -93,6 +93,10 @@ func (h *Hub) handleClusterConn(ctx context.Context, conn net.Conn) {
 				hb.NodeID = n.id
 			}
 			h.updateHeartbeat(n.id, hb)
+		case daemon.KindClusterEvent:
+			var ev daemon.JobEventBody
+			_ = daemon.DecodeBody(msg, &ev)
+			h.deliverEvent(ev)
 		case daemon.KindClusterDone:
 			var done daemon.JobDoneBody
 			_ = daemon.DecodeBody(msg, &done)

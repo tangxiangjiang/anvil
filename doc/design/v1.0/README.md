@@ -1,8 +1,8 @@
 # Design v1.0 (cutoff)
 
-Anvil **local-only** Go Agent SDK design through product milestone **0.30** (loop guard). Read chapters in order before implementing the matching roadmap phase.
+Anvil **local-only** Go Agent SDK design through product milestone **0.31** (job event stream). Read chapters in order before implementing the matching roadmap phase.
 
-This tree is the **design cutoff** for 0.1–0.30 delivery. Later product lines get a new `doc/design/v…/` directory.
+This tree is the **design cutoff** for 0.1–0.31 delivery. Later product lines get a new `doc/design/v…/` directory.
 
 ## Read order
 
@@ -39,6 +39,7 @@ This tree is the **design cutoff** for 0.1–0.30 delivery. Later product lines 
 | 28 | [28-clusters-workers.md](28-clusters-workers.md) | Web Clusters / Nodes / Workers → **0.28** |
 | 29 | [29-sandbox-workers.md](29-sandbox-workers.md) | Sandbox workers + web FS browser → **0.29** |
 | 30 | [30-loop-guard.md](30-loop-guard.md) | Loop guard / unlimited steps → **0.30** |
+| 31 | [31-job-event-stream.md](31-job-event-stream.md) | Job SSE stream for app chat → **0.31** |
 
 Parent index: [`doc/design/README.md`](../README.md).
 
@@ -46,4 +47,4 @@ Parent index: [`doc/design/README.md`](../README.md).
 
 - Design describes **what** and **why** for this cutoff.
 - [`doc/roadmaps/v1.0/`](../../roadmaps/v1.0/) describes **when**.
-- Chapters 11–30 map to [m_0.11](../../roadmaps/v1.0/m_0.11_worker_daemon.md) … [m_0.30](../../roadmaps/v1.0/m_0.30_loop_guard.md).
+- Chapters 11–31 map to [m_0.11](../../roadmaps/v1.0/m_0.11_worker_daemon.md) … [m_0.31](../../roadmaps/v1.0/m_0.31_job_stream.md).

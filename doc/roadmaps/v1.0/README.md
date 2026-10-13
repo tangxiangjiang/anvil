@@ -1,6 +1,6 @@
 # Roadmaps v1.0 (cutoff)
 
-Versioned delivery for Anvil through product **0.30**. Design cutoff: [`doc/design/v1.0/`](../../design/v1.0/).
+Versioned delivery for Anvil through product **0.31**. Design cutoff: [`doc/design/v1.0/`](../../design/v1.0/).
 
 ## Version index
 
@@ -36,6 +36,7 @@ Versioned delivery for Anvil through product **0.30**. Design cutoff: [`doc/desi
 | 0.28 | Web Clusters / Nodes / Workers | done | [m_0.28_clusters_workers.md](m_0.28_clusters_workers.md) | [28](../../design/v1.0/28-clusters-workers.md) |
 | 0.29 | Sandbox workers + web FS browser | done | [m_0.29_sandbox_workers.md](m_0.29_sandbox_workers.md) | [29](../../design/v1.0/29-sandbox-workers.md) |
 | 0.30 | Loop guard (unlimited steps) | done | [m_0.30_loop_guard.md](m_0.30_loop_guard.md) | [30](../../design/v1.0/30-loop-guard.md) |
+| 0.31 | Job event stream (app chat) | done | [m_0.31_job_stream.md](m_0.31_job_stream.md) | [31](../../design/v1.0/31-job-event-stream.md) |
 
 ## Naming
 

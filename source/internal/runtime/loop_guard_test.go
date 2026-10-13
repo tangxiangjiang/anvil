@@ -5,6 +5,7 @@ package runtime
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/anvil-dev/anvil/internal/llm"
@@ -57,5 +58,21 @@ func TestLoopGuardCycle(t *testing.T) {
 	}
 	if last != loopWarn && last != loopStop {
 		t.Fatalf("want cycle warn/stop got %v %q", last, reason)
+	}
+}
+
+func TestLoopGuardSameToolNameNotCycle(t *testing.T) {
+	g := newLoopGuard()
+	// Six different read_file calls must not trip name-cycle ([A A]×3).
+	for i := 0; i < 6; i++ {
+		tc := llm.ToolCall{
+			Name: "read_file",
+			Args: json.RawMessage(fmt.Sprintf(`{"path":"f%d"}`, i)),
+		}
+		res := tools.Result{Content: fmt.Sprintf("body-%d", i)}
+		action, reason := g.Observe([]llm.ToolCall{tc}, []tools.Result{res})
+		if action != loopOK {
+			t.Fatalf("read_file batch %d: action=%v reason=%q", i, action, reason)
+		}
 	}
 }

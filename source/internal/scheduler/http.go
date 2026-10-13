@@ -360,6 +360,7 @@ type jobRequest struct {
 	Plugins   []string `json:"plugins"`
 	NodeID    string   `json:"node_id"`
 	ForceStub bool     `json:"force_stub"`
+	Stream    bool     `json:"stream"`
 }
 
 func (h *Hub) handleJobs(w http.ResponseWriter, r *http.Request) {
@@ -401,12 +402,90 @@ func (h *Hub) handleJobs(w http.ResponseWriter, r *http.Request) {
 			job.Provider = llm.Provider
 		}
 	}
+	wantStream := req.Stream || strings.Contains(r.Header.Get("Accept"), "text/event-stream")
+	if wantStream {
+		h.handleJobsSSE(w, r, job, req.NodeID)
+		return
+	}
 	done, err := h.AssignJobTo(r.Context(), job, req.NodeID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
 	writeJSON(w, http.StatusOK, done)
+}
+
+func (h *Hub) handleJobsSSE(w http.ResponseWriter, r *http.Request, job daemon.JobAssignBody, preferNode string) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	eventCh := make(chan daemon.JobEventBody, 128)
+	type outcome struct {
+		done daemon.JobDoneBody
+		err  error
+	}
+	outCh := make(chan outcome, 1)
+	go func() {
+		done, err := h.AssignJobTo(r.Context(), job, preferNode, func(ev daemon.JobEventBody) {
+			select {
+			case eventCh <- ev:
+			case <-r.Context().Done():
+			}
+		})
+		outCh <- outcome{done: done, err: err}
+	}()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case ev := <-eventCh:
+			if err := writeSSE(w, "job.event", ev); err != nil {
+				return
+			}
+			flusher.Flush()
+		case out := <-outCh:
+			// Drain remaining events before terminal frame.
+		drain:
+			for {
+				select {
+				case ev := <-eventCh:
+					_ = writeSSE(w, "job.event", ev)
+					flusher.Flush()
+				default:
+					break drain
+				}
+			}
+			if out.err != nil {
+				_ = writeSSE(w, "error", map[string]string{"error": out.err.Error()})
+				flusher.Flush()
+				return
+			}
+			_ = writeSSE(w, "job.done", out.done)
+			flusher.Flush()
+			return
+		}
+	}
+}
+
+func writeSSE(w http.ResponseWriter, event string, v any) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, b); err != nil {
+		return err
+	}
+	return nil
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
