@@ -124,7 +124,7 @@ func prepareProjectPath(absPath, gitURL string) (remote string, err error) {
 		return "", fmt.Errorf("project_path has content but is not a git repository")
 	}
 	if gitURL == "" {
-		return "", fmt.Errorf("empty project_path requires git_url")
+		return "", fmt.Errorf("empty project_path requires git_url or init_git")
 	}
 	cmd := exec.Command("git", "clone", "--", gitURL, absPath)
 	out, err := cmd.CombinedOutput()
@@ -134,15 +134,80 @@ func prepareProjectPath(absPath, gitURL string) (remote string, err error) {
 	return gitURL, nil
 }
 
+func gitInitWithReadme(absPath, readme string) error {
+	if err := os.MkdirAll(absPath, 0o755); err != nil {
+		return err
+	}
+	cmd := exec.Command("git", "-C", absPath, "init")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git init: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	if strings.TrimSpace(readme) == "" {
+		readme = "# Project\n\nCreated by Anvil.\n"
+	}
+	if err := os.WriteFile(filepath.Join(absPath, "README.md"), []byte(readme), 0o644); err != nil {
+		return err
+	}
+	_ = exec.Command("git", "-C", absPath, "add", "README.md").Run()
+	_ = exec.Command("git", "-C", absPath, "commit", "-m", "Initial commit").Run()
+	return nil
+}
+
 // AddProjectWorker prepares the path under sandbox, registers a repo, and opens a capacity slot.
-func (s *Server) AddProjectWorker(workerID, name, description, projectPath, gitURL string) (WorkerState, error) {
+// When worktreeBase is set, creates a git worktree at projectPath (-b branch) from that base checkout.
+func (s *Server) AddProjectWorker(workerID, name, description, projectPath, gitURL string, initGit bool, readme, worktreeBase, branch string) (WorkerState, error) {
 	abs, rel, err := s.resolveInSandbox(projectPath)
 	if err != nil {
 		return WorkerState{}, err
 	}
-	remote, err := prepareProjectPath(abs, gitURL)
-	if err != nil {
-		return WorkerState{}, err
+	var remote string
+	worktreeBase = strings.TrimSpace(worktreeBase)
+	branch = strings.TrimSpace(branch)
+	if worktreeBase != "" {
+		baseAbs, _, err := s.resolveInSandbox(worktreeBase)
+		if err != nil {
+			return WorkerState{}, err
+		}
+		if !isGitRepo(baseAbs) {
+			return WorkerState{}, fmt.Errorf("worktree_base is not a git checkout")
+		}
+		if branch == "" {
+			return WorkerState{}, fmt.Errorf("branch required for worktree")
+		}
+		if _, err := os.Stat(abs); err == nil {
+			return WorkerState{}, fmt.Errorf("worktree path already exists: %s", rel)
+		} else if !os.IsNotExist(err) {
+			return WorkerState{}, err
+		}
+		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+			return WorkerState{}, err
+		}
+		cmd := exec.Command("git", "-C", baseAbs, "worktree", "add", "-b", branch, abs)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return WorkerState{}, fmt.Errorf("git worktree add: %w (%s)", err, strings.TrimSpace(string(out)))
+		}
+		remote, _ = gitRemoteOrigin(baseAbs)
+	} else if initGit && gitURL == "" {
+		st, statErr := os.Stat(abs)
+		if statErr != nil && !os.IsNotExist(statErr) {
+			return WorkerState{}, statErr
+		}
+		if statErr == nil && (!st.IsDir() || (dirNonEmpty(abs) && !isGitRepo(abs))) {
+			return WorkerState{}, fmt.Errorf("cannot init_git: path exists with non-git content")
+		}
+		if isGitRepo(abs) {
+			remote, _ = gitRemoteOrigin(abs)
+		} else {
+			if err := gitInitWithReadme(abs, readme); err != nil {
+				return WorkerState{}, err
+			}
+		}
+	} else {
+		remote, err = prepareProjectPath(abs, gitURL)
+		if err != nil {
+			return WorkerState{}, err
+		}
 	}
 	name = strings.TrimSpace(name)
 	description = strings.TrimSpace(description)

@@ -91,7 +91,7 @@ func (s *Server) restoreProjectWorkers() {
 		if _, ok := s.slots.Get(id); ok {
 			continue
 		}
-		ws, err := s.AddProjectWorker(id, w.Name, w.Description, rel, w.GitURL)
+		ws, err := s.AddProjectWorker(id, w.Name, w.Description, rel, w.GitURL, false, "", "", "")
 		if err != nil {
 			s.stateLog().Printf("workers restore %q (%s): %v", id, rel, err)
 			continue

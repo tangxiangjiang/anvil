@@ -42,6 +42,8 @@ type ClusterConfig struct {
 	NodeID       string `json:"node_id" yaml:"node_id"`
 	TokenEnv     string `json:"token_env" yaml:"token_env"` // default ANVIL_CLUSTER_TOKEN
 	HeartbeatSec int    `json:"heartbeat_sec" yaml:"heartbeat_sec"`
+	// WorkspaceToken admits this Dev Node into a Clusters Workspace (0.34+).
+	WorkspaceToken string `json:"workspace_token" yaml:"workspace_token"`
 }
 
 // LLMConfig holds defaults injected into embedded workers (0.23+).

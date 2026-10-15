@@ -32,7 +32,7 @@ func TestSetupWizardThenLogin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := web.New(cfg, store, nil, static, nil)
+	srv := web.New(cfg, store, nil, nil, static, nil)
 	h := srv.Handler()
 
 	res := httptest.NewRecorder()
@@ -86,7 +86,7 @@ func TestSetupBlockedFromPublicIP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := web.New(cfg, store, nil, static, nil).Handler()
+	h := web.New(cfg, store, nil, nil, static, nil).Handler()
 
 	res := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/setup/status", nil)
@@ -128,7 +128,7 @@ func TestAuthLoginMe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := web.New(cfg, store, nil, static, nil)
+	srv := web.New(cfg, store, nil, nil, static, nil)
 	h := srv.Handler()
 
 	body, _ := json.Marshal(map[string]string{"username": "admin", "password": "password1"})
@@ -214,7 +214,7 @@ func TestDeliveryAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := web.New(cfg, store, del, static, nil).Handler()
+	h := web.New(cfg, store, del, nil, static, nil).Handler()
 
 	body, _ := json.Marshal(map[string]string{"username": "admin", "password": "password1"})
 	res := httptest.NewRecorder()

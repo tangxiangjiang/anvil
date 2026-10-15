@@ -30,6 +30,8 @@
 
 本系统是一套以 **AI 为执行主体、人为审核与兜底** 的软件开发流水线工具。
 
+调度与协作域（Clusters）：**Scheduler → Workspace → Project → Workers**。Workspace 用 Token 收编多台 Dev Node；**Project** 是交付单元（需求→设计→路网→测试）；**Worker** 是某分支的工作副本，可并行多个。
+
 核心目的：
 
 > **给 AI 树立边界——什么能干、什么不能干、按什么规格干、什么必须人接、什么条件才算完成，全部固化在 Graph 里。**

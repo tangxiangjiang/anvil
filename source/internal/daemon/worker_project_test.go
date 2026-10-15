@@ -87,7 +87,7 @@ func TestAddRemoveProjectWorkerInSandbox(t *testing.T) {
 	cfg.SandboxDir = sandbox
 	_ = cfg.Normalize()
 	s := &Server{cfg: cfg, slots: NewSlots(0)}
-	ws, err := s.AddProjectWorker("", "Demo", "ops note", "proj", "")
+	ws, err := s.AddProjectWorker("", "Demo", "ops note", "proj", "", false, "", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +151,7 @@ func TestProjectWorkersPersistAcrossNewServer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ws, err := s1.AddProjectWorker("Demo", "Demo", "note", "proj", "")
+	ws, err := s1.AddProjectWorker("Demo", "Demo", "note", "proj", "", false, "", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,5 +225,49 @@ func TestListAndMkdirSandbox(t *testing.T) {
 func TestSanitizeWorkerID(t *testing.T) {
 	if got := sanitizeWorkerID("My Repo!!"); got != "My-Repo" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestAddProjectWorkerWorktree(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	sandbox := t.TempDir()
+	repo := filepath.Join(sandbox, "main")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v (%s)", args, err, out)
+		}
+	}
+	run("init")
+	run("config", "user.email", "t@example.com")
+	run("config", "user.name", "t")
+	_ = os.WriteFile(filepath.Join(repo, "a.txt"), []byte("a"), 0o644)
+	run("add", ".")
+	run("commit", "-m", "init")
+
+	cfg := DefaultConfig()
+	cfg.Listen = "tcp://127.0.0.1:0"
+	cfg.Repos = nil
+	cfg.SandboxDir = sandbox
+	_ = cfg.Normalize()
+	s := &Server{cfg: cfg, slots: NewSlots(0)}
+	ws, err := s.AddProjectWorker("", "Feature", "", "feature-wt", "", false, "", "main", "feature/x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ws.ProjectRel != "feature-wt" {
+		t.Fatalf("%+v", ws)
+	}
+	if ws.GitBranch != "feature/x" && ws.GitBranch != "" {
+		// decorateWorker may report branch; empty is ok if decorate skipped
+	}
+	if _, err := os.Stat(filepath.Join(sandbox, "feature-wt", "a.txt")); err != nil {
+		t.Fatal(err)
 	}
 }

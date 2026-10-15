@@ -153,12 +153,13 @@ type ErrorBody struct {
 
 // ClusterJoinBody is sent to a scheduler (p_0.11.4).
 type ClusterJoinBody struct {
-	NodeID      string `json:"node_id"`
-	Token       string `json:"token"`
-	MaxWorkers  int    `json:"max_workers"`
-	Hostname    string `json:"hostname,omitempty"`
-	Name        string `json:"name,omitempty"`
-	Description string `json:"description,omitempty"`
+	NodeID         string `json:"node_id"`
+	Token          string `json:"token"`
+	MaxWorkers     int    `json:"max_workers"`
+	Hostname       string `json:"hostname,omitempty"`
+	Name           string `json:"name,omitempty"`
+	Description    string `json:"description,omitempty"`
+	WorkspaceToken string `json:"workspace_token,omitempty"` // 0.34+ join a Workspace domain
 }
 
 // ClusterLLMBody is LLM defaults pushed by the scheduler (0.24+).
@@ -204,11 +205,15 @@ type ClusterHeartbeatBody struct {
 
 // ClusterWorkerAddBody creates a project-bound worker on agentd.
 type ClusterWorkerAddBody struct {
-	WorkerID    string `json:"worker_id,omitempty"`
-	Name        string `json:"name,omitempty"`
-	Description string `json:"description,omitempty"`
-	ProjectPath string `json:"project_path"` // absolute or relative to sandbox_dir
-	GitURL      string `json:"git_url,omitempty"`
+	WorkerID     string `json:"worker_id,omitempty"`
+	Name         string `json:"name,omitempty"`
+	Description  string `json:"description,omitempty"`
+	ProjectPath  string `json:"project_path"` // absolute or relative to sandbox_dir
+	GitURL       string `json:"git_url,omitempty"`
+	InitGit      bool   `json:"init_git,omitempty"` // empty dir → git init (+ optional README)
+	Readme       string `json:"readme,omitempty"`
+	WorktreeBase string `json:"worktree_base,omitempty"` // existing checkout; project_path = new worktree
+	Branch       string `json:"branch,omitempty"`        // new branch for worktree add -b
 }
 
 // ClusterWorkerRemoveBody removes a project worker (stopped or idle).

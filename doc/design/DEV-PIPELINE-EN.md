@@ -30,6 +30,8 @@
 
 This system is a **software development pipeline** where **AI does the executable work** and **humans review, decide, and catch what AI cannot**.
 
+Ops domain (Clusters): **Scheduler → Workspace → Project → Workers**. A Workspace Token admits Dev Nodes; **Project** is the delivery unit (req → design → roadmap → test); **Worker** is a branch checkout (many per Project in parallel).
+
 Core purpose:
 
 > **Draw hard boundaries for AI** — what it may do, what it must not do, under which specs it works, when a human must take over, and what “done” means — all encoded in the Graph.

@@ -1,6 +1,6 @@
 # Roadmaps v1.0 (cutoff)
 
-Versioned delivery for Anvil through product **0.33**. Design cutoff: [`doc/design/v1.0/`](../../design/v1.0/).
+Versioned delivery for Anvil through product **0.34**. Design cutoff: [`doc/design/v1.0/`](../../design/v1.0/).
 
 ## Version index
 
@@ -39,6 +39,7 @@ Versioned delivery for Anvil through product **0.33**. Design cutoff: [`doc/desi
 | 0.31 | Job event stream (app chat) | done | [m_0.31_job_stream.md](m_0.31_job_stream.md) | [31](../../design/v1.0/31-job-event-stream.md) |
 | 0.32 | Sandbox code review + VS Code Server | planned | [m_0.32_sandbox_code_review.md](m_0.32_sandbox_code_review.md) | [32](../../design/v1.0/32-sandbox-code-review.md) |
 | 0.33 | Delivery UI + schema | done | [m_0.33_delivery_ui.md](m_0.33_delivery_ui.md) | [33](../../design/v1.0/33-delivery-ui.md) |
+| 0.34 | Workspace domain (Clusters hierarchy) | done | [m_0.34_workspace_domain.md](m_0.34_workspace_domain.md) | [34](../../design/v1.0/34-workspace-domain.md) |
 
 ## Naming
 

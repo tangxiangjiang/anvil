@@ -1276,6 +1276,25 @@ FROM delivery_designs WHERE id=?`, id).Scan(
 	return d, nil
 }
 
+// DeleteDesign removes a design and its option cards.
+func (s *Store) DeleteDesign(id string) error {
+	if _, err := s.getDesign(id); err != nil {
+		return err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(`DELETE FROM delivery_design_options WHERE design_id=?`, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM delivery_designs WHERE id=?`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // ApproveDesign marks design approved and advances the bound milestone to awaiting_roadmap.
 func (s *Store) ApproveDesign(id string) (Design, error) {
 	d, err := s.getDesign(id)

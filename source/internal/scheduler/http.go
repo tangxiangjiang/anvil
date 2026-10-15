@@ -25,6 +25,7 @@ func (h *Hub) AppHandler() http.Handler {
 	mux.HandleFunc("/v1/llm/selection", h.withAuth(h.handleLLMSelection))
 	mux.HandleFunc("/v1/nodes", h.withAuth(h.handleNodes))
 	mux.HandleFunc("/v1/nodes/", h.withAuth(h.handleNodeRoutes))
+	mux.HandleFunc("/v1/workspaces", h.withAuth(h.handleWorkspaces))
 	mux.HandleFunc("/v1/models", h.withAuth(h.handleModels))
 	mux.HandleFunc("/v1/jobs", h.withAuth(h.handleJobs))
 	mux.HandleFunc("/v1/usage", h.withAuth(h.handleUsage))
@@ -97,6 +98,28 @@ func (h *Hub) handleHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "nodes": len(h.ListNodes())})
+}
+
+func (h *Hub) handleWorkspaces(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		ID    string `json:"id"`
+		Token string `json:"token"`
+		Name  string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+	if body.ID == "" || body.Token == "" {
+		http.Error(w, "id and token required", http.StatusBadRequest)
+		return
+	}
+	h.RegisterWorkspace(body.ID, body.Token, body.Name)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 type llmPublic struct {

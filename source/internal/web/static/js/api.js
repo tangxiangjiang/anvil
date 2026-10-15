@@ -90,6 +90,59 @@ window.api = {
         { path },
       );
     },
+    listWorkspaces(fleetId) {
+      return api.req("GET", "/api/v1/workspaces?fleet_id=" + encodeURIComponent(fleetId));
+    },
+    createWorkspace(body) {
+      return api.req("POST", "/api/v1/workspaces", body);
+    },
+    deleteWorkspace(id) {
+      return api.req("DELETE", "/api/v1/workspaces/" + encodeURIComponent(id));
+    },
+    workspaceGraph(id) {
+      return api.req("GET", "/api/v1/workspaces/" + encodeURIComponent(id) + "/graph");
+    },
+    listProjects(wsId) {
+      return api.req("GET", "/api/v1/workspaces/" + encodeURIComponent(wsId) + "/projects");
+    },
+    createProject(wsId, body) {
+      return api.req("POST", "/api/v1/workspaces/" + encodeURIComponent(wsId) + "/projects", body);
+    },
+    deleteProject(wsId, projId) {
+      return api.req(
+        "DELETE",
+        "/api/v1/workspaces/" + encodeURIComponent(wsId) + "/projects/" + encodeURIComponent(projId),
+      );
+    },
+    patchProject(wsId, projId, body) {
+      return api.req(
+        "PATCH",
+        "/api/v1/workspaces/" + encodeURIComponent(wsId) + "/projects/" + encodeURIComponent(projId),
+        body,
+      );
+    },
+    getProject(wsId, projId) {
+      return api.req(
+        "GET",
+        "/api/v1/workspaces/" + encodeURIComponent(wsId) + "/projects/" + encodeURIComponent(projId),
+      );
+    },
+    bindWorker(wsId, projId, body) {
+      return api.req(
+        "POST",
+        "/api/v1/workspaces/" + encodeURIComponent(wsId) + "/projects/" +
+          encodeURIComponent(projId) + "/bind-worker",
+        body,
+      );
+    },
+    unbindWorker(wsId, projId, workerId) {
+      return api.req(
+        "POST",
+        "/api/v1/workspaces/" + encodeURIComponent(wsId) + "/projects/" +
+          encodeURIComponent(projId) + "/unbind-worker",
+        { worker_id: workerId },
+      );
+    },
     usage() { return api.req("GET", "/api/v1/usage"); },
     delivery() { return api.req("GET", "/api/v1/delivery"); },
     deliveryReset() { return api.req("POST", "/api/v1/delivery/reset", {}); },
@@ -167,6 +220,9 @@ window.api = {
     },
     deliveryApproveDesign(id) {
       return api.req("POST", "/api/v1/delivery/designs/" + encodeURIComponent(id) + "/approve", {});
+    },
+    deliveryDeleteDesign(id) {
+      return api.req("DELETE", "/api/v1/delivery/designs/" + encodeURIComponent(id));
     },
   },
 };

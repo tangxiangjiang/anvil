@@ -56,11 +56,21 @@ func (h *Hub) handleClusterConn(ctx context.Context, conn net.Conn) {
 		return
 	}
 
+	wsID := ""
+	if join.WorkspaceToken != "" {
+		id, ok := h.ResolveWorkspaceToken(join.WorkspaceToken)
+		if !ok {
+			_ = daemon.WriteEnvelope(conn, daemon.Envelope{Kind: daemon.KindError, Body: mustBody(daemon.ErrorBody{Message: "unknown workspace_token"})})
+			return
+		}
+		wsID = id
+	}
 	n := &nodeConn{
 		id:          join.NodeID,
 		name:        join.Name,
 		description: join.Description,
 		hostname:    join.Hostname,
+		workspaceID: wsID,
 		max:         join.MaxWorkers,
 		idle:        join.MaxWorkers,
 		conn:        conn,
@@ -74,7 +84,7 @@ func (h *Hub) handleClusterConn(ctx context.Context, conn net.Conn) {
 	if err := daemon.WriteEnvelope(conn, daemon.Envelope{Kind: daemon.KindClusterJoinOK, Body: okBody}); err != nil {
 		return
 	}
-	h.log.Printf("cluster joined node=%s max_workers=%d", n.id, n.max)
+	h.log.Printf("cluster joined node=%s workspace=%s max_workers=%d", n.id, n.workspaceID, n.max)
 
 	for {
 		if ctx.Err() != nil {

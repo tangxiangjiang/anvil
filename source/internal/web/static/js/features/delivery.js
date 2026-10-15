@@ -237,16 +237,10 @@ window.Features.delivery = {
       route.section === "requirements" && route.engId && route.major == null;
     const engHome = workerHome ? this.findEng(route.engId) : null;
     const wHome = engHome ? this.findWorker(engHome.worker_id) : null;
-    const designsList = route.section === "designs" && !route.desId;
-    let headActions =
+    const headActions =
       isWorkspace || workerHome
         ? ""
         : `<button type="button" class="ghost" id="del-reset">Reset demo data</button>`;
-    if (designsList) {
-      headActions =
-        `<button type="button" id="des-new">New design</button>` +
-        (headActions ? " " + headActions : "");
-    }
     let metaTitle = meta.title;
     let metaSub = meta.sub;
     if (route.section === "roadmap" && route.roadmapTab === "gates") {
@@ -278,9 +272,6 @@ window.Features.delivery = {
       } catch (e) {
         alert(e.message || e);
       }
-    });
-    this.el.querySelector("#des-new")?.addEventListener("click", () => {
-      this.openCreateDesignModal();
     });
     this.el.querySelector("#del-req-add")?.addEventListener("click", () => {
       this.openNewMilestoneEntry();
@@ -1008,6 +999,16 @@ window.Features.delivery = {
       el.querySelector("#des-filter")?.addEventListener("change", (ev) => {
         this._desFilter = ev.target.value || "all";
         this.render();
+      });
+      el.querySelector("#des-new-card")?.addEventListener("click", () => {
+        this.openCreateDesignModal();
+      });
+      el.querySelectorAll("[data-des-delete]").forEach((btn) => {
+        btn.addEventListener("click", (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          this.openDeleteDesignModal(btn.getAttribute("data-des-delete"));
+        });
       });
       el.querySelectorAll("[data-des-open]").forEach((card) => {
         card.addEventListener("click", () => {
@@ -2955,6 +2956,38 @@ window.Features.delivery = {
     return out;
   },
 
+  openDeleteDesignModal(id) {
+    const d = (this.data.designs || []).find((x) => x.id === id);
+    if (!d) return;
+    const note =
+      d.status === "approved"
+        ? "This design is approved. Deleting removes options and ADR; the bound milestone is not changed."
+        : "Removes this design and its option cards.";
+    this.showUiModal(`
+      <div class="modal-card">
+        <h3 style="margin-top:0">Delete design?</h3>
+        <p><strong>${this.esc(d.title)}</strong>
+          · <code>${this.esc(`${d.major}.${d.minor}`)}</code>
+          ${this.badge(d.status)}</p>
+        <p class="muted">${this.esc(note)}</p>
+        <div class="toolbar" style="margin-top:1rem;justify-content:flex-end">
+          <button type="button" class="ghost" data-close-ui>Cancel</button>
+          <button type="button" class="danger" id="des-del-ok">Delete</button>
+        </div>
+      </div>`);
+    const modal = this.uiModal();
+    modal.querySelector("#des-del-ok").onclick = async () => {
+      try {
+        await api.v1.deliveryDeleteDesign(id);
+        this.closeUiModal();
+        await this.reload();
+        this.render();
+      } catch (e) {
+        alert(e.message || e);
+      }
+    };
+  },
+
   openCreateDesignModal() {
     const cands = this.designCandidateMilestones();
     if (!cands.length) {
@@ -3026,6 +3059,8 @@ window.Features.delivery = {
         const nOpts = (d.options || []).length;
         return `
       <div class="del-des-card" role="link" tabindex="0" data-des-open="${this.esc(d.id)}">
+        <button type="button" class="ghost del-des-card-x" data-des-delete="${this.esc(d.id)}"
+          title="Delete design">×</button>
         <div class="del-des-card-top">
           <strong class="del-des-card-title">${this.esc(d.title)}</strong>
           ${this.badge(d.status)}
@@ -3060,7 +3095,12 @@ window.Features.delivery = {
         <span class="muted" style="flex:1">${list.length} design${list.length === 1 ? "" : "s"}</span>
       </div>
       <div class="del-des-grid">
-        ${cards || `<p class="muted">No designs yet. Use <strong>New design</strong> to bootstrap from a milestone.</p>`}
+        ${cards}
+        <button type="button" class="del-des-card del-des-card-add" id="des-new-card"
+          title="New design">
+          <span class="del-req-plus">+</span>
+          <span class="muted">New design</span>
+        </button>
       </div>`;
   },
 

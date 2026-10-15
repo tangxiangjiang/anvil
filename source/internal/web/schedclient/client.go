@@ -164,3 +164,10 @@ func (c *Client) Usage(ctx context.Context) (json.RawMessage, error) {
 	}
 	return raw, nil
 }
+
+// RegisterWorkspace registers a workspace token on the scheduler for Dev Node join.
+func (c *Client) RegisterWorkspace(ctx context.Context, id, token, name string) error {
+	return c.do(ctx, http.MethodPost, "/v1/workspaces", map[string]any{
+		"id": id, "token": token, "name": name,
+	}, nil)
+}

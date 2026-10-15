@@ -1,8 +1,8 @@
 # Design v1.0 (cutoff)
 
-Anvil **local-only** Go Agent SDK design through product milestone **0.33** (Delivery UI + schema). Read chapters in order before implementing the matching roadmap phase.
+Anvil **local-only** Go Agent SDK design through product milestone **0.34** (Workspace domain). Read chapters in order before implementing the matching roadmap phase.
 
-This tree is the **design cutoff** for 0.1–0.33 delivery. Later product lines get a new `doc/design/v…/` directory.
+This tree is the **design cutoff** for 0.1–0.34 delivery. Later product lines get a new `doc/design/v…/` directory.
 
 ## Read order
 
@@ -42,6 +42,7 @@ This tree is the **design cutoff** for 0.1–0.33 delivery. Later product lines 
 | 31 | [31-job-event-stream.md](31-job-event-stream.md) | Job SSE stream for app chat → **0.31** |
 | 32 | [32-sandbox-code-review.md](32-sandbox-code-review.md) | Sandbox read-only review + VS Code Server → **0.32** |
 | 33 | [33-delivery-ui.md](33-delivery-ui.md) | Delivery UI + SQLite schema → **0.33** |
+| 34 | [34-workspace-domain.md](34-workspace-domain.md) | Workspace → Project → Workers (Clusters) → **0.34** |
 
 Parent index: [`doc/design/README.md`](../README.md).
 

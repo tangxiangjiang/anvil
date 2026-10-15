@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -72,12 +73,13 @@ func (e *ClusterEdge) session(ctx context.Context, url string) error {
 	nodeID := e.cfg.Cluster.NodeIDOr(e.cfg.NodeID)
 	hostname, _ := os.Hostname()
 	join, _ := MarshalBody(ClusterJoinBody{
-		NodeID:      nodeID,
-		Token:       token,
-		MaxWorkers:  e.server.Slots().Max(),
-		Hostname:    hostname,
-		Name:        e.cfg.Name,
-		Description: e.cfg.Description,
+		NodeID:         nodeID,
+		Token:          token,
+		MaxWorkers:     e.server.Slots().Max(),
+		Hostname:       hostname,
+		Name:           e.cfg.Name,
+		Description:    e.cfg.Description,
+		WorkspaceToken: strings.TrimSpace(e.cfg.Cluster.WorkspaceToken),
 	})
 	if err := e.write(conn, Envelope{Kind: KindClusterJoin, Body: join}); err != nil {
 		return err
@@ -143,7 +145,7 @@ func (e *ClusterEdge) session(ctx context.Context, url string) error {
 			case KindClusterWorkerAdd:
 				var req ClusterWorkerAddBody
 				_ = DecodeBody(msg, &req)
-				ws, err := e.server.AddProjectWorker(req.WorkerID, req.Name, req.Description, req.ProjectPath, req.GitURL)
+				ws, err := e.server.AddProjectWorker(req.WorkerID, req.Name, req.Description, req.ProjectPath, req.GitURL, req.InitGit, req.Readme, req.WorktreeBase, req.Branch)
 				res := ClusterWorkerResultBody{Request: "add", Worker: ws}
 				if err != nil {
 					res.Error = err.Error()

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,6 +24,7 @@ type NodeInfo struct {
 	Description   string               `json:"description,omitempty"`
 	Hostname      string               `json:"hostname,omitempty"`
 	SandboxDir    string               `json:"sandbox_dir,omitempty"`
+	WorkspaceID   string               `json:"workspace_id,omitempty"`
 	MaxWorkers    int                  `json:"max_workers"`
 	Idle          int                  `json:"idle"`
 	Busy          int                  `json:"busy"`
@@ -53,6 +55,7 @@ type nodeConn struct {
 	description string
 	hostname    string
 	sandboxDir  string
+	workspaceID string
 	max         int
 	idle        int
 	busy        int
@@ -95,7 +98,16 @@ type Hub struct {
 	modelsAt    time.Time
 	modelsCache []modelJSON
 
+	wsMu        sync.RWMutex
+	workspaces  map[string]wsReg // token -> registration
+
 	sessions *auth.Store // optional; validates anvil-web session Bearers on app HTTP
+}
+
+type wsReg struct {
+	ID    string
+	Token string
+	Name  string
 }
 
 // NewHub constructs a hub with bootstrap llm.
@@ -104,14 +116,15 @@ func NewHub(cfg Config, logger *log.Logger) *Hub {
 		logger = log.Default()
 	}
 	return &Hub{
-		cfg:     cfg,
-		log:     logger,
-		llm:     cfg.BootstrapLLM(),
-		nodes:   make(map[string]*nodeConn),
+		cfg:        cfg,
+		log:        logger,
+		llm:        cfg.BootstrapLLM(),
+		nodes:      make(map[string]*nodeConn),
 		waiters:    make(map[string]chan daemon.JobDoneBody),
 		eventHooks: make(map[string]func(daemon.JobEventBody)),
 		jobNode:    make(map[string]string),
 		usageN:     make(map[string]UsageTotals),
+		workspaces: make(map[string]wsReg),
 		workerWait:  make(map[string]chan daemon.ClusterWorkerResultBody),
 		sandboxWait: make(map[string]chan daemon.ClusterSandboxResultBody),
 	}
@@ -179,6 +192,7 @@ func (h *Hub) ListNodes() []NodeInfo {
 			Description:   n.description,
 			Hostname:      n.hostname,
 			SandboxDir:    n.sandboxDir,
+			WorkspaceID:   n.workspaceID,
 			MaxWorkers:    n.max,
 			Idle:          n.idle,
 			Busy:          n.busy,
@@ -190,6 +204,33 @@ func (h *Hub) ListNodes() []NodeInfo {
 		})
 	}
 	return out
+}
+
+// RegisterWorkspace records a workspace token for Dev Node join (0.34+).
+func (h *Hub) RegisterWorkspace(id, token, name string) {
+	token = strings.TrimSpace(token)
+	id = strings.TrimSpace(id)
+	if token == "" || id == "" {
+		return
+	}
+	h.wsMu.Lock()
+	defer h.wsMu.Unlock()
+	if h.workspaces == nil {
+		h.workspaces = make(map[string]wsReg)
+	}
+	h.workspaces[token] = wsReg{ID: id, Token: token, Name: name}
+}
+
+// ResolveWorkspaceToken returns workspace id for a join token.
+func (h *Hub) ResolveWorkspaceToken(token string) (string, bool) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return "", false
+	}
+	h.wsMu.RLock()
+	defer h.wsMu.RUnlock()
+	r, ok := h.workspaces[token]
+	return r.ID, ok
 }
 
 // UsageSnapshot returns aggregated token usage.

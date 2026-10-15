@@ -467,6 +467,14 @@ func (s *Server) handleDelivery(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, d)
 			return
 		}
+		if len(parts) == 1 && r.Method == http.MethodDelete {
+			if err := s.delivery.DeleteDesign(id); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+			return
+		}
 	}
 
 	http.NotFound(w, r)

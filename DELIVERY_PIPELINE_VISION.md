@@ -132,30 +132,40 @@ Cite chips stay above the textarea (not inlined). View mode may drag `data-cite-
 
 ### 4.0 Information architecture
 
+**Clusters (ops)** — product hierarchy (0.34+):
+
+```
+Clusters
+└── Scheduler
+      └── Workspace          # Token; Dev Nodes join here
+            └── Project      # logical eng unit; Delivery binds here
+                  └── Worker # checkout (path + branch) on a Dev Node
+```
+
+**Delivery** — planning surfaces (bind **Project**; execute picks a Worker):
+
 ```
 Delivery
-├── Requirements
-│     └── Workspace       # workers grouped by scheduler (fleet)
-│           └── Worker    # generation plan + milestones (bound to this worker)
-│                 └── View / Edit milestone → versions + Polish chat
+├── Requirements          # per Project (today still worker-bound until migrate)
+│     └── generation → milestone → versions + Polish chat
 ├── Designs               # list → detail (options + ADR)
 └── Roadmap
       ├── Graph           # milestone topology + phase chains
       └── Gates           # execution constraints / pending human checks
 ```
 
-**Requirements always start in Workspace.** Pick a Worker (by scheduler); all req editing for that project stays on that Worker. Cross-links: Worker ↔ Req versions ↔ Design ↔ Milestone/Phase. Export actions live on Design / Roadmap toolbars (“Export markdown”).
+Cross-links: Project ↔ Req versions ↔ Design ↔ Milestone/Phase; Worker is the execute checkout. Export on Design / Roadmap toolbars.
 
 In Requirements UI, `patch` rows are **versions** (capability slices). Roadmap still uses **phases** as the execute/landing order under a milestone (same `major.minor.patch` id).
 
-### 4.1 Requirements UI (Worker-scoped + versioned)
+### 4.1 Requirements UI (Project-scoped target; Worker execute)
 
 #### Binding model
 
 | Concept | Meaning |
 |---------|---------|
-| **Engineering requirement** | Top-level object on a **Worker** (fleet/node/worker or stable `worker_id` + `project_rel`) |
-| **Reqs directory pointer** | Sandbox-relative subdirectory under that worker’s project where req artifacts live (e.g. `docs/requirements`) — set at create time, same spirit as picking a project folder |
+| **Engineering requirement** | Target: top-level on a **Project** (`project_key`); 0.33 still may bind `worker_id` until migrate |
+| **Reqs directory pointer** | Sandbox-relative subdirectory under a Worker checkout of that Project (e.g. `docs/requirements`) |
 | **Versioned req group** | Inside one eng-req: managed as **`major.minor.patch`** |
 
 #### Version semantics (locked)
