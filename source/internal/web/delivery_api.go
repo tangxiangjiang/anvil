@@ -1,0 +1,497 @@
+// Copyright (c) 2026 TangXiangjiang.
+// SPDX-License-Identifier: MIT
+
+package web
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"strconv"
+	"strings"
+
+	"github.com/anvil-dev/anvil/internal/web/delivery"
+)
+
+func (s *Server) handleDelivery(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/v1/delivery")
+	path = strings.Trim(path, "/")
+	if s.delivery == nil {
+		http.Error(w, "delivery store unavailable", http.StatusInternalServerError)
+		return
+	}
+
+	if path == "" && r.Method == http.MethodGet {
+		snap, err := s.delivery.Snapshot()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		// Supplement workers from seed helpers when empty labels only from eng_reqs.
+		if len(snap.Workers) == 0 {
+			snap.Workers = []delivery.WorkerRef{
+				{ID: "w_flutter_chat", Label: "flutter-chat-local", Fleet: "local", Node: "dev-node", ProjectRel: "flutter-chat-local"},
+				{ID: "w_demo", Label: "demo", Fleet: "local", Node: "dev-node", ProjectRel: "demo"},
+			}
+		} else {
+			snap.Workers = mergeWorkerHelpers(snap.Workers)
+		}
+		writeJSON(w, http.StatusOK, snap)
+		return
+	}
+
+	if path == "reset" && r.Method == http.MethodPost {
+		if err := s.delivery.Reset(); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		snap, err := s.delivery.Snapshot()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		snap.Workers = mergeWorkerHelpers(snap.Workers)
+		writeJSON(w, http.StatusOK, snap)
+		return
+	}
+
+	if path == "majors" && r.Method == http.MethodGet {
+		list, err := s.delivery.ListMajors()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"majors": list})
+		return
+	}
+
+	if path == "majors" && r.Method == http.MethodPost {
+		var body struct {
+			Major   *int   `json:"major"`
+			Title   string `json:"title"`
+			Status  string `json:"status"`
+			Summary string `json:"summary"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+		maj := 0
+		if body.Major != nil {
+			maj = *body.Major
+		} else {
+			n, err := s.delivery.NextMajorNumber()
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			maj = n
+		}
+		m, err := s.delivery.AddMajor(maj, body.Title, delivery.MajorPlanning, body.Summary)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, http.StatusCreated, m)
+		return
+	}
+
+	if strings.HasPrefix(path, "majors/") {
+		raw := strings.TrimPrefix(path, "majors/")
+		// majors/{n}/preview-delete | majors/{n}
+		parts := strings.Split(raw, "/")
+		maj, err := strconv.Atoi(parts[0])
+		if err != nil || maj < 0 {
+			http.Error(w, "bad major", http.StatusBadRequest)
+			return
+		}
+		if len(parts) == 2 && parts[1] == "preview-delete" && r.Method == http.MethodGet {
+			ms, vers, err := s.delivery.CountMilestonesUnderMajor(maj)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{
+				"major": maj, "milestone_count": ms, "version_count": vers,
+			})
+			return
+		}
+		if len(parts) == 2 && parts[1] == "advance" && r.Method == http.MethodPost {
+			m, err := s.delivery.AdvanceMajor(maj)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			writeJSON(w, http.StatusOK, m)
+			return
+		}
+		if len(parts) == 1 && r.Method == http.MethodPatch {
+			var body struct {
+				Title   *string `json:"title"`
+				Status  *string `json:"status"`
+				Summary *string `json:"summary"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, "bad json", http.StatusBadRequest)
+				return
+			}
+			m, err := s.delivery.UpdateMajor(maj, body.Title, body.Status, body.Summary)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			writeJSON(w, http.StatusOK, m)
+			return
+		}
+		if len(parts) == 1 && r.Method == http.MethodDelete {
+			item, err := s.delivery.DeleteMajorToTrash(maj)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			writeJSON(w, http.StatusOK, item)
+			return
+		}
+	}
+
+	if path == "trash" && r.Method == http.MethodGet {
+		list, err := s.delivery.ListTrash()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"items": list})
+		return
+	}
+
+	if strings.HasPrefix(path, "trash/") {
+		id := strings.TrimPrefix(path, "trash/")
+		rest := ""
+		if i := strings.Index(id, "/"); i >= 0 {
+			rest = id[i+1:]
+			id = id[:i]
+		}
+		if id == "" {
+			http.NotFound(w, r)
+			return
+		}
+		if rest == "restore" && r.Method == http.MethodPost {
+			var body struct {
+				Mode string `json:"mode"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			res, err := s.delivery.RestoreMajorFromTrash(id, body.Mode)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			if res.Conflict {
+				writeJSON(w, http.StatusConflict, res)
+				return
+			}
+			writeJSON(w, http.StatusOK, res)
+			return
+		}
+		if rest == "" && r.Method == http.MethodDelete {
+			if err := s.delivery.PurgeTrash(id); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+			return
+		}
+	}
+
+	if path == "eng-reqs" && r.Method == http.MethodPost {
+		var body struct {
+			WorkerID       string `json:"worker_id"`
+			Label          string `json:"label"`
+			Fleet          string `json:"fleet"`
+			Node           string `json:"node"`
+			ProjectRel     string `json:"project_rel"`
+			Title          string `json:"title"`
+			ReqsRel        string `json:"reqs_rel"`
+			Major          *int   `json:"major"`
+			Minor          int    `json:"minor"`
+			MilestoneTitle string `json:"milestone_title"`
+			Status         string `json:"status"`
+			Goals          string `json:"goals"`
+			NonGoals       string `json:"non_goals"`
+			Success        string `json:"success"`
+			Constraints    string `json:"constraints"`
+			Phases         []struct {
+				Title    string `json:"title"`
+				Delivery string `json:"delivery"`
+			} `json:"phases"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+		in := delivery.CreateEngReqInput{
+			Worker: delivery.WorkerRef{
+				ID: body.WorkerID, Label: body.Label, Fleet: body.Fleet,
+				Node: body.Node, ProjectRel: body.ProjectRel,
+			},
+			Title:          body.Title,
+			ReqsRel:        body.ReqsRel,
+			Minor:          body.Minor,
+			MilestoneTitle: body.MilestoneTitle,
+			Status:         body.Status,
+			Goals:          body.Goals,
+			NonGoals:       body.NonGoals,
+			Success:        body.Success,
+			Constraints:    body.Constraints,
+		}
+		for _, p := range body.Phases {
+			in.Phases = append(in.Phases, delivery.MilestonePhaseInput{
+				Title: p.Title, Delivery: p.Delivery,
+			})
+		}
+		if body.Major == nil {
+			in.AutoMajor = true
+		} else {
+			in.Major = *body.Major
+		}
+		eng, err := s.delivery.CreateEngReq(in)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, http.StatusCreated, eng)
+		return
+	}
+
+	if path == "next-milestone" && r.Method == http.MethodGet {
+		engID := r.URL.Query().Get("eng_req_id")
+		workerID := r.URL.Query().Get("worker_id")
+		major := -1
+		if m := r.URL.Query().Get("major"); m != "" {
+			if n, err := strconv.Atoi(m); err == nil && n >= 0 {
+				major = n
+			}
+		}
+		if engID == "" && workerID != "" {
+			id, found, err := s.delivery.EngIDByWorker(workerID)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			if found {
+				engID = id
+			}
+		}
+		maj, min, err := s.delivery.NextMilestone(engID, major)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"major": maj, "minor": min, "patch": 1,
+			"version": fmt.Sprintf("%d.%d", maj, min),
+		})
+		return
+	}
+
+	// eng-reqs/{id}/milestones/{M}/{m}  DELETE
+	// eng-reqs/{id}/versions[/{M}/{m}/{p}[/approve]]
+	if strings.HasPrefix(path, "eng-reqs/") {
+		rest := strings.TrimPrefix(path, "eng-reqs/")
+		parts := strings.Split(rest, "/")
+		if len(parts) == 4 && parts[1] == "milestones" {
+			engID := parts[0]
+			major, err1 := strconv.Atoi(parts[2])
+			minor, err2 := strconv.Atoi(parts[3])
+			if err1 != nil || err2 != nil || major < 0 || minor < 0 {
+				http.Error(w, "bad milestone", http.StatusBadRequest)
+				return
+			}
+			if r.Method == http.MethodDelete {
+				if err := s.delivery.DeleteMilestone(engID, major, minor); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				writeJSON(w, http.StatusOK, map[string]any{"ok": true, "eng_req_id": engID, "major": major, "minor": minor})
+				return
+			}
+			if r.Method == http.MethodPatch {
+				var body struct {
+					Status string `json:"status"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					http.Error(w, "bad json", http.StatusBadRequest)
+					return
+				}
+				if err := s.delivery.SetMilestoneLifecycle(engID, major, minor, body.Status); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				writeJSON(w, http.StatusOK, map[string]any{
+					"ok": true, "eng_req_id": engID, "major": major, "minor": minor, "status": body.Status,
+				})
+				return
+			}
+		}
+		if len(parts) >= 2 && parts[1] == "versions" {
+			engID := parts[0]
+			if len(parts) == 2 && r.Method == http.MethodPost {
+				var body struct {
+					Major int    `json:"major"`
+					Minor int    `json:"minor"`
+					Patch int    `json:"patch"`
+					Title string `json:"title"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					http.Error(w, "bad json", http.StatusBadRequest)
+					return
+				}
+				v, err := s.delivery.AddVersion(delivery.AddVersionInput{
+					EngReqID: engID, Major: body.Major, Minor: body.Minor, Patch: body.Patch, Title: body.Title,
+				})
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				writeJSON(w, http.StatusCreated, v)
+				return
+			}
+			if len(parts) >= 5 {
+				major, err1 := strconv.Atoi(parts[2])
+				minor, err2 := strconv.Atoi(parts[3])
+				patch, err3 := strconv.Atoi(parts[4])
+				if err1 != nil || err2 != nil || err3 != nil {
+					http.Error(w, "bad version", http.StatusBadRequest)
+					return
+				}
+				if len(parts) == 6 && parts[5] == "approve" && r.Method == http.MethodPost {
+					v, err := s.delivery.ApproveVersion(engID, major, minor, patch)
+					if err != nil {
+						http.Error(w, err.Error(), http.StatusBadRequest)
+						return
+					}
+					writeJSON(w, http.StatusOK, v)
+					return
+				}
+				if len(parts) == 5 && r.Method == http.MethodPatch {
+					var body struct {
+						Title       *string `json:"title"`
+						Problem     *string `json:"problem"`
+						Goals       *string `json:"goals"`
+						NonGoals    *string `json:"non_goals"`
+						Constraints *string `json:"constraints"`
+						Success     *string `json:"success"`
+					}
+					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+						http.Error(w, "bad json", http.StatusBadRequest)
+						return
+					}
+					v, err := s.delivery.UpdateVersion(delivery.UpdateVersionInput{
+						EngReqID: engID, Major: major, Minor: minor, Patch: patch,
+						Title: body.Title, Problem: body.Problem, Goals: body.Goals,
+						NonGoals: body.NonGoals, Constraints: body.Constraints, Success: body.Success,
+					})
+					if err != nil {
+						http.Error(w, err.Error(), http.StatusBadRequest)
+						return
+					}
+					writeJSON(w, http.StatusOK, v)
+					return
+				}
+				if len(parts) == 5 && r.Method == http.MethodDelete {
+					if err := s.delivery.DeleteVersion(engID, major, minor, patch); err != nil {
+						http.Error(w, err.Error(), http.StatusBadRequest)
+						return
+					}
+					writeJSON(w, http.StatusOK, map[string]any{
+						"ok": true, "eng_req_id": engID, "major": major, "minor": minor, "patch": patch,
+					})
+					return
+				}
+			}
+		}
+	}
+
+	if path == "designs" && r.Method == http.MethodPost {
+		var body struct {
+			EngReqID string `json:"eng_req_id"`
+			Major    int    `json:"major"`
+			Minor    int    `json:"minor"`
+			Title    string `json:"title"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+		d, err := s.delivery.CreateDesign(delivery.CreateDesignInput{
+			EngReqID: body.EngReqID, Major: body.Major, Minor: body.Minor, Title: body.Title,
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, http.StatusCreated, d)
+		return
+	}
+
+	// designs/{id}[/approve]
+	if strings.HasPrefix(path, "designs/") {
+		rest := strings.TrimPrefix(path, "designs/")
+		parts := strings.Split(rest, "/")
+		id := parts[0]
+		if len(parts) == 2 && parts[1] == "approve" && r.Method == http.MethodPost {
+			d, err := s.delivery.ApproveDesign(id)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			writeJSON(w, http.StatusOK, d)
+			return
+		}
+		if len(parts) == 1 && r.Method == http.MethodPatch {
+			var body struct {
+				ChosenOptionID *string                 `json:"chosen_option_id"`
+				ADR            *string                 `json:"adr"`
+				Options        []delivery.DesignOption `json:"options"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, "bad json", http.StatusBadRequest)
+				return
+			}
+			d, err := s.delivery.PatchDesign(id, delivery.PatchDesignInput{
+				ChosenOptionID: body.ChosenOptionID, ADR: body.ADR, Options: body.Options,
+			})
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			writeJSON(w, http.StatusOK, d)
+			return
+		}
+	}
+
+	http.NotFound(w, r)
+}
+
+func mergeWorkerHelpers(have []delivery.WorkerRef) []delivery.WorkerRef {
+	helpers := []delivery.WorkerRef{
+		{ID: "w_flutter_chat", Label: "flutter-chat-local", Fleet: "local", Node: "dev-node", ProjectRel: "flutter-chat-local"},
+		{ID: "w_demo", Label: "demo", Fleet: "local", Node: "dev-node", ProjectRel: "demo"},
+	}
+	seen := map[string]bool{}
+	var out []delivery.WorkerRef
+	for _, w := range have {
+		if w.ID == "" || seen[w.ID] {
+			continue
+		}
+		seen[w.ID] = true
+		out = append(out, w)
+	}
+	for _, w := range helpers {
+		if seen[w.ID] {
+			continue
+		}
+		seen[w.ID] = true
+		out = append(out, w)
+	}
+	return out
+}

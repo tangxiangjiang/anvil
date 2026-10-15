@@ -1,8 +1,8 @@
 # Design v1.0 (cutoff)
 
-Anvil **local-only** Go Agent SDK design through product milestone **0.31** (job event stream). Read chapters in order before implementing the matching roadmap phase.
+Anvil **local-only** Go Agent SDK design through product milestone **0.33** (Delivery UI + schema). Read chapters in order before implementing the matching roadmap phase.
 
-This tree is the **design cutoff** for 0.1–0.31 delivery. Later product lines get a new `doc/design/v…/` directory.
+This tree is the **design cutoff** for 0.1–0.33 delivery. Later product lines get a new `doc/design/v…/` directory.
 
 ## Read order
 
@@ -40,6 +40,8 @@ This tree is the **design cutoff** for 0.1–0.31 delivery. Later product lines 
 | 29 | [29-sandbox-workers.md](29-sandbox-workers.md) | Sandbox workers + web FS browser → **0.29** |
 | 30 | [30-loop-guard.md](30-loop-guard.md) | Loop guard / unlimited steps → **0.30** |
 | 31 | [31-job-event-stream.md](31-job-event-stream.md) | Job SSE stream for app chat → **0.31** |
+| 32 | [32-sandbox-code-review.md](32-sandbox-code-review.md) | Sandbox read-only review + VS Code Server → **0.32** |
+| 33 | [33-delivery-ui.md](33-delivery-ui.md) | Delivery UI + SQLite schema → **0.33** |
 
 Parent index: [`doc/design/README.md`](../README.md).
 
@@ -47,4 +49,4 @@ Parent index: [`doc/design/README.md`](../README.md).
 
 - Design describes **what** and **why** for this cutoff.
 - [`doc/roadmaps/v1.0/`](../../roadmaps/v1.0/) describes **when**.
-- Chapters 11–31 map to [m_0.11](../../roadmaps/v1.0/m_0.11_worker_daemon.md) … [m_0.31](../../roadmaps/v1.0/m_0.31_job_stream.md).
+- Chapters 11–33 map to [m_0.11](../../roadmaps/v1.0/m_0.11_worker_daemon.md) … [m_0.33](../../roadmaps/v1.0/m_0.33_delivery_ui.md).

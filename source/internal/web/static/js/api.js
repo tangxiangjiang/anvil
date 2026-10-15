@@ -19,8 +19,9 @@ window.api = {
     let data = null;
     try { data = text ? JSON.parse(text) : null; } catch (_) { data = { raw: text }; }
     if (!res.ok) {
-      const err = new Error((data && (data.error || data.message)) || text || res.statusText);
+      const err = new Error((data && (data.error || data.message || data.Message)) || text || res.statusText);
       err.status = res.status;
+      err.data = data;
       throw err;
     }
     return data;
@@ -90,5 +91,82 @@ window.api = {
       );
     },
     usage() { return api.req("GET", "/api/v1/usage"); },
+    delivery() { return api.req("GET", "/api/v1/delivery"); },
+    deliveryReset() { return api.req("POST", "/api/v1/delivery/reset", {}); },
+    deliveryCreateEng(body) { return api.req("POST", "/api/v1/delivery/eng-reqs", body); },
+    deliveryNextMilestone(params) {
+      const q = new URLSearchParams(params || {}).toString();
+      return api.req("GET", "/api/v1/delivery/next-milestone" + (q ? "?" + q : ""));
+    },
+    deliveryAddMajor(body) { return api.req("POST", "/api/v1/delivery/majors", body); },
+    deliveryPatchMajor(major, body) {
+      return api.req("PATCH", "/api/v1/delivery/majors/" + encodeURIComponent(major), body);
+    },
+    deliveryAdvanceMajor(major) {
+      return api.req("POST", "/api/v1/delivery/majors/" + encodeURIComponent(major) + "/advance", {});
+    },
+    deliveryDeleteMajor(major) {
+      return api.req("DELETE", "/api/v1/delivery/majors/" + encodeURIComponent(major));
+    },
+    deliveryPreviewDeleteMajor(major) {
+      return api.req("GET", "/api/v1/delivery/majors/" + encodeURIComponent(major) + "/preview-delete");
+    },
+    deliveryTrash() { return api.req("GET", "/api/v1/delivery/trash"); },
+    deliveryRestoreTrash(id, mode) {
+      return api.req("POST", "/api/v1/delivery/trash/" + encodeURIComponent(id) + "/restore", { mode: mode || "" });
+    },
+    deliveryPurgeTrash(id) {
+      return api.req("DELETE", "/api/v1/delivery/trash/" + encodeURIComponent(id));
+    },
+    deliveryAddVersion(engId, body) {
+      return api.req("POST", "/api/v1/delivery/eng-reqs/" + encodeURIComponent(engId) + "/versions", body);
+    },
+    deliveryDeleteMilestone(engId, major, minor) {
+      return api.req(
+        "DELETE",
+        "/api/v1/delivery/eng-reqs/" + encodeURIComponent(engId) +
+          "/milestones/" + major + "/" + minor,
+      );
+    },
+    deliverySetMilestoneStatus(engId, major, minor, status) {
+      return api.req(
+        "PATCH",
+        "/api/v1/delivery/eng-reqs/" + encodeURIComponent(engId) +
+          "/milestones/" + major + "/" + minor,
+        { status },
+      );
+    },
+    deliveryPatchVersion(engId, major, minor, patch, body) {
+      return api.req(
+        "PATCH",
+        "/api/v1/delivery/eng-reqs/" + encodeURIComponent(engId) +
+          "/versions/" + major + "/" + minor + "/" + patch,
+        body,
+      );
+    },
+    deliveryDeleteVersion(engId, major, minor, patch) {
+      return api.req(
+        "DELETE",
+        "/api/v1/delivery/eng-reqs/" + encodeURIComponent(engId) +
+          "/versions/" + major + "/" + minor + "/" + patch,
+      );
+    },
+    deliveryApproveVersion(engId, major, minor, patch) {
+      return api.req(
+        "POST",
+        "/api/v1/delivery/eng-reqs/" + encodeURIComponent(engId) +
+          "/versions/" + major + "/" + minor + "/" + patch + "/approve",
+        {},
+      );
+    },
+    deliveryCreateDesign(body) {
+      return api.req("POST", "/api/v1/delivery/designs", body);
+    },
+    deliveryPatchDesign(id, body) {
+      return api.req("PATCH", "/api/v1/delivery/designs/" + encodeURIComponent(id), body);
+    },
+    deliveryApproveDesign(id) {
+      return api.req("POST", "/api/v1/delivery/designs/" + encodeURIComponent(id) + "/approve", {});
+    },
   },
 };

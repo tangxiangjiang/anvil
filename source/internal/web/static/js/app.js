@@ -60,6 +60,10 @@
       hash = "#/clusters";
       location.hash = "#/clusters";
     }
+    if (hash === "#/delivery" || hash === "#/delivery/") {
+      location.hash = "#/delivery/requirements";
+      return;
+    }
     if (hash === "#/setup") {
       location.hash = "#/login";
     }
@@ -76,11 +80,19 @@
       return;
     }
     showShell();
-    const item = Nav.items.find((i) => i.hash === hash) || Nav.items[0];
-    Nav.render(document.getElementById("nav"), item.hash);
-    if (current && Features[current] && Features[current].unmount) Features[current].unmount();
-    current = item.feature;
+    hash = location.hash || "#/clusters";
+    const item = Nav.match(hash);
+    Nav.render(document.getElementById("nav"), hash);
     const app = document.getElementById("app");
+    // Same feature (e.g. Delivery child routes): re-route without remount/reload.
+    if (current === item.feature && Features[current] && Features[current].onRoute) {
+      Features[current].onRoute();
+      return;
+    }
+    if (current && Features[current] && Features[current].unmount) {
+      Features[current].unmount();
+    }
+    current = item.feature;
     app.innerHTML = "";
     if (Features[current] && Features[current].mount) {
       await Features[current].mount(app);

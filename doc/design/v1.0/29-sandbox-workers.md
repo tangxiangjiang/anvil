@@ -29,3 +29,5 @@ Every project worker on agentd runs under a configured **sandbox directory**. Op
 - Editing files in the sandbox from web
 - Deleting sandbox folders from web
 - Per-worker sandbox roots
+
+Read-only file view + git review + agentd VS Code Server: [32-sandbox-code-review.md](32-sandbox-code-review.md).

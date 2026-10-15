@@ -16,6 +16,7 @@ import (
 
 	"github.com/anvil-dev/anvil/internal/web"
 	"github.com/anvil-dev/anvil/internal/web/auth"
+	"github.com/anvil-dev/anvil/internal/web/delivery"
 )
 
 func main() {
@@ -75,13 +76,23 @@ and add /api/v1 handlers on the web Server.
 		log.Printf("anvil-web: no users yet — open http://%s and complete the install wizard", cfg.Listen)
 	}
 
+	delStore, err := delivery.Open(store.DB())
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if err := delStore.EnsureSeed(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+
 	staticFS, err := web.StaticFS()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 
-	srv := web.New(cfg, store, staticFS, log.Default())
+	srv := web.New(cfg, store, delStore, staticFS, log.Default())
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	if err := srv.Run(ctx); err != nil {

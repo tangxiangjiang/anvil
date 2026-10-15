@@ -67,6 +67,9 @@ CREATE TABLE IF NOT EXISTS sessions (
 // Close closes the DB.
 func (s *Store) Close() error { return s.db.Close() }
 
+// DB returns the underlying SQLite connection (shared migrations / domains).
+func (s *Store) DB() *sql.DB { return s.db }
+
 // UserCount returns the number of users.
 func (s *Store) UserCount() (int, error) {
 	var n int

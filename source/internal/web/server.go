@@ -14,29 +14,33 @@ import (
 	"time"
 
 	"github.com/anvil-dev/anvil/internal/web/auth"
+	"github.com/anvil-dev/anvil/internal/web/delivery"
 	"github.com/anvil-dev/anvil/internal/web/schedclient"
 )
 
 // Server is the anvil-web HTTP server.
 type Server struct {
-	cfg    Config
-	store  *auth.Store
-	sched  *schedclient.Client
-	static fs.FS
-	log    *log.Logger
+	cfg      Config
+	store    *auth.Store
+	delivery *delivery.Store
+	sched    *schedclient.Client
+	static   fs.FS
+	log      *log.Logger
 }
 
 // New constructs a server. staticFS is typically embed FS rooted at static/.
-func New(cfg Config, store *auth.Store, staticFS fs.FS, logger *log.Logger) *Server {
+// deliveryStore may be nil (Delivery API returns 500); production main always opens it.
+func New(cfg Config, store *auth.Store, deliveryStore *delivery.Store, staticFS fs.FS, logger *log.Logger) *Server {
 	if logger == nil {
 		logger = log.Default()
 	}
 	return &Server{
-		cfg:   cfg,
-		store: store,
-		sched: &schedclient.Client{BaseURL: cfg.SchedulerURL, Token: cfg.SchedulerToken()},
-		static: staticFS,
-		log:   logger,
+		cfg:      cfg,
+		store:    store,
+		delivery: deliveryStore,
+		sched:    &schedclient.Client{BaseURL: cfg.SchedulerURL, Token: cfg.SchedulerToken()},
+		static:   staticFS,
+		log:      logger,
 	}
 }
 
@@ -54,6 +58,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/nodes", s.requireAuth(s.handleNodes))
 	mux.HandleFunc("/api/v1/nodes/", s.requireAuth(s.handleNodePatch))
 	mux.HandleFunc("/api/v1/usage", s.requireAuth(s.handleUsage))
+	mux.HandleFunc("/api/v1/delivery", s.requireAuth(s.handleDelivery))
+	mux.HandleFunc("/api/v1/delivery/", s.requireAuth(s.handleDelivery))
 
 	if s.static != nil {
 		fileServer := http.FileServer(http.FS(s.static))
