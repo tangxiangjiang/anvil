@@ -199,9 +199,19 @@ The client sets these per session, on `session.new` / `session.resume`:
 - **A resumed conversation cannot be replayed.** There is no public transcript reader in the SDK, so the panel marks the resume and moves on rather than inventing a history it does not have; the prior context is real — it is the agent's — but the *rendering* of it is not available to a client. This is a limit of the current SDK surface, documented rather than worked around.
 - **The mode select is driven by the extension, never by the click.** It is disabled while a turn runs and updated from the `mode` message, so a refused change corrects the control instead of sticking in it. `bypass` is the one mode that changes the panel's appearance, because it is the one mode that removes a safeguard.
 
+### Packaging as built (p_0.35.7)
+
+- **A platform VSIX carries exactly one sidecar, at `bin/anvil-host[.exe]`.** The target is a parameter of the build rather than a property of the extension, because an installed extension cannot know which machine it will run on: VS Code's platform is a fact about the *host*, and `ExtensionContext.extensionUri` says nothing about it. `scripts/package-vsix.mjs --all` therefore emits one VSIX per target — `win32-x64`, `win32-arm64`, `linux-x64`, `linux-arm64`, `darwin-x64`, `darwin-arm64` — each built by `--target <id>`, cross-compiled with `CGO_ENABLED=0` so a Linux package does not depend on the glibc vintage of the machine that opens it. The target list is written once, in `src/hostBundle.ts`, and both scripts read their behaviour from it (the build script keeps a copy, and a test reads the manifest it produced and fails if a name is one the extension would not look for).
+- **The developer's binary and the shipped binary are the same file.** `npm run build:host` writes to `bin/`, which is where F5 resolves the host from and what `vsce package` picks up; there is no "build directory" and "package directory" to drift apart. The `vscode`-free `hostBundle.ts` holds the whole resolution order — setting, then bundle, then `PATH` — which is why the packaged case, the F5 case, and the "I built my own" case are one code path and one set of tests.
+- **What is bundled is checked before it is run.** `build-host.mjs` writes `bin/hosts.json` beside the binary: file name, sha256, size, Go toolchain, protocol revision, build time. At spawn the extension hashes the bundled binary and refuses to run a mismatch, or a bundled binary the manifest does not name at all. The check applies **only** to the bundled host: a configured path or a `PATH` lookup is the user's own build, and the extension has nothing truthful to compare it against — refusing those would break the developer loop while proving nothing. This is an integrity check against a broken package (a truncated download, a half-replaced `bin/`, a stale file next to fresh JavaScript), not a signature: anyone who can rewrite the binary can rewrite the manifest. It is not claimed to be more than that.
+- **Two version checks, and only one of them is fatal.** `initialize` asserts the protocol revision, as it always did, and now fails with which binary answered, both revisions, and the two ways out — a mismatch must not look like a hang. On top of that the host's banner is compared against the extension's version: a different *minor* is reported as a warning, because shipping a stale sidecar for one platform is the failure this milestone makes easy, but a patch or a newer build is not an error and refusing it would strand anyone running one. The compile-time half is cheaper still: `build-host.mjs` refuses to build when `proto.go` and `protocol.ts` disagree, so two halves of one wire format cannot be packaged apart.
+- **A package contains the product and nothing else.** `.vscodeignore` drops `src/`, the tests, the scripts, the source maps, and the workspace's own `.anvil/` session state — the last of these being the one that matters: it is somebody's conversations, and an extension has no business carrying them. `scripts/smoke-packaged.mjs` extracts a built VSIX to a temporary directory and asserts both the required files and the forbidden ones, verifies the binary against the manifest in the package, and then runs *that* binary and completes the handshake. A package that only works from the tree it was built in fails it.
+- **The extension version tracks the product line.** `package.json` moves with the milestone (0.35.7 here), the marketplace publishing story stays a non-goal, and the VSIX is unsigned: it is installed with `code --install-extension` for a local trial, which is what this phase was for.
+
 ## Placement
 
-- Extension (TypeScript): repository root **`editors/vscode/`** — mirrors the `app/` precedent from [26](26-mobile-app.md) of keeping non-Go clients outside `source/`.
+- Extension (TypeScript): repository root **`editors/vscode/`** — mirrors the `app/` precedent from [26](26-mobile-app.md) of keeping non-Go clients outside `source/`. `bin/` inside it holds the built sidecar; it is git-ignored, and the packaged extension carries it.
+- Build and packaging scripts: **`editors/vscode/scripts/`** — `build-host.mjs` (cross-compile + manifest), `package-vsix.mjs` (compile, host, `vsce`), `smoke-packaged.mjs` (open a VSIX and run what is inside). `@vscode/vsce` is a dev dependency, run through `node` rather than its `.cmd` shim, since a Windows shim needs a shell and a shell needs quoting rules for a command that has none.
 - Host binary: **`source/cmd/anvil-host/`**; protocol + session registry in **`source/internal/editorhost/`** (`.go` files stay under `source/` per `.cursor/rules/source-layout.mdc`).
 - Working state stays in the workspace: `{cwd}/.anvil/` (already git-ignored).
 
@@ -212,6 +222,8 @@ The client sets these per session, on `session.new` / `session.resume`:
 - The sidecar holds the same cwd sandbox as any Anvil local agent ([08](08-security.md)); path escapes remain tool errors.
 - Approvals default to deny; `bypass` is opt-in and visibly flagged.
 - No new network listener — stdio only.
+- **The bundled sidecar is checked against the digest the build recorded** before it is run, and only for the bundled case; the check is an integrity check on the package, not a signature, and is documented as such. A package for another platform is never run by mistake: the host file name is looked up per target.
+- **A package carries no workspace state.** `.anvil/` (agents, runs, rules the user wrote for their own workspace) is excluded from the VSIX and its absence is asserted by the packaging smoke test.
 
 ## Explicit non-goals (0.35)
 
@@ -224,7 +236,7 @@ The client sets these per session, on `session.new` / `session.resume`:
 
 ## Acceptance (milestone)
 
-1. Installing the platform VSIX and opening a trusted workspace starts the host; the panel streams assistant text and tool cards. (The extension half of this is p_0.35.4 — the VSIX is p_0.35.7.)
+1. Installing the platform VSIX and opening a trusted workspace starts the host; the panel streams assistant text and tool cards. (The extension half is p_0.35.4, the package is p_0.35.7; what a script can check — the tree, the provenance, and the handshake of the binary inside the package — is `npm run smoke:vsix`, and the window-level pass is installing it.)
 2. Mutating tools prompt; deny returns a tool error to the model; allow-for-session stops re-prompting for that tool.
 3. A `shell` command, a `run_tests`, and an MCP tool call each prompt (the gate gap is closed). The gate is closed as of p_0.35.3; the last two need the host to be able to *configure* those tools first, which the settings work brings.
 4. Diff review shows the result of an edit before it is applied.

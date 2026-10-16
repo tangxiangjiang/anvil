@@ -243,7 +243,14 @@ export class HostClient {
       { protocol: PROTOCOL_VERSION, cwd, client },
     );
     if (res.protocol !== PROTOCOL_VERSION) {
-      throw new HostDownError(`the host speaks protocol ${res.protocol}, this extension speaks ${PROTOCOL_VERSION}`);
+      // A mismatch is not a hang and must not look like one: the two sides
+      // speak different revisions, and no amount of retrying fixes it. Name
+      // which binary answered and what to do about it.
+      throw new HostDownError(
+        `${res.host} speaks editor-host protocol ${res.protocol}; this extension speaks ` +
+          `${PROTOCOL_VERSION}. The two were built from different revisions: reinstall the ` +
+          'extension, or point anvil.hostPath at an anvil-host built with it.',
+      );
     }
     this.notify('initialized');
     return { host: res.host, capabilities: res.capabilities ?? [], cwd: res.cwd };

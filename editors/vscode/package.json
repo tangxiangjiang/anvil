@@ -2,9 +2,14 @@
   "name": "anvil-vscode",
   "displayName": "Anvil",
   "description": "Anvil agent in VS Code: streaming chat, tool cards, per-call approvals.",
-  "version": "0.35.6",
+  "version": "0.35.7",
   "publisher": "anvil-dev",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tangxiangjiang/anvil.git",
+    "directory": "editors/vscode"
+  },
   "private": true,
   "engines": {
     "vscode": "^1.105.0"
@@ -87,8 +92,8 @@
       "properties": {
         "anvil.hostPath": {
           "type": "string",
-          "default": "anvil-host",
-          "markdownDescription": "Path to the `anvil-host` sidecar binary. Defaults to `anvil-host` on `PATH`; a relative path is resolved against the workspace folder."
+          "default": "",
+          "markdownDescription": "Path to the `anvil-host` sidecar binary. Empty uses the binary bundled in the extension, then `anvil-host` on `PATH`. A relative path is resolved against the workspace folder. Set this only to run a host you built yourself."
         },
         "anvil.provider": {
           "type": "string",
@@ -147,6 +152,9 @@
     "compile": "tsc -p .",
     "watch": "tsc -p . --watch",
     "build:host": "node scripts/build-host.mjs",
+    "package:vsix": "node scripts/package-vsix.mjs",
+    "package:all": "node scripts/package-vsix.mjs --all",
+    "smoke:vsix": "node scripts/smoke-packaged.mjs",
     "lint": "eslint src test scripts media",
     "test:unit": "node --test \"out/test/unit/*.test.js\"",
     "test:integration": "node --test \"out/test/integration/*.test.js\"",
@@ -155,6 +163,7 @@
   "devDependencies": {
     "@types/node": "^22.20.5",
     "@types/vscode": "^1.105.0",
+    "@vscode/vsce": "^3.9.2",
     "eslint": "^9.39.5",
     "globals": "^14.0.0",
     "typescript": "^5.9.3",

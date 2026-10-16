@@ -13,6 +13,7 @@ The repository also carries an **automated coding tool-chain** (scheduler, worke
 | [`doc/design/`](doc/design/) | Versioned design (current: [`v1.0/`](doc/design/v1.0/)) |
 | [`doc/roadmaps/`](doc/roadmaps/) | Versioned milestones (current: [`v1.0/`](doc/roadmaps/v1.0/)) |
 | [`source/`](source/) | Go module (`github.com/anvil-dev/anvil`) |
+| [`editors/vscode/`](editors/vscode/) | VS Code extension + `anvil-host` sidecar (0.35) |
 | [`app/`](app/) | Flutter mobile client (login via web → scheduler jobs) |
 
 ## Quick start
@@ -60,14 +61,39 @@ func main() {
 
 ## Status
 
-Product is at **0.34 delivered**, **0.35 planned**. Full per-milestone index: [`doc/roadmaps/v1.0/README.md`](doc/roadmaps/v1.0/README.md).
+Product is at **0.35 delivered**. Full per-milestone index: [`doc/roadmaps/v1.0/README.md`](doc/roadmaps/v1.0/README.md).
 
 | Era | Milestones | What |
 |-----|-----------|------|
 | Core SDK | 0.1 – 0.10 | Create / Prompt / Resume, streaming & stable error codes, security hardening, tools & sandbox, MCP, Cursor SDK **local** parity |
 | Agent capabilities | 0.11 – 0.22 | worker daemon, model gateway, retrieval, hooks & skills, web search, LSP, git tools, test & build, vision, plugins, dev memory, project search |
 | Automated coding tool-chain | 0.23 – 0.34 | YAML ops config, scheduler hub, web fleet console, mobile app, app fleets, clusters/workers, sandbox workers, loop guard, job event stream, sandbox code review, delivery UI, workspace domain |
-| Editor client | 0.35 | VS Code extension + `anvil-host` (**planned**) — [design 35](doc/design/v1.0/35-vscode-extension.md) |
+| Editor client | 0.35 | VS Code extension + `anvil-host` sidecar, packaged as per-platform VSIX — [design 35](doc/design/v1.0/35-vscode-extension.md) |
+
+### VS Code extension (0.35)
+
+[`editors/vscode/`](editors/vscode/) is the editor surface: a chat panel on the
+activity bar that streams a turn, shows every tool call as a card, and stops for
+approval before anything writes to the workspace. It holds no agent logic — it
+spawns the **`anvil-host`** sidecar ([`source/cmd/anvil-host`](source/cmd/anvil-host/),
+a stdio JSON-RPC program built from the public SDK) and renders what that process
+reports. The Go side imports the public `anvil` package only, which is enforced
+by `internal/editorhost/independence_test.go`.
+
+```bash
+cd editors/vscode
+npm install
+npm run package:vsix          # this platform; --target <id> / --all for the rest
+code --install-extension anvil-vscode-0.35.7-win32-x64.vsix
+```
+
+A platform VSIX carries the matching `anvil-host`, cross-compiled with
+`CGO_ENABLED=0` and verified against the digest recorded at build time before it
+runs, so it installs on a machine with no Go toolchain. The API key never
+enters the package: it lives in VS Code SecretStorage and reaches the child only
+through its environment (`ANVIL_API_KEY`). See
+[`editors/vscode/README.md`](editors/vscode/README.md) for the settings,
+permission modes, and troubleshooting.
 
 ### Inspect agents (0.5)
 
@@ -353,7 +379,7 @@ Logs: `.dev/*.log`. Ctrl+C in the script terminal stops the stack.
 
 See [`doc/design/v1.0/26-mobile-app.md`](doc/design/v1.0/26-mobile-app.md) and [`app/README.md`](app/README.md).
 
-Still deferred: Cursor Bridge, cloud agents, full hooks catalog, OIDC/RBAC, workflow/milestone DAG on mobile. A first-party VS Code extension is no longer deferred — it is milestone **0.35** ([design 35](doc/design/v1.0/35-vscode-extension.md)).
+Still deferred: Cursor Bridge, cloud agents, full hooks catalog, OIDC/RBAC, workflow/milestone DAG on mobile, and marketplace publication of the VS Code extension (0.35 ships a VSIX you install yourself — [design 35](doc/design/v1.0/35-vscode-extension.md)).
 
 ## License
 

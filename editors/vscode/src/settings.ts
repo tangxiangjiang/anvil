@@ -15,7 +15,11 @@ const SECRET_KEY = 'anvil.apiKey';
 const ENV_KEY = 'ANVIL_API_KEY';
 
 export interface ResolvedSettings {
-  /** The sidecar command, as configured. */
+  /**
+   * The raw `anvil.hostPath` setting, or empty when it is not set. Resolving it
+   * — against the bundle, the workspace, then `PATH` — is `hostBundle.ts`'s job;
+   * this module only reports what was typed.
+   */
   hostPath: string;
   /** Everything `session.new` needs, minus the session id. */
   session: SessionConfig;
@@ -51,7 +55,7 @@ export function readSettings(): ResolvedSettings {
   session.load_rules = loadProject;
   session.load_cursor_rules = loadCursor;
   return {
-    hostPath: (cfg.get<string>('hostPath', 'anvil-host') ?? '').trim() || 'anvil-host',
+    hostPath: (cfg.get<string>('hostPath', '') ?? '').trim(),
     session,
     rules: { load_project: loadProject, load_cursor_rules: loadCursor },
   };
@@ -104,20 +108,3 @@ export async function clearApiKey(context: vscode.ExtensionContext): Promise<voi
   await context.secrets.delete(SECRET_KEY);
 }
 
-/**
- * Resolves the host binary. A relative path is resolved against the first
- * workspace folder, so a repository can ship a built sidecar and point at it.
- */
-export function resolveHostPath(hostPath: string): string {
-  if (hostPath.includes('/') || hostPath.includes('\\')) {
-    const folder = vscode.workspace.workspaceFolders?.[0];
-    if (folder && !isAbsolute(hostPath)) {
-      return vscode.Uri.joinPath(folder.uri, hostPath).fsPath;
-    }
-  }
-  return hostPath;
-}
-
-function isAbsolute(path: string): boolean {
-  return /^([a-zA-Z]:[\\/]|\\\\|\/)/.test(path);
-}

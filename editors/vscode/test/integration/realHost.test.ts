@@ -11,7 +11,7 @@
  */
 
 import { strict as assert } from 'node:assert';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { test } from 'node:test';
 import { HostClient } from '../../src/hostClient';
@@ -19,12 +19,19 @@ import { ChatSession } from '../../src/session';
 import { classifyDone } from '../../src/errors';
 import { DoneParams, HostEvent } from '../../src/protocol';
 
-const BINARY = path.resolve(
-  __dirname,
-  '../../..',
-  'out',
-  process.platform === 'win32' ? 'anvil-host.exe' : 'anvil-host',
-);
+// The same file the extension resolves first (`src/hostBundle.ts`): a
+// developer's F5 window and a packaged extension run the same binary, so these
+// tests pin the sidecar the VSIX actually carries.
+// Compiled, this file runs from `out/test/integration`, so the extension root
+// is three levels up.
+const EXTENSION_ROOT = path.resolve(__dirname, '../../..');
+const BUNDLE = path.join(EXTENSION_ROOT, 'bin');
+const BINARY = path.join(BUNDLE, process.platform === 'win32' ? 'anvil-host.exe' : 'anvil-host');
+
+/** The version the extension would report, read rather than restated. */
+const VERSION = (
+  JSON.parse(readFileSync(path.join(EXTENSION_ROOT, 'package.json'), 'utf8')) as { version: string }
+).version;
 
 const missing = existsSync(BINARY) ? false : `the sidecar is not built at ${BINARY} (run: npm run build:host)`;
 
@@ -53,7 +60,7 @@ test('the real host handshakes and reports what it can do', { skip: missing }, a
   const client = realClient();
   try {
     await client.start();
-    const info = await client.initialize(process.cwd(), { name: 'anvil-vscode', version: '0.35.6' });
+    const info = await client.initialize(process.cwd(), { name: 'anvil-vscode', version: VERSION });
 
     // `initialize()` only resolves after it has checked the protocol revision,
     // so reaching this line is the assertion that the two sides agree.
@@ -97,7 +104,7 @@ test('a run the provider refuses ends as a done with its own code', { skip: miss
 
   try {
     await client.start();
-    await client.initialize(process.cwd(), { name: 'anvil-vscode', version: '0.35.6' });
+    await client.initialize(process.cwd(), { name: 'anvil-vscode', version: VERSION });
     const opened = await session.open();
     assert.equal(opened.model, UNREACHABLE.model);
     assert.equal(opened.provider, 'openai');

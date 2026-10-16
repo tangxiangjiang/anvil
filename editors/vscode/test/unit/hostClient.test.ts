@@ -32,11 +32,13 @@ test('initialize reports the host and refuses a protocol it does not speak', asy
   assert.ok(result.capabilities.includes('approval'));
   await good.stop();
 
+  // A revision mismatch must read as a mismatch and not as a hang: it names
+  // the binary that answered, both revisions, and the way out.
   const wrong = client({ FAKE_HOST_PROTOCOL: '99' });
   await wrong.start();
   await assert.rejects(
     () => wrong.initialize(process.cwd(), { name: 'test', version: '1' }),
-    /speaks protocol 99, this extension speaks 1/,
+    /anvil-host \(fake\) speaks editor-host protocol 99; this extension speaks 1\..*anvil\.hostPath/s,
   );
   await wrong.stop();
 });

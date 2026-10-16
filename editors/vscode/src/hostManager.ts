@@ -10,7 +10,8 @@
 import * as vscode from 'vscode';
 import { HostClient, LogFn } from './hostClient';
 import { ChatSession, SendOptions, SessionConfig, SessionState } from './session';
-import { childEnv, readApiKey, readSettings, resolveHostPath } from './settings';
+import { childEnv, readApiKey, readSettings } from './settings';
+import { describeHost, hostFixHint, resolveHost, verifyHost, versionDrift } from './hostBundle';
 import {
   ApprovalRequest,
   Decision,
@@ -122,8 +123,22 @@ export class HostManager {
     const cwd = folder.uri.fsPath;
     this.cwd = cwd;
 
+    const host = resolveHost({
+      extensionPath: this.context.extensionUri.fsPath,
+      configured: settings.hostPath,
+      workspaceRoot: cwd,
+    });
+    // The binary is checked against what the build recorded before it is run,
+    // and only when it is the one we shipped: a user's own build has no
+    // manifest to compare with, and pretending otherwise would only break their
+    // loop. Refusing to start is the point — a host that is not the one we
+    // packaged is not a configuration to work around silently.
+    const refusal = verifyHost(host);
+    if (refusal) throw new Error(refusal);
+    this.log(`host ${describeHost(host)}`);
+
     const client = new HostClient({
-      command: resolveHostPath(settings.hostPath),
+      command: host.command,
       cwd,
       env: childEnv(apiKey),
       log: this.log,
@@ -134,15 +149,18 @@ export class HostManager {
       await client.start();
     } catch (err) {
       // The caller reports this: the panel owns the user-facing message. What
-      // is added here is the fix, which the spawn error alone does not name.
-      throw new Error(`could not start the Anvil host: ${(err as Error).message} (check anvil.hostPath)`);
+      // is added here is the fix, which the spawn error alone does not name —
+      // and the fix depends on where we looked.
+      throw new Error(
+        `could not start the Anvil host: ${(err as Error).message} (${hostFixHint(host)})`,
+      );
     }
     try {
-      const handshake = await client.initialize(cwd, {
-        name: 'anvil-vscode',
-        version: this.context.extension.packageJSON.version as string,
-      });
+      const version = this.context.extension.packageJSON.version as string;
+      const handshake = await client.initialize(cwd, { name: 'anvil-vscode', version });
       this.log(`host ${handshake.host} (capabilities: ${handshake.capabilities.join(', ') || 'none'})`);
+      const drift = versionDrift(handshake.host, version);
+      if (drift) this.listener.onNotice?.('warn', drift);
     } catch (err) {
       await client.stop();
       this.listener.onNotice?.('error', `the host did not answer initialize: ${(err as Error).message}`);
