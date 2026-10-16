@@ -15,6 +15,7 @@
  */
 
 import { randomBytes } from 'node:crypto';
+import { dirname } from 'node:path';
 import * as vscode from 'vscode';
 import { ChangesTracker, ChangedFile } from './changes';
 import { buildPromptContext, pickMentions } from './editorContext';
@@ -37,12 +38,17 @@ import {
   HostEvent,
   PermissionMode,
   PermissionModes,
+  PermissionsResult,
   RuleFileInfo,
+  RuleInfo,
+  RuleProblem,
+  RuleSpec,
   SessionInfo,
   SkillEntry,
 } from './protocol';
 import { RunFailure } from './errors';
 import { readSettings } from './settings';
+import { describeProblem, emptyRulesFile, problemPosition } from './rulesFile';
 
 /** A message from the webview. */
 type Inbound =
@@ -50,6 +56,13 @@ type Inbound =
   | { type: 'send'; text: string; mentions?: string[]; images?: string[] }
   | { type: 'cancel' }
   | { type: 'answer'; requestId: string; decision: Decision; scope?: string }
+  /**
+   * "Always allow" this shape: the rule the host offered, written into the
+   * workspace rule file for the call that is waiting on the card.
+   */
+  | { type: 'remember'; requestId: string; rule: RuleSpec }
+  /** The composer's Permissions button: show the file these rules live in. */
+  | { type: 'openPermissions' }
   | { type: 'pickMention' }
   | { type: 'commands' }
   | { type: 'mode'; mode: string }
@@ -72,6 +85,19 @@ type Outbound =
   | { type: 'event'; event: HostEvent }
   | { type: 'approval'; request: ApprovalRequest }
   | { type: 'approvalWithdrawn'; requestId: string }
+  /**
+   * What became of a "remember this" choice. Exactly one of the three endings:
+   * the host settled the card (`approved`), the rule was written but does not
+   * decide this call (`decidedBy`), or nothing was written (`error`).
+   */
+  | {
+      type: 'rememberResult';
+      requestId: string;
+      rule?: RuleInfo;
+      approved?: boolean;
+      decidedBy?: RuleInfo;
+      error?: string;
+    }
   | { type: 'done'; done: DoneParams; failure: RunFailure }
   | { type: 'mentions'; paths: string[] }
   | { type: 'vision'; enabled: boolean }
@@ -141,6 +167,12 @@ export class ChatPanel implements HostListener {
   private rules: RuleFileInfo[] = [];
   /** The permission mode in force, remembered per workspace. */
   private mode: PermissionMode = 'ask';
+  /**
+   * A rule file that will not compile, reported against the file itself rather
+   * than only as a failed session. Created on first use: a window that never
+   * looks at a rules file never makes a diagnostics collection.
+   */
+  private diagnostics: vscode.DiagnosticCollection | undefined;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -268,6 +300,12 @@ export class ChatPanel implements HostListener {
         return;
       case 'answer':
         await this.answer(msg.requestId, msg.decision, msg.scope);
+        return;
+      case 'remember':
+        await this.remember(msg.requestId, msg.rule);
+        return;
+      case 'openPermissions':
+        await this.openPermissionRules();
         return;
       case 'pickMention':
         // The picker is the editor's, not the webview's: it searches the real
@@ -669,6 +707,126 @@ export class ChatPanel implements HostListener {
     await this.closeReview(requestId);
   }
 
+  /**
+   * Writes an "always allow" into the workspace rule file, and reports what
+   * that did to the card it was chosen on.
+   *
+   * The host owns both halves: it appends the rule, and when the file then
+   * decides the approval, it answers that approval itself. What is decided here
+   * is only what the card is told — the call runs, or the card is still open and
+   * something else decides it — because those two endings look identical from
+   * the button and could not be more different to the user.
+   */
+  private async remember(requestId: string, rule: RuleSpec): Promise<void> {
+    const manager = this.ensureManager();
+    try {
+      const result = await manager.addPermissionRule(rule, requestId);
+      await this.closeReview(requestId);
+      this.log(
+        `wrote ${result.path} rule ${result.index}` +
+          (result.decided_by ? ` (decided by ${result.decided_by.describe || 'a rule'})` : ''),
+      );
+      this.post({
+        type: 'rememberResult',
+        requestId,
+        rule: result.rules.find((candidate) => candidate.index === result.index),
+        approved: result.approved === true,
+        decidedBy: result.decided_by,
+      });
+    } catch (err) {
+      // Nothing was written — the file is malformed, .anvil is not writable, or
+      // the session does not read the file at all. The card stays open, and the
+      // message is the host's, which names the file and the line.
+      this.post({ type: 'rememberResult', requestId, error: (err as Error).message });
+    }
+  }
+
+  /**
+   * Shows the workspace rule file where it lives, creating it when this
+   * workspace has written no rules yet.
+   *
+   * A file that will not compile is opened at the place the parser objected to,
+   * reported against the file in the Problems panel, and said in the panel: it
+   * is the one failure of this feature the user cannot see coming, so "the
+   * session would not start" would leave them looking for which bracket. The
+   * session itself reports the same problem as a failure to open, and this is
+   * the way to it.
+   */
+  async openPermissionRules(): Promise<void> {
+    let state: PermissionsResult;
+    try {
+      state = await this.ensureManager().permissionRules();
+    } catch (err) {
+      this.post({
+        type: 'notice',
+        level: 'error',
+        message: `Could not read the permission rules: ${(err as Error).message}`,
+      });
+      return;
+    }
+    const uri = vscode.Uri.file(state.path);
+    if (!state.exists) {
+      const create = 'Create it';
+      const answer = await vscode.window.showInformationMessage(
+        'This workspace has no permission rules. Nothing is allowed or refused by rule yet.',
+        { modal: false, detail: state.path },
+        create,
+      );
+      if (answer !== create) return;
+      try {
+        await vscode.workspace.fs.createDirectory(vscode.Uri.file(dirname(state.path)));
+        await vscode.workspace.fs.writeFile(uri, Buffer.from(emptyRulesFile(), 'utf8'));
+      } catch (err) {
+        this.post({
+          type: 'notice',
+          level: 'error',
+          message: `Could not create ${state.path}: ${(err as Error).message}`,
+        });
+        return;
+      }
+    }
+    const document = await vscode.workspace.openTextDocument(uri);
+    const editor = await vscode.window.showTextDocument(document);
+    this.reportProblem(state.path, state.problem);
+    // A file the session does not read is a file whose rules do nothing. The
+    // setting is what turns it off, so saying which setting is the whole help
+    // a user needs — the alternative is editing a rule and watching it be
+    // ignored, which reads as the feature being broken.
+    if (readSettings().session.load_permissions === false) {
+      this.post({
+        type: 'notice',
+        level: 'warn',
+        message: `anvil.permissions is off, so ${state.path} is not read: its rules decide nothing.`,
+      });
+    }
+    if (!state.problem) return;
+    const position = problemPosition(state.problem);
+    const at = new vscode.Position(position.line, position.column);
+    editor.selection = new vscode.Selection(at, at);
+    editor.revealRange(new vscode.Range(at, at), vscode.TextEditorRevealType.InCenter);
+    this.post({ type: 'notice', level: 'warn', message: describeProblem(state.path, state.problem) });
+  }
+
+  /** Reports a rule file that will not compile against the file itself. */
+  private reportProblem(path: string, problem: RuleProblem | undefined): void {
+    if (!problem) {
+      this.diagnostics?.delete(vscode.Uri.file(path));
+      return;
+    }
+    if (!this.diagnostics) this.diagnostics = vscode.languages.createDiagnosticCollection('anvil');
+    const position = problemPosition(problem);
+    const at = new vscode.Position(position.line, position.column);
+    // A zero-width range at the exact place the parser stopped: the file is
+    // being edited by hand, so pointing at a character beats underlining a line.
+    const diagnostic = new vscode.Diagnostic(
+      new vscode.Range(at, at),
+      problem.message,
+      vscode.DiagnosticSeverity.Error,
+    );
+    diagnostic.source = 'anvil';
+    this.diagnostics.set(vscode.Uri.file(path), [diagnostic]);
+  }
+
   private pendingApprovals(): ApprovalRequest[] {
     return this.manager?.pendingApprovals() ?? [];
   }
@@ -856,6 +1014,8 @@ export class ChatPanel implements HostListener {
     this.manager = undefined;
     this.runningChanged.dispose();
     this.sessionsChanged.dispose();
+    this.diagnostics?.dispose();
+    this.diagnostics = undefined;
     for (const uris of this.reviews.values()) {
       await this.previews.close(uris).catch(() => undefined);
     }
@@ -908,6 +1068,7 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
           <option value="bypass">Bypass approvals</option>
         </select>
         <button id="rules" type="button" class="ghost" title="Which rule files this workspace loaded" hidden>Rules</button>
+        <button id="permissions" type="button" class="ghost" title="Open .anvil/permissions.json: what runs without asking, and what is refused">Permissions</button>
         <span class="spacer"></span>
         <button id="attach" type="button" class="secondary" title="Reference a file or folder">@</button>
         <button id="stop" type="button" class="secondary" hidden>Stop</button>

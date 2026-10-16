@@ -74,6 +74,13 @@ export function activate(context: vscode.ExtensionContext): void {
       await panel.restart();
     }),
 
+    // Opens — or creates — the file that says what the agent may do without
+    // asking. The same layers the SDK reads, so a rule written here is a rule
+    // the next session obeys.
+    vscode.commands.registerCommand('anvil.openPermissionRules', async () => {
+      await panel.openPermissionRules();
+    }),
+
     vscode.commands.registerCommand('anvil.setApiKey', async () => {
       const saved = await promptForApiKey(context);
       if (!saved) return;

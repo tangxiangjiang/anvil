@@ -19,7 +19,7 @@ reports. The protocol between the two is chapter 35 of the design docs
 Download or build the VSIX for your platform and install it:
 
 ```bash
-code --install-extension anvil-vscode-0.35.9-win32-x64.vsix
+code --install-extension anvil-vscode-0.36.0-win32-x64.vsix
 ```
 
 Nothing else is needed: the `anvil-host` sidecar for that platform travels
@@ -58,7 +58,7 @@ The sidecar is found in this order, and the first hit wins:
 npm run package:vsix                 # this machine's platform
 npm run package:vsix -- --target linux-x64
 npm run package:all                  # one VSIX per target, in sequence
-npm run smoke:vsix -- --vsix anvil-vscode-0.35.9-win32-x64.vsix
+npm run smoke:vsix -- --vsix anvil-vscode-0.36.0-win32-x64.vsix
 ```
 
 Targets: `win32-x64`, `win32-arm64`, `linux-x64`, `linux-arm64`, `darwin-x64`,
@@ -116,6 +116,7 @@ names both sides and stops rather than failing later inside a tool call.
 | `anvil.vision` | Accept pasted images; off by default |
 | `anvil.rules` | Load `AGENTS.md` and `.anvil/rules/*.md`; on by default |
 | `anvil.cursorRules` | Also load `.cursor/rules/*.md|.mdc`; on by default |
+| `anvil.permissions` | Read the workspace's `.anvil/permissions.json`; on by default. Off means the session ignores the file — and an approval card has nothing to offer under "always allow", because a rule written into a file this session does not read would not be in force |
 | `anvil.hostPath` | The sidecar to spawn; empty uses the bundled one, then `PATH` |
 
 The API key is **not** a setting. Run **Anvil: Set API Key**; it goes into VS
@@ -135,6 +136,18 @@ a log line.
   for a command, the diff for a file, a summary otherwise. (Rendering the diff
   inside the prompt is not the same as the diff-review surface, which is
   p_0.35.5.)
+- **Remembers a pattern, not a tool.** "Always allow" offers the shapes that
+  would actually decide the call in front of you — this exact command, commands
+  starting with these tokens, anything the analyzer can prove read-only, this one
+  file — and each one writes a rule into `.anvil/permissions.json`. The host
+  re-reads that file and settles the call itself, so the choice takes effect
+  immediately and is visible in the file afterwards. When the call is one no rule
+  shape can describe (a `&&` line, say), the card offers a **session-only**
+  entry instead, marked as such. A call that runs without a prompt says
+  `allowed by rule N: …` on its card, and a refused one shows the rule's reason.
+  A rules file that will not compile is opened where it is broken, with a
+  diagnostic on the line, rather than failing the session with a bare error —
+  and **Anvil: Open Permission Rules** is how you get to the file.
 - **Kills its child.** One host per window, stopped on deactivate, on a folder
   change, and on a settings change (the host reads its configuration at spawn).
 - **Tells you what it read.** The tab reports which rule files this workspace
@@ -208,6 +221,11 @@ Type `/` in the composer for the catalogue. Built-ins:
 | `/clear` | Start a new conversation |
 | `/help` | List the commands |
 
+**Anvil: Open Permission Rules** (also the **Permissions** button on the composer) opens this
+workspace's `.anvil/permissions.json`, creating it with an empty rule set if it is not there
+yet. That file is what decides whether a tool call runs, stops to ask you, or is refused
+outright — see the section below.
+
 Skills in the workspace (`.anvil/skills/<id>/SKILL.md`) are listed as commands
 of their own: running one turns that skill on for the conversation. `@`
 references a file or folder for the next prompt.
@@ -232,10 +250,10 @@ wire; they are skipped when the sidecar has not been built.
 and `src/extension.ts` import `vscode` and are therefore not covered by these
 tests — they need an extension host. Keep them thin; the behaviour worth testing
 belongs on this side of the `vscode` boundary. `src/commands.ts`,
-`src/hostBundle.ts` and `src/sessionList.ts` are split that way on purpose: they
-decide what a typed line means, which binary to run, and what the session
-sidebar shows, and the `vscode`-bound modules above only carry those decisions
-out. `test/unit/chatLayout.test.ts` is the third kind of check: it reads
+`src/hostBundle.ts`, `src/sessionList.ts` and `src/rulesFile.ts` are split that
+way on purpose: they decide what a typed line means, which binary to run, what
+the session sidebar shows, and what the rules file's skeleton and error positions
+are, and the `vscode`-bound modules above only carry those decisions out. `test/unit/chatLayout.test.ts` is the third kind of check: it reads
 `media/chat.css` and `media/chat.js` as text and asserts the layout invariants
 those two files have to agree on, since nothing here can render them.
 `test/unit/markdown.test.ts` loads `media/markdown.js` the same way — by
@@ -244,7 +262,11 @@ incremental renderer rests on: that re-parsing a document from its last block's
 start reproduces that block exactly. `test/unit/linkPolicy.test.ts` reads the
 two files that implement the link policy and checks they still both exist and
 still allow the same schemes, which is the only part of that policy this suite
-can see.
+can see. `test/unit/permissionKinds.test.ts` is the fourth: it reads
+`media/chat.js`, `src/protocol.ts` and the two Go files behind them and asserts
+that every "always allow" kind the SDK offers has a label, that the methods are
+spelled alike on both sides, and that the fields the card reads are the ones the
+host sends — three failures that are all silent at runtime.
 
 The packaging step has its own check, since it is the part no unit test can
 reach: `npm run smoke:vsix` extracts a built VSIX to a temporary directory,

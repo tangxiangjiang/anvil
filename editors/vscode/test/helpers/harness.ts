@@ -17,7 +17,7 @@ import { ChatSession, SessionConfig } from '../../src/session';
 /** The scripted host. Spawned with the same Node that runs the tests. */
 export const FIXTURE_HOST = path.resolve(__dirname, '../../..', 'test', 'fixtures', 'fake-host.mjs');
 
-export type Scenario = 'chat' | 'approval' | 'diff' | 'slow' | 'fail' | 'silent';
+export type Scenario = 'chat' | 'approval' | 'diff' | 'slow' | 'fail' | 'silent' | 'permissions';
 
 export interface Harness {
   client: HostClient;

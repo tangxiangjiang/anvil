@@ -2,7 +2,7 @@
   "name": "anvil-vscode",
   "displayName": "Anvil",
   "description": "Anvil agent in VS Code: streaming chat, tool cards, per-call approvals.",
-  "version": "0.35.9",
+  "version": "0.36.0",
   "publisher": "anvil-dev",
   "license": "MIT",
   "repository": {
@@ -95,6 +95,11 @@
         "command": "anvil.restartHost",
         "title": "Anvil: Restart Host",
         "category": "Anvil"
+      },
+      {
+        "command": "anvil.openPermissionRules",
+        "title": "Anvil: Open Permission Rules",
+        "category": "Anvil"
       }
     ],
     "menus": {
@@ -186,6 +191,11 @@
           "type": "boolean",
           "default": true,
           "markdownDescription": "Also load `.cursor/rules/*.md` and `*.mdc`, so an existing Cursor setup carries over. Off means only Anvil's own rule files are read."
+        },
+        "anvil.permissions": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Read this workspace's `.anvil/permissions.json`: the rules that let a tool call run, stop to ask about it, or refuse it outright. Off means the session ignores the file, and an approval card has nothing to offer under \"always allow\" — a rule written into a file this session does not read would not be in force."
         }
       }
     }

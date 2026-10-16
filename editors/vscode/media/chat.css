@@ -520,6 +520,43 @@ body {
   font-size: 0.92em;
 }
 
+/*
+ * A "remember this" button carries the rule it will write, because the label
+ * alone ("always allow read-only commands") does not say what lands in the
+ * file, and the file is the thing that outlives the session.
+ */
+.approval .remember {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.approval .remember code,
+.approval .why code,
+.tool .rule-ref code {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.94em;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.14));
+  word-break: break-all;
+}
+
+/* A card waiting on the host is not answerable: the buttons stay, disabled. */
+.approval.pending {
+  opacity: 0.85;
+}
+
+/*
+ * Why a tool call did not stop for an approval. It is a line of the card rather
+ * than a badge, because it names a rule the user may want to go and edit.
+ */
+.tool .rule-ref {
+  padding: 0 8px 6px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.9em;
+}
+
 /* --- buttons -------------------------------------------------------------- */
 
 button {

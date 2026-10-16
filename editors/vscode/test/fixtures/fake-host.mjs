@@ -15,14 +15,21 @@
  *   slow       streams, then waits for `cancel` and reports done(cancelled)
  *   fail       done(error, code=max_steps)
  *   silent     accepts the prompt and never answers (for timeout paths)
+ *   permissions a shell call a rule insisted on asking about: the card carries
+ *              that rule and the "always allow" shapes for it, and a
+ *              `permissions.add` naming the request settles the card, so the
+ *              call runs without an approval.response
  *
  * Environment:
  *   FAKE_HOST_ECHO=<path>  append every session.new / session.resume / prompt
  *                          this host receives to that file as one JSON line
  *                          each, so a test can assert what the client sent
+ *   FAKE_HOST_RULES_BROKEN=1  report the workspace rule file as malformed, both
+ *                          from permissions.get and from permissions.add
  */
 
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 
 const scenario = process.env.FAKE_HOST_SCENARIO || 'chat';
@@ -35,6 +42,18 @@ const ignore = process.env.FAKE_HOST_IGNORE || '';
 const echoPath = process.env.FAKE_HOST_ECHO || '';
 /** The file the `diff` scenario edits, relative to this process's cwd. */
 const diffFile = process.env.FAKE_HOST_FILE || 'target.txt';
+/** Whether the workspace rule file is reported as one that will not compile. */
+const rulesBroken = process.env.FAKE_HOST_RULES_BROKEN === '1';
+/** The workspace rule file, which `permissions.get/add` are about. */
+const rulesPath = join(process.env.FAKE_HOST_CWD || process.cwd(), '.anvil', 'permissions.json');
+/** Its rules, as a session that appended them would have them. */
+const rules = [];
+/** Where the parse error is reported: the place, not a line for the file. */
+const rulesProblem = {
+  message: 'rule 2: effect "maybe" is not one of allow, ask, deny',
+  line: 4,
+  column: 12,
+};
 
 const out = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
 const notify = (method, params) => out({ jsonrpc: '2.0', method, params });
@@ -153,6 +172,57 @@ async function runScript(session, run, message) {
     event(session, run, { type: 'tool_result', tool_call_id: 't1', content: `wrote ${after.length} bytes`, is_error: false });
     event(session, run, { type: 'assistant', text: 'Done.' });
     finish(session, run, { status: 'finished', result: 'ok', steps: 3 });
+    return;
+  }
+
+  if (scenario === 'permissions') {
+    // What the real host sends when a rule says `ask`: the card names the rule
+    // that insisted, and every "always allow" shape that would decide this very
+    // command comes with it, already evaluated.
+    const command = 'git status -s';
+    const args = { command };
+    event(session, run, { type: 'assistant', text: 'I will check the working tree.' });
+    event(session, run, { type: 'tool_call', tool_call_id: 't1', name: 'shell', args });
+    const requestId = `req-${run}`;
+    notify('approval.request', {
+      request_id: requestId,
+      session_id: session.session_id,
+      run_id: run,
+      tool: 'shell',
+      args,
+      preview: { kind: 'command', command: ['git', 'status', '-s'] },
+      decisions: ['allow', 'allow_session', 'deny'],
+      rule: {
+        index: 1,
+        effect: 'ask',
+        tool: 'shell',
+        pattern: 'git:*',
+        reason: 'show me git before it runs',
+        describe: '.anvil/permissions.json rule 1 (ask shell "git:*"): show me git before it runs',
+      },
+      remember: [
+        { kind: 'exact', rule: { effect: 'allow', tool: 'shell', pattern: command } },
+        { kind: 'prefix', rule: { effect: 'allow', tool: 'shell', pattern: 'git status:*' } },
+        { kind: 'readonly', rule: { effect: 'allow', tool: 'shell', pattern: 'readonly' } },
+      ],
+      timeout_ms: 30_000,
+    });
+    const answer = await new Promise((resolve) => approvals.set(requestId, resolve));
+    if (answer.decision === 'deny') {
+      event(session, run, { type: 'tool_result', tool_call_id: 't1', content: 'denied by the user', is_error: true });
+      finish(session, run, { status: 'finished', result: 'nothing ran', steps: 2 });
+      return;
+    }
+    event(session, run, {
+      type: 'tool_result',
+      tool_call_id: 't1',
+      content: 'M file.txt',
+      is_error: false,
+      // Set only when a rule decided the call, which here is the one written
+      // from the card: that is the difference this scenario exists to pin.
+      rule: answer.rule,
+    });
+    finish(session, run, { status: 'finished', result: 'the tree is dirty', steps: 2 });
     return;
   }
 
@@ -344,6 +414,50 @@ async function handle(msg) {
       }
       sessions.delete(id);
       ok(msg.id, { closed: true });
+      return;
+    }
+    case 'permissions.get':
+      echo('permissions.get', msg.params || {});
+      if (rulesBroken) {
+        // A result, not an error: the client asked about the state of the file,
+        // and a file somebody is halfway through editing is one of its states.
+        ok(msg.id, { path: rulesPath, exists: true, rules: [], problem: rulesProblem });
+        return;
+      }
+      ok(msg.id, { path: rulesPath, exists: rules.length > 0, rules });
+      return;
+    case 'permissions.add': {
+      echo('permissions.add', msg.params || {});
+      if (rulesBroken) {
+        // The same place, in the shape a session failure would carry it.
+        fail(msg.id, -32000, `${rulesPath}:${rulesProblem.line}:${rulesProblem.column}: ${rulesProblem.message}`);
+        return;
+      }
+      const params = msg.params || {};
+      // An empty effect means allow, as it does in the SDK, and the appended
+      // rule lands last — which is where the index it reports points.
+      const rule = { effect: 'allow', ...(params.rule || {}) };
+      const info = {
+        index: rules.length + 1,
+        ...rule,
+        describe: `.anvil/permissions.json rule ${rules.length + 1} (${rule.effect} ${rule.tool} "${rule.pattern}")`,
+      };
+      rules.push(info);
+      const requestId = params.request_id;
+      const resolve = requestId ? approvals.get(requestId) : undefined;
+      ok(msg.id, {
+        path: rulesPath,
+        index: info.index,
+        rules,
+        decided_by: info,
+        approved: resolve !== undefined,
+      });
+      // The real host answers the approval itself when the file now decides the
+      // call, and names the rule on the tool result that follows.
+      if (resolve) {
+        approvals.delete(requestId);
+        resolve({ request_id: requestId, decision: 'allow', rule: info });
+      }
       return;
     }
     case 'models.list':

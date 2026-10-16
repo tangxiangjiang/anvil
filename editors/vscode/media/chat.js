@@ -30,6 +30,7 @@
   const modeSelect = document.getElementById('mode');
   const bypassStrip = document.getElementById('bypass');
   const rulesButton = document.getElementById('rules');
+  const permissionsButton = document.getElementById('permissions');
   const palette = document.getElementById('palette');
   const dock = document.getElementById('composerDock');
 
@@ -638,6 +639,18 @@
     card.classList.add(failed ? 'failed' : 'done');
     state.textContent = failed ? 'failed' : 'done';
 
+    // Why this call ran without stopping, when a rule is the reason — or why it
+    // did not run at all, which is the same field on a denial. The host sets it
+    // only for a call a rule really decided, so its absence means no rule did,
+    // not that some rule allowed it. It sits under the summary, which is the
+    // half of the card that stays visible while it is collapsed.
+    if (event.rule) {
+      const line = el('div', 'rule-ref');
+      line.appendChild(el('span', null, failed ? 'refused by ' : 'allowed by '));
+      line.appendChild(el('code', null, ruleText(event.rule)));
+      card.insertBefore(line, card.querySelector('.pane'));
+    }
+
     const content = event.content || '';
     const limit = 4000;
     const truncated = content.length > limit;
@@ -665,6 +678,43 @@
       return String(value);
     }
   }
+
+  // --- rules ----------------------------------------------------------------
+
+  /**
+   * Names a deciding rule the way the SDK does.
+   *
+   * The host sends its own sentence with the rule (`describe`), which is the
+   * wording a denial uses in the model's tool error — so the card and the error
+   * cannot disagree about which rule did it. The fallback is for a rule that
+   * arrived without one, which is a shape, not a decision: it says what the
+   * rule is made of rather than inventing a sentence.
+   */
+  function ruleText(rule) {
+    if (!rule) return '';
+    return rule.describe || ruleSentence(rule);
+  }
+
+  /** The rule as the file spells it, for a label that has no sentence. */
+  function ruleSentence(rule) {
+    if (!rule) return '';
+    const pattern = rule.pattern ? ' "' + rule.pattern + '"' : '';
+    return (rule.effect || 'allow') + ' ' + (rule.tool || 'tool') + pattern;
+  }
+
+  /**
+   * What each "always allow" choice is a claim about, by the kind the host
+   * labelled it with. The labels live here and the pattern does not: what a
+   * button writes is shown beside the label as the file spells it, so the user
+   * reads the rule they are about to add instead of a paraphrase of it.
+   */
+  const REMEMBER_LABELS = {
+    exact: 'Always allow this command',
+    prefix: 'Always allow this prefix',
+    readonly: 'Always allow read-only commands',
+    path: 'Always allow this file',
+    tool: 'Always allow this tool',
+  };
 
   // --- approvals ------------------------------------------------------------
 
@@ -734,27 +784,23 @@
     head.appendChild(el('span', 'tool-name', request.tool));
     head.appendChild(el('span', null, '?'));
     card.appendChild(head);
+    // A rule that insists on asking is part of why the card is here at all, and
+    // "why am I being asked about a command I allowed" has exactly this answer.
+    if (request.rule) {
+      const asked = el('div', 'why rule-ref');
+      asked.appendChild(el('span', null, 'Asked for by '));
+      asked.appendChild(el('code', null, ruleText(request.rule)));
+      card.appendChild(asked);
+    }
     card.appendChild(describePreview(request));
 
     const buttons = el('div', 'buttons');
     const scope = request.preview && request.preview.path ? request.preview.path : undefined;
-    const choices = [
-      { decision: 'allow', label: 'Allow once', cls: 'primary' },
-      {
-        decision: 'allow_session',
-        label: scope ? `Always allow for ${scope}` : `Always allow ${request.tool}`,
-        cls: 'secondary',
-      },
-      { decision: 'deny', label: 'Deny', cls: 'secondary' },
-    ];
-    for (const choice of choices) {
-      const button = el('button', choice.cls, choice.label);
-      button.type = 'button';
-      button.addEventListener('click', () => {
-        resolveApproval(request.request_id, choice.decision, scope);
-      });
-      buttons.appendChild(button);
-    }
+    buttons.appendChild(
+      decisionButton(request, 'allow', 'Allow once', 'primary', scope),
+    );
+    for (const button of rememberButtons(request)) buttons.appendChild(button);
+    buttons.appendChild(decisionButton(request, 'deny', 'Deny', 'secondary', scope));
     card.appendChild(buttons);
 
     if (request.timeout_ms) {
@@ -764,6 +810,123 @@
     approvals.set(request.request_id, card);
     transcript.appendChild(card);
     transcript.scrollTop = transcript.scrollHeight;
+  }
+
+  function decisionButton(request, decision, label, cls, scope) {
+    const button = el('button', cls, label);
+    button.type = 'button';
+    button.addEventListener('click', () => {
+      resolveApproval(request.request_id, decision, scope);
+    });
+    return button;
+  }
+
+  /**
+   * The "always allow" choices, one per rule the host proved would decide this
+   * very call. They are what the card remembers with now: each writes a rule
+   * into .anvil/permissions.json, which outlives the session and the process —
+   * unlike the session's own allowlist, which is memory and nothing else.
+   *
+   * A call no rule can describe — a compound shell line, say — is offered none
+   * of them, and then the session-scoped answer stands in, because it is the
+   * only memory such a call has. It is deliberately the fallback rather than a
+   * peer: "allow every shell call for this session" is the all-or-nothing
+   * choice the rule file exists to replace.
+   */
+  function rememberButtons(request) {
+    const options = Array.isArray(request.remember) ? request.remember : [];
+    if (options.length === 0) {
+      const scope = request.preview && request.preview.path ? request.preview.path : undefined;
+      const label = scope ? `Always allow for ${scope}` : `Always allow ${request.tool} this session`;
+      const button = decisionButton(request, 'allow_session', label, 'secondary', scope);
+      button.title = 'For this session only: nothing is written to .anvil/permissions.json.';
+      return [button];
+    }
+    return options.map((option) => {
+      const button = el('button', 'secondary remember');
+      button.type = 'button';
+      button.appendChild(el('span', 'label', REMEMBER_LABELS[option.kind] || 'Always allow this'));
+      // The rule as the file spells it, so what is remembered is read rather
+      // than inferred from the label — and "readonly" is exactly what lands in
+      // the file for that choice.
+      if (option.rule && option.rule.pattern) {
+        button.appendChild(el('code', 'pattern', option.rule.pattern));
+      }
+      button.title = 'Writes to .anvil/permissions.json: ' + ruleSentence(option.rule);
+      button.addEventListener('click', () => {
+        askToRemember(request, button, option);
+      });
+      return button;
+    });
+  }
+
+  /**
+   * Puts a "remember this" choice to the host, which appends the rule and — when
+   * the file now decides the call — answers the card itself.
+   *
+   * The buttons wait rather than claiming a verdict: whether the call runs is
+   * the file's decision, not the button's, and a card that said "allowed" for a
+   * rule an earlier deny outranks would be lying about the thing the user was
+   * just shown.
+   */
+  function askToRemember(request, button, option) {
+    const card = approvals.get(request.request_id);
+    if (!card) return;
+    card.classList.add('pending');
+    for (const other of card.querySelectorAll('button')) other.disabled = true;
+    button.disabled = true;
+    vscode.postMessage({
+      type: 'remember',
+      requestId: request.request_id,
+      rule: option.rule,
+    });
+  }
+
+  /**
+   * What became of a "remember this" choice. Three endings, and the card shows
+   * which one it got rather than one message for all of them:
+   *
+   *   approved          the file decides this call now, and the host answered
+   *                     it — the card is done, and nothing is left to send
+   *   written, unasked  the rule is in the file but does not decide this call
+   *                     (an earlier deny or ask outranks it), so the card is
+   *                     still open and the user is told what stood in the way
+   *   failed            nothing was written, and the error says why
+   */
+  function resolveRemember(msg) {
+    const card = approvals.get(msg.requestId);
+    if (!card) return;
+    card.classList.remove('pending');
+    if (msg.error) {
+      for (const button of card.querySelectorAll('button')) button.disabled = false;
+      card.appendChild(el('div', 'why', 'Nothing was written: ' + msg.error));
+      return;
+    }
+    if (msg.approved === true) {
+      // The host answered the approval itself. A second answer from here would
+      // name a request that is no longer pending.
+      approvals.delete(msg.requestId);
+      card.classList.add('resolved');
+      for (const button of card.querySelectorAll('button')) button.disabled = true;
+      const verdict = el('div', 'why', 'Allowed, and remembered: ');
+      verdict.appendChild(el('code', null, ruleText(msg.rule)));
+      card.appendChild(verdict);
+      return;
+    }
+    // Written, but not deciding. Another rule cannot help — precedence is by
+    // effect and then by file order, so no later rule outranks what did — and
+    // the choices are taken away rather than left to add a second copy.
+    for (const button of card.querySelectorAll('button.remember')) button.remove();
+    for (const button of card.querySelectorAll('button')) button.disabled = false;
+    const why = el('div', 'why');
+    if (msg.decidedBy) {
+      why.appendChild(el('span', null, 'The rule was written, but this call is still decided by '));
+      why.appendChild(el('code', null, ruleText(msg.decidedBy)));
+      why.appendChild(el('span', null, '. Answer the card to let it run.'));
+    } else {
+      why.appendChild(el('span', null, 'The rule was written, but it does not decide this call. Answer the card to let it run.'));
+    }
+    card.appendChild(why);
   }
 
   function resolveApproval(requestId, decision, scope) {
@@ -1237,6 +1400,13 @@
     rulesButton.addEventListener('click', () => showRules(rules));
   }
 
+  if (permissionsButton) {
+    // Always offered, even before the file exists: creating it is one of the two
+    // things this button is for, and an entry point that only appears once
+    // somebody has already found the file is not an entry point.
+    permissionsButton.addEventListener('click', () => vscode.postMessage({ type: 'openPermissions' }));
+  }
+
   // A paste is only ours when it carries an image; text pastes stay the
   // textarea's, which is why the default is left alone unless one is found.
   input.addEventListener('paste', (event) => {
@@ -1292,6 +1462,9 @@
         return;
       case 'approvalWithdrawn':
         withdrawApproval(msg.requestId);
+        return;
+      case 'rememberResult':
+        resolveRemember(msg);
         return;
       case 'mentions':
         addMentions(msg.paths || []);

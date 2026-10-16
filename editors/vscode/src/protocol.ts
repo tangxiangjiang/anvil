@@ -25,6 +25,8 @@ export const Method = {
   ModelsList: 'models.list',
   SkillsList: 'skills.list',
   RulesList: 'rules.list',
+  PermissionsGet: 'permissions.get',
+  PermissionsAdd: 'permissions.add',
   Shutdown: 'shutdown',
   ApprovalResponse: 'approval.response',
 } as const;
@@ -102,6 +104,13 @@ export interface SessionParams {
   store?: string;
   load_rules?: boolean;
   load_cursor_rules?: boolean;
+  /**
+   * Whether `.anvil/hooks.json` and `.anvil/permissions.json` are read for this
+   * session. Omitted means on: both are policy the workspace wrote down, so a
+   * client that wants them off says so. Only meaningful on `session.new`.
+   */
+  load_hooks?: boolean;
+  load_permissions?: boolean;
   setting_sources?: string[];
   builtin_tools?: string[];
   disallowed_tools?: string[];
@@ -127,6 +136,100 @@ export interface SessionResult {
   provider: string;
   model: string;
   permission_mode: PermissionMode;
+}
+
+// --- permissions -------------------------------------------------------------
+
+/**
+ * One rule as the user writes it in `.anvil/permissions.json`.
+ *
+ * The same shape travels both ways: the host sends the rules the file holds, and
+ * the client sends back the rule a "remember this" choice would append. `effect`
+ * may be left empty when asking for a rule to be written, which means allow.
+ */
+export interface RuleSpec {
+  effect?: 'allow' | 'ask' | 'deny' | '';
+  tool: string;
+  /**
+   * What the rule matches, read according to the call's facts: a command line
+   * for `shell`, a path glob for the file tools, a tool-name glob otherwise.
+   * Empty matches every call to the tool.
+   */
+  pattern?: string;
+  reason?: string;
+}
+
+/** One rule of a set, with the position and the sentence a decision quotes. */
+export interface RuleInfo extends RuleSpec {
+  /**
+   * The rule's position as the SDK counts it — one-based, the number a denial
+   * quotes. This is not an index into the `rules` array, which is zero-based.
+   */
+  index: number;
+  /** The SDK's own sentence for this rule; show it rather than composing one. */
+  describe?: string;
+}
+
+/** A rule file that will not compile, as the parser sees it. */
+export interface RuleProblem {
+  message: string;
+  /** One-based, and zero when the problem belongs to no particular place. */
+  line?: number;
+  column?: number;
+}
+
+/** The workspace rule file's state. */
+export interface PermissionsResult {
+  /** Absolute, so the file can be opened even before it exists. */
+  path: string;
+  /** False with no `problem` is a workspace that has written down nothing. */
+  exists: boolean;
+  rules: RuleInfo[];
+  /**
+   * Set when the file exists but cannot be read as rules. A result rather than
+   * an error: a file somebody is halfway through editing is a state of the file,
+   * and it is reported with its place so it can be fixed where it is edited.
+   */
+  problem?: RuleProblem;
+}
+
+export interface PermissionsAddParams {
+  rule: RuleSpec;
+  /**
+   * The pending approval this rule is being written for. The host then answers
+   * that approval itself when the file decides the call, so "always allow" takes
+   * effect on the call in front of the user instead of on the next one.
+   */
+  request_id?: string;
+}
+
+export interface PermissionsAddResult {
+  path: string;
+  /** The position the new rule landed at, counted as `RuleInfo.index` is. */
+  index: number;
+  rules: RuleInfo[];
+  /**
+   * The rule that decides the pending call now, which is not always the one just
+   * written: a deny outranks an allow wherever in the file each one sits.
+   */
+  decided_by?: RuleInfo;
+  /**
+   * The host answered the pending approval with allow because the file now
+   * decides the call. False means the card still has to be answered, and
+   * `decided_by` says what stood in the way.
+   */
+  approved?: boolean;
+}
+
+/**
+ * One "always allow" a card may offer. The host evaluated it against the very
+ * call being shown, so a button built from one always writes a rule that decides
+ * that call; a shape that would not is not offered.
+ */
+export interface RememberOption {
+  /** `exact` | `prefix` | `readonly` | `path` | `tool`. The host decides it. */
+  kind: string;
+  rule: RuleSpec;
 }
 
 // --- approval ----------------------------------------------------------------
@@ -167,6 +270,18 @@ export interface ApprovalRequest {
   args?: unknown;
   preview?: ApprovalPreview;
   decisions: Decision[];
+  /**
+   * The workspace rule that insisted on this prompt, when one did. Absent means
+   * the mode gate alone is the reason, so a card never claims a rule asked when
+   * none did.
+   */
+  rule?: RuleInfo;
+  /**
+   * The "always allow" choices this call can honestly be offered. Empty or
+   * absent means no rule shape would decide this call — a compound shell line,
+   * say — so the card offers none rather than one that would not work.
+   */
+  remember?: RememberOption[];
   timeout_ms?: number;
 }
 
@@ -353,6 +468,12 @@ export interface HostEvent {
   step?: number;
   max_steps?: number;
   code?: string;
+  /**
+   * The workspace rule that decided this tool result, when one did. It is how a
+   * call that ran without a prompt says why it did not need one; absent means no
+   * rule decided it, which is not the same as "some rule allowed it".
+   */
+  rule?: RuleInfo;
 }
 
 /** Run status values, mirroring `anvil.Status*`. */

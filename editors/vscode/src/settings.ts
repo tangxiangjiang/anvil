@@ -54,6 +54,13 @@ export function readSettings(): ResolvedSettings {
   // session belongs to the folder the user opened.
   session.load_rules = loadProject;
   session.load_cursor_rules = loadCursor;
+  // The permission rules are policy rather than context, so this is not the
+  // rules switch with a different name: `.anvil/permissions.json` says what the
+  // agent may do without asking, and a session that ignores it also offers
+  // nothing to remember on an approval card — a rule written there would not be
+  // in force. It is sent explicitly, both ways, because the host's default is
+  // on and this is the one place a user turns it off.
+  session.load_permissions = cfg.get<boolean>('permissions', true) ?? true;
   return {
     hostPath: (cfg.get<string>('hostPath', '') ?? '').trim(),
     session,

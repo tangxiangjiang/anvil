@@ -20,7 +20,11 @@ import {
   Method,
   ModelEntry,
   PermissionMode,
+  PermissionsAddParams,
+  PermissionsAddResult,
+  PermissionsResult,
   RuleFileInfo,
+  RuleSpec,
   SessionInfo,
   SkillEntry,
 } from './protocol';
@@ -302,6 +306,36 @@ export class HostManager {
     const client = await this.startClient();
     const result = await client.request<{ sessions: SessionInfo[] }>(Method.SessionList, {});
     return result.sessions ?? [];
+  }
+
+  /**
+   * The workspace rule file's state: where it is, what it says, and whether it
+   * can be read at all.
+   *
+   * A file that will not compile comes back as a result with its `problem`, not
+   * as a rejection — a file somebody is halfway through editing is a state the
+   * rules are in, and the client asked about the file, not about a session
+   * built from it.
+   */
+  async permissionRules(): Promise<PermissionsResult> {
+    const client = await this.startClient();
+    return client.request<PermissionsResult>(Method.PermissionsGet, {});
+  }
+
+  /**
+   * Appends one rule to the workspace rule file.
+   *
+   * `requestId`, when given, names the pending approval the rule is being
+   * written for: the host then answers that approval itself when the file
+   * decides the call, so "always allow" takes effect on the call in front of
+   * the user rather than on the next one. A file that will not compile is
+   * refused here, and the message names the file and the line.
+   */
+  async addPermissionRule(rule: RuleSpec, requestId?: string): Promise<PermissionsAddResult> {
+    const client = await this.startClient();
+    const params: PermissionsAddParams = { rule };
+    if (requestId !== undefined && requestId !== '') params.request_id = requestId;
+    return client.request<PermissionsAddResult>(Method.PermissionsAdd, params);
   }
 
   /** The provider's model catalogue, for the /model picker. */
