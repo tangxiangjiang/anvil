@@ -121,11 +121,18 @@ Only `read-only` ever satisfies a rule. `cannot-prove` is not a soft failure; it
 normal outcome for anything unusual, and the design accepts asking more often rather than
 guessing once.
 
-Pipeline: `Split` on `&&`, `||`, `;`, `|`, `&`, and newlines outside quotes (an unterminated
-quote, or any `$(`, backtick, `${`, or process substitution anywhere, is `cannot-prove`);
-reject any segment carrying a redirection (`>`, `>>`, `<`, `<<`, `2>`); `Lex` each segment
-into literal tokens, failing on quotes, escapes, `$` expansion, or an unquoted glob
-metacharacter; strip leading `timeout N`, `nice`, `env A=1`, and treat `cd X` as read-only;
+Pipeline: `Split` on `&&`, `||`, `;`, `|`, `&`, and newlines **outside quotes**; `Lex` each
+segment into literal tokens, failing on `$` or backtick expansion, a POSIX backslash escape,
+a redirection, an unquoted glob metacharacter, and the subshell/history characters. A quoted
+argument is kept when what it encloses is itself literal — that is what lets `sed -n '1p' f`
+and `grep -n "name" f` be proved, while `grep -n "$PATTERN" f` cannot be, and it is why an
+escape *inside* double quotes is refused: its value is not the text on the line. The one
+unquoted brace allowed is the exact token `{}`, find's placeholder — bash expands a brace
+only when it holds a comma or a range, so `{}` survives as written, while `{-delete,}` would
+expand and rewrite a later argument, and the shell would run something no rule matcher ever
+saw. A line that cannot be split, or a segment that cannot be lexed, makes the *whole* line
+`cannot-prove` rather than costing only that segment. Then strip leading `timeout N`, `nice`,
+`env A=1`, and treat `cd X` as read-only;
 then classify each remaining argv against a curated allowlist with per-command constraints —
 `find` only without `-exec`/`-delete`/`-ok`/`-fprint*`, `sed` only without `-i` and without a
 `w`/`r`/`e` script command, `git` by subcommand (`status`, `log`, `diff`, `show`,
