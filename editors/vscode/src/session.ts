@@ -10,12 +10,14 @@ import { LogFn, HostRpcError } from './hostClient';
 import { RunFailure, classifyDone, transportFailure } from './errors';
 import {
   ApprovalRequest,
+  Attachment,
   CodeNoApproval,
   Decision,
   DoneParams,
   HostEvent,
   Method,
   Notify,
+  PromptContext,
   PromptResult,
   SessionParams,
   SessionResult,
@@ -45,6 +47,16 @@ export interface ChatSessionHandlers {
 
 /** Options for one session, mapped onto `session.new`. */
 export type SessionConfig = Omit<SessionParams, 'agent_id'>;
+
+/**
+ * What travels with one turn beyond its text. Both are optional and both are
+ * omitted from the wire when empty, so a plain question is sent exactly as it
+ * was before either existed.
+ */
+export interface SendOptions {
+  context?: PromptContext;
+  attachments?: Attachment[];
+}
 
 export class ChatSession {
   private result: SessionResult | undefined;
@@ -146,17 +158,24 @@ export class ChatSession {
   }
 
   /** Opens a session if needed, then sends one turn. */
-  async send(text: string): Promise<PromptResult> {
+  async send(text: string, options: SendOptions = {}): Promise<PromptResult> {
     const message = text.trim();
     if (message === '') throw new Error('prompt is empty');
     if (this.state === 'running') {
       throw new Error(`a turn is already running (${this.runId ?? 'unknown run'})`);
     }
     const session = await this.open();
-    const result = await this.client.request<PromptResult>(Method.Prompt, {
+    const params: Record<string, unknown> = {
       session_id: session.session_id,
       message,
-    });
+    };
+    if (options.context && Object.keys(options.context).length > 0) {
+      params.context = options.context;
+    }
+    if (options.attachments && options.attachments.length > 0) {
+      params.attachments = options.attachments;
+    }
+    const result = await this.client.request<PromptResult>(Method.Prompt, params);
     this.runId = result.run_id;
     this.setState('running', result.run_id);
     return result;

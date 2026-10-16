@@ -298,6 +298,19 @@ type ToolPreview struct {
 	Path string
 	// Diff is a unified diff of the projected change, for Kind == "diff".
 	Diff string
+	// Before and After are the target's body before and after the projected
+	// change, for Kind == "diff". They let a client open a real diff editor
+	// instead of applying the unified diff itself. Both are empty for
+	// apply_patch, which may span several files.
+	//
+	// Both share one size cap (see maxPreviewBody in agent.go); a preview too
+	// large to carry sets Truncated and drops **both** bodies rather than
+	// handing a client a clipped post-image it would show as the whole file.
+	Before string
+	After  string
+	// Truncated reports that Before and After were dropped for size. The Diff
+	// is still present, so a client can fall back to rendering it.
+	Truncated bool
 	// Command is the argv that would run, for Kind == "command". shell is the
 	// one exception: its argv is the single command string it hands to a shell.
 	Command []string

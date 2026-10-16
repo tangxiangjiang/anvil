@@ -22,6 +22,14 @@ type Preview struct {
 	Path string
 	// Diff is a unified diff of the projected change, for Kind == "diff".
 	Diff string
+	// Before and After are the file's body before and after the projected
+	// change, for Kind == "diff". They are what a native diff editor needs: a
+	// unified diff alone would make every client re-implement the patch
+	// algorithm, and the client's second implementation is exactly the thing the
+	// user would be approving. Both are empty for apply_patch, which may span
+	// several files and so has no single pre- or post-image.
+	Before string
+	After  string
 	// Command is the argv that would run, for Kind == "command".
 	Command []string
 	// Summary is a one-line description for anything else.
@@ -174,6 +182,9 @@ func (r *Registry) patchPreview(args json.RawMessage) Preview {
 			diffs = append(diffs, unifiedDiff(op.Path, pre, text))
 		}
 	}
+	// Before/After stay empty on purpose: one patch may touch several files, so
+	// there is no single pre- or post-image to hand a diff editor. The
+	// concatenated diff is what the caller shows instead.
 	return Preview{
 		Kind: PreviewDiff,
 		Path: strings.Join(paths, ", "),
@@ -213,7 +224,13 @@ func (r *Registry) diffPreview(path, next string) Preview {
 	if err != nil {
 		return Preview{Kind: PreviewSummary, Path: path, Summary: err.Error()}
 	}
-	return Preview{Kind: PreviewDiff, Path: path, Diff: unifiedDiff(path, pre, next)}
+	return Preview{
+		Kind:   PreviewDiff,
+		Path:   path,
+		Diff:   unifiedDiff(path, pre, next),
+		Before: pre,
+		After:  next,
+	}
 }
 
 // ---------------------------------------------------------------------------

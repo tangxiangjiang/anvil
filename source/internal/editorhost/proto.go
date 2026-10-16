@@ -175,6 +175,11 @@ type SessionParams struct {
 	// which process runs; the workspace settings supply the defaults.
 	TestCommand  []string `json:"test_command,omitempty"`
 	BuildCommand []string `json:"build_command,omitempty"`
+
+	// Vision enables image attachments for the session. It is off by default:
+	// a prompt carrying attachments to a session that did not opt in is
+	// refused, so a client never gets a run that quietly ignores the image.
+	Vision bool `json:"vision,omitempty"`
 }
 
 // SessionResult is the identity of a live session.
@@ -239,6 +244,14 @@ type ApprovalPreview struct {
 	Kind string `json:"kind,omitempty"`
 	Path string `json:"path,omitempty"`
 	Diff string `json:"diff,omitempty"`
+	// Before and After are the target's body before and after the projected
+	// change, so the client can open a native diff editor. Empty for
+	// apply_patch, which spans several files and carries only Diff.
+	Before string `json:"before,omitempty"`
+	After  string `json:"after,omitempty"`
+	// Truncated reports that Before and After were withheld for size; Diff is
+	// still present and is what the client should render instead.
+	Truncated bool `json:"truncated,omitempty"`
 	// Command is a display-ready argv. shell carries its one command string.
 	Command []string `json:"command,omitempty"`
 	Summary string   `json:"summary,omitempty"`
@@ -319,6 +332,68 @@ type SessionRefParams struct {
 type PromptParams struct {
 	SessionID string `json:"session_id"`
 	Message   string `json:"message"`
+	// Context is the editor's ambient material — referenced paths, the current
+	// selection, diagnostics. The host folds it into the message it sends; see
+	// context.go. It is never trusted for path containment: every path in it is
+	// resolved against the workspace root and rejected if it leaves.
+	Context *PromptContext `json:"context,omitempty"`
+	// Attachments are images for the turn. They require a session created with
+	// vision: true, because Options.Vision.Enabled is what makes the SDK accept
+	// an attachment at all.
+	Attachments []Attachment `json:"attachments,omitempty"`
+}
+
+// PromptContext is what the editor knows that the prompt text alone does not
+// say. Every field is optional.
+type PromptContext struct {
+	// Mentions are workspace-relative paths the user referenced. Files are read
+	// into the message; directories become a listing.
+	Mentions []Mention `json:"mentions,omitempty"`
+	// Selection is the editor's active selection, sent as text.
+	Selection *Selection `json:"selection,omitempty"`
+	// Diagnostics are the client's own, straight from its language server.
+	Diagnostics []Diagnostic `json:"diagnostics,omitempty"`
+}
+
+// Mention is one referenced path. It carries a path, never contents: what gets
+// read, how much of it, and whether it is inside the workspace at all are the
+// host's decisions.
+type Mention struct {
+	Path string `json:"path"`
+}
+
+// Selection is the active editor selection.
+type Selection struct {
+	Path  string `json:"path"`
+	Range Range  `json:"range"`
+	Text  string `json:"text"`
+}
+
+// Range is a 1-based editor range, in the shape VS Code reports it.
+type Range struct {
+	StartLine   int `json:"start_line"`
+	StartColumn int `json:"start_column"`
+	EndLine     int `json:"end_line"`
+	EndColumn   int `json:"end_column"`
+}
+
+// Diagnostic is one problem the client already has from its language server.
+type Diagnostic struct {
+	Path     string `json:"path"`
+	Line     int    `json:"line"`
+	Severity string `json:"severity,omitempty"`
+	Message  string `json:"message"`
+}
+
+// Attachment is one image. Exactly one of Data / Path is used: Data (base64) for
+// an image pasted into the editor, Path (workspace-relative) for one picked
+// from disk. Bytes never touch the filesystem, and the path is resolved by the
+// SDK's own sandbox when the image is loaded.
+type Attachment struct {
+	Path   string `json:"path,omitempty"`
+	Data   string `json:"data,omitempty"`
+	MIME   string `json:"mime,omitempty"`
+	Detail string `json:"detail,omitempty"` // openai detail: low | high | auto
 }
 
 // PromptResult acknowledges the accepted turn.

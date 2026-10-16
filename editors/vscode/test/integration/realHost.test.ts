@@ -53,7 +53,7 @@ test('the real host handshakes and reports what it can do', { skip: missing }, a
   const client = realClient();
   try {
     await client.start();
-    const info = await client.initialize(process.cwd(), { name: 'anvil-vscode', version: '0.35.4' });
+    const info = await client.initialize(process.cwd(), { name: 'anvil-vscode', version: '0.35.5' });
 
     // `initialize()` only resolves after it has checked the protocol revision,
     // so reaching this line is the assertion that the two sides agree.
@@ -82,7 +82,7 @@ test('a run the provider refuses ends as a done with its own code', { skip: miss
 
   try {
     await client.start();
-    await client.initialize(process.cwd(), { name: 'anvil-vscode', version: '0.35.4' });
+    await client.initialize(process.cwd(), { name: 'anvil-vscode', version: '0.35.5' });
     const opened = await session.open();
     assert.equal(opened.model, UNREACHABLE.model);
     assert.equal(opened.provider, 'openai');

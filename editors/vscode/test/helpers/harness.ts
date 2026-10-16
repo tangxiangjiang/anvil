@@ -17,7 +17,7 @@ import { ChatSession, SessionConfig } from '../../src/session';
 /** The scripted host. Spawned with the same Node that runs the tests. */
 export const FIXTURE_HOST = path.resolve(__dirname, '../../..', 'test', 'fixtures', 'fake-host.mjs');
 
-export type Scenario = 'chat' | 'approval' | 'slow' | 'fail' | 'silent';
+export type Scenario = 'chat' | 'approval' | 'diff' | 'slow' | 'fail' | 'silent';
 
 export interface Harness {
   client: HostClient;
@@ -38,6 +38,10 @@ export interface HarnessOptions {
   config?: SessionConfig;
   /** Awaited before the session is wired up, to observe a notification race. */
   requestTimeoutMs?: number;
+  /** Working directory of the host child; tests that touch files set this. */
+  cwd?: string;
+  /** Extra environment for the child (FAKE_HOST_ECHO, FAKE_HOST_FILE, …). */
+  env?: NodeJS.ProcessEnv;
 }
 
 /** Starts a scripted host and opens a session on it. */
@@ -52,13 +56,13 @@ export async function startFakeHost(scenario: Scenario, options: HarnessOptions 
   const client = new HostClient({
     command: process.execPath,
     args: [FIXTURE_HOST],
-    cwd: process.cwd(),
-    env: { ...process.env, FAKE_HOST_SCENARIO: scenario },
+    cwd: options.cwd ?? process.cwd(),
+    env: { ...process.env, FAKE_HOST_SCENARIO: scenario, ...options.env },
     log: (line) => log.push(line),
     requestTimeoutMs: options.requestTimeoutMs ?? 5_000,
   });
 
-  const session = new ChatSession(client, process.cwd(), options.config ?? {}, {
+  const session = new ChatSession(client, options.cwd ?? process.cwd(), options.config ?? {}, {
     onEvent: (event) => events.push(event),
     onApproval: (request) => approvals.push(request),
     onApprovalWithdrawn: (id) => withdrawn.push(id),
@@ -69,7 +73,7 @@ export async function startFakeHost(scenario: Scenario, options: HarnessOptions 
   client.setNotificationHandler((method, params) => session.handle(method, params));
 
   await client.start();
-  await client.initialize(process.cwd(), { name: 'anvil-vscode-test', version: '0.0.0' });
+  await client.initialize(options.cwd ?? process.cwd(), { name: 'anvil-vscode-test', version: '0.0.0' });
   await session.open();
 
   return {

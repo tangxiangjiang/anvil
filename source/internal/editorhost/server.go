@@ -224,7 +224,7 @@ func (s *Server) handleInitialize(params json.RawMessage) (any, *RPCError) {
 }
 
 func capabilities() []string {
-	return []string{"streaming", "sessions", "resume", "cancel", "models", "approval"}
+	return []string{"streaming", "sessions", "resume", "cancel", "models", "approval", "context", "vision"}
 }
 
 // ---------------------------------------------------------------------------
@@ -244,7 +244,7 @@ func (s *Server) handleSessionNew(ctx context.Context, params json.RawMessage) (
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
-	sess := newSession(sessID, s.cwdPath(), mode)
+	sess := newSession(sessID, s.cwdPath(), mode, p.Vision)
 	opts, rpcErr := s.buildOptions(p, sess)
 	if rpcErr != nil {
 		return nil, rpcErr
@@ -272,7 +272,7 @@ func (s *Server) handleSessionResume(ctx context.Context, params json.RawMessage
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
-	sess := newSession(sessID, s.cwdPath(), mode)
+	sess := newSession(sessID, s.cwdPath(), mode, p.Vision)
 	opts, rpcErr := s.buildOptions(p, sess)
 	if rpcErr != nil {
 		return nil, rpcErr
@@ -372,11 +372,36 @@ func (s *Server) handlePrompt(ctx context.Context, params json.RawMessage) (any,
 	if agent == nil {
 		return nil, errCode(CodeNoSession, "session is not open: "+p.SessionID)
 	}
+	// Order is directive prefix, context block, user message: the model reads
+	// the request last, immediately after the material it is about.
 	message := p.Message
+	block, rpcErr := s.composePromptContext(p.Context)
+	if rpcErr != nil {
+		return nil, rpcErr
+	}
+	if block != "" {
+		message = block + "\n\n" + message
+	}
 	if sess.mode == ModePlan {
 		message = planPromptPrefix + "\n\n" + message
 	}
-	run, err := agent.Send(ctx, message)
+
+	var sendOpts []anvil.SendOption
+	if len(p.Attachments) > 0 {
+		if !sess.vision {
+			// Named as a setting rather than silently ignored: a run that
+			// quietly drops the screenshot looks like a model that cannot see.
+			return nil, errInvalidParams(
+				"prompt: attachments require a session created with vision: true")
+		}
+		atts, rpcErr := attachmentsFor(p.Attachments)
+		if rpcErr != nil {
+			return nil, rpcErr
+		}
+		sendOpts = append(sendOpts, anvil.WithAttachments(atts...))
+	}
+
+	run, err := agent.Send(ctx, message, sendOpts...)
 	if err != nil {
 		return nil, errHost(err)
 	}
@@ -493,6 +518,9 @@ func (s *Server) buildOptions(p SessionParams, sess *session) (anvil.Options, *R
 			LoadCursorRules: p.LoadCursorRules,
 			Store:           p.Store,
 		},
+		// Off unless the client asks: Vision.Enabled is what makes the SDK
+		// accept an attachment, and enabling it also advertises read_image.
+		Vision: anvil.VisionOptions{Enabled: p.Vision},
 	}
 	if len(p.TestCommand) > 0 {
 		opts.Test = anvil.TestOptions{Command: p.TestCommand}
@@ -655,11 +683,14 @@ func approvalScope(p anvil.ToolPreview) string {
 
 func approvalPreview(p anvil.ToolPreview) ApprovalPreview {
 	return ApprovalPreview{
-		Kind:    p.Kind,
-		Path:    p.Path,
-		Diff:    p.Diff,
-		Command: p.Command,
-		Summary: p.Summary,
+		Kind:      p.Kind,
+		Path:      p.Path,
+		Diff:      p.Diff,
+		Before:    p.Before,
+		After:     p.After,
+		Truncated: p.Truncated,
+		Command:   p.Command,
+		Summary:   p.Summary,
 	}
 }
 

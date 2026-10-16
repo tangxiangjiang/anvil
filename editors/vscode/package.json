@@ -2,7 +2,7 @@
   "name": "anvil-vscode",
   "displayName": "Anvil",
   "description": "Anvil agent in VS Code: streaming chat, tool cards, per-call approvals.",
-  "version": "0.35.4",
+  "version": "0.35.5",
   "publisher": "anvil-dev",
   "license": "MIT",
   "private": true,
@@ -124,6 +124,11 @@
           ],
           "default": "",
           "description": "Session store kind. Empty uses the host default."
+        },
+        "anvil.vision": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Let the session accept pasted images. Off by default: an image sent to a session created without this is refused, which is what keeps a stray paste from becoming a model request."
         }
       }
     }

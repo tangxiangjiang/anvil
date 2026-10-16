@@ -9,11 +9,19 @@
  * Scenarios:
  *   chat       assistant text, one tool call and its result, done(finished)
  *   approval   a gated write_file: waits for approval.response, then finishes
+ *   diff       a gated write_file whose preview carries both bodies, and which
+ *              really writes the file when it is allowed (FAKE_HOST_FILE)
  *   slow       streams, then waits for `cancel` and reports done(cancelled)
  *   fail       done(error, code=max_steps)
  *   silent     accepts the prompt and never answers (for timeout paths)
+ *
+ * Environment:
+ *   FAKE_HOST_ECHO=<path>  append every session.new / prompt this host receives
+ *                          to that file as one JSON line each, so a test can
+ *                          assert what the client actually sent
  */
 
+import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 
 const scenario = process.env.FAKE_HOST_SCENARIO || 'chat';
@@ -22,11 +30,28 @@ const scenario = process.env.FAKE_HOST_SCENARIO || 'chat';
 const protocol = Number(process.env.FAKE_HOST_PROTOCOL || 1);
 /** A method to swallow, for the client's timeout path. */
 const ignore = process.env.FAKE_HOST_IGNORE || '';
+/** Where to write the record of what the client asked for, if anywhere. */
+const echoPath = process.env.FAKE_HOST_ECHO || '';
+/** The file the `diff` scenario edits, relative to this process's cwd. */
+const diffFile = process.env.FAKE_HOST_FILE || 'target.txt';
 
 const out = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
 const notify = (method, params) => out({ jsonrpc: '2.0', method, params });
 const ok = (id, result) => out({ jsonrpc: '2.0', id, result });
 const fail = (id, code, message) => out({ jsonrpc: '2.0', id, error: { code, message } });
+
+/**
+ * Records one inbound request. Written synchronously and in arrival order, so a
+ * test that reads the file after a `done` sees the whole conversation.
+ */
+function echo(method, params) {
+  if (echoPath === '') return;
+  try {
+    appendFileSync(echoPath, `${JSON.stringify({ method, params })}\n`);
+  } catch {
+    // A record that cannot be written must not take the run down with it.
+  }
+}
 
 const sessions = new Map();
 let sessionSeq = 0;
@@ -82,6 +107,46 @@ async function runScript(session, run, message) {
     return;
   }
 
+  if (scenario === 'diff') {
+    // A single-file write, previewed the way the real host previews one: a
+    // unified diff plus both bodies, which is exactly what the extension opens
+    // in the editor's diff view. It really writes the file when allowed, so a
+    // denial can be checked against the file on disk.
+    const before = readIfPresent(diffFile);
+    const after = `${before}added by the fake host\n`;
+    const args = { path: diffFile, content: after };
+    event(session, run, { type: 'assistant', text: 'I will append a line.' });
+    event(session, run, { type: 'tool_call', tool_call_id: 't1', name: 'write_file', args });
+    const requestId = `req-${run}`;
+    notify('approval.request', {
+      request_id: requestId,
+      session_id: session.session_id,
+      run_id: run,
+      tool: 'write_file',
+      args,
+      preview: {
+        kind: 'diff',
+        path: diffFile,
+        diff: unifiedDiff(diffFile, before, after),
+        before,
+        after,
+      },
+      decisions: ['allow', 'allow_session', 'deny'],
+      timeout_ms: 30_000,
+    });
+    const answer = await new Promise((resolve) => approvals.set(requestId, resolve));
+    if (answer.decision === 'deny') {
+      event(session, run, { type: 'tool_result', tool_call_id: 't1', content: 'denied by the user', is_error: true });
+      finish(session, run, { status: 'finished', result: 'nothing written', steps: 2 });
+      return;
+    }
+    writeFileSync(diffFile, after);
+    event(session, run, { type: 'tool_result', tool_call_id: 't1', content: `wrote ${after.length} bytes`, is_error: false });
+    event(session, run, { type: 'assistant', text: 'Done.' });
+    finish(session, run, { status: 'finished', result: 'ok', steps: 3 });
+    return;
+  }
+
   if (scenario === 'approval') {
     const args = message.includes('deny') ? { path: 'denied.txt' } : { path: 'notes.txt', content: 'hello' };
     event(session, run, { type: 'assistant', text: 'I will write the file.' });
@@ -132,6 +197,31 @@ async function runScript(session, run, message) {
   });
 }
 
+/** Reads a file's body, or "" when it is not there yet (a create). */
+function readIfPresent(path) {
+  try {
+    return readFileSync(path, 'utf8');
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * A minimal unified diff: one hunk, the whole old body removed and the whole
+ * new one added. It is not what the real host produces — that one keeps three
+ * lines of context — but it has the same shape, which is all this fixture is
+ * here to pin.
+ */
+function unifiedDiff(path, before, after) {
+  if (before === after) return '';
+  const oldLines = before === '' ? [] : before.replace(/\n$/, '').split('\n');
+  const newLines = after === '' ? [] : after.replace(/\n$/, '').split('\n');
+  const lines = [`--- a/${path}`, `+++ b/${path}`, `@@ -1,${oldLines.length} +1,${newLines.length} @@`];
+  for (const line of oldLines) lines.push(`-${line}`);
+  for (const line of newLines) lines.push(`+${line}`);
+  return `${lines.join('\n')}\n`;
+}
+
 const reader = createInterface({ input: process.stdin });
 const queue = [];
 let draining = false;
@@ -177,6 +267,7 @@ async function handle(msg) {
       });
       return;
     case 'session.new':
+      echo('session.new', msg.params || {});
       ok(msg.id, newSession(msg.params || {}));
       return;
     case 'session.resume':
@@ -210,6 +301,7 @@ async function handle(msg) {
       }
       runSeq += 1;
       const run = `r${runSeq}`;
+      echo('prompt', msg.params || {});
       activeRun = { session, run, cancelled: false };
       ok(msg.id, { session_id: session.session_id, run_id: run, agent_id: session.agent_id });
       const message = (msg.params && msg.params.message) || '';

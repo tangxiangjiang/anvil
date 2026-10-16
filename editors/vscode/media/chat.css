@@ -384,3 +384,156 @@ kbd {
   border-radius: 3px;
   padding: 0 4px;
 }
+
+/* --- composer chips ------------------------------------------------------- */
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 2px 4px 2px 6px;
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.4));
+  border-radius: 10px;
+  background: var(--vscode-input-background);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.85em;
+  color: var(--vscode-descriptionForeground);
+}
+
+.chip .chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chip img {
+  max-height: 28px;
+  max-width: 60px;
+  border-radius: 3px;
+  display: block;
+}
+
+.chip-x {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 0 2px;
+  opacity: 0.7;
+}
+
+.chip-x:hover {
+  opacity: 1;
+}
+
+/* The same chips, echoed inside the turn they were sent with. */
+
+.msg .refs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.msg .ref {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.85em;
+  color: var(--vscode-descriptionForeground);
+}
+
+.msg .shots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.msg .shots img {
+  max-height: 90px;
+  max-width: 140px;
+  border-radius: 4px;
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.4));
+}
+
+/* --- review button on a diff preview -------------------------------------- */
+
+.approval .review {
+  align-self: flex-start;
+  background: none;
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.4));
+  color: var(--vscode-textLink-foreground);
+  padding: 2px 8px;
+  font-size: 0.9em;
+}
+
+.approval .review:hover:not(:disabled) {
+  background: var(--vscode-button-secondaryHoverBackground, rgba(128, 128, 128, 0.15));
+}
+
+/* --- changed files -------------------------------------------------------- */
+
+.changes {
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
+  border-radius: var(--anvil-radius);
+  background: var(--vscode-editorWidget-background, transparent);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.changes .head {
+  font-size: 0.8em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--vscode-descriptionForeground);
+}
+
+.change {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  padding: 2px 4px;
+  color: var(--vscode-foreground);
+}
+
+.change:hover {
+  background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.12));
+}
+
+.change .kind {
+  flex: none;
+  width: 5.5em;
+  font-size: 0.85em;
+}
+
+.change .kind.created {
+  color: var(--vscode-gitDecoration-addedResourceForeground, #3fb950);
+}
+
+.change .kind.deleted {
+  color: var(--vscode-gitDecoration-deletedResourceForeground, #f85149);
+}
+
+.change .kind.modified {
+  color: var(--vscode-gitDecoration-modifiedResourceForeground, #d29922);
+}
+
+.change .path {
+  flex: 1;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.9em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

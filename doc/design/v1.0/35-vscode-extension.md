@@ -55,12 +55,12 @@ Messages marked ← are server→client **notifications** (no `id`); → are cli
 
 | Direction | Method | Payload |
 |-----------|--------|---------|
-| → | `initialize` | `cwd`, `settings{provider, model, base_url, max_steps, store}`, `client_info` |
+| → | `initialize` | `protocol`, `cwd`, `client{name, version}` — the workspace root, fixed for the process. Everything else a session needs goes on `session.new`. |
 | ← | `initialized` | `host_version`, `capabilities[]` |
 | → | `session.new` \| `session.resume` \| `session.list` \| `session.close` | session == one agent id |
-| → | `prompt` | `session_id`, `text`, `attachments[]`, `context{active_file, selection, diagnostics, mentions[]}` |
+| → | `prompt` | `session_id`, `message`, `attachments[]{path\|data, mime}`, `context{mentions[]{path}, selection{path, range, text}, diagnostics[]{path, line, severity, message}}` |
 | ← | `event` | `run_id` + **`JobEventBody`** (below) |
-| ← | **`approval.request`** | `request_id`, `session_id`, `run_id`, `tool`, `args`, `preview{kind, path, diff, command[], summary}`, `decisions[]`, `timeout_ms` |
+| ← | **`approval.request`** | `request_id`, `session_id`, `run_id`, `tool`, `args`, `preview{kind, path, diff, before?, after?, command[], summary, truncated?}`, `decisions[]`, `timeout_ms` |
 | → | **`approval.response`** | `request_id`, `decision: allow\|deny\|allow_session`, `scope?`, `args?`, `message?` |
 | → | `cancel` | `session_id` |
 | → | `models.list` | → `ModelInfo[]` for the picker |
@@ -77,6 +77,17 @@ Consequences the extension must respect:
 - `usage` is **terminal only** (on `anvil.RunResult`). A live token meter would need an SDK addition and is out of scope.
 - `Run.Stream(ctx)` ignores its `ctx`; cancellation is `Run.Cancel`, driven by the `cancel` method.
 - `Run.emit` drops events when its buffer fills. The host must drain the channel and forward without blocking on stdio writes (use an internal queue), or the UI silently loses output.
+
+## Context injection
+
+What the editor knows, the agent should know — but the client decides *what*, and the host decides *how much*. The extension sends a `context` object on `prompt`; the host composes it into the turn.
+
+- **The host composes text, not structure.** There is no multi-part text message in the public SDK — `Agent.Send` takes a `string` — so mentions, selection, and diagnostics are folded into the message the same way plan mode's directive is (p_0.35.3). A structured-content SDK API would be a new capability; this phase does not need one.
+- **Order: directive prefix, context block, user message.** The model reads the request last, immediately after the material it is about.
+- **Mentions are read by the host, under the workspace root.** A file mention carries its contents; a folder mention carries a listing, not a dump. Caps: **32 mentions**, **64 KiB per file**, **256 KiB total**, **200 listing entries**. A capped file is included up to the cap with an explicit truncation note — silently sending half a file would be worse than saying so.
+- **Diagnostics are the client's.** The editor already has them from the language server, so the host neither computes nor filters them; it renders a compact block. The cap (100 entries) exists to keep a broken file from filling the context.
+- **Attachments ride the vision path.** `attachments[]` becomes `anvil.ImageAttachment` and goes out on `anvil.WithAttachments`; in-memory bytes for a pasted image, a workspace-relative path for one picked from disk. Vision is **off by default** and a session must opt in (`vision: true` on `session.new`), because `Options.Vision.Enabled` is what makes the SDK accept an attachment at all — a client that sends one to a non-vision session gets `-32602` naming the setting, not a run that mysteriously ignores the image.
+- **The host reads nothing outside the workspace.** A mention path is resolved against the session cwd, cleaned, and re-checked after symlinks; an absolute path outside the root, a `..` escape, and a symlink pointing out are all rejected as invalid params. The SDK's own sandbox still governs what *tools* may touch; this check governs what the host will read into a prompt on a client's word, which is a different and narrower promise.
 
 ## Approval and permission modes
 
@@ -107,6 +118,10 @@ The preview cannot be computed in the host. The host imports the **public `anvil
 
 The host does not have to be trusted with the pre-image either: a preview is best-effort by contract, and an empty `Kind` means "nothing could be shown", never "this call is safe".
 
+For **diff review**, the preview carries the pre-image and the projected post-image (`before`, `after`) alongside the unified diff. The alternative — a client applying the diff itself to reconstruct the result — puts a second implementation of the patch algorithm in the editor, and the thing it would get wrong is the thing the user is approving. The bodies are what the SDK already had in hand when it built the diff, so they cost nothing to include.
+
+Both bodies share one cap; past it, **both are dropped together** and `truncated` is set, because a diff editor showing a clipped post-image as if it were the whole file is worse than showing the diff text. `apply_patch` is the exception: it may span several files, so it sends the concatenated diff and no bodies, and the client renders that diff rather than opening a diff editor. When the answer is `allow` with rewritten `args`, the review has to be re-opened against the edited call — the preview describes the call that was asked for, not the one the user changed it into.
+
 ### Modes (Claude Code-class)
 
 | Mode | Implementation |
@@ -126,6 +141,7 @@ The client sets these per session, on `session.new` / `session.resume`:
 | `permission_groups` | overrides the default gated set (`write, edit, shell, verify, web, mcp`); ignored in `bypass` |
 | `approval_timeout_ms` | per-session wait for an answer; `0` = default 5m, negative = until the run ends |
 | `test_command` / `build_command` | argv for `run_tests` / `build`. Without them the host registers neither tool, so those calls cannot reach an approval at all |
+| `vision` | opt in to image attachments; off by default, and a prompt carrying one without it is refused |
 
 - **Session allowlist**: the host remembers `(session, tool, scope)` approvals and short-circuits the callback. In-memory per session; not persisted. `scope` is opaque to the host — it compares it verbatim and takes it from `preview.path`, so a client can offer "always allow shell" (no scope) and "always allow edits to this file" (that path) through one field.
 - **Diff review before apply**: for `write_file` / `edit_file` / `apply_patch` the SDK computes the resulting diff at gate time and puts it on `preview`. `apply_patch` is dry-run through the existing patch implementation, so the files it reports are the files it would touch — and the dry run must not mutate anything. This is the review-changes flow.
@@ -160,6 +176,15 @@ The client sets these per session, on `session.new` / `session.resume`:
 - **The webview is a rendering surface only.** Sessions, approvals and error classification live on the extension side; the HTML holds no state the host needs, and everything it renders from the host goes through `textContent`, never `innerHTML` — tool output is arbitrary file content and command output, and it must not be able to add markup or script to the panel. The document is served under a CSP with a per-render nonce and no network sources.
 - **Trust is declared, not just checked.** `capabilities.untrustedWorkspaces.supported: false` keeps VS Code from activating the extension in a folder the user has not trusted; the spawn path asserts it as well, because a UI check is a message, not an enforcement point.
 - **Testing two ways.** `test/fixtures/fake-host.mjs` speaks the real protocol from a script, which is what makes the state machine testable without a key or a network — but a stub only pins the extension's *assumptions* about the Go side. Two integration tests therefore drive the real `anvil-host` binary with the model call aimed at `127.0.0.1:9`, which ends the run offline and deterministically and pins the wire against the actual Go writer.
+
+### Context and diff review as built (p_0.35.5)
+
+- **Five new modules, split along the existing line.** `mentions.ts` (a picked path, and the paths a tool call's arguments name) and `attachments.ts` (a data URL into `{data, mime}`, with its refusals) import no `vscode` and are unit-tested. `editorContext.ts` (selection, diagnostics, the quick pick), `review.ts` (the content provider and the diff editor), and `changes.ts` (the changed-files tracker) do import it and stay thin — the same boundary p_0.35.4 drew.
+- **Mentions are picked, then sent as paths.** The composer opens a quick pick over `workspace.findFiles` on `@`, and the chip it leaves behind holds a workspace-relative path — never file contents. What gets read, how much of it, and whether it is even inside the workspace is the host's decision, made once, for every client.
+- **Selection and diagnostics come from the editor, on send**, not when the panel was opened: the selection the prompt should carry is the one that exists when the user presses Send. Diagnostics are read from the language server already running, which is why the extension computes nothing.
+- **A pasted image travels as bytes.** The webview reads the pasted `File` with a `FileReader` and posts the `data:` URL it produces — the one thing a webview can do with a `File` — and the extension turns that into `{data, mime}`. The conversion is where the refusals live (not an image, not base64, empty, larger than the composer's per-paste bound), it has no `vscode` import, and it is unit-tested: a payload that reaches the wire with the wrong MIME type is a model request made from something the user did not send. The bound is a transport sanity check, not a copy of the SDK's budget — the vision pipeline downscales to a 2048-longest side and applies its own 4 MiB encoded cap afterwards. Bytes, not a path, so no temporary file is written anywhere; a vision-off session is warned in the composer *and* refused by the host.
+- **Diff review is a real diff editor.** The extension serves the preview's `before` / `after` through a read-only `TextDocumentContentProvider` and opens `vscode.diff` against them, so the review is the editor's own diff UI — folding, inline changes, and the theme included — rather than a second renderer inside a webview. Accepting closes the review and answers `allow`; dismissing answers `deny`. The review is a tab about a *proposed* change, so it is closed when the question it belongs to is answered, withdrawn, or the run ends: a window full of diffs of changes that were never made is worse than no review at all. When the bodies are absent — dropped by the cap, or an `apply_patch` that spans files — the card says so and the diff text is the review, rather than opening an empty diff editor.
+- **The changed-files list needs snapshots, not reconstruction.** Before allowing a call that would write, the extension reads the target's current content into memory, keyed by path; it does the same at the `tool_call` event, which is what covers the calls that were never gated (accept-edits, bypass). After the turn, each touched file gets an entry whose diff opens against that snapshot. Reading the pre-image *before* the write is the only moment it is available — the host's preview has it, but the client that applied the edit does not keep it, and re-deriving it from git would make the feature depend on the workspace being a clean git checkout. First touch wins within a turn, so a file written twice is diffed against the state the turn started from. The list covers the tools that name what they write — `write_file`, `edit_file`, and the file headers of an `apply_patch` — and not a `shell` command that redirects into a file: rescanning the workspace after every turn would close that gap and cost far more than the gap does.
 
 ## Placement
 

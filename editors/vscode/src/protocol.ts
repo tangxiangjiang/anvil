@@ -110,6 +110,12 @@ export interface SessionParams {
   approval_timeout_ms?: number;
   test_command?: string[];
   build_command?: string[];
+  /**
+   * Opt in to image attachments. Off by default: the host refuses an
+   * attachment on a session that did not ask, because the SDK's
+   * `Vision.Enabled` is what makes it accept one at all.
+   */
+  vision?: boolean;
 }
 
 export interface SessionResult {
@@ -138,6 +144,15 @@ export interface ApprovalPreview {
   kind?: 'diff' | 'command' | 'summary' | '';
   path?: string;
   diff?: string;
+  /**
+   * The target's body before and after the projected change. Present for
+   * write_file / edit_file, so a review can be opened as a real diff; empty for
+   * apply_patch, which may span several files and carries only `diff`.
+   */
+  before?: string;
+  after?: string;
+  /** The bodies were withheld for size; render `diff` instead. */
+  truncated?: boolean;
   command?: string[];
   summary?: string;
 }
@@ -166,9 +181,60 @@ export interface ApprovalResponse {
 
 // --- prompt / cancel ---------------------------------------------------------
 
+/**
+ * What the editor knows that the prompt text alone does not say. The host folds
+ * it into the message; the client never sends file contents it did not already
+ * have in a selection.
+ */
+export interface PromptContext {
+  /** Workspace-relative paths the user referenced. Files are read by the host. */
+  mentions?: Mention[];
+  selection?: Selection;
+  diagnostics?: Diagnostic[];
+}
+
+export interface Mention {
+  path: string;
+}
+
+export interface Selection {
+  path: string;
+  range: Range;
+  text: string;
+}
+
+/** A 1-based editor range, in the shape VS Code reports it. */
+export interface Range {
+  start_line: number;
+  start_column: number;
+  end_line: number;
+  end_column: number;
+}
+
+export interface Diagnostic {
+  path: string;
+  line: number;
+  severity?: string;
+  message: string;
+}
+
+/**
+ * One image. Exactly one of `data` (base64, for a paste) or `path`
+ * (workspace-relative, for a file the user picked) is set.
+ */
+export interface Attachment {
+  path?: string;
+  data?: string;
+  mime?: string;
+  /** openai detail hint: low | high | auto. */
+  detail?: string;
+}
+
 export interface PromptParams {
   session_id: string;
   message: string;
+  context?: PromptContext;
+  attachments?: Attachment[];
 }
 
 export interface PromptResult {

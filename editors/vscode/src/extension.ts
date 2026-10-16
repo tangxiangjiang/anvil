@@ -7,6 +7,7 @@
 
 import * as vscode from 'vscode';
 import { ChatPanelProvider } from './chatPanel';
+import { PreviewDocuments } from './review';
 import { clearApiKey, promptForApiKey } from './settings';
 
 /** The window's provider, so `deactivate` can kill the child. */
@@ -17,7 +18,12 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(output);
   const log = (line: string): void => output.appendLine(line);
 
-  const provider = new ChatPanelProvider(context, log);
+  // One content provider for the window, for the life of the extension: it is
+  // what makes a diff view of a file that has not been written yet possible.
+  const previews = new PreviewDocuments();
+  context.subscriptions.push(previews);
+
+  const provider = new ChatPanelProvider(context, log, previews);
   active = provider;
 
   context.subscriptions.push(

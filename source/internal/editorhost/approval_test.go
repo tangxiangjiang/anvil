@@ -123,6 +123,34 @@ func TestApprovalRequestCarriesAToolPreview(t *testing.T) {
 	}
 }
 
+// A diff preview carries both bodies, so the client can open a real diff
+// editor instead of applying the unified diff itself. The thing an editor-side
+// applier would get wrong is the thing the user is approving.
+func TestApprovalPreviewCarriesBothBodies(t *testing.T) {
+	llm := newStubLLM(t,
+		toolTurn("call_1", "edit_file", `{"path":"a.txt","old_string":"beta","new_string":"gamma"}`),
+		textTurn("done"),
+	)
+	h, dir := initHost(t, llm.baseURL())
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("alpha\nbeta\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sessionID := startSession(t, h, SessionParams{})
+
+	var preview map[string]any
+	promptRun(t, h, sessionID, "edit it", func(req map[string]any) map[string]any {
+		preview, _ = req["preview"].(map[string]any)
+		return map[string]any{"decision": DecisionDeny}
+	})
+
+	if preview["before"] != "alpha\nbeta\n" || preview["after"] != "alpha\ngamma\n" {
+		t.Fatalf("unexpected bodies: %v", preview)
+	}
+	if _, ok := preview["truncated"]; ok {
+		t.Fatalf("a two-line preview must not be marked truncated: %v", preview)
+	}
+}
+
 // --- decisions --------------------------------------------------------------
 
 func TestDenyReachesTheModelAsAToolError(t *testing.T) {

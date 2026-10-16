@@ -651,15 +651,32 @@ func configureWebTools(reg *tools.Registry, opts Options) error {
 	return nil
 }
 
+// maxPreviewBody is the shared size cap for ToolPreview.Before and .After.
+//
+// The two bodies are one budget, not two: past it a client gets neither, and
+// Truncated says so. The alternative — keep whichever body fits — would hand a
+// diff editor a clipped post-image and let it render that as the whole file,
+// which is a worse failure than showing the unified diff text the preview
+// already carries. apply_patch carries no bodies at all, so it never trips this.
+const maxPreviewBody = 512 << 10
+
 // toToolPreview lifts the runtime's preview into the public type.
 func toToolPreview(p tools.Preview) ToolPreview {
-	return ToolPreview{
+	out := ToolPreview{
 		Kind:    p.Kind,
 		Path:    p.Path,
 		Diff:    p.Diff,
 		Command: p.Command,
 		Summary: p.Summary,
 	}
+	if p.Before != "" || p.After != "" {
+		if len(p.Before)+len(p.After) <= maxPreviewBody {
+			out.Before, out.After = p.Before, p.After
+		} else {
+			out.Truncated = true
+		}
+	}
+	return out
 }
 
 func composePermission(user PermissionFunc, hookFile *hooks.File, hookOpts hooks.CheckOpts) PermissionFunc {

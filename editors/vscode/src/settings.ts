@@ -33,6 +33,10 @@ export function readSettings(): ResolvedSettings {
   };
   if (maxSteps > 0) session.max_steps = maxSteps;
   if (store !== '') session.store = store;
+  // Vision is opt-in, and the setting is the whole switch: a prompt carrying an
+  // image on a session created without it is refused by the host, so a paste
+  // path with this off would fail every time.
+  session.vision = cfg.get<boolean>('vision', false) ?? false;
   // The workspace, not the process, decides where sessions land: an editor
   // session belongs to the folder the user opened.
   session.load_rules = true;

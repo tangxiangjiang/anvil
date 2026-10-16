@@ -433,6 +433,88 @@ func TestPreviewForUnknownToolIsASummary(t *testing.T) {
 	}
 }
 
+// --- preview bodies (diff review) -------------------------------------------
+
+// A client cannot render a real diff editor from a unified diff without
+// re-implementing the patch algorithm, so the preview carries both bodies.
+func TestPreviewCarriesBothBodies(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("one\ntwo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a, rec := gatedAgent(t, dir, Options{PermissionGroups: []string{"write"}})
+	execTool(a, "write_file", map[string]any{"path": "a.txt", "content": "one\nTWO\n"})
+
+	req, _ := rec.last()
+	if req.Preview.Before != "one\ntwo\n" || req.Preview.After != "one\nTWO\n" {
+		t.Fatalf("bodies: before=%q after=%q", req.Preview.Before, req.Preview.After)
+	}
+	if req.Preview.Truncated {
+		t.Fatal("a two-line preview must not be reported as truncated")
+	}
+}
+
+// A file that does not exist yet previews as an empty pre-image, which is what
+// a diff editor needs to show the whole body as an addition.
+func TestPreviewCreateHasAnEmptyPreImage(t *testing.T) {
+	dir := t.TempDir()
+	a, rec := gatedAgent(t, dir, Options{PermissionGroups: []string{"write"}})
+	execTool(a, "write_file", map[string]any{"path": "new.txt", "content": "hello\n"})
+
+	req, _ := rec.last()
+	if req.Preview.Before != "" || req.Preview.After != "hello\n" {
+		t.Fatalf("bodies: before=%q after=%q", req.Preview.Before, req.Preview.After)
+	}
+}
+
+func TestPreviewDeleteHasAnEmptyPostImage(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "gone.txt"), []byte("bye\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a, rec := gatedAgent(t, dir, Options{PermissionGroups: []string{"edit"}})
+	patch := "*** Begin Patch\n*** Delete File: gone.txt\n*** End Patch\n"
+	execTool(a, "apply_patch", map[string]any{"patch": patch})
+
+	req, _ := rec.last()
+	// apply_patch is deliberately body-less: it may span several files, so a
+	// single pre/post image would be a lie about which file it describes.
+	if req.Preview.Kind != PreviewDiff || req.Preview.Before != "" || req.Preview.After != "" {
+		t.Fatalf("unexpected preview: %+v", req.Preview)
+	}
+	if !strings.Contains(req.Preview.Diff, "-bye") {
+		t.Fatalf("diff does not describe the deletion:\n%s", req.Preview.Diff)
+	}
+}
+
+// Past the shared cap both bodies go together. Keeping whichever fits would let
+// a client render a clipped post-image as if it were the whole file — the
+// failure mode this rule exists to prevent.
+func TestPreviewBodiesAreDroppedTogetherWhenTooLarge(t *testing.T) {
+	dir := t.TempDir()
+	big := strings.Repeat("x", maxPreviewBody) + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "big.txt"), []byte("small\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a, rec := gatedAgent(t, dir, Options{PermissionGroups: []string{"write"}})
+	execTool(a, "write_file", map[string]any{"path": "big.txt", "content": big})
+
+	req, _ := rec.last()
+	if req.Preview.Kind != PreviewDiff {
+		t.Fatalf("unexpected preview kind: %+v", req.Preview)
+	}
+	if req.Preview.Before != "" || req.Preview.After != "" {
+		t.Fatalf("oversized bodies must both be dropped, got %d and %d bytes",
+			len(req.Preview.Before), len(req.Preview.After))
+	}
+	if !req.Preview.Truncated {
+		t.Fatal("dropping the bodies must be reported as truncated")
+	}
+	if req.Preview.Diff == "" {
+		t.Fatal("the diff is the fallback and must survive the cap")
+	}
+}
+
 // --- the group table itself -------------------------------------------------
 
 func TestExpandToolSelectorsIsStable(t *testing.T) {

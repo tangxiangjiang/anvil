@@ -22,6 +22,11 @@ type session struct {
 	cwd string
 	// mode is the permission mode the session was created with, after defaults.
 	mode string
+	// vision is whether the session opted into image attachments. It has to be
+	// decided at option-build time — Options.Vision.Enabled is what makes the
+	// SDK accept an attachment — so it is recorded here rather than read back
+	// from the agent when a prompt arrives.
+	vision bool
 
 	mu      sync.Mutex
 	agent   *anvil.Agent
@@ -33,8 +38,8 @@ type session struct {
 // newSession reserves an id before the agent exists. The permission callback
 // needs the session's identity at option-build time, and the SDK needs the
 // options before it can hand back an agent, so the agent is attached afterwards.
-func newSession(id, cwd, mode string) *session {
-	return &session{id: id, cwd: cwd, mode: mode}
+func newSession(id, cwd, mode string, vision bool) *session {
+	return &session{id: id, cwd: cwd, mode: mode, vision: vision}
 }
 
 func (s *session) attach(agent *anvil.Agent) {

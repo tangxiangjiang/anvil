@@ -9,7 +9,7 @@
 
 import * as vscode from 'vscode';
 import { HostClient, LogFn } from './hostClient';
-import { ChatSession, SessionState } from './session';
+import { ChatSession, SendOptions, SessionState } from './session';
 import { childEnv, readApiKey, readSettings, resolveHostPath } from './settings';
 import { ApprovalRequest, Decision, DoneParams, HostEvent } from './protocol';
 import { RunFailure } from './errors';
@@ -123,10 +123,10 @@ export class HostManager {
   }
 
   /** Sends a turn, starting the host if needed. */
-  async send(text: string): Promise<void> {
+  async send(text: string, options: SendOptions = {}): Promise<void> {
     try {
       const session = await this.ensure();
-      await session.send(text);
+      await session.send(text, options);
     } catch (err) {
       this.listener.onNotice?.('error', (err as Error).message);
       throw err;
