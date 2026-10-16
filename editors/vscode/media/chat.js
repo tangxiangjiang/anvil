@@ -582,6 +582,23 @@
     endRound();
   }
 
+  /**
+   * A line that is neither the user's nor the model's: something the loop put
+   * into the conversation on its own account, replayed.
+   *
+   * It exists because the store keeps those records under the user's role, and a
+   * transcript that showed them as "you" would report words the user never
+   * typed. The title says where it came from, since the text alone reads like a
+   * prompt.
+   */
+  function addNote(text) {
+    const wrap = el('div', 'msg note');
+    wrap.title = 'The loop put this into the conversation; you did not type it.';
+    wrap.appendChild(el('div', 'body', text));
+    append(wrap);
+    endRound();
+  }
+
   // --- tool cards -----------------------------------------------------------
 
   /** A short one-line hint about what the call touches. */
@@ -1323,11 +1340,18 @@
     return value >= 1000 ? (value / 1000).toFixed(value >= 10000 ? 0 : 1) + 'k' : String(value);
   }
 
-  function finishRun(done, failure) {
-    endRound();
-    setRunning(false);
+  /**
+   * What a finished run is worth saying: how many steps, and what it cost. One
+   * function because two places say it — the status line for the run in flight,
+   * and the marker a replayed one leaves in the transcript — and a run's steps
+   * counted one way in one of them and another way in the other would be two
+   * answers to one question.
+   */
+  function runSummary(done) {
     const parts = [];
-    const steps = done && typeof done.steps === 'number' ? `${done.steps} step${done.steps === 1 ? '' : 's'}` : '';
+    const steps = done && typeof done.steps === 'number' && done.steps > 0
+      ? `${done.steps} step${done.steps === 1 ? '' : 's'}`
+      : '';
     if (steps) parts.push(steps);
     const usage = (done && done.usage) || null;
     if (usage) {
@@ -1339,11 +1363,59 @@
         parts.push(`${total} tokens${split}`);
       }
     }
+    return parts;
+  }
+
+  function finishRun(done, failure) {
+    endRound();
+    setRunning(false);
+    // The run is over, so nothing in it can still be in flight. A card left
+    // reading "running…" is a call whose result never arrived, and leaving it
+    // in flight forever reads as a stuck turn rather than as a lost event.
+    stopRunningCards();
+    const parts = runSummary(done);
     statusLine.textContent = parts.join(' · ');
     statusLine.hidden = parts.length === 0;
     // "Stopped." is not a failure, but it is still something the user asked
     // for and should see once: a run that ends silently reads as a hang.
     if (failure && failure.message) addNotice(failure.message);
+  }
+
+  /**
+   * Where a replayed run ended, drawn in the transcript rather than on the
+   * status line: a replay shows several runs at once, and a line at the bottom
+   * could only report the last of them.
+   *
+   * The status is a word, not a colour: the store keeps whether a run finished,
+   * failed or was stopped, and keeps neither the reason nor anything about a
+   * call that failed inside it, so there is nothing more to show.
+   */
+  function addRunEnd(done) {
+    endRound();
+    stopRunningCards();
+    const status = done && done.status;
+    const word = status === 'error' ? 'Run failed' : status === 'cancelled' ? 'Run stopped' : 'Run finished';
+    const line = el('div', 'msg run-end');
+    line.appendChild(el('div', 'body', [word].concat(runSummary(done)).join(' · ')));
+    append(line);
+  }
+
+  /**
+   * Marks every card still waiting for a result as stopped.
+   *
+   * Structural rather than textual: a card that has an ending has one of the two
+   * classes the result handler adds, and a card with neither was never told how
+   * its call went. Its reviewer is not offered, because the button's rule is
+   * that a change which did not land is not a change — and whether this one
+   * landed is exactly what is unknown.
+   */
+  function stopRunningCards() {
+    for (const card of toolCards.values()) {
+      if (card.classList.contains('done') || card.classList.contains('failed')) continue;
+      const state = card.querySelector('.state');
+      if (state) state.textContent = 'stopped';
+      card.classList.add('stopped');
+    }
   }
 
   function showBanner(level, message) {
@@ -1592,6 +1664,17 @@
         return;
       case 'reset':
         clearTranscript();
+        return;
+      case 'user':
+        // A replayed turn. The composer does this for a live one, and it is not
+        // involved here, so the replay asks for it directly.
+        addUser(msg.text || '');
+        return;
+      case 'note':
+        addNote(msg.text || '');
+        return;
+      case 'runEnd':
+        addRunEnd(msg.done);
         return;
       case 'focus':
         // The tab became the active editor, so the keyboard belongs here —

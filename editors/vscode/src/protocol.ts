@@ -19,6 +19,14 @@ export const Method = {
   SessionNew: 'session.new',
   SessionResume: 'session.resume',
   SessionList: 'session.list',
+  /**
+   * Replays a stored conversation. Keyed by agent id rather than by session, so
+   * it answers for a session this host has not opened — which is the case it
+   * exists for: a window that has just reloaded and knows which agent it was
+   * talking to. A host that predates it answers `-32601`, and the panel then has
+   * no replay rather than an error.
+   */
+  SessionTranscript: 'session.transcript',
   SessionClose: 'session.close',
   Prompt: 'prompt',
   Cancel: 'cancel',
@@ -427,6 +435,59 @@ export interface SessionInfo {
   runs: number;
   /** Cumulative across the stored runs, when the provider reported any. */
   usage?: Usage;
+}
+
+// --- session.transcript ------------------------------------------------------
+
+export interface SessionTranscriptParams {
+  agent_id: string;
+  /** Caps the entries returned, keeping the newest. Omitted means the host's default. */
+  limit?: number;
+  store?: string;
+}
+
+/** One tool invocation as the store recorded it, arguments included. */
+export interface TranscriptCall {
+  id: string;
+  name: string;
+  /**
+   * The call's arguments, in the same shape a live `tool_call` event carries
+   * them. They are what a replayed card opens its change from, which is why
+   * they travel at all.
+   */
+  args?: unknown;
+}
+
+/**
+ * One unit of a stored conversation: a message, or where a run ended. The union
+ * is by `kind`, and `reasoning` is not one of the values — it was streamed and
+ * dropped rather than stored, so there is nothing to replay it from.
+ */
+export interface TranscriptEntry {
+  kind: 'message' | 'run_end';
+  run_id?: string;
+
+  /** message */
+  role?: 'user' | 'assistant' | 'tool';
+  content?: string;
+  tool_call_id?: string;
+  name?: string;
+  tool_calls?: TranscriptCall[];
+
+  /** run_end */
+  status?: RunStatus;
+  steps?: number;
+  usage?: Usage;
+}
+
+export interface SessionTranscriptResult {
+  entries: TranscriptEntry[];
+  /**
+   * How many entries before the first one were left out, by the cap and by the
+   * run boundary it was moved back to. A replay that shows the tail says so
+   * rather than implying the conversation started there.
+   */
+  dropped?: number;
 }
 
 // --- skills.list / rules.list ------------------------------------------------

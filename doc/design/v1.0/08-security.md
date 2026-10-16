@@ -25,6 +25,16 @@ Caller intentionally grants the agent access to `cwd` and optionally shell. Prim
 | Secrets | API key from opts/env; never write key into `.anvil` JSONL meta |
 | Redaction (0.8+) | Best-effort scrub of `sk-` / Bearer / PEM / `api_key=` in streamed tool results + history (not a DLP product) |
 
+Reading a stored conversation back (0.38+) adds **no exposure**. `anvil.LoadTranscript` returns
+what the store already holds, and the store holds tool output that was redacted on its way out of
+the tool — before both the stream and the record — so there is no unredacted copy for a reader to
+find. User and assistant text was never redacted on the wire either, so a replay shows exactly
+what the live stream showed. What is new is durability: output that used to scroll past now stays
+readable in the workspace's own file, which is a reason to keep the redaction honest and not a
+reason to add a mechanism. What the reader must never carry is checked rather than assumed —
+`source/transcript_test.go` asserts that no entry, and no line of the store file, contains image
+bytes or the API key.
+
 ## Explicit non-controls
 
 - No seccomp/containers/VM isolation.

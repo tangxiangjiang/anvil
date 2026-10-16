@@ -161,6 +161,8 @@ func (s *Server) dispatch(ctx context.Context, req *Request) (any, *RPCError) {
 		return s.handleSessionResume(ctx, req.Params)
 	case MethodSessionList:
 		return s.handleSessionList(ctx, req.Params)
+	case MethodSessionTranscript:
+		return s.handleSessionTranscript(ctx, req.Params)
 	case MethodSessionClose:
 		return s.handleSessionClose(req.Params)
 	case MethodPrompt:
@@ -349,6 +351,61 @@ func (s *Server) handleSessionList(ctx context.Context, params json.RawMessage) 
 	}
 	if p.Limit > 0 && len(out.Sessions) > p.Limit {
 		out.Sessions = out.Sessions[:p.Limit]
+	}
+	return out, nil
+}
+
+// handleSessionTranscript replays a stored conversation.
+//
+// It resolves the agent against the workspace root, the way session.list does,
+// and not against the live sessions: a replay has to work for an agent this
+// host has never opened — that is the case it is for, a client that has just
+// come back with no session at all.
+func (s *Server) handleSessionTranscript(ctx context.Context, params json.RawMessage) (any, *RPCError) {
+	p, err := decode[SessionTranscriptParams](params)
+	if err != nil {
+		return nil, errInvalidParams("session.transcript: " + err.Error())
+	}
+	if p.AgentID == "" {
+		return nil, errInvalidParams("session.transcript: agent_id is required")
+	}
+	result, err := anvil.LoadTranscript(ctx, p.AgentID, anvil.TranscriptOptions{
+		Local: anvil.LocalOptions{CWD: s.cwdPath(), Store: p.Store},
+		Limit: p.Limit,
+	})
+	if err != nil {
+		return nil, errHost(err)
+	}
+	out := SessionTranscriptResult{
+		Entries: make([]TranscriptEntry, 0, len(result.Entries)),
+		Dropped: result.Dropped,
+	}
+	for _, in := range result.Entries {
+		entry := TranscriptEntry{
+			Kind:       in.Kind,
+			RunID:      in.RunID,
+			Role:       in.Role,
+			Content:    in.Content,
+			ToolCallID: in.ToolCallID,
+			Name:       in.Name,
+			Status:     in.Status,
+			Steps:      in.Steps,
+		}
+		for _, tc := range in.ToolCalls {
+			entry.ToolCalls = append(entry.ToolCalls, TranscriptCall{
+				ID:   tc.ID,
+				Name: tc.Name,
+				Args: tc.Args,
+			})
+		}
+		if in.Usage != nil {
+			entry.Usage = &Usage{
+				InputTokens:  in.Usage.InputTokens,
+				OutputTokens: in.Usage.OutputTokens,
+				TotalTokens:  in.Usage.TotalTokens,
+			}
+		}
+		out.Entries = append(out.Entries, entry)
 	}
 	return out, nil
 }

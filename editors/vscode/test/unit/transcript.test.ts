@@ -1,0 +1,177 @@
+/**
+ * A stored conversation, folded into the messages the panel can already draw.
+ *
+ * The replay's whole value is that it reuses the live renderers, which means the
+ * folding has to produce exactly the shapes they expect — and the two ways it
+ * can go wrong are both quiet. A user record the loop wrote to the model, shown
+ * as a turn, puts words in the user's mouth; a tool call whose arguments were
+ * dropped is a card that cannot open its change. Neither throws.
+ */
+
+import { strict as assert } from 'node:assert';
+import { test } from 'node:test';
+import { TranscriptEntry } from '../../src/protocol';
+import { ReplayStep, replayOf } from '../../src/transcript';
+
+function kinds(steps: ReplayStep[]): string[] {
+  return steps.map((step) => step.kind);
+}
+
+test('a stored conversation replays oldest first, in the shapes the tab draws', () => {
+  const entries: TranscriptEntry[] = [
+    { kind: 'message', run_id: 'r1', role: 'user', content: 'add a line' },
+    { kind: 'message', run_id: 'r1', role: 'assistant', content: 'I will.' },
+    {
+      kind: 'message',
+      run_id: 'r1',
+      role: 'assistant',
+      tool_calls: [{ id: 't1', name: 'write_file', args: { path: 'a.txt', content: 'x' } }],
+    },
+    {
+      kind: 'message',
+      run_id: 'r1',
+      role: 'tool',
+      tool_call_id: 't1',
+      name: 'write_file',
+      content: 'wrote 1 bytes',
+    },
+    { kind: 'message', run_id: 'r1', role: 'assistant', content: 'Done.' },
+    { kind: 'run_end', run_id: 'r1', status: 'finished', steps: 3, usage: { input_tokens: 1, output_tokens: 2, total_tokens: 3 } },
+  ];
+
+  const steps = replayOf(entries, 's1');
+  assert.deepEqual(kinds(steps), ['user', 'event', 'event', 'event', 'event', 'runEnd']);
+
+  const user = steps[0];
+  assert.equal(user.kind === 'user' && user.text, 'add a line');
+
+  // The assistant text is an `assistant` event, which is what the Markdown
+  // renderer is fed live, so replayed prose is typeset the same way.
+  const prose = steps[1];
+  assert.ok(prose.kind === 'event');
+  assert.equal(prose.event.type, 'assistant');
+  assert.equal(prose.event.text, 'I will.');
+  assert.equal(prose.event.session_id, 's1');
+  assert.equal(prose.event.run_id, 'r1');
+
+  // The tool call travels with its arguments, because the card's review is
+  // derived from them and a replayed call has nothing else.
+  const call = steps[2];
+  assert.ok(call.kind === 'event');
+  assert.equal(call.event.type, 'tool_call');
+  assert.equal(call.event.tool_call_id, 't1');
+  assert.equal(call.event.name, 'write_file');
+  assert.deepEqual(call.event.args, { path: 'a.txt', content: 'x' });
+
+  // The result is keyed by the same id, which is how the card finds its ending.
+  const result = steps[3];
+  assert.ok(result.kind === 'event');
+  assert.equal(result.event.type, 'tool_result');
+  assert.equal(result.event.tool_call_id, 't1');
+  assert.equal(result.event.content, 'wrote 1 bytes');
+  // And it claims nothing about failure. Whether the call failed was never
+  // written down; an `is_error` invented here would be a card that says "done"
+  // or "failed" on no evidence at all.
+  assert.equal(result.event.is_error, undefined);
+
+  const end = steps[5];
+  assert.ok(end.kind === 'runEnd');
+  assert.equal(end.done.status, 'finished');
+  assert.equal(end.done.steps, 3);
+  assert.equal(end.done.usage?.total_tokens, 3);
+  assert.equal(end.done.session_id, 's1');
+});
+
+test('the loop’s own notes to the model are not replayed as the user’s turns', () => {
+  // The store keeps these under `role:"user"`, so the only thing that tells them
+  // apart is where they sit: a run opens with the one message that started it,
+  // and the loop's notes come after. Shown as a "you" bubble, a vision note or a
+  // loop guard warning would read as something the user typed.
+  const entries: TranscriptEntry[] = [
+    { kind: 'message', run_id: 'r1', role: 'user', content: 'what is in this screenshot?' },
+    { kind: 'message', run_id: 'r1', role: 'user', content: '(attached images from read_image)' },
+    { kind: 'message', run_id: 'r1', role: 'assistant', content: 'A login form.' },
+    { kind: 'run_end', run_id: 'r1', status: 'finished', steps: 2 },
+  ];
+
+  const steps = replayOf(entries, 's1');
+  assert.deepEqual(kinds(steps), ['user', 'notice', 'event', 'runEnd']);
+  const notice = steps[1];
+  assert.ok(notice.kind === 'notice');
+  assert.equal(notice.text, '(attached images from read_image)');
+});
+
+test('a second prompt is a user turn again, because a run end closes the first', () => {
+  const entries: TranscriptEntry[] = [
+    { kind: 'message', run_id: 'r1', role: 'user', content: 'first' },
+    { kind: 'run_end', run_id: 'r1', status: 'finished', steps: 1 },
+    { kind: 'message', run_id: 'r2', role: 'user', content: 'second' },
+    { kind: 'message', run_id: 'r2', role: 'user', content: 'Loop guard: stop repeating.' },
+  ];
+
+  const steps = replayOf(entries, 's1');
+  assert.deepEqual(kinds(steps), ['user', 'runEnd', 'user', 'notice']);
+  const first = steps[0];
+  const second = steps[2];
+  assert.ok(first.kind === 'user' && second.kind === 'user');
+  assert.equal(first.text, 'first');
+  assert.equal(second.text, 'second');
+});
+
+test('a turn that carried only an image is still a turn', () => {
+  // The prompt is empty and the images were never stored, so this is all there
+  // is: an empty user turn. Dropping it would lose the fact that it happened.
+  const steps = replayOf([{ kind: 'message', run_id: 'r1', role: 'user', content: '' }], 's1');
+  assert.deepEqual(kinds(steps), ['user']);
+  const user = steps[0];
+  assert.ok(user.kind === 'user' && user.text === '');
+});
+
+test('an empty assistant turn draws nothing, and a call without content still draws its card', () => {
+  const steps = replayOf(
+    [
+      { kind: 'message', run_id: 'r1', role: 'assistant', content: '' },
+      {
+        kind: 'message',
+        run_id: 'r1',
+        role: 'assistant',
+        tool_calls: [{ id: 't2', name: 'shell', args: { command: 'ls' } }],
+      },
+    ],
+    's1',
+  );
+  assert.deepEqual(kinds(steps), ['event']);
+  const call = steps[0];
+  assert.ok(call.kind === 'event');
+  assert.equal(call.event.type, 'tool_call');
+  assert.equal(call.event.tool_call_id, 't2');
+});
+
+test('an entry kind this build does not know is skipped, and a missing field is not a crash', () => {
+  // A newer host may add a kind; an older panel has no renderer for it. Reading
+  // it as a message would draw the wrong thing, so it is left out.
+  const steps = replayOf(
+    [
+      { kind: 'checkpoint' as unknown as TranscriptEntry['kind'], run_id: 'r1' },
+      { kind: 'message', run_id: 'r1', role: 'system' as unknown as 'user', content: 'ignored' },
+      { kind: 'message', run_id: 'r1', role: 'tool', content: '' },
+    ],
+    's1',
+  );
+  assert.deepEqual(kinds(steps), ['event']);
+  const out = steps[0];
+  assert.ok(out.kind === 'event');
+  assert.equal(out.event.type, 'tool_result');
+  assert.equal(out.event.content, '');
+});
+
+test('a run boundary that never said how it ended replays as one that finished', () => {
+  // The status decides a word on screen, and there is always one: an absent
+  // status would otherwise print "undefined" over the middle of a transcript.
+  const steps = replayOf([{ kind: 'run_end', run_id: 'r1' }], 's1');
+  assert.deepEqual(kinds(steps), ['runEnd']);
+  const end = steps[0];
+  assert.ok(end.kind === 'runEnd');
+  assert.equal(end.done.status, 'finished');
+  assert.equal(end.done.steps, undefined);
+});

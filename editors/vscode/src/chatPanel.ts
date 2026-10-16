@@ -11,7 +11,10 @@
  * it is not stopping the turn: the session and the host child outlive the view,
  * and messages that arrive with no view attached are dropped rather than queued.
  * And reopening it re-announces everything, because a fresh document knows
- * nothing — which is what the `ready` path is for, and now its main job.
+ * nothing — the `ready` path. What it cannot re-announce is the conversation
+ * itself, which happened before the document existed and left no record in this
+ * process; that is replayed from the store, and re-attaching to the session
+ * first is how the window finds out which conversation that was.
  */
 
 import { randomBytes } from 'node:crypto';
@@ -25,6 +28,8 @@ import { HostListener, HostManager } from './hostManager';
 import { PreviewDocuments } from './review';
 import { SessionState } from './session';
 import { dedupeMentions } from './mentions';
+import { SessionAgentKey, shouldReattach } from './reattach';
+import { replayOf } from './transcript';
 import {
   CommandAction,
   SlashCommand,
@@ -47,6 +52,7 @@ import {
   RuleSpec,
   SessionInfo,
   SessionResult,
+  SessionTranscriptResult,
   SkillEntry,
 } from './protocol';
 import { RunFailure } from './errors';
@@ -125,6 +131,25 @@ type Outbound =
    * reads as corruption rather than as a switch.
    */
   | { type: 'reset' }
+  /**
+   * A turn in a replayed conversation. The composer is what normally puts a user
+   * message on screen, and it is not involved in a replay, so the replay says it
+   * itself. It is drawn by the same renderer either way.
+   */
+  | { type: 'user'; text: string }
+  /**
+   * A line in the transcript for something the user did not type and the model
+   * did not say — the loop's own note to the model, replayed. Not a `notice`:
+   * that is a banner about the state of things, and this is part of the
+   * conversation, in its place.
+   */
+  | { type: 'note'; text: string }
+  /**
+   * Where a replayed run ended, drawn in the transcript at that point. The live
+   * `done` is a different thing: it is the end of the run in flight, and it
+   * lands on the status line rather than in the conversation.
+   */
+  | { type: 'runEnd'; done: DoneParams }
   /** The tab became the active editor: the composer takes the keyboard. */
   | { type: 'focus' }
   | { type: 'notice'; level: 'info' | 'warn' | 'error'; message: string };
@@ -261,11 +286,11 @@ export class ChatPanel implements HostListener {
       vscode.ViewColumn.Active,
       {
         enableScripts: true,
-        // Without this, clicking another editor destroys the document and the
-        // transcript with it — and there is no replay to rebuild it from. It is
-        // an optimisation for the panel this side creates, not a guarantee:
-        // VS Code creates the panel a serializer is handed, and that one may
-        // not retain, which is why `ready` is the source of truth either way.
+        // Clicking another editor would otherwise destroy the document and the
+        // transcript with it. It is an optimisation, not a guarantee: a document
+        // that did go away is rebuilt by the replay, and VS Code creates the
+        // panel a serializer is handed, which may not retain at all — which is
+        // why `ready` is the source of truth either way.
         retainContextWhenHidden: true,
         localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, 'media')],
       },
@@ -349,6 +374,12 @@ export class ChatPanel implements HostListener {
       for (const request of this.pendingApprovals()) {
         this.post({ type: 'approval', request });
       }
+
+      // The document has no transcript, and after a window reload nothing else
+      // does either. Coming back to the session is the last thing done here,
+      // because it is the only part that can take a moment — everything above
+      // is already on the wire by the time the host is asked anything.
+      void this.reattach();
       return;
     }
 
@@ -534,6 +565,7 @@ export class ChatPanel implements HostListener {
   /** Ends the conversation. The host stays up; the next prompt starts fresh. */
   private async clearConversation(): Promise<void> {
     await this.ensureManager().clearConversation();
+    await this.forgetAgent();
     this.changes.begin();
     this.forgetChanges();
     this.post({ type: 'reset' });
@@ -691,6 +723,117 @@ export class ChatPanel implements HostListener {
     this.updateTitle();
     this.sessionsChanged.fire();
     await this.reportRules();
+    // Last, so the two never stack: the reset has taken the old conversation off
+    // the screen, and the marker is the first line of the new one.
+    await this.replay(agentId);
+  }
+
+  /**
+   * Fills the tab with a conversation it did not watch.
+   *
+   * Every step goes through the same paths a live turn does — a tool call through
+   * `postEvent`, so a replayed card's review is decided by the same rule as a
+   * live one's — except that nothing here touches the change tracker. A replayed
+   * call's pre-image is not on disk any more; snapshotting now would file the
+   * *current* contents under a historical call's id and, worse, list files the
+   * present turn never touched under the present turn's changed files.
+   *
+   * Best-effort on purpose. A host that had never heard of `session.transcript`
+   * answers `-32601`, and an old host beside a new extension is a pair that has
+   * to keep working: the tab stays usable, with no replay and no error.
+   */
+  private async replay(agentId: string): Promise<void> {
+    if (!agentId || !this.panel) return;
+    let result: SessionTranscriptResult;
+    try {
+      result = await this.ensureManager().transcript(agentId);
+    } catch (err) {
+      this.log(`no replay for ${agentId}: ${(err as Error).message}`);
+      return;
+    }
+
+    const sessionId = this.manager?.state().sessionId ?? '';
+    const steps = replayOf(result.entries ?? [], sessionId);
+    if (steps.length === 0) return;
+    for (const step of steps) {
+      if (step.kind === 'user') this.post({ type: 'user', text: step.text });
+      else if (step.kind === 'notice') this.post({ type: 'note', text: step.text });
+      else if (step.kind === 'runEnd') this.post({ type: 'runEnd', done: step.done });
+      else this.postEvent(step.event);
+    }
+    if (this.dropped(result) > 0) {
+      this.post({
+        type: 'note',
+        text: `Earlier turns are not shown: the store keeps the newest ${steps.length} records of this conversation.`,
+      });
+    }
+  }
+
+  /**
+   * How much of the conversation the host left out. The reader reports a count
+   * rather than a flag so the client can say how much, and a host that predates
+   * the field reports nothing, which is read as nothing dropped.
+   */
+  private dropped(result: SessionTranscriptResult): number {
+    const dropped = result.dropped;
+    return typeof dropped === 'number' && dropped > 0 ? dropped : 0;
+  }
+
+  /**
+   * Comes back to the session this workspace was talking to, if it still has one.
+   *
+   * Three endings, and the middle one is why the agent list is consulted rather
+   * than the memory being trusted: an id the workspace no longer stores has to be
+   * forgotten, or every reload would try to resume an agent that is gone and say
+   * so. A listing that could not be read is not evidence of that — it is no
+   * evidence at all, so the memory stays and nothing happens.
+   */
+  private async reattach(): Promise<void> {
+    const stored = this.context.workspaceState.get<string>(SessionAgentKey);
+    if (!stored) return;
+
+    // A session that is already live needs no resuming — the manager survived
+    // because this document, not the window, is what went away. The transcript
+    // is still what the document lost, and that is what it gets.
+    if (this.manager?.state().agentId === stored) {
+      await this.replay(stored);
+      return;
+    }
+
+    let listed: SessionInfo[] | undefined;
+    try {
+      listed = await this.ensureManager().listSessions();
+    } catch (err) {
+      this.log(`could not check whether ${stored} is still stored: ${(err as Error).message}`);
+    }
+
+    switch (shouldReattach(stored, listed)) {
+      case 'resume':
+        await this.resumeAgent(stored);
+        return;
+      case 'clear':
+        await this.forgetAgent();
+        return;
+      default:
+        return;
+    }
+  }
+
+  /**
+   * Remembers which agent the tab is showing, so a reloaded window can find it.
+   *
+   * Written here rather than at each place a session opens: this side hears
+   * about every one of them — new, resumed, re-opened for a model change — and
+   * the id is the host's answer, not something composed from what was asked.
+   */
+  private rememberAgent(agentId: string): void {
+    if (!agentId) return;
+    void this.context.workspaceState.update(SessionAgentKey, agentId);
+  }
+
+  /** Forgets it. Called when the conversation is ended, and when it is gone. */
+  private async forgetAgent(): Promise<void> {
+    await this.context.workspaceState.update(SessionAgentKey, undefined);
   }
 
   /** Names the tab after the conversation in it, so a tab strip is readable. */
@@ -1105,6 +1248,7 @@ export class ChatPanel implements HostListener {
    * wrong thing until now.
    */
   onSession = (result: SessionResult): void => {
+    this.rememberAgent(result.agent_id);
     this.postMode();
     this.announceSessionMode(result);
   };
@@ -1137,9 +1281,11 @@ export class ChatPanel implements HostListener {
    */
   private post(message: Outbound): void {
     const panel = this.panel;
-    // Closed tabs drop events rather than queueing them for a document that
-    // may never exist: the session carries on, and what was missed is the
-    // transcript, which the `ready` announcement does not pretend to rebuild.
+    // Closed tabs drop events rather than queueing them for a document that may
+    // never exist: the session carries on, and what was missed is the live
+    // rendering of it. Nothing is lost by that — the turns are on disk, and a
+    // document that comes back gets them replayed from there rather than from a
+    // queue that would have to hold a whole conversation to be any use.
     if (!panel) return;
     if (!this.listening) {
       // A document that has not run its script yet has no listener, and a

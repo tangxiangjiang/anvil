@@ -8,7 +8,8 @@
 
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
-import { answerNewestApproval, startFakeHost, waitFor } from '../helpers/harness';
+import { HostClient } from '../../src/hostClient';
+import { FIXTURE_HOST, answerNewestApproval, startFakeHost, waitFor } from '../helpers/harness';
 
 test('a chat turn streams text, pairs the tool call with its result, and ends idle', async (t) => {
   const harness = await startFakeHost('chat');
@@ -177,4 +178,41 @@ test('a host that dies mid-turn leaves nothing running', async (t) => {
   assert.equal(harness.session.currentState, 'idle');
   assert.equal(harness.dones.length, 1);
   assert.equal(harness.dones[0].done.status, 'error');
+});
+
+test('a window that has just reloaded can read a conversation it never opened', async (t) => {
+  // The reload, as the extension sees it: a new client, a new host child, and
+  // nothing open. Everything the tab needs to come back — which session it was,
+  // and what was said in it — has to be answerable in exactly this state, from
+  // the store, keyed by an agent id rather than by a live session. A reader that
+  // needed `session.resume` first would work in this test and fail in the
+  // extension, because the panel asks before it resumes.
+  const env = { FAKE_HOST_STORED: 'a7', FAKE_HOST_TRANSCRIPT: '1' };
+  const client = new HostClient({
+    command: process.execPath,
+    args: [FIXTURE_HOST],
+    cwd: process.cwd(),
+    env: { ...process.env, FAKE_HOST_SCENARIO: 'chat', ...env },
+    log: () => undefined,
+  });
+  t.after(() => client.stop());
+  await client.start();
+  await client.initialize(process.cwd(), { name: 'anvil-vscode-test', version: '0.0.0' });
+
+  const listed = await client.request<{ sessions: Array<{ agent_id: string }> }>('session.list');
+  assert.ok(
+    listed.sessions.some((row) => row.agent_id === 'a7'),
+    'the stored agent is on the list the sidebar builds itself from',
+  );
+
+  const transcript = await client.request<{ entries: Array<{ kind: string }> }>(
+    'session.transcript',
+    { agent_id: 'a7' },
+  );
+  assert.ok(transcript.entries.length > 0, 'and its conversation reads back');
+  assert.equal(
+    transcript.entries.some((entry) => entry.kind === 'run_end'),
+    true,
+    'including where the run that produced it ended',
+  );
 });

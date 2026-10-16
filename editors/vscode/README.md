@@ -19,7 +19,7 @@ reports. The protocol between the two is chapter 35 of the design docs
 Download or build the VSIX for your platform and install it:
 
 ```bash
-code --install-extension anvil-vscode-0.37.2-win32-x64.vsix
+code --install-extension anvil-vscode-0.38.3-win32-x64.vsix
 ```
 
 Nothing else is needed: the `anvil-host` sidecar for that platform travels
@@ -58,7 +58,7 @@ The sidecar is found in this order, and the first hit wins:
 npm run package:vsix                 # this machine's platform
 npm run package:vsix -- --target linux-x64
 npm run package:all                  # one VSIX per target, in sequence
-npm run smoke:vsix -- --vsix anvil-vscode-0.37.2-win32-x64.vsix
+npm run smoke:vsix -- --vsix anvil-vscode-0.38.3-win32-x64.vsix
 ```
 
 Targets: `win32-x64`, `win32-arm64`, `linux-x64`, `linux-arm64`, `darwin-x64`,
@@ -202,14 +202,30 @@ a log line.
   running, and reopening it re-announces the session, the mode and any approval
   still waiting for an answer. Opening a session from the sidebar reuses the one
   tab and empties it first, so two conversations are never stacked in it.
+- **Draws a stored conversation back into the tab.** Opening a session — or
+  reopening the window onto one — fills the tab with what happened in it: your
+  messages, the replies as Markdown, the tool cards (each still able to open the
+  change it made), and a marker where each run ended, with its steps and tokens.
+  Reasoning has no row, because it was streamed and never written down; a call's
+  card does not claim whether it succeeded, because that was never written
+  either. A conversation longer than the reader's cap shows its most recent part
+  and says how many earlier turns were left out. The window also remembers which
+  session it was in, so a reload comes back to that conversation rather than to
+  an empty tab — and if the session is no longer in the list it opens fresh
+  instead of trying to resume something that is gone. An older host that does not
+  answer `session.transcript` leaves the tab usable with no replay and no error.
+  See
+  [`doc/design/v1.0/38-session-identity-and-replay.md`](../../doc/design/v1.0/38-session-identity-and-replay.md).
 - **Ships its own sidecar.** A platform VSIX carries the `anvil-host` binary it
   was built with, verified against the checksum recorded at build time before it
   is run. The API key is not in the package: it is in VS Code's SecretStorage,
   and from there in the child process environment.
-- **Does not have transcript replay or checkpoints yet.** A resumed session
-  continues the agent's real context, but the SDK exposes no transcript reader,
-  so the tab marks the resume instead of printing a history it does not have.
-  See `doc/roadmaps/v1.0/m_0.35/`.
+- **Does not have checkpoints, rewind or forking.** A transcript is a record,
+  not a cursor: replaying a conversation cannot be resumed from, edited, or
+  branched. Reasoning is the one part of a turn that does not come back — it was
+  never persisted — and a round whose record had not landed when the tab
+  re-attached mid-run is in neither the replay nor the stream. See
+  `doc/roadmaps/v1.0/m_0.38/`.
 
 ## Sessions
 
@@ -304,12 +320,14 @@ wire; they are skipped when the sidecar has not been built.
 and `src/extension.ts` import `vscode` and are therefore not covered by these
 tests — they need an extension host. Keep them thin; the behaviour worth testing
 belongs on this side of the `vscode` boundary. `src/commands.ts`,
-`src/hostBundle.ts`, `src/sessionList.ts`, `src/rulesFile.ts` and
-`src/editDiff.ts` are split that way on purpose: they decide what a typed line
-means, which binary to run, what the session sidebar shows, what the rules
-file's skeleton and error positions are, and what change a finished tool call
-carried and how it should be opened, and the `vscode`-bound modules above only
-carry those decisions out. `test/unit/chatLayout.test.ts` is the third kind of check: it reads
+`src/hostBundle.ts`, `src/sessionList.ts`, `src/rulesFile.ts`, `src/editDiff.ts`,
+`src/transcript.ts` and `src/reattach.ts` are split that way on purpose: they
+decide what a typed line means, which binary to run, what the session sidebar
+shows, what the rules file's skeleton and error positions are, what change a
+finished tool call carried and how it should be opened, what a stored
+conversation folds into, and whether a reloaded window comes back to its session
+or starts fresh — and the `vscode`-bound modules above only carry those
+decisions out. `test/unit/chatLayout.test.ts` is the third kind of check: it reads
 `media/chat.css` and `media/chat.js` as text and asserts the layout invariants
 those two files have to agree on, since nothing here can render them.
 `test/unit/markdown.test.ts` loads `media/markdown.js` the same way — by
@@ -331,6 +349,16 @@ where the extension said there was one, that the click hands back the call's
 facts, that a pre-image is used only for the turn it came from, and that the
 tools the review covers are the tools the change tracker follows — a second list
 of file-writing tools is a list that goes stale in silence.
+`test/unit/replayWiring.test.ts` is the sixth, over the replay: it reads
+`src/chatPanel.ts` and `media/chat.js` and asserts the replay goes through
+`postEvent` (so a replayed card is offered its review by the one place that
+decides reviews) and never through `onEvent` (whose change-tracker snapshot would
+file today's file contents under a historical call's id), that the reset lands
+before the marker and the replay after both, that a host too old to answer costs
+the tab a replay and nothing else, and that the two lines a replay adds are built
+rather than written. The Go side of the same feature has its own reader tests,
+including the one that asserts no entry and no line of the store file contains
+image bytes or the API key.
 
 The packaging step has its own check, since it is the part no unit test can
 reach: `npm run smoke:vsix` extracts a built VSIX to a temporary directory,

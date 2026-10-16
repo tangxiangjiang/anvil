@@ -21,11 +21,23 @@
  *              call runs without an approval.response
  *
  * Environment:
- *   FAKE_HOST_ECHO=<path>  append every session.new / session.resume / prompt
- *                          this host receives to that file as one JSON line
- *                          each, so a test can assert what the client sent
+ *   FAKE_HOST_ECHO=<path>  append every session.new / session.resume / prompt /
+ *                          session.transcript this host receives to that file as
+ *                          one JSON line each, so a test can assert what the
+ *                          client sent
  *   FAKE_HOST_RULES_BROKEN=1  report the workspace rule file as malformed, both
  *                          from permissions.get and from permissions.add
+ *   FAKE_HOST_TRANSCRIPT=1  answer session.transcript with the stored
+ *                          conversation below. Off by default, and off means
+ *                          -32601: a host too old to know the method is a case
+ *                          the panel has to survive, so it is the default here
+ *                          rather than something only a dedicated test sees
+ *   FAKE_HOST_STORED=<ids>  agents the store holds but this process never
+ *                          opened, comma separated. What session.list reports on
+ *                          a window that has just reloaded, where the agent is
+ *                          on disk and nothing is live
+ *   FAKE_HOST_TRANSCRIPT_DROPPED=<n>  entries the reader left out, so the panel's
+ *                          "earlier turns are not shown" note can be seen
  *
  * One thing here is not scripted: the mode a new session starts in. It is
  * resolved from what the client asked for and from the workspace's
@@ -50,6 +62,13 @@ const echoPath = process.env.FAKE_HOST_ECHO || '';
 const diffFile = process.env.FAKE_HOST_FILE || 'target.txt';
 /** Whether the workspace rule file is reported as one that will not compile. */
 const rulesBroken = process.env.FAKE_HOST_RULES_BROKEN === '1';
+/** Whether this host knows session.transcript at all. Off means a 0.37 host. */
+const servesTranscript = process.env.FAKE_HOST_TRANSCRIPT === '1';
+/** Agents the store holds that this process never opened. */
+const storedIds = (process.env.FAKE_HOST_STORED || '')
+  .split(',')
+  .map((id) => id.trim())
+  .filter((id) => id !== '');
 /** The workspace rule file, which `permissions.get/add` are about. */
 const rulesPath = join(process.env.FAKE_HOST_CWD || process.cwd(), '.anvil', 'permissions.json');
 /** Its rules, as a session that appended them would have them. */
@@ -152,6 +171,50 @@ function newSession(params) {
   };
   sessions.set(id, session);
   return session;
+}
+
+/**
+ * One stored conversation, in the shape `anvil.LoadTranscript` projects.
+ *
+ * It carries the three things a replay has to be able to draw and only one of
+ * which a listing could supply: turns, a tool call with the arguments its review
+ * is derived from, and the boundary of the run they belong to. The `user` entry
+ * in the middle is not a user turn — it is where the loop writes its own notes
+ * to the model, under the user's role, which is why the panel has a rule for it.
+ */
+function storedTranscript() {
+  return {
+    entries: [
+      { kind: 'message', run_id: 'r1', role: 'user', content: 'append a line to the target' },
+      { kind: 'message', run_id: 'r1', role: 'assistant', content: 'I will append a line.' },
+      {
+        kind: 'message',
+        run_id: 'r1',
+        role: 'assistant',
+        tool_calls: [
+          { id: 't1', name: 'write_file', args: { path: diffFile, content: 'added by the fake host\n' } },
+        ],
+      },
+      {
+        kind: 'message',
+        run_id: 'r1',
+        role: 'tool',
+        tool_call_id: 't1',
+        name: 'write_file',
+        content: 'wrote 23 bytes',
+      },
+      { kind: 'message', run_id: 'r1', role: 'user', content: 'Loop guard: the same call was repeated.' },
+      { kind: 'message', run_id: 'r1', role: 'assistant', content: 'Done.' },
+      {
+        kind: 'run_end',
+        run_id: 'r1',
+        status: 'finished',
+        steps: 3,
+        usage: { input_tokens: 120, output_tokens: 18, total_tokens: 138 },
+      },
+    ],
+    dropped: Number(process.env.FAKE_HOST_TRANSCRIPT_DROPPED || 0) || undefined,
+  };
 }
 
 function event(session, run, body) {
@@ -416,7 +479,35 @@ async function handle(msg) {
       ok(msg.id, newSession(msg.params || {}));
       return;
     case 'session.list':
-      ok(msg.id, { sessions: [...sessions.values()] });
+      // The live sessions plus the ones FAKE_HOST_STORED says the store holds.
+      // The second set is what a reloaded window sees: the agent is on disk, and
+      // this process has never heard of it.
+      ok(msg.id, {
+        sessions: [
+          ...sessions.values(),
+          ...storedIds.map((agentId) => ({
+            agent_id: agentId,
+            cwd: process.env.FAKE_HOST_CWD || process.cwd(),
+            provider: 'openai',
+            model: 'fake-model',
+            title: process.env.FAKE_HOST_TITLE,
+            updated_at: '2026-01-02T03:05:06Z',
+            last_status: 'finished',
+            runs: 1,
+            usage: { input_tokens: 120, output_tokens: 18, total_tokens: 138 },
+          })),
+        ],
+      });
+      return;
+    case 'session.transcript':
+      echo('session.transcript', msg.params || {});
+      if (!servesTranscript) {
+        // A host from before this method existed. The panel has to come out of
+        // this with an empty tab and a working composer, not an error.
+        fail(msg.id, -32601, `unknown method ${msg.method}`);
+        return;
+      }
+      ok(msg.id, storedTranscript());
       return;
     case 'skills.list':
       // Two packages on purpose: one selected by hand, one always-on, which is

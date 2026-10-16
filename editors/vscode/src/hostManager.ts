@@ -30,6 +30,8 @@ import {
   RuleSpec,
   SessionInfo,
   SessionResult,
+  SessionTranscriptParams,
+  SessionTranscriptResult,
   SkillEntry,
 } from './protocol';
 import { RunFailure } from './errors';
@@ -344,6 +346,21 @@ export class HostManager {
     const client = await this.startClient();
     const result = await client.request<{ sessions: SessionInfo[] }>(Method.SessionList, {});
     return result.sessions ?? [];
+  }
+
+  /**
+   * The stored conversation for one agent, oldest first.
+   *
+   * Keyed by agent id, so it works with no session open — which is what a
+   * reloaded window needs. A host that predates the method rejects with
+   * `-32601`; the caller treats that as "no replay available" rather than as a
+   * failure, because an old host beside a new extension is a supported pair.
+   */
+  async transcript(agentId: string, limit?: number): Promise<SessionTranscriptResult> {
+    const client = await this.startClient();
+    const params: SessionTranscriptParams = { agent_id: agentId };
+    if (limit !== undefined) params.limit = limit;
+    return client.request<SessionTranscriptResult>(Method.SessionTranscript, params);
   }
 
   /**

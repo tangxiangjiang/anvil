@@ -57,7 +57,8 @@ Messages marked ← are server→client **notifications** (no `id`); → are cli
 |-----------|--------|---------|
 | → | `initialize` | `protocol`, `cwd`, `client{name, version}` — the workspace root, fixed for the process. Everything else a session needs goes on `session.new`. |
 | ← | `initialized` | `host_version`, `capabilities[]` |
-| → | `session.new` \| `session.resume` \| `session.list` \| `session.close` | session == one agent id. `session.resume` takes every `session.new` param plus `agent_id`, so the same conversation re-opens under new options. `session.list` answers `SessionInfo[]` with `runs`, `last_status` and the cumulative `usage` of the stored runs. |
+| → | `session.new` \| `session.resume` \| `session.list` \| `session.close` | session == one agent id. `session.resume` takes every `session.new` param plus `agent_id`, so the same conversation re-opens under new options. `session.list` answers `SessionInfo[]` with `title`, `runs`, `last_status` and the cumulative `usage` of the stored runs. |
+| → | **`session.transcript`** | `agent_id`, `limit?` → `entries[]{kind: message\|run_end, run_id, role, content, tool_call_id, name, tool_calls[]{id, name, args}, status, steps, usage}`, `dropped?` — the stored conversation, oldest first, **keyed by agent id rather than by an open session**, so it answers on a window that has just reloaded and has none (p_0.38.3, [38](38-session-identity-and-replay.md)) |
 | → | `prompt` | `session_id`, `message`, `attachments[]{path\|data, mime}`, `context{mentions[]{path}, selection{path, range, text}, diagnostics[]{path, line, severity, message}}` |
 | ← | `event` | `run_id` + **`JobEventBody`** (below) |
 | ← | **`approval.request`** | `request_id`, `session_id`, `run_id`, `tool`, `args`, `preview{kind, path, diff, before?, after?, command[], summary, truncated?}`, `decisions[]`, `rule?`, `remember[]`, `timeout_ms` |
@@ -75,7 +76,7 @@ The `event` notification carries the fields of the public **`anvil.Event`** (`so
 
 Deliberately **not** the daemon's `JobEventBody` / `JobDoneBody`: those belong to the tool-chain protocol, and depending on them is exactly the coupling this chapter forbids. The shapes look alike because both derive from the same runtime events — that resemblance is a consequence, not a contract.
 
-A **`reasoning`** event (p_0.35.9) carries the model's thinking, also in `text`. It is a new value of a field the client already switches on, not a new field and not a new method, so it does not move `ProtocolVersion`: a client that does not know the value falls through its event switch and loses the thinking, which is the correct degradation for a display-only stream. It is **not** on `anvil.RunResult` and is not stored — the transcript has no replay, so a resumed session has no thinking to show and does not pretend to. Which events carry it depends on the provider: an OpenAI-compatible reasoner sends `reasoning_content` and this is where it lands, while Anthropic's extended thinking is not requested at all (see [05](05-llm-provider.md)). `initialized`'s `capabilities[]` is **not** extended to announce it: the list is a server-wide claim, it would be false for an Anthropic session, and nothing in the client reads it to enable behaviour.
+A **`reasoning`** event (p_0.35.9) carries the model's thinking, also in `text`. It is a new value of a field the client already switches on, not a new field and not a new method, so it does not move `ProtocolVersion`: a client that does not know the value falls through its event switch and loses the thinking, which is the correct degradation for a display-only stream. It is **not** on `anvil.RunResult` and is not stored. p_0.38.3 gave a session a replay ([38](38-session-identity-and-replay.md)), and reasoning is the one thing that replay does not contain: it was streamed and never written, so there is nothing on disk to read back and a resumed session has no thinking to show and does not pretend to. Which events carry it depends on the provider: an OpenAI-compatible reasoner sends `reasoning_content` and this is where it lands, while Anthropic's extended thinking is not requested at all (see [05](05-llm-provider.md)). `initialized`'s `capabilities[]` is **not** extended to announce it: the list is a server-wide claim, it would be false for an Anthropic session, and nothing in the client reads it to enable behaviour.
 
 Consequences the extension must respect:
 
@@ -210,7 +211,7 @@ The client sets these per session, on `session.new` / `session.resume`:
 - **A rule file that was skipped is shown unbidden; a rule file that loaded is not.** The panel keeps a `Rules (n)` button for the list, and speaks up on its own only when something went wrong — a truncated or skipped rule file is a silent failure of something the user wrote, which is the one case they cannot discover for themselves. Showing the list after every turn would be noise about the ordinary case.
 - **Slash commands are decided in a pure module and executed where a window exists.** `commands.ts` holds the catalogue, the parser, and `route()`, which turns a line plus the catalogue into an action (`mode`, `model`, `resume`, `clear`, `help`, `skill`, or a plain prompt). Everything that needs a quick pick or a session — `chatPanel.ts` — consumes that decision. Built-ins are matched case-insensitively and are never shadowed by a skill with the same name; a slash that names nothing stays a prompt verbatim, so `/usr/bin/env is missing` is a sentence and not an error.
 - **The `/` palette is an affordance, not a dispatcher.** It lists what can be typed and inserts a name; Enter still goes through the same submit path as anything else. Keeping the webview that dumb is what lets route resolution stay on the extension side, next to the catalogue it needs.
-- **A resumed conversation cannot be replayed.** There is no public transcript reader in the SDK, so the panel marks the resume and moves on rather than inventing a history it does not have; the prior context is real — it is the agent's — but the *rendering* of it is not available to a client. This is a limit of the current SDK surface, documented rather than worked around.
+- **A resumed conversation could not be replayed** — there was no public transcript reader in the SDK, so the panel marked the resume and moved on rather than inventing a history it did not have. **p_0.38.3 reverses this**: `anvil.LoadTranscript` and `session.transcript` are that reader, and opening a session now draws what happened in it. What is still true is the narrower claim underneath — the *model's context* was never the problem and nothing about it changes; and reasoning, which was never stored, is still not shown. See [38](38-session-identity-and-replay.md) and [the transcript as built](#the-transcript-replayed-as-built-p_0383).
 - **The mode select is driven by the extension, never by the click.** It is disabled while a turn runs and updated from the `mode` message, so a refused change corrects the control instead of sticking in it. `bypass` is the one mode that changes the panel's appearance, because it is the one mode that removes a safeguard.
 
 ### Packaging as built (p_0.35.7)
@@ -234,7 +235,7 @@ The first install of a packaged VSIX found a defect no headless check could have
 
 One narrow sidebar panel held the transcript, the tool cards, the mode select and the composer at once, sessions were reachable only through `/resume`, and the composer took a slice of the layout. The rework separates the three surfaces, and each one moves to where the editor already puts that kind of thing.
 
-- **The conversation is an editor tab, not a view.** `ChatPanel` owns a `WebviewPanel` created with `createWebviewPanel(viewType, …, ViewColumn.Active, …)`; `anvil.openChat` creates or reveals it and never creates a second one. The container is a document, so the surface follows document rules: full width, splittable, draggable between columns, and closable with <kbd>Ctrl</kbd>+<kbd>W</kbd>. Two consequences follow from that, and both are load-bearing. **Closing the tab is not stopping the turn** — the session and the host child outlive the view, `post()` becomes a no-op with no view attached, and events that arrive while it is closed are dropped rather than queued. **Reopening must re-announce everything**, which is why the `ready` path already exists and now carries the load: trust, vision, the mode, the rule files, the session state, and *every still-pending approval*, one message each. What does not come back is the rendered transcript, and the tab does not pretend otherwise — the SDK has no transcript reader, so a replay would be an invented history rather than a restored one.
+- **The conversation is an editor tab, not a view.** `ChatPanel` owns a `WebviewPanel` created with `createWebviewPanel(viewType, …, ViewColumn.Active, …)`; `anvil.openChat` creates or reveals it and never creates a second one. The container is a document, so the surface follows document rules: full width, splittable, draggable between columns, and closable with <kbd>Ctrl</kbd>+<kbd>W</kbd>. Two consequences follow from that, and both are load-bearing. **Closing the tab is not stopping the turn** — the session and the host child outlive the view, `post()` becomes a no-op with no view attached, and events that arrive while it is closed are dropped rather than queued. **Reopening must re-announce everything**, which is why the `ready` path already exists and now carries the load: trust, vision, the mode, the rule files, the session state, and *every still-pending approval*, one message each. The rendered transcript is no longer one of the things that stays lost: the `ready` announcement also asks for the stored conversation and draws it back (**p_0.38.3** — see [38](38-session-identity-and-replay.md)), so a reload comes back to the same conversation rather than to an empty document. Everything the announcement does not carry is still gone: events that arrived while the tab was closed were dropped, and a round whose record had not landed yet is in neither the replay nor the stream.
 - **A reused tab has to be emptied.** The panel is a singleton, so clicking a different session in the sidebar points the same document at a different agent — and the DOM still holds the previous conversation's messages, tool cards, approval cards and chips, with the script's `toolCards` / `approvals` maps still keyed to it. `resumeAgent` therefore posts a `reset` message before the session marker, and the script implements it as a full clear. Reusing the tab without that reads as two conversations stacked, which is worse than either a flash or a second tab would have been.
 - **The mode toolbar moves into the card.** `Mode` and `Rules` were a row of their own between the transcript and the composer; they are now the trailing row of the composer itself, which is where the choice they carry applies.
 - **The sidebar is a native tree over `session.list`.** `SessionTreeProvider` is the thin `vscode` half; the grouping, ordering, labels and tooltips are `sessionList.ts`, which imports no `vscode` and is unit-tested, on the same boundary p_0.35.4 drew. Rows are grouped by *local* calendar recency (Today / This week / Earlier) and ordered newest first, because the only timestamp `session.list` reports is `updated_at`, falling back to `created_at`. The label is the title the store derived — a session's first user message, one line and truncated — and the description is `model · N runs` with the status carried by the icon. A session nobody prompted has no such message, so it falls back to its shortened id; the whole id stays in the tooltip either way, because a title is what a person recognises and an id is what a command takes. (p_0.38.1 added the title; before it there was none to show, and every row was an id.) **Nothing is invented to fill a column** — a session with no timestamp sorts last and says so, and an unrecognised `last_status` renders as unknown rather than being guessed into one of the SDK's three.
@@ -407,6 +408,62 @@ no preview. A finished card now carries *Review changes*.
 - **The one gap is stated rather than papered over.** A `shell` command that redirects into a file
   is invisible to the tracker, so its card offers no review. Rescanning the workspace after every
   turn would close it and cost far more than the gap does — the same judgment p_0.35.9 made.
+
+### The transcript replayed as built (p_0.38.3)
+
+`session.transcript` reads a stored conversation back and the tab draws it: the prose as Markdown,
+the tool calls as cards, and a marker where each run ended. It replaces the paragraph above that
+said a resumed conversation could not be replayed — the reader exists now
+([38](38-session-identity-and-replay.md) is the design). What the phase had to settle is the part
+the store's shape decides, and each of the four is a place where the obvious implementation is
+quietly wrong.
+
+- **A `role: "user"` record is not always the user.** The loop writes its own notes to the model
+  under that role — a vision note when attachments went out, a loop-guard warning — and sinks them
+  with everything else, so a naive replay puts words in the user's mouth. What separates them is
+  position, not content: a run opens with the one message that started it
+  (`loop.go:124` is the only place a run's own user message is sunk), so the first user record of a
+  run is the turn and later ones are the loop's. The replay draws the first as a "you" bubble and
+  the rest as a note, labelled *the loop put this into the conversation*, because the alternative —
+  dropping them — would silently hide a guard trip the user should see. **No store field was added
+  for this**, and the rule does not depend on `run_id` being present: a `run_end` resets it, so a
+  store without run ids still reads correctly.
+- **A replayed run needs a boundary, and the marker is the only place one exists.** A live run's
+  end arrives as a `done` and the panel writes a status line and closes the run; a replay has no
+  `done`, and a transcript of three runs drawn without boundaries reads as one long turn. The
+  reader therefore returns a `run_end` entry per persisted `run_end` record, the panel posts it
+  through a renderer of its own (`addRunEnd`), and that renderer shares `runSummary` with the live
+  one so the same run is described the same way in both — two counts of one run's steps would be
+  two answers to one question.
+- **A run that ended leaves nothing reading "running".** A replayed `tool_call` whose `tool_result`
+  is missing — a dropped event, or a record the store never got — would otherwise sit in flight
+  forever, which reads as a stuck turn rather than as a lost record. Both endings sweep the cards
+  still claiming to run and settle them as `stopped`. That sweep deliberately adds no review
+  button: whether the call landed is precisely what is not known, and the button's rule is that a
+  change which did not apply is not a change.
+- **The replay is a projection, so it inherits the store's honesty and its gaps.** A call that
+  failed replay as completed, because `is_error` was never written; reasoning has no row, because
+  it was never written; an image-only turn replays as an empty user bubble, because the attachment
+  bytes are not in the message record. The reader also reports how many entries the cap dropped,
+  and the tab says so in a note rather than presenting a truncated conversation as the whole one.
+  None of these is a missing feature to be filled in later — each is a thing the store does not
+  contain.
+- **Coming back to a session is the same call as opening one.** The panel remembers the current
+  agent id in `workspaceState` and reads it on `ready`; the decision is the pure
+  `shouldReattach(stored, listed)`, whose third outcome (the id is stored and no longer listed)
+  *clears the key*, which is a different action from having no key at all. Re-attaching calls the
+  same `resumeAgent` a sidebar click does, so the reset that empties a reused tab runs before the
+  replay fills it and two conversations are never stacked. A listing that could not be read at all
+  is `undefined` and must not be mistaken for an empty one — clearing there would forget a session
+  that is perfectly intact.
+- **The two files no test in this suite can run are held by reading them.** `src/transcript.ts`
+  and `src/reattach.ts` are pure and tested directly; the wiring between them,
+  `src/chatPanel.ts` and `media/chat.js` is asserted by `test/unit/replayWiring.test.ts`, which
+  reads the sources — the replay must go through `postEvent` (so a replayed card gets its review
+  button from the one place that decides reviews) and never through `onEvent` (whose change-tracker
+  snapshot would file today's file contents under a historical call's id), the reset must precede
+  the marker which must precede the replay, and the new lines must be built with `textContent`
+  rather than written.
 
 ## Placement
 

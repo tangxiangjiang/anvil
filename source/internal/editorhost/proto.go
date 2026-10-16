@@ -24,7 +24,7 @@ import (
 const ProtocolVersion = 1
 
 // Version is the host build version, overridable at link time.
-var Version = "0.37.0-dev"
+var Version = "0.38.0-dev"
 
 // Client to host request methods.
 const (
@@ -33,12 +33,17 @@ const (
 	MethodSessionNew    = "session.new"
 	MethodSessionResume = "session.resume"
 	MethodSessionList   = "session.list"
-	MethodSessionClose  = "session.close"
-	MethodPrompt        = "prompt"
-	MethodCancel        = "cancel"
-	MethodModelsList    = "models.list"
-	MethodSkillsList    = "skills.list"
-	MethodRulesList     = "rules.list"
+	// MethodSessionTranscript replays a stored conversation. It is keyed by agent
+	// id rather than by session, so it answers for a session this host has not
+	// opened — which is the case it exists for: a client that has just reloaded
+	// its window and knows which agent it was talking to.
+	MethodSessionTranscript = "session.transcript"
+	MethodSessionClose      = "session.close"
+	MethodPrompt            = "prompt"
+	MethodCancel            = "cancel"
+	MethodModelsList        = "models.list"
+	MethodSkillsList        = "skills.list"
+	MethodRulesList         = "rules.list"
 	// MethodPermissionsGet reads the workspace rule file — the effective policy
 	// for this workspace, and the place to put a squiggle when it will not
 	// compile.
@@ -496,6 +501,55 @@ type SessionInfo struct {
 	// any. The store is the only place a past session's tokens exist: the
 	// terminal `done` of a run that has already ended is gone.
 	Usage *Usage `json:"usage,omitempty"`
+}
+
+// ---------------------------------------------------------------------------
+// session.transcript
+// ---------------------------------------------------------------------------
+
+// SessionTranscriptParams names the agent to replay.
+type SessionTranscriptParams struct {
+	AgentID string `json:"agent_id"`
+	// Limit caps the entries returned, keeping the newest. Zero means the SDK's
+	// default.
+	Limit int `json:"limit,omitempty"`
+	// Store selects the session backend to read: "jsonl" (default) or "sqlite".
+	Store string `json:"store,omitempty"`
+}
+
+// SessionTranscriptResult is a stored conversation, oldest first.
+type SessionTranscriptResult struct {
+	Entries []TranscriptEntry `json:"entries"`
+	// Dropped is how many entries the cap and the run boundary left out. The
+	// client shows the tail and says how much of it this is.
+	Dropped int `json:"dropped,omitempty"`
+}
+
+// TranscriptEntry mirrors anvil.TranscriptEntry in host vocabulary. It carries
+// what can be rendered and nothing else: the reader never had reasoning or an
+// API key to hand back.
+type TranscriptEntry struct {
+	Kind  string `json:"kind"` // message | run_end
+	RunID string `json:"run_id,omitempty"`
+
+	// message
+	Role       string           `json:"role,omitempty"`
+	Content    string           `json:"content,omitempty"`
+	ToolCallID string           `json:"tool_call_id,omitempty"`
+	Name       string           `json:"name,omitempty"`
+	ToolCalls  []TranscriptCall `json:"tool_calls,omitempty"`
+
+	// run_end
+	Status string `json:"status,omitempty"`
+	Steps  int    `json:"steps,omitempty"`
+	Usage  *Usage `json:"usage,omitempty"`
+}
+
+// TranscriptCall is one tool invocation inside a replayed assistant message.
+type TranscriptCall struct {
+	ID   string          `json:"id"`
+	Name string          `json:"name"`
+	Args json.RawMessage `json:"args,omitempty"`
 }
 
 // ---------------------------------------------------------------------------

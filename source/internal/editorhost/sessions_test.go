@@ -205,3 +205,92 @@ func TestRulesListIsEmptyWhenNoLayerIsAskedFor(t *testing.T) {
 		t.Fatalf("a layer that is off must not be reported: %v", res)
 	}
 }
+
+// A closed session's conversation is still readable, because session.transcript
+// is keyed by agent id rather than by session. That is what makes the reload
+// case work: the window comes back, no session is open, and the panel still has
+// something to fill the tab with.
+//
+// The assertion is on the wire shape the panel folds, so it covers the three
+// things a replay needs and a listing could not give it: the user turn, the
+// tool call with its arguments, and where the run ended.
+func TestSessionTranscriptReplaysAPersistedConversation(t *testing.T) {
+	llm := newStubLLM(t,
+		toolTurn("call_1", "read_file", `{"path":"note.txt"}`),
+		textTurn("noted."),
+	)
+	h, dir := initHost(t, llm.baseURL())
+	if err := os.WriteFile(filepath.Join(dir, "note.txt"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	newResult := resultOf(t, h.callOK(MethodSessionNew, SessionParams{}))
+	sessionID, _ := newResult["session_id"].(string)
+	agentID, _ := newResult["agent_id"].(string)
+	if out := promptRun(t, h, sessionID, "read the note", autoApprove); out.done == nil {
+		t.Fatalf("the run produced no done: %+v", out)
+	}
+	h.callOK(MethodSessionClose, SessionRefParams{SessionID: sessionID})
+
+	res := resultOf(t, h.callOK(MethodSessionTranscript, SessionTranscriptParams{AgentID: agentID}))
+	entries, _ := res["entries"].([]any)
+	// The user turn, the assistant turn that called the tool, the tool's result,
+	// the assistant turn that ended the run, and the run's boundary.
+	if len(entries) != 5 {
+		t.Fatalf("want the whole conversation back, got %d: %v", len(entries), res)
+	}
+	if dropped, _ := res["dropped"].(float64); dropped != 0 {
+		t.Fatalf("nothing was dropped, got %v", res["dropped"])
+	}
+
+	first, _ := entries[0].(map[string]any)
+	if first["kind"] != "message" || first["role"] != "user" || first["content"] != "read the note" {
+		t.Fatalf("first entry = %v", first)
+	}
+	call, _ := entries[1].(map[string]any)
+	calls, _ := call["tool_calls"].([]any)
+	if len(calls) != 1 {
+		t.Fatalf("the assistant turn carries no tool call: %v", call)
+	}
+	// The arguments cross the pipe as JSON, not as a string: a replayed card
+	// reads them exactly where a live one reads the event's.
+	tc, _ := calls[0].(map[string]any)
+	args, _ := tc["args"].(map[string]any)
+	if tc["name"] != "read_file" || args["path"] != "note.txt" {
+		t.Fatalf("tool call = %v", tc)
+	}
+	result, _ := entries[2].(map[string]any)
+	if result["role"] != "tool" || result["tool_call_id"] != "call_1" || result["content"] == "" {
+		t.Fatalf("tool result = %v", result)
+	}
+	last, _ := entries[3].(map[string]any)
+	if last["role"] != "assistant" || last["content"] != "noted." {
+		t.Fatalf("the closing turn = %v", last)
+	}
+	end, _ := entries[4].(map[string]any)
+	if end["kind"] != "run_end" || end["status"] != "finished" {
+		t.Fatalf("run boundary = %v", end)
+	}
+}
+
+// An agent the workspace does not have is a host error, not an empty
+// conversation: the panel tells "this session is gone" from "this session had
+// nothing in it", and only the first one clears the remembered id.
+func TestSessionTranscriptRejectsAnUnknownAgent(t *testing.T) {
+	llm := newStubLLM(t, textTurn("ok"))
+	h, _ := initHost(t, llm.baseURL())
+
+	m := h.call(MethodSessionTranscript, SessionTranscriptParams{AgentID: "agent-nope"})
+	rpcErr, ok := rpcErrorOf(m)
+	if !ok || rpcErr.Code != CodeHostError {
+		t.Fatalf("want a host error, got %v", m)
+	}
+	if !strings.Contains(rpcErr.Message, "not found") {
+		t.Fatalf("want a not-found message, got %q", rpcErr.Message)
+	}
+
+	empty := h.call(MethodSessionTranscript, SessionTranscriptParams{})
+	if _, ok := rpcErrorOf(empty); !ok {
+		t.Fatalf("an empty agent id must be refused, got %v", empty)
+	}
+}
