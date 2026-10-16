@@ -56,3 +56,21 @@ See also: [m_0.35/p_0.35.7.md](m_0.35/p_0.35.7.md), [35-vscode-extension.md](../
 | A defect fixed after review is not a lesson until it is guarded | Where the p_0.35.7 bug became a stylesheet invariant, this pass's invariants are the layout's shape: out of flow, measured once, the variables agreed across files |
 
 See also: [m_0.35/p_0.35.8.md](m_0.35/p_0.35.8.md), [35-vscode-extension.md](../../design/v1.0/35-vscode-extension.md).
+
+## 2026-10-16 — rendering a Markdown reply while it is still arriving
+
+**Setup:** p_0.35.9 typesets the assistant's reply and streams it. There is no incremental Markdown renderer to borrow, so the transcript freezes every block except the last and re-parses the remainder on each frame.
+
+**What happened:** the scheme is only sound if a block can be extended *solely* by the source that immediately follows it. That prerequisite is invisible in the code and easy to state and easy to break: a bare `-` on its own line parsed as a paragraph, so the next character turned it into a list and a block that had already been frozen — and drawn — changed underneath the renderer. A test that parses every prefix of a document and checks that no frozen block changed found it; reading the parser would not have.
+
+**Takeaways for later phases**
+
+| Lesson | Implication |
+|--------|-------------|
+| A frozen-prefix scheme needs a test that grows the input one character at a time | Freeze-and-reparse passes on every whole document and fails on prefixes. Walk each prefix, re-run the exact cycle the renderer runs, and assert the frozen part is unchanged — that test is the contract, not the parser |
+| A blank line is not a parse boundary | An indented code block continues across one, a blank line inside an open fence would split the code, `- a\n\n- b` is one loose list, and an item's second paragraph has a blank line inside it. "Seal the block on a blank line" is the intuitive rule and it is wrong four ways |
+| A field's name is not a slot | `start` was the block's offset and the ordered list's first number went into it too, which broke re-parsing for every list not starting at 1. Where two numbers nearly coincide, the near-miss is the bug; the re-parse test found this one as well |
+| A decode field on a struct shared with the request encoder is a leak | `openAIMessage` encodes requests *and* decodes responses, so giving it a `reasoning` field is how chain-of-thought starts being echoed upstream. The fix cost nothing to keep small — decode-only deltas live in the streaming struct — and a test asserting the serialized request body has no `reasoning` key keeps it that way |
+| Reasoner output is a firehose, and a dropped event is permanent | `Run.emit` drops silently when its buffer fills, and the transcript is append-only, so a dropped *text* chunk corrupts the turn. Coalesce reasoning by size (200 chars) at the source rather than forwarding one event per token |
+
+See also: [m_0.35/p_0.35.9.md](m_0.35/p_0.35.9.md), [35-vscode-extension.md](../../design/v1.0/35-vscode-extension.md).

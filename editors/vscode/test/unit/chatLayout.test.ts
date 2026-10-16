@@ -186,6 +186,26 @@ test('the composer is a card, and the tab is themed as an editor', () => {
   assert.doesNotMatch(body, /--vscode-sideBar-background/);
 });
 
+test('the assistant body reflows, and a code block does not', () => {
+  // The rest of `.body` is `pre-wrap`, which is right for text the user typed and
+  // wrong for Markdown: it would keep every line break the model wrote and stop
+  // paragraphs from reflowing when the window is resized. The override is the
+  // whole reason the class is `body md` rather than `body`.
+  assert.equal(valueOf('.msg .body.md', 'white-space'), 'normal');
+
+  // And the opposite inside a code block: a wrapped code line is a changed line.
+  assert.equal(valueOf('.body.md .md-code code', 'white-space'), 'pre');
+});
+
+test('the stylesheet has no at-rules, which is what lets it be parsed as text', () => {
+  // `parseRules()` above splits the stylesheet on `}` and reads the text before
+  // each `{` as a selector, so a `@media` block would silently turn into rules
+  // with names like `@media (min-width: 600px) { .x`. Every invariant in this
+  // file would then be checking something that does not exist. The assumption is
+  // stated in a comment up there; this is what enforces it.
+  assert.doesNotMatch(SOURCE, /@[a-z-]+\s*[({]/, 'chat.css must stay free of at-rules');
+});
+
 test('the textarea grows to fit instead of being dragged', () => {
   // A manual resize grip on a box whose height the layout reserves would leave
   // the reservation describing a size the script overwrites on the next

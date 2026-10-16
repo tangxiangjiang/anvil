@@ -1,10 +1,12 @@
 # Anvil for VS Code
 
 The editor surface for the Anvil agent. The conversation is an **editor tab**
-that streams a turn, shows every tool call as a card, and stops for your
-approval before anything writes to the workspace; the **activity bar** lists
-this workspace's past sessions, one click to continue; and the composer floats
-over the transcript so the conversation scrolls underneath it.
+that streams a turn, typesets the model's Markdown, shows its reasoning in a
+collapsed row above the answer, and gives every tool call a card with what went
+in and what came back; it stops for your approval before anything writes to the
+workspace. The **activity bar** lists this workspace's past sessions, one click
+to continue, and the composer floats over the transcript so the conversation
+scrolls underneath it.
 
 This extension holds no agent logic. It spawns the `anvil-host` sidecar — a
 stdio program built from the Anvil Go SDK — and renders what that process
@@ -17,7 +19,7 @@ reports. The protocol between the two is chapter 35 of the design docs
 Download or build the VSIX for your platform and install it:
 
 ```bash
-code --install-extension anvil-vscode-0.35.8-win32-x64.vsix
+code --install-extension anvil-vscode-0.35.9-win32-x64.vsix
 ```
 
 Nothing else is needed: the `anvil-host` sidecar for that platform travels
@@ -56,7 +58,7 @@ The sidecar is found in this order, and the first hit wins:
 npm run package:vsix                 # this machine's platform
 npm run package:vsix -- --target linux-x64
 npm run package:all                  # one VSIX per target, in sequence
-npm run smoke:vsix -- --vsix anvil-vscode-0.35.8-win32-x64.vsix
+npm run smoke:vsix -- --vsix anvil-vscode-0.35.9-win32-x64.vsix
 ```
 
 Targets: `win32-x64`, `win32-arm64`, `linux-x64`, `linux-arm64`, `darwin-x64`,
@@ -138,6 +140,19 @@ a log line.
 - **Tells you what it read.** The tab reports which rule files this workspace
   loaded — `AGENTS.md`, `.anvil/rules/*.md`, and optionally `.cursor/rules/*` —
   and says so plainly when one was skipped or cut short by the size budget.
+- **Typesets the reply, and shows the thinking when the provider sends it.** A
+  reply is rendered as Markdown — paragraphs, headings, lists, quotes, fenced
+  code — by a parser that returns a tree of plain objects and nothing else: the
+  panel builds the nodes, so nothing the model writes can add markup or script
+  to the page. Reasoning that an OpenAI-compatible provider streams
+  (`reasoning_content`, or `reasoning`) appears in a collapsed **Thinking** row
+  above the answer, which closes itself once the answer starts. It is
+  display-only — never stored, never replayed, never sent back. A link is only
+  clickable if it is `http` or `https`, and the extension checks that again
+  before asking the operating system to open it; anything else stays the literal
+  text it was written as. The Thinking row is provider-dependent: Anthropic's
+  extended thinking must be echoed back with a signature the SDK does not carry
+  yet, so it does not appear there.
 - **Keeps the conversation across a mode change.** `ask`, `accept edits`,
   `plan`, and `bypass` are session options in the SDK, so switching one closes
   the session and re-opens it under the same agent: same history, new mode. The
@@ -219,6 +234,13 @@ sidebar shows, and the `vscode`-bound modules above only carry those decisions
 out. `test/unit/chatLayout.test.ts` is the third kind of check: it reads
 `media/chat.css` and `media/chat.js` as text and asserts the layout invariants
 those two files have to agree on, since nothing here can render them.
+`test/unit/markdown.test.ts` loads `media/markdown.js` the same way — by
+absolute path, for its side effect — and pins the property the transcript's
+incremental renderer rests on: that re-parsing a document from its last block's
+start reproduces that block exactly. `test/unit/linkPolicy.test.ts` reads the
+two files that implement the link policy and checks they still both exist and
+still allow the same schemes, which is the only part of that policy this suite
+can see.
 
 The packaging step has its own check, since it is the part no unit test can
 reach: `npm run smoke:vsix` extracts a built VSIX to a temporary directory,

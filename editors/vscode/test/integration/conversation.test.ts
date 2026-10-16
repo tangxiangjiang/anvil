@@ -25,6 +25,18 @@ test('a chat turn streams text, pairs the tool call with its result, and ends id
   assert.ok(types.includes('tool_call'));
   assert.ok(types.includes('tool_result'));
 
+  // Reasoning has to survive the host's projection onto the wire, which is a
+  // whitelist: an event type missing from it is dropped in silence and the
+  // panel's Thinking block simply never appears.
+  const reasoning = harness.events.filter((event) => event.type === 'reasoning');
+  assert.ok(reasoning.length > 0, 'the host forwarded the model reasoning');
+  assert.ok(reasoning.every((event) => typeof event.text === 'string' && event.text.length > 0));
+  // It is carried in `text`, like assistant output, so a client that does not
+  // know the type loses the thinking rather than misreading the answer.
+  const firstReasoning = harness.events.findIndex((event) => event.type === 'reasoning');
+  const firstAssistant = harness.events.findIndex((event) => event.type === 'assistant');
+  assert.ok(firstReasoning < firstAssistant, 'reasoning of a round precedes its answer');
+
   const call = harness.events.find((event) => event.type === 'tool_call');
   const output = harness.events.find((event) => event.type === 'tool_result');
   assert.equal(call?.name, 'read_file');

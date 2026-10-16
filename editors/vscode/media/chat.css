@@ -177,6 +177,159 @@ body {
   color: var(--vscode-errorForeground);
 }
 
+/* --- markdown ------------------------------------------------------------- */
+
+/*
+ * The assistant's prose is typeset, not dumped, so the `pre-wrap` that the rest
+ * of `.body` uses has to go: it preserves every newline the model wrote and
+ * stops paragraphs from reflowing when the window is resized. `.body.md` is only
+ * ever on an assistant bubble — user text is shown as it was typed.
+ */
+.msg .body.md {
+  white-space: normal;
+}
+
+.body.md .md-p {
+  margin: 0 0 8px;
+}
+
+.body.md .md-p:last-child,
+.body.md .md-list:last-child,
+.body.md .md-quote:last-child,
+.body.md .md-code:last-child {
+  margin-bottom: 0;
+}
+
+.body.md .md-h {
+  margin: 14px 0 6px;
+  line-height: 1.3;
+}
+
+.body.md .md-h:first-child {
+  margin-top: 0;
+}
+
+.body.md .md-list {
+  margin: 0 0 8px;
+  padding-left: 1.5em;
+}
+
+.body.md .md-list .md-list {
+  margin-bottom: 0;
+}
+
+.body.md .md-list li {
+  margin: 2px 0;
+}
+
+.body.md .md-quote {
+  margin: 0 0 8px;
+  padding: 2px 0 2px 10px;
+  border-left: 3px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
+  color: var(--vscode-descriptionForeground);
+}
+
+.body.md .md-rule {
+  margin: 12px 0;
+  border: none;
+  border-top: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
+}
+
+/*
+ * One height cap in the whole file, and it is not here: tool output can be
+ * arbitrarily long and is not what the reader came for, while a code block in
+ * the answer is, so that one is allowed to be as tall as it is and the
+ * transcript scrolls. It scrolls sideways instead of wrapping, because a wrapped
+ * code line is a changed code line.
+ */
+.body.md .md-code {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.12));
+  overflow: auto;
+}
+
+.body.md .md-code code {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.92em;
+  white-space: pre;
+  word-break: normal;
+}
+
+.body.md .md-inline-code {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.92em;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.12));
+}
+
+/*
+ * A link is a `span`, not an `<a href>`: the script puts no URL in the document
+ * at all, so nothing here can navigate the webview away from the conversation.
+ * It still has to look and behave like a link, keyboard included.
+ */
+.body.md .md-link {
+  color: var(--vscode-textLink-foreground);
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.body.md .md-link:hover {
+  color: var(--vscode-textLink-activeForeground, var(--vscode-textLink-foreground));
+}
+
+.body.md .md-link:focus {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 1px;
+}
+
+/* A target that will not be opened stays the text it was written as. */
+.body.md .md-literal {
+  color: var(--vscode-descriptionForeground);
+}
+
+/* --- thinking ------------------------------------------------------------- */
+
+/*
+ * Reasoning sits above the answer it belongs to, collapsed, so a verbose model
+ * does not push the answer off the screen. It is plain text rather than
+ * Markdown: reasoning is not a document, and typesetting it would invite the
+ * reader to treat it as one.
+ */
+.msg .think {
+  border-left: 2px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
+  padding-left: 8px;
+}
+
+.msg .think > summary {
+  cursor: pointer;
+  font-size: 0.88em;
+  color: var(--vscode-descriptionForeground);
+  list-style: none;
+}
+
+.msg .think > summary::-webkit-details-marker {
+  display: none;
+}
+
+.msg .think > summary::before {
+  content: '\25B8';
+  margin-right: 6px;
+  opacity: 0.6;
+}
+
+.msg .think[open] > summary::before {
+  content: '\25BE';
+}
+
+.msg .think .body {
+  margin-top: 4px;
+  font-size: 0.92em;
+  color: var(--vscode-descriptionForeground);
+}
+
 /* --- tool cards ----------------------------------------------------------- */
 
 .tool {
@@ -251,6 +404,21 @@ body {
 
 .tool .pane {
   padding: 0 8px 8px;
+}
+
+/*
+ * The card's two halves are labelled, so a reader can tell what the model asked
+ * for from what it got back without inferring it from the shape of the JSON.
+ */
+.tool .section .label {
+  font-size: 0.78em;
+  letter-spacing: 0.06em;
+  color: var(--vscode-descriptionForeground);
+  margin-bottom: 3px;
+}
+
+.tool .section + .section {
+  margin-top: 8px;
 }
 
 .tool pre,

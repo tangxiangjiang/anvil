@@ -54,7 +54,9 @@ type Inbound =
   | { type: 'commands' }
   | { type: 'mode'; mode: string }
   | { type: 'review'; requestId: string }
-  | { type: 'reviewChange'; path: string };
+  | { type: 'reviewChange'; path: string }
+  /** A link the transcript rendered. The URL is re-checked before it is opened. */
+  | { type: 'openLink'; url: string };
 
 /** A message to the webview. */
 type Outbound =
@@ -284,9 +286,33 @@ export class ChatPanel implements HostListener {
       case 'reviewChange':
         await this.openChangeReview(msg.path);
         return;
+      case 'openLink':
+        await this.openLink(msg.url);
+        return;
       default:
         return;
     }
+  }
+
+  /**
+   * Opens a link out of the transcript, after checking its scheme again.
+   *
+   * The webview already refuses anything that is not http or https, and that
+   * check is presentation rather than the boundary: this message comes from a
+   * document, and that document is written by a renderer over *model* output.
+   * `vscode.env.openExternal` hands a URL to the operating system, so the
+   * decision about what may reach it belongs on this side. The duplication of
+   * the pattern is the point.
+   *
+   * A refusal is silent. The webview only posts a URL it already agreed to open,
+   * so a rejected message means the document is not the one this extension
+   * wrote, and there is nothing useful to tell the user about that.
+   */
+  private async openLink(url: unknown): Promise<void> {
+    if (typeof url !== 'string') return;
+    const trimmed = url.trim();
+    if (!/^https?:\/\/\S+$/i.test(trimmed)) return;
+    await vscode.env.openExternal(vscode.Uri.parse(trimmed));
   }
 
   // --- commands ---------------------------------------------------------------
@@ -889,6 +915,14 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
       </div>
     </form>
   </div>
+  <!--
+    The Markdown parser first, because it is a plain script assigning a global
+    rather than a module -- media/ is linted as browser code and tsc never
+    copies it into out/, so there is nothing to import. chat.js reads the global
+    lazily on its first render, so the order is convention rather than a
+    requirement; it is written this way so a reader can see the dependency.
+  -->
+  <script nonce="${nonce}" src="${asset('markdown.js')}"></script>
   <script nonce="${nonce}" src="${asset('chat.js')}"></script>
 </body>
 </html>`;

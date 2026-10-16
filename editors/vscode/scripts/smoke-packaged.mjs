@@ -30,6 +30,11 @@ const REQUIRED = [
   'out/src/hostBundle.js',
   'media/chat.js',
   'media/chat.css',
+  // A plain script, loaded by a second `script` tag in the panel's document. It
+  // is not imported by anything, so nothing in the build or the tests fails when
+  // it is missing from the package -- the transcript would just render as
+  // unstyled text. This line is the only thing that would notice.
+  'media/markdown.js',
   'bin/hosts.json',
 ];
 /**

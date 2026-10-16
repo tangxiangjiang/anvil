@@ -288,4 +288,4 @@ The transcript rendered assistant prose as escaped text in a `pre-wrap` box and 
 
 ## Roadmap mapping
 
-[m_0.35_vscode_extension.md](../../roadmaps/v1.0/m_0.35_vscode_extension.md) phases `p_0.35.1` … `p_0.35.8`.
+[m_0.35_vscode_extension.md](../../roadmaps/v1.0/m_0.35_vscode_extension.md) phases `p_0.35.1` … `p_0.35.9`.

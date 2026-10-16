@@ -7,7 +7,8 @@
  * seconds of latency, and it pins the wire shape the extension reads.
  *
  * Scenarios:
- *   chat       assistant text, one tool call and its result, done(finished)
+ *   chat       coalesced reasoning, Markdown assistant text, one tool call and
+ *              its result, done(finished)
  *   approval   a gated write_file: waits for approval.response, then finishes
  *   diff       a gated write_file whose preview carries both bodies, and which
  *              really writes the file when it is allowed (FAKE_HOST_FILE)
@@ -185,9 +186,14 @@ async function runScript(session, run, message) {
 
   // chat
   event(session, run, { type: 'progress', text: 'step 1' });
+  // Reasoning arrives before the answer of the same round, and coalesced rather
+  // than per token, because that is what the real host does. The panel's
+  // Thinking block is built from these.
+  event(session, run, { type: 'reasoning', text: 'The user wants the README. ' });
+  event(session, run, { type: 'reasoning', text: 'I should read it before answering.' });
   event(session, run, { type: 'assistant', text: 'Reading ' });
   await wait(2);
-  event(session, run, { type: 'assistant', text: 'the file.' });
+  event(session, run, { type: 'assistant', text: 'the file.\n\n' });
   event(session, run, { type: 'tool_call', tool_call_id: 't1', name: 'read_file', args: { path: 'README.md' } });
   await wait(2);
   event(session, run, {
@@ -196,7 +202,13 @@ async function runScript(session, run, message) {
     content: '# Project\n'.repeat(400),
     is_error: false,
   });
-  event(session, run, { type: 'assistant', text: 'The file is a README.' });
+  // Markdown, so the wire-to-UI path for the renderer is covered without a key
+  // or a network: a heading, a list and a fenced block, none of which can be
+  // produced by the plain-text path this replaced.
+  event(session, run, {
+    type: 'assistant',
+    text: '## The file\n\nIt has:\n\n- a title\n- nothing else\n\n```md\n# Project\n```\n',
+  });
   finish(session, run, {
     status: 'finished',
     result: 'The file is a README.',

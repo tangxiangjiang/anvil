@@ -330,7 +330,14 @@ export type EventType =
   | 'assistant'
   | 'tool_call'
   | 'tool_result'
-  | 'error';
+  | 'error'
+  /**
+   * The model's thinking, for providers that stream it, carried in `text` like
+   * `assistant`. Display-only: it is not part of the run result and has no
+   * replay, so a resumed session shows none. A host that predates it simply
+   * never emits the value, which is why this did not move the protocol version.
+   */
+  | 'reasoning';
 
 /** One streamed unit of a run. */
 export interface HostEvent {

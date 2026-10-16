@@ -6,6 +6,13 @@
  * results, diffs — is written with textContent, never innerHTML. Tool output is
  * arbitrary file content and command output; it is data, and it must not be
  * able to add markup or script to this document.
+ *
+ * That rule is why the Markdown renderer builds nodes by hand rather than
+ * setting `innerHTML` to generated HTML: a renderer over *model* output is an
+ * injection surface even when everything it interpolates is escaped, because a
+ * URL is not text. `media/markdown.js` parses into plain objects; this file is
+ * the only thing that turns them into nodes, and it refuses any link scheme it
+ * will not make clickable.
  */
 (function () {
   const vscode = acquireVsCodeApi();
@@ -30,8 +37,15 @@
   let running = false;
   /** True once a prompt has been sent: the empty state is gone for good. */
   let started = false;
-  /** The assistant bubble new text is appended to. */
-  let currentText = null;
+  /**
+   * The assistant round being streamed, or null. One reference for its Thinking
+   * block and its answer, because they are one round: a user message, a tool
+   * call, an approval, a notice, a session marker, the end of the run and a
+   * transcript reset all end it. Reasoning that outlived its round would append
+   * to a block sitting *above* the tool cards, so the transcript would show
+   * thinking before the calls it actually followed.
+   */
+  let round = null;
   /** Tool cards by tool_call_id, so a result can find its call. */
   const toolCards = new Map();
   /** Approval cards by request_id. */
@@ -89,7 +103,7 @@
    * the user is no longer looking at.
    */
   function clearTranscript() {
-    currentText = null;
+    endRound();
     toolCards.clear();
     approvals.clear();
     mentions = [];
@@ -132,27 +146,427 @@
       wrap.appendChild(shots);
     }
     append(wrap);
-    currentText = null;
+    endRound();
+  }
+
+  /**
+   * Ends the assistant round, so the next reasoning or text starts a new bubble
+   * rather than appending to one the reader has already read past.
+   */
+  function endRound() {
+    if (round && round.think && !round.thinkPinned) round.think.open = false;
+    round = null;
+  }
+
+  /**
+   * The bubble for the current round, created by whichever of reasoning or text
+   * arrives first — so the round's label precedes its Thinking block instead of
+   * floating below it.
+   *
+   * `text` accumulates every chunk, and `painted` is how much of it is on
+   * screen: the reconciler below is fed the whole string and works out the rest,
+   * because re-parsing only the new tail is exactly what it must not do.
+   */
+  function ensureRound() {
+    if (round) return round;
+    const wrap = el('div', 'msg assistant');
+    wrap.appendChild(el('div', 'who', 'anvil'));
+    const body = el('div', 'body md');
+    wrap.appendChild(body);
+    round = {
+      wrap,
+      body,
+      text: '',
+      paintQueued: false,
+      think: null,
+      thinkBody: null,
+      thinkSealed: false,
+      thinkPinned: false,
+      md: { node: body, settled: [], offset: 0, rendered: 0 },
+    };
+    append(wrap);
+    return round;
   }
 
   function addAssistantChunk(text) {
-    if (!currentText) {
-      const wrap = el('div', 'msg assistant');
-      wrap.appendChild(el('div', 'who', 'anvil'));
-      currentText = el('div', 'body');
-      wrap.appendChild(currentText);
-      append(wrap);
+    const state = ensureRound();
+    // The answer has started, so the thinking is done: collapse it unless the
+    // reader opened it themselves, which is not something to undo for them.
+    if (state.think) {
+      state.thinkSealed = true;
+      if (!state.thinkPinned) state.think.open = false;
+    }
+    state.text += text;
+    queuePaint(state);
+  }
+
+  /**
+   * The model's thinking, in its own collapsed block above the answer.
+   *
+   * Plain text in a `pre-wrap` box rather than Markdown: reasoning is not a
+   * document, and typesetting it would invite the reader to treat it as one.
+   */
+  function addReasoning(text) {
+    const state = ensureRound();
+    // Reasoning that arrives after text in the same round opens a second block
+    // below the answer. That is rare, and showing it there is strictly better
+    // than dropping it, which is the only other option.
+    if (!state.think || state.thinkSealed) {
+      const think = el('details', 'think');
+      think.open = false;
+      think.appendChild(el('summary', null, 'Thinking'));
+      think.addEventListener('toggle', () => {
+        if (think.open) state.thinkPinned = true;
+      });
+      const body = el('div', 'body');
+      think.appendChild(body);
+      state.wrap.insertBefore(think, state.body);
+      state.think = think;
+      state.thinkBody = body;
+      state.thinkSealed = false;
     }
     const pinned = atBottom();
-    currentText.textContent += text;
+    state.thinkBody.textContent += text;
+    // Collapsed, growing the block moves nothing, so the pin only matters once
+    // the reader has opened it — which is when they want to follow the bottom.
     scrollIfPinned(pinned);
+  }
+
+  // --- markdown -------------------------------------------------------------
+
+  /**
+   * The parser, read once, lazily.
+   *
+   * Lazy so that the order of the two `script` tags in the document is not
+   * load-bearing: `markdown.js` assigns a global and this is the only place that
+   * reads it, so a webview that somehow got them the other way round still
+   * renders its first message.
+   */
+  let markdown = null;
+
+  function parseMarkdown(text) {
+    if (!markdown) markdown = self.anvilMarkdown;
+    return markdown.parse(text);
+  }
+
+  /** Whether two block objects would be drawn by the same kind of node. */
+  function sameBlockShape(a, b) {
+    if (!a || a.type !== b.type) return false;
+    if (a.type === 'heading') return a.level === b.level;
+    if (a.type === 'list') return a.ordered === b.ordered;
+    if (a.type === 'code') return (a.lang || '') === (b.lang || '');
+    return true;
+  }
+
+  /**
+   * Draws `blocks` into `container`, keeping the nodes before `from` and reusing
+   * any node whose shape still matches. Returns the number of children, which is
+   * where the next frame should start re-rendering.
+   */
+  function renderBlocks(container, blocks, from) {
+    let i = from;
+    for (; i < blocks.length; i++) {
+      const existing = container.childNodes[i];
+      if (!existing) {
+        container.appendChild(blockNode(blocks[i]));
+      } else if (sameBlockShape(existing.anvilBlock, blocks[i])) {
+        updateBlock(existing, blocks[i]);
+      } else {
+        container.replaceChild(blockNode(blocks[i]), existing);
+      }
+    }
+    while (container.childNodes.length > blocks.length) container.removeChild(container.lastChild);
+    return blocks.length;
+  }
+
+  function blockNode(block) {
+    const node = buildBlock(block);
+    node.anvilBlock = block;
+    return node;
+  }
+
+  function buildBlock(block) {
+    switch (block.type) {
+      case 'heading': {
+        const node = el('h' + block.level, 'md-h');
+        fillInline(node, block.spans);
+        return node;
+      }
+      case 'code': {
+        const node = el('pre', 'md-code');
+        const code = el('code');
+        if (block.lang) code.dataset.lang = block.lang;
+        setText(code, block.text || '');
+        node.appendChild(code);
+        return node;
+      }
+      case 'blockquote': {
+        const node = el('blockquote', 'md-quote');
+        renderBlocks(node, block.blocks || [], 0);
+        return node;
+      }
+      case 'hr':
+        return el('hr', 'md-rule');
+      case 'list': {
+        const node = el(block.ordered ? 'ol' : 'ul', 'md-list');
+        if (block.ordered && block.from && block.from !== 1) node.start = block.from;
+        renderBlocks(node, (block.items || []).map(itemNode), 0);
+        return node;
+      }
+      default: {
+        const node = el('p', 'md-p');
+        fillInline(node, block.spans);
+        return node;
+      }
+    }
+  }
+
+  /**
+   * A list item as a block, so the same reconciler can draw items as it draws
+   * top-level blocks. An item that is one paragraph is drawn as its spans;
+   * anything else — a nested list, a second paragraph — keeps its blocks.
+   */
+  function itemNode(item) {
+    const node = el('li');
+    node.anvilItem = item;
+    if (item.spans) fillInline(node, item.spans);
+    else renderBlocks(node, item.blocks || [], 0);
+    return node;
+  }
+
+  /** A block whose shape did not change, redrawn in place. */
+  function updateBlock(node, block) {
+    switch (block.type) {
+      case 'heading':
+      case 'paragraph':
+        if (block.type === 'heading') node.anvilBlock = block;
+        updateInline(node, block.spans || []);
+        break;
+      case 'code':
+        // The one place a growing leaf is large enough for how it is written to
+        // matter: a 50 KB code block is the open tail of most long answers, and
+        // setting `textContent` on every frame re-lays out all of it.
+        setText(node.firstChild, block.text || '');
+        break;
+      case 'blockquote':
+        renderBlocks(node, block.blocks || [], 0);
+        break;
+      case 'list': {
+        const items = block.items || [];
+        // Items are matched by index, so a streaming list grows an item rather
+        // than rebuilding the list on every frame.
+        for (let i = 0; i < items.length; i++) {
+          const li = node.childNodes[i];
+          if (li && li.anvilItem && sameItemShape(li.anvilItem, items[i])) {
+            updateItem(li, items[i]);
+          } else if (li) {
+            node.replaceChild(itemNode(items[i]), li);
+          } else {
+            node.appendChild(itemNode(items[i]));
+          }
+        }
+        while (node.childNodes.length > items.length) node.removeChild(node.lastChild);
+        break;
+      }
+      default:
+        break;
+    }
+    node.anvilBlock = block;
+  }
+
+  function sameItemShape(a, b) {
+    return (a.spans === null) === (b.spans === null);
+  }
+
+  function updateItem(li, item) {
+    if (item.spans) updateInline(li, item.spans);
+    else renderBlocks(li, item.blocks || [], 0);
+    li.anvilItem = item;
+  }
+
+  /**
+   * Draws inline spans into `container`, keeping the nodes before the first one
+   * that changed.
+   *
+   * Streaming appends to the end of the last span nearly every frame, so the
+   * reusable prefix is almost always everything but the final node — and keeping
+   * it is what stops a growing paragraph from being rebuilt, and the reader's
+   * text selection from being thrown away, on every frame.
+   */
+  function fillInline(container, spans) {
+    for (const span of spans || []) container.appendChild(inlineNode(span));
+  }
+
+  function updateInline(container, spans) {
+    const next = spans || [];
+    let keep = 0;
+    while (keep < next.length && keep < container.childNodes.length && sameSpan(container.childNodes[keep], next[keep])) {
+      keep++;
+    }
+    while (container.childNodes.length > keep) container.removeChild(container.lastChild);
+    for (let i = keep; i < next.length; i++) container.appendChild(inlineNode(next[i]));
+  }
+
+  /** Whether an existing node already renders this span exactly. */
+  function sameSpan(node, span) {
+    const shape = node.anvilSpan;
+    if (!shape || shape.type !== span.type) return false;
+    if (span.type === 'link') return shape.href === span.href;
+    if (span.type === 'text' || span.type === 'code') return shape.value === span.value;
+    return false;
+  }
+
+  function inlineNode(span) {
+    let node;
+    switch (span.type) {
+      case 'code':
+        node = el('code', 'md-inline-code', span.value);
+        break;
+      case 'strong':
+        node = el('strong');
+        fillInline(node, span.spans);
+        break;
+      case 'em':
+        node = el('em');
+        fillInline(node, span.spans);
+        break;
+      case 'del':
+        node = el('del');
+        fillInline(node, span.spans);
+        break;
+      case 'link':
+        node = linkNode(span);
+        break;
+      default:
+        node = document.createTextNode(span.value);
+        break;
+    }
+    node.anvilSpan = span;
+    return node;
+  }
+
+  /**
+   * A link, but only if its scheme is one this will open.
+   *
+   * It is a `span` wearing a link's role, not an `<a href>`: a real anchor can
+   * be middle-clicked or activated from the context menu, which navigates the
+   * webview away and takes the conversation with it. Nothing here puts a URL in
+   * the document, so there is nothing for the browser to follow even by
+   * accident. A target this will not open stays the literal text it was written
+   * as, which is honest about what happened to it.
+   *
+   * The extension checks the scheme again before handing it to
+   * `vscode.env.openExternal`. This check is presentation; that one is the
+   * boundary, because a webview is not where a decision about what to open
+   * belongs.
+   */
+  function linkNode(span) {
+    const href = safeHref(span.href);
+    if (!href) return el('span', 'md-literal', '[' + spansText(span.spans) + '](' + span.href + ')');
+
+    const node = el('span', 'md-link');
+    node.setAttribute('role', 'link');
+    node.tabIndex = 0;
+    node.title = href;
+    fillInline(node, span.spans);
+    const open = () => vscode.postMessage({ type: 'openLink', url: href });
+    node.addEventListener('click', open);
+    node.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        open();
+      }
+    });
+    return node;
+  }
+
+  /** The URL if it is one to open, otherwise '' — http and https, nothing else. */
+  function safeHref(href) {
+    if (typeof href !== 'string') return '';
+    const trimmed = href.trim();
+    return /^https?:\/\/\S+$/i.test(trimmed) ? trimmed : '';
+  }
+
+  function spansText(spans) {
+    return (spans || []).map((span) => (span.value !== undefined ? span.value : spansText(span.spans))).join('');
+  }
+
+  /**
+   * Sets a node's text to exactly `text`, appending when the new text merely
+   * extends the old one.
+   *
+   * `textContent = text` is the obvious version and it is O(n) in the whole
+   * string every frame; a code block that is still streaming is the largest
+   * thing on screen, so extending its text node is what keeps a long answer from
+   * being quadratic in its own length.
+   */
+  function setText(node, text) {
+    if (!node) return;
+    const only = node.childNodes.length === 1 ? node.firstChild : null;
+    if (only && only.nodeType === 3) {
+      if (only.data === text) return;
+      if (text.startsWith(only.data)) {
+        only.appendData(text.slice(only.data.length));
+        return;
+      }
+      only.data = text;
+      return;
+    }
+    node.textContent = text;
+  }
+
+  /**
+   * Coalesces the chunks that land in one animation frame into a single paint.
+   *
+   * It is not only about doing less work: the reconciler re-parses from the open
+   * block, and a fenced code block *is* the open block, so without this a
+   * fast stream would re-parse the whole block once per token. The closure holds
+   * the round's own state rather than reading `round`, so a round that ends
+   * between the chunk and the frame still paints everything it accumulated.
+   */
+  function queuePaint(state) {
+    if (state.paintQueued) return;
+    state.paintQueued = true;
+    requestAnimationFrame(() => {
+      state.paintQueued = false;
+      const pinned = atBottom();
+      paintMarkdown(state.md, state.text);
+      scrollIfPinned(pinned);
+    });
+  }
+
+  /**
+   * Renders the accumulated answer, re-parsing only the block it is still
+   * growing into.
+   *
+   * `md.offset` is where that block starts and `md.settled` is every block
+   * before it, which are final: text is only ever appended after a block, so
+   * nothing before the last one can change again. Sealing on a blank line
+   * instead — the obvious shortcut — is wrong in four ways at once: an indented
+   * code block continues across a blank line, a blank line inside an open fence
+   * would split the code in two, `- a` / blank / `- b` is a single loose list,
+   * and a list item's second paragraph has a blank line *inside* the item.
+   * `markdown.test.ts` walks whole documents one character at a time to keep
+   * this rule honest, because the failure it prevents is a duplicated or lost
+   * line rather than a crash.
+   */
+  function paintMarkdown(state, text) {
+    const tail = parseMarkdown(text.slice(state.offset)).blocks;
+    const blocks = state.settled.concat(tail);
+    const last = tail[tail.length - 1];
+    state.offset = last ? state.offset + last.start : text.length;
+    state.settled = blocks.slice(0, -1);
+    renderBlocks(state.node, blocks, state.rendered);
+    // Everything from the tail onwards may change again next frame, so the next
+    // paint starts there.
+    state.rendered = state.settled.length;
   }
 
   function addNotice(text) {
     const wrap = el('div', 'msg error');
     wrap.appendChild(el('div', 'body', text));
     append(wrap);
-    currentText = null;
+    endRound();
   }
 
   // --- tool cards -----------------------------------------------------------
@@ -175,8 +589,23 @@
     }
   }
 
+  /**
+   * One labelled half of a tool card. The label is most of what makes the card
+   * readable: two unlabelled blocks leave the reader to work out which one the
+   * model asked for and which one it got back, and for a call whose arguments
+   * look like its output that is a guess.
+   */
+  function section(name, label, text) {
+    const wrap = el('div', 'section ' + name);
+    wrap.appendChild(el('div', 'label', label));
+    const pre = el('pre');
+    pre.textContent = text;
+    wrap.appendChild(pre);
+    return wrap;
+  }
+
   function addToolCall(event) {
-    currentText = null;
+    endRound();
     const card = el('details', 'tool');
     const summary = el('summary');
     summary.appendChild(el('span', 'name', event.name || 'tool'));
@@ -185,10 +614,10 @@
     card.appendChild(summary);
 
     const pane = el('div', 'pane');
+    // Omitted rather than shown empty: `undefined` would otherwise be rendered
+    // as the string "undefined" and read as arguments the model never sent.
     if (event.args !== undefined) {
-      const pre = el('pre');
-      pre.textContent = safeJson(event.args);
-      pane.appendChild(pre);
+      pane.appendChild(section('in', 'IN', safeJson(event.args)));
     }
     card.appendChild(pane);
 
@@ -210,12 +639,14 @@
     state.textContent = failed ? 'failed' : 'done';
 
     const content = event.content || '';
-    const pane = card.querySelector('.pane');
-    const pre = el('pre');
     const limit = 4000;
     const truncated = content.length > limit;
-    pre.textContent = truncated ? content.slice(0, limit) : content;
-    pane.appendChild(pre);
+    // The result goes in OUT, and the "show all" button has to name *that* pane:
+    // the card has two now, so a button that reached for the last `pre` in the
+    // card would expand the arguments instead of the output.
+    const out = section('out', 'OUT', truncated ? content.slice(0, limit) : content);
+    const pre = out.querySelector('pre');
+    card.querySelector('.pane').appendChild(out);
     if (truncated) {
       const more = el('button', 'more', `show all (${content.length} chars)`);
       more.type = 'button';
@@ -223,7 +654,7 @@
         pre.textContent = content;
         more.remove();
       });
-      pane.appendChild(more);
+      out.appendChild(more);
     }
   }
 
@@ -295,7 +726,7 @@
   }
 
   function showApproval(request) {
-    currentText = null;
+    endRound();
     const card = el('div', 'approval');
 
     const head = el('div', 'head');
@@ -461,7 +892,7 @@
       card.appendChild(row);
     }
     append(card);
-    currentText = null;
+    endRound();
   }
 
   // --- mode -----------------------------------------------------------------
@@ -586,7 +1017,7 @@
     const skills = commands.filter((command) => command.source !== 'builtin');
     append(commandCard('Commands', builtins));
     if (skills.length) append(commandCard('Skills in this workspace', skills));
-    currentText = null;
+    endRound();
   }
 
   /**
@@ -610,7 +1041,7 @@
       card.appendChild(el('div', 'command muted', 'AGENTS.md and .anvil/rules/*.md were not found in this workspace.'));
     }
     append(card);
-    currentText = null;
+    endRound();
   }
 
   function showSession(msg) {
@@ -620,7 +1051,7 @@
       : 'Continuing session ' + msg.agentId + '.';
     line.appendChild(el('div', 'body', label));
     append(line);
-    currentText = null;
+    endRound();
   }
 
 
@@ -643,7 +1074,7 @@
   }
 
   function finishRun(done, failure) {
-    currentText = null;
+    endRound();
     setRunning(false);
     const parts = [];
     const steps = done && typeof done.steps === 'number' ? `${done.steps} step${done.steps === 1 ? '' : 's'}` : '';
@@ -846,6 +1277,7 @@
       case 'event': {
         const e = msg.event;
         if (e.type === 'assistant') addAssistantChunk(e.text || '');
+        else if (e.type === 'reasoning') addReasoning(e.text || '');
         else if (e.type === 'tool_call') addToolCall(e);
         else if (e.type === 'tool_result') addToolResult(e);
         else if (e.type === 'error') addNotice(e.text || 'The run reported an error.');
