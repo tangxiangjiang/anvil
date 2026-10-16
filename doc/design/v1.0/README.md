@@ -1,8 +1,8 @@
 # Design v1.0 (cutoff)
 
-Anvil **local-only** Go Agent SDK design through product milestone **0.38** (session identity and replay). Read chapters in order before implementing the matching roadmap phase.
+Anvil **local-only** Go Agent SDK design through product milestone **0.39**. The chapters end at **38** (session identity and replay): 0.39 is the Delivery **execute / test campaign loop**, and it is designed by [33](33-delivery-ui.md) together with [DELIVERY_PIPELINE_VISION.md](../../../DELIVERY_PIPELINE_VISION.md) rather than by a chapter of its own. Read chapters in order before implementing the matching roadmap phase.
 
-This tree is the **design cutoff** for 0.1–0.38 delivery. Later product lines get a new `doc/design/v…/` directory.
+This tree is the **design cutoff** for 0.1–0.39 delivery. Later product lines get a new `doc/design/v…/` directory.
 
 ## Read order
 
@@ -54,4 +54,4 @@ Parent index: [`doc/design/README.md`](../README.md).
 
 - Design describes **what** and **why** for this cutoff.
 - [`doc/roadmaps/v1.0/`](../../roadmaps/v1.0/) describes **when**.
-- Chapters 11–38 map to [m_0.11](../../roadmaps/v1.0/m_0.11_worker_daemon.md) … [m_0.38](../../roadmaps/v1.0/m_0.38_session_identity.md).
+- Chapters 11–38 map to [m_0.11](../../roadmaps/v1.0/m_0.11_worker_daemon.md) … [m_0.38](../../roadmaps/v1.0/m_0.38_session_identity.md). [m_0.39](../../roadmaps/v1.0/m_0.39_execute.md) maps back to chapter 33.

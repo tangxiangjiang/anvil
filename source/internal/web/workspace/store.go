@@ -529,20 +529,27 @@ func (s *Store) ListWorkerDeps(fromWorkerID string) ([]string, error) {
 	return out, rows.Err()
 }
 
-// GraphPayload is Workspace View data.
+// GraphPayload is Workspace View data (projects + workers + depends_on edges).
 type GraphPayload struct {
-	Projects []Project         `json:"projects"`
-	Edges    []ProjectEdge     `json:"edges"`
-	Workers  []WorkerBinding   `json:"workers"`
+	Projects    []Project       `json:"projects"`
+	Edges       []ProjectEdge   `json:"edges"`        // Project → Project
+	Workers     []WorkerBinding `json:"workers"`
+	WorkerEdges []WorkerEdge    `json:"worker_edges"` // Worker → Worker (debug/联调)
 }
 
-// ProjectEdge is a depends_on edge.
+// ProjectEdge is a project depends_on edge.
 type ProjectEdge struct {
 	From string `json:"from"`
 	To   string `json:"to"`
 }
 
-// Graph builds the project dependency graph for a workspace.
+// WorkerEdge is a worker depends_on edge.
+type WorkerEdge struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+// Graph builds the Workspace View graph: projects, workers, and both edge kinds.
 func (s *Store) Graph(workspaceID string) (GraphPayload, error) {
 	projs, err := s.ListProjects(workspaceID)
 	if err != nil {
@@ -558,7 +565,40 @@ func (s *Store) Graph(workspaceID string) (GraphPayload, error) {
 			edges = append(edges, ProjectEdge{From: p.ID, To: to})
 		}
 	}
-	return GraphPayload{Projects: projs, Edges: edges, Workers: binds}, nil
+	wEdges, err := s.listWorkerEdgesForWorkspace(workspaceID)
+	if err != nil {
+		return GraphPayload{}, err
+	}
+	return GraphPayload{Projects: projs, Edges: edges, Workers: binds, WorkerEdges: wEdges}, nil
+}
+
+func (s *Store) listWorkerEdgesForWorkspace(workspaceID string) ([]WorkerEdge, error) {
+	rows, err := s.db.Query(`
+SELECT d.from_worker_id, d.to_worker_id
+FROM cluster_worker_deps d
+WHERE d.from_worker_id IN (
+  SELECT b.worker_id FROM cluster_worker_bindings b
+  JOIN cluster_projects p ON p.id = b.project_id
+  WHERE p.workspace_id = ?
+)
+OR d.to_worker_id IN (
+  SELECT b.worker_id FROM cluster_worker_bindings b
+  JOIN cluster_projects p ON p.id = b.project_id
+  WHERE p.workspace_id = ?
+)`, workspaceID, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []WorkerEdge
+	for rows.Next() {
+		var e WorkerEdge
+		if err := rows.Scan(&e.From, &e.To); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
 }
 
 // AllTokens returns token→workspace for scheduler sync.

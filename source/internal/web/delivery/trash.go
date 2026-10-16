@@ -29,10 +29,10 @@ type TrashItem struct {
 
 // TrashMajorMeta is list-card metadata for a trashed major.
 type TrashMajorMeta struct {
-	Major           int `json:"major"`
-	MilestoneCount  int `json:"milestone_count"`
-	VersionCount    int `json:"version_count"`
-	DesignCount     int `json:"design_count"`
+	Major          int `json:"major"`
+	MilestoneCount int `json:"milestone_count"`
+	VersionCount   int `json:"version_count"`
+	DesignCount    int `json:"design_count"`
 }
 
 // TrashMajorBundle is the serialized major + dependents.
@@ -48,10 +48,11 @@ type TrashVersionRow struct {
 	Version  ReqVersion `json:"version"`
 }
 
-// TrashDesignBundle is a design + options under a major.
+// TrashDesignBundle is a design + options/versions under a major.
 type TrashDesignBundle struct {
-	Design  Design         `json:"design"`
-	Options []DesignOption `json:"options"`
+	Design   Design          `json:"design"`
+	Options  []DesignOption  `json:"options"`
+	Versions []DesignVersion `json:"versions,omitempty"`
 }
 
 // CountMilestonesUnderMajor counts distinct major.minor groups (and total version rows).
@@ -109,23 +110,17 @@ FROM delivery_req_versions WHERE major=?`, major)
 		return TrashItem{}, err
 	}
 
-	drows, err := s.db.Query(`
-SELECT id, eng_req_id, major, minor, patch, title, status, chosen_option_id, adr, updated_at
-FROM delivery_designs WHERE major=?`, major)
+	drows, err := s.db.Query(`SELECT `+designSelectCols+` FROM delivery_designs WHERE major=?`, major)
 	if err != nil {
 		return TrashItem{}, err
 	}
 	var designs []Design
 	for drows.Next() {
 		var d Design
-		if err := drows.Scan(
-			&d.ID, &d.EngReqID, &d.Major, &d.Minor, &d.Patch,
-			&d.Title, &d.Status, &d.ChosenOptionID, &d.ADR, &d.UpdatedAt,
-		); err != nil {
+		if err := scanDesign(drows, &d); err != nil {
 			_ = drows.Close()
 			return TrashItem{}, err
 		}
-		d.Version = fmt.Sprintf("%d.%d.%d", d.Major, d.Minor, d.Patch)
 		designs = append(designs, d)
 	}
 	if err := drows.Close(); err != nil {
@@ -136,7 +131,11 @@ FROM delivery_designs WHERE major=?`, major)
 		if err != nil {
 			return TrashItem{}, err
 		}
-		bundle.Designs = append(bundle.Designs, TrashDesignBundle{Design: d, Options: opts})
+		vers, err := s.listDesignVersions(d.ID)
+		if err != nil {
+			return TrashItem{}, err
+		}
+		bundle.Designs = append(bundle.Designs, TrashDesignBundle{Design: d, Options: opts, Versions: vers})
 	}
 
 	raw, err := json.Marshal(bundle)
@@ -161,6 +160,12 @@ FROM delivery_designs WHERE major=?`, major)
 		return TrashItem{}, err
 	}
 	for _, db := range bundle.Designs {
+		if _, err := tx.Exec(`DELETE FROM delivery_design_version_deps WHERE design_id=?`, db.Design.ID); err != nil {
+			return TrashItem{}, err
+		}
+		if _, err := tx.Exec(`DELETE FROM delivery_design_versions WHERE design_id=?`, db.Design.ID); err != nil {
+			return TrashItem{}, err
+		}
 		if _, err := tx.Exec(`DELETE FROM delivery_design_options WHERE design_id=?`, db.Design.ID); err != nil {
 			return TrashItem{}, err
 		}
@@ -169,6 +174,15 @@ FROM delivery_designs WHERE major=?`, major)
 		}
 	}
 	if _, err := tx.Exec(`DELETE FROM delivery_req_versions WHERE major=?`, major); err != nil {
+		return TrashItem{}, err
+	}
+	if _, err := tx.Exec(`DELETE FROM delivery_buglist_items WHERE major=?`, major); err != nil {
+		return TrashItem{}, err
+	}
+	if _, err := tx.Exec(`DELETE FROM delivery_test_cases WHERE major=?`, major); err != nil {
+		return TrashItem{}, err
+	}
+	if _, err := tx.Exec(`DELETE FROM delivery_polishes WHERE major=?`, major); err != nil {
 		return TrashItem{}, err
 	}
 	if _, err := tx.Exec(`DELETE FROM delivery_gates WHERE ref_id LIKE ?`, fmt.Sprintf("%%:%d.%%", major)); err != nil {
@@ -245,10 +259,10 @@ func (s *Store) PurgeTrash(id string) error {
 
 // RestoreTrashResult describes restore outcome.
 type RestoreTrashResult struct {
-	Major   MajorPlan `json:"major"`
-	Mode    string    `json:"mode"`
-	Conflict bool     `json:"conflict"`
-	Message string    `json:"message"`
+	Major    MajorPlan `json:"major"`
+	Mode     string    `json:"mode"`
+	Conflict bool      `json:"conflict"`
+	Message  string    `json:"message"`
 }
 
 // RestoreMajorFromTrash restores a trashed major.
@@ -318,6 +332,12 @@ VALUES(?,?,?,?,?,?)`,
 		}
 		_ = drows.Close()
 		for _, did := range ids {
+			if _, err := tx.Exec(`DELETE FROM delivery_design_version_deps WHERE design_id=?`, did); err != nil {
+				return RestoreTrashResult{}, err
+			}
+			if _, err := tx.Exec(`DELETE FROM delivery_design_versions WHERE design_id=?`, did); err != nil {
+				return RestoreTrashResult{}, err
+			}
 			if _, err := tx.Exec(`DELETE FROM delivery_design_options WHERE design_id=?`, did); err != nil {
 				return RestoreTrashResult{}, err
 			}
@@ -400,9 +420,11 @@ VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
 			}
 		}
 		_, err = tx.Exec(`
-INSERT INTO delivery_designs(id, eng_req_id, major, minor, patch, title, status, chosen_option_id, adr, updated_at)
-VALUES(?,?,?,?,?,?,?,?,?,?)`,
-			newID, d.EngReqID, major, newMinor, d.Patch, d.Title, d.Status, d.ChosenOptionID, d.ADR, d.UpdatedAt)
+INSERT INTO delivery_designs(id, eng_req_id, major, minor, patch, title, status, chosen_option_id, adr, updated_at,
+  adr_context, adr_decision, adr_consequences, adr_spec, adr_architecture, adr_sequence, adr_sample)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			newID, d.EngReqID, major, newMinor, d.Patch, d.Title, d.Status, d.ChosenOptionID, d.ADR, d.UpdatedAt,
+			d.AdrContext, d.AdrDecision, d.AdrConsequences, d.AdrSpec, d.AdrArchitecture, d.AdrSequence, d.AdrSample)
 		if err != nil {
 			return RestoreTrashResult{}, fmt.Errorf("restore design: %w", err)
 		}
@@ -416,6 +438,43 @@ INSERT INTO delivery_design_options(id, design_id, title, summary, tradeoffs, ri
 VALUES(?,?,?,?,?,?,?,?)`, oid, newID, o.Title, o.Summary, o.Tradeoffs, o.Risks, o.OutOfScope, i)
 			if err != nil {
 				return RestoreTrashResult{}, err
+			}
+		}
+		idMap := map[string]string{} // old version id → new
+		for _, v := range db.Versions {
+			vid := v.ID
+			if mode == RestoreAppend {
+				vid = fmt.Sprintf("%s_v%d", newID, v.SortOrder)
+			}
+			idMap[v.ID] = vid
+			st := v.Status
+			if st == "" {
+				if designVersionReady(v) {
+					st = "ready"
+				} else {
+					st = "draft"
+				}
+			}
+			_, err = tx.Exec(`
+INSERT INTO delivery_design_versions(id, design_id, sort_order, title, gate, sub_architecture, class_design, status, updated_at)
+VALUES(?,?,?,?,?,?,?,?,?)`,
+				vid, newID, v.SortOrder, v.Title, v.Gate, v.SubArchitecture, v.ClassDesign, st, v.UpdatedAt)
+			if err != nil {
+				return RestoreTrashResult{}, err
+			}
+		}
+		for _, v := range db.Versions {
+			newVid := idMap[v.ID]
+			for _, dep := range v.DependsOn {
+				newDep, ok := idMap[dep]
+				if !ok {
+					continue
+				}
+				if _, err := tx.Exec(`
+INSERT INTO delivery_design_version_deps(design_id, version_id, depends_on_id) VALUES(?,?,?)`,
+					newID, newVid, newDep); err != nil {
+					return RestoreTrashResult{}, err
+				}
 			}
 		}
 	}

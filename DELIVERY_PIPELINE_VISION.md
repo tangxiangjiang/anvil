@@ -11,7 +11,7 @@
 Turn Anvil from “agent runtime + fleet jobs” into a **human + AI delivery system**:
 
 ```
-Requirement → Design → Roadmap (+ Gates) → Develop (app) → Test → Complete
+Requirement → Design → Roadmap → Develop (app) → Test → Complete
                                          └─ test fail → Buglist → Roadmap (bugfix) ─┘
 ```
 
@@ -58,7 +58,7 @@ Create ──► awaiting_design ──Design approve──► awaiting_roadmap
                           Buglist → awaiting_roadmap (bugfix phases)
 ```
 
-Full execute / test runner / buglist entity automation lands in **0.37+**. Early UI only locks create status and advances Design → Roadmap → awaiting development.
+Full execute / test runner / buglist entity automation lands in **0.39+**. Early UI only locks create status and advances Design → Roadmap → awaiting development.
 
 ### 2.2 Stage surfaces
 
@@ -66,7 +66,7 @@ Full execute / test runner / buglist entity automation lands in **0.37+**. Early
 ┌─────────────┐            ┌─────────────┐            ┌──────────────────────────┐
 │ Requirement │ ──────────►│   Design    │ ──────────►│ Roadmap                  │
 │  (spec)     │            │ (options +  │            │  · Graph (milestones)    │
-│             │            │  ADR pick)  │            │  · Gates (exec constraints)│
+│             │            │  + Versions)│            │  · phases from Versions   │
 └─────────────┘            └─────────────┘            └────────────┬─────────────┘
                                                                    │ ready
                                                                    ▼
@@ -77,7 +77,7 @@ Full execute / test runner / buglist entity automation lands in **0.37+**. Early
                                                           pass / fail (buglist)
 ```
 
-**Gates** constrain execution (pending human checks, ready-for-main, etc.). They are a **Roadmap sub-surface**, not a peer Delivery tab.
+**Gates** constrain execution (entry/exit, DoD, human check). They are authored on each **Design Version**, then carried into roadmap phases — not a separate Roadmap tab.
 
 Agents do not skip gates.
 
@@ -138,21 +138,22 @@ Cite chips stay above the textarea (not inlined). View mode may drag `data-cite-
 Clusters
 └── Scheduler
       └── Workspace          # Token; Dev Nodes join here
+            ├── Workspace View (Graph)  # Projects + Workers topology
             └── Project      # logical eng unit; Delivery binds here
                   └── Worker # checkout (path + branch) on a Dev Node
 ```
 
-**Delivery** — planning surfaces (bind **Project**; execute picks a Worker):
+**Delivery** — planning surfaces. Top hop is always **Generation (major)**; then Project / Design / Milestone. Execute still picks a Worker:
 
 ```
 Delivery
-├── Requirements          # per Project (today still worker-bound until migrate)
-│     └── generation → milestone → versions + Polish chat
-├── Designs               # list → detail (options + ADR)
-└── Roadmap
-      ├── Graph           # milestone topology + phase chains
-      └── Gates           # execution constraints / pending human checks
+├── Requirements          # Generations → major → Project/milestones → versions
+├── Designs               # Generations → major → Design detail (ADR + Versions)
+├── Roadmap               # Generations → major → cards (Execute + 提交测试)
+└── Test                  # Generations → major → testing queue (Pass / Fail)
 ```
+
+Primary entry: **Requirements home = Generation plan + Project picker**. Click a major to scope; open a Project for the full milestone edit flow. Designs / Roadmap / Test open on the same Generation plan, then drill into that major. Clusters “Open in Delivery” remains an optional deep link.
 
 Cross-links: Project ↔ Req versions ↔ Design ↔ Milestone/Phase; Worker is the execute checkout. Export on Design / Roadmap toolbars.
 
@@ -182,9 +183,10 @@ Example: `1.33.1` → major `1` (世代) · minor `33` (milestone 0.33) · patch
 
 | Surface | Purpose |
 |---------|---------|
-| **Eng-req list** | Per console: which Workers have an engineering requirement; show worker label, `project_rel`, `reqs_rel`, status |
-| **Create eng-req** | Pick **Worker** (from cluster inventory) → set **reqs subdirectory** (sandbox browser under that project) → title |
-| **Version browser** | After open: milestones (`major.minor`) with version list (`patch`); create version nodes |
+| **Generation index** | First screen: `delivery_majors` cards (0.x, 1.x, …); open one → work under that major |
+| **Major home** | Projects / milestones that have versions in this major; link to Project picker |
+| **Create eng-req** | Pick **Project/Worker** (inventory) → set **reqs subdirectory** → title; milestone attaches to developing major |
+| **Version browser** | After open Project: milestones (`major.minor`) with version list (`patch`); create version nodes |
 | **Version detail** | Goals, delivery note, **completion criteria** (capabilities to ship) — **fields drive export** |
 | **Req chat dock** | Polish current version slice → **field patches** (not blind whole-doc rewrite) |
 | **Lifecycle status** | Read-only on milestone; starts `awaiting_design`; advanced by Design / Roadmap / later execute |
@@ -195,41 +197,50 @@ Empty state: “Bind Worker & set reqs folder” before any version exists.
 
 | Surface | Purpose |
 |---------|---------|
-| **Design list** | Filter by req, status |
-| **Design detail** | Bound `req_id`; **Options** (A/B/…) as cards; **Chosen option** + ADR notes; links to roadmap |
-| **Option editor** | Per-option: summary, tradeoffs, risks, out-of-scope — structured sections |
-| **Design chat dock** | Same pattern as req: patch options / ADR; AI may propose new option card |
-| **Approve gate** | Requires req already approved; sets design `approved` + chosen option id |
+| **Generation index** | Same majors as Requirements; open → designs for that major |
+| **Design list** | Under major: filter by status |
+| **Design detail** | Bound `req_id` + `major.minor`; **structured ADR** + ordered **Versions** (execution units); links to roadmap |
+| **ADR** | Context · Decision · Consequences · Spec · Architecture (mermaid) · Sequence (mermaid) · Sample & capacity — Markdown Edit/Preview |
+| **Version cards** | Per Version: title + **Depends on** (sibling DAG) + **Gate** + **Sub-architecture** + **Class design** (Markdown Edit/Preview; mermaid OK on Sub-architecture) |
+| **Design chat dock** | Cite ADR sections or Version fields; mock polish appends to Decision / Gate |
+| **View** | Compose full Design Markdown (ADR + Versions) for review (Preview / raw) |
+| **Approve gate** | After View; ≥1 Version with Gate / Sub-architecture / Class design; sets `approved` |
+| **Bootstrap** | **Approved only** → topo-order Versions by deps, then seed eng-req patches + roadmap phases (idempotent) |
 
-Toolbar: **Bootstrap roadmap** (enabled when design approved) → opens Roadmap with AI-generated initial graph (human applies).
+Toolbar flow: **Save** (draft) → **View** → **Approve** → **Bootstrap roadmap**.
 
-### 4.3 Roadmap UI (graph + gates)
+### 4.3 Roadmap UI
 
-Primary planning canvas — see §5 interactions below (graph chat, per-node chat, export). Sub-nav: **Graph** | **Gates**.
+Primary planning canvas — see §5 interactions below (graph chat, per-node chat, export).
 
 | Chrome | Behavior |
 |--------|----------|
-| **Canvas** | Milestone nodes + dependency edges; select node → right inspector |
-| **Inspector** | Milestone fields, phase chain, bound design slices; **Mark ready for development** |
-| **Phase strip** | Inside inspector or bottom drawer: `p1 → p2 → p3` reorder / add / status |
-| **Graph chat** | Floating/docked: whole-graph polish → `GraphPatch` preview → Apply / Discard |
-| **Node chat** | From inspector: context = node + neighbors + design/req slices → local patch |
-| **Export** | Preview markdown tabs (`m_*.md`, `p_*.md`) → write to configured export root |
-| **Gates** | Execution-constraint inbox: pending checks that block or gate running work |
+| **Generation index** | Majors first; open → milestones for that major only |
+| **Graph + cards** | Milestone nodes for **this major** (drag); rich cards: Worker, Start/Pause/Stop, Design/Req links, Polish list |
+| **Polish** | On complete: modal + AI assist → save into Version + card ▶ run (mock until Jobs) |
+| **提交测试** | From `in_development` → lifecycle `testing` (explicit; not auto-on-Stop) |
+| **Phase strip** | Phases under the milestone (seeded from Design Versions; shown as phase count on cards) |
 
-Human always confirms Apply on AI patches (no silent overwrite).
-
-### 4.4 Gates (under Roadmap)
+### 4.4 Test
 
 | Surface | Purpose |
 |---------|---------|
-| **Inbox** | Execution constraints waiting on human (e.g. ready-for-main, blocked checks) |
-| **Item** | Diff/summary + Approve / Reject + comment |
-| **Deep link** | Opens Req / Design / Roadmap node |
+| **Generation index** | Same majors; open → milestones **in `testing` only** for that major |
+| **Campaign** | AI-draft cases → Worker mock write/run → buglist → Worker fix → regress → Pass |
+| **Test card** | Acceptance excerpt; cases list; Run / Fix / Regress; Pass gated on clean campaign |
+| **Buglist** | Rows bound to `eng_req` + `major.minor`; status `open|fixing|verified|closed` |
+| **Fail** | Escape hatch → stub + `awaiting_roadmap` (no auto bugfix phases yet) |
 
-Gates are **not** a top-level Delivery peer; they live at `#/delivery/roadmap/gates`.
+Test queue is **not** the `complete` list — `complete` means tests already passed (Pass after clean campaign).
+| **Graph chat** | Floating/docked: whole-graph polish → `GraphPatch` preview → Apply / Discard |
+| **Node chat** | From inspector: context = node + neighbors + design/req slices → local patch |
+| **Export** | Preview markdown tabs (`m_*.md`, `p_*.md`) → write to configured export root |
 
-### 4.5 What App UI will consume later (not built here)
+**Gates** for execute are authored on each **Design Version** (`Gate` field: entry/exit, DoD, human check) — not a Roadmap sub-tab.
+
+Human always confirms Apply on AI patches (no silent overwrite).
+
+### 4.4 What App UI will consume later (not built here)
 
 | App surface | Needs from Delivery UI IDs |
 |-------------|----------------------------|
@@ -239,7 +250,7 @@ Gates are **not** a top-level Delivery peer; they live at `#/delivery/roadmap/ga
 
 Defining these deep links now keeps web field names stable when schema lands.
 
-### 4.6 UI → data abstraction order
+### 4.5 UI → data abstraction order
 
 1. Freeze §4 screens + primary actions (this section).  
 2. Derive **entities / statuses / patch ops** from visible controls.  
@@ -374,7 +385,9 @@ Illustrative numbering after current cutoff (**0.32** = sandbox code review + VS
 | **0.34** | Markdown export + `.anvil/delivery/` project mirror derived from UI/store |
 | **0.35** | Roadmap graph editor + GraphPatch apply |
 | **0.36** | AI bootstrap / per-node chat → patches; delivery retrieval |
-| **0.37** | Execute: phase jobs, Gates constraints, **test stage**, buglist → Roadmap loop, milestone accept → merge main |
+| **0.39** | Execute: **0.39.1** Worker bind + Execute → `in_development`; then phase jobs, Gates constraints, **test stage**, buglist → Roadmap loop, milestone accept → merge main |
+
+The graph editor and the per-node chat above shipped as part of **0.39**'s work rather than under numbers of their own, and **0.35–0.38** belong to the editor line (VS Code extension, tool permissions, permission modes, session identity) — see [roadmaps/v1.0/README.md](doc/roadmaps/v1.0/README.md).
 
 Exact numbers follow Anvil’s normal `doc/design` + `doc/roadmaps` process when promoted from this vision doc.
 
@@ -421,6 +434,6 @@ Promote into versioned docs under `doc/design/v1.0/` (and matching roadmaps), **
 | Text docs | **Export** from tool layer |
 | App | Develop when `awaiting_development` / `in_development` |
 | Runtime | Reuse scheduler / workers / SSE |
-| Gates IA | Sub-item of **Roadmap**, not Delivery peer |}
+| Gates IA | On **Design Version** (`Gate` field), not a Roadmap tab |}
 
 This document is the rolled-up product vision from planning discussions; implementation should follow Anvil’s normal design-chapter → roadmap-phase → code path once adopted.

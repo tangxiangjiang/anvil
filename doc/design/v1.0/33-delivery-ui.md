@@ -11,9 +11,9 @@ Vision: [`DELIVERY_PIPELINE_VISION.md`](../../../DELIVERY_PIPELINE_VISION.md) §
 
 ## Product split
 
-| Surface | 0.33 |
+| Surface | 0.33+ |
 |---------|------|
-| anvil-web **Delivery** | Requirements / Designs / Roadmap / Gates |
+| anvil-web **Delivery** | Requirements / Designs / Roadmap / **Test** (0.39.3) |
 | Persistence | SQLite tables in `anvil-web` `db_path` (same file as auth) |
 | HTTP | `/api/v1/delivery/*` (session Bearer) |
 | Markdown export / GraphPatch / agent jobs | **Out** (later milestones) |
@@ -64,19 +64,40 @@ Working-state on the worker project (`.anvil/delivery/`) and markdown export are
 | POST | `/api/v1/delivery/eng-reqs/{id}/versions` | Add version |
 | PATCH | `/api/v1/delivery/eng-reqs/{id}/versions/{M}/{m}/{p}` | Update fields |
 | POST | `/api/v1/delivery/eng-reqs/{id}/versions/{M}/{m}/{p}/approve` | Set approved + gate |
-| PATCH | `/api/v1/delivery/designs/{id}` | Choose option / ADR |
-| POST | `/api/v1/delivery/designs/{id}/approve` | Approve design |
+| PATCH | `/api/v1/delivery/designs/{id}` | ADR sections |
+| POST | `/api/v1/delivery/designs/{id}/versions` | Add Design Version |
+| PATCH | `/api/v1/delivery/designs/{id}/versions/{vid}` | Update Gate / Sub-architecture / Class design / `depends_on` |
+| DELETE | `/api/v1/delivery/designs/{id}/versions/{vid}` | Remove Version (draft) |
+| POST | `/api/v1/delivery/designs/{id}/approve` | Approve when Versions complete |
+| POST | `/api/v1/delivery/designs/{id}/bootstrap` | Seed roadmap phases from Versions |
+| PATCH | `/api/v1/delivery/roadmap/milestones/{id}` | Canvas `x`/`y`; optional `execute_worker_id` / `run_state`; `execute: true` → `in_development`; `submit_test` / `pass_test` / `fail_test` (+ fail note) |
+| POST | `/api/v1/delivery/buglist` | Optional create-only path for a buglist stub (Fail usually goes through milestone PATCH) |
+| POST | `/api/v1/delivery/test-cases` | Batch create cases `{ eng_req_id, major, minor, cases:[{title,body}] }` |
+| POST | `/api/v1/delivery/test-cases/run` | Mock Worker run for bind; failed cases spawn open buglist items |
+| POST | `/api/v1/delivery/buglist/{id}/fix` | Mock Worker fix: `open` → `verified` |
+| POST | `/api/v1/delivery/buglist/regress` | Mock regression for bind; `verified` → `closed` (or reopen) |
 
 Workers for the create picker: cluster inventory when available; otherwise snapshot may include denormalized workers from existing eng-reqs plus seed helpers.
 
 ## Screens
 
-Sidebar: **Delivery** (collapsible) → children:
+Sidebar: **Delivery** (collapsible) → children. **Shared top layer:** each surface opens on **Generations** (`delivery_majors`) first — `major` / 大版本 — then drills into scoped work.
 
-1. **Requirements** — rounded card list + `+` create wizard (scheduler → node → worker → project FS pick/create reqs dir; auto `major.minor` milestone) → version browser → detail + Approve  
-2. **Designs** — list + detail + Approve + Bootstrap roadmap (nav stub)  
-3. **Roadmap** — canvas + inspector phase chain  
-4. **Gates** — inbox with deep links  
+Routes: `#/delivery/{requirements|designs|roadmap|test}` → major index; `#/delivery/{section}/m/{M}/…` → scoped under that generation.
+
+1. **Requirements** — Home keeps **Generation plan** (Edit / Start / Seal / Add) **and** Project picker. Click a major → `m/{M}` scoped milestones; open a Project → eng-req home (same Generation plan filter + milestones) → version detail + Approve.  
+
+2. **Designs** — Generations → `m/{M}` design cards → detail (**structured ADR** + ordered **Versions**). New design defaults to current major.  
+
+**Design flow:** **Save** (draft) → **View** (composed Markdown) → **Approve** (after View; Versions complete). After Approve the workspace is **view-only** (no Save / edit / chat); toolbar shows **View** + **Bootstrap roadmap** to publish phases.  
+
+**ADR storage** (`delivery_designs`): `adr_*` section columns; composed `adr` kept for export/legacy. Old rows with only `adr` hydrate into **Decision**.  
+
+**Design Versions** (`delivery_design_versions` + `delivery_design_version_deps`): execution units under one Design/ADR — each has **Gate**, **Sub-architecture**, **Class design**, and **Depends on** (DAG of sibling Versions). Approve requires complete fields and an acyclic graph; Bootstrap **topo-sorts** Versions then seeds eng-req patches + canvas phases 1:1 (renumbers `sort_order`).  
+
+3. **Roadmap** — Generations → `m/{M}` **graph** (drag) + **control cards**: Worker, Start / Pause / Stop (`run_state` + Execute lifecycle), **提交测试** (`in_development` → `testing`), Design / Requirements links, **Polish** (complete milestones → modal + AI assist → store on Version + card ▶ run). No separate execute page. No Gates tab — gates live on Design Versions.  
+
+4. **Test** (0.39.3–0.39.4) — Generations → `m/{M}` **queue of milestones in lifecycle `testing` only**. Campaign on each card: **AI assist** drafts cases (`delivery_test_cases`) → **Run tests** (mock Worker = Roadmap `execute_worker_id`) → failed cases spawn **buglist** → **Fix** / **Regress** → **Pass** → `complete` only when ≥1 case, last run clean, and no `open`/`fixing` bugs. **Fail** remains escape hatch → buglist stub + `awaiting_roadmap`. No real Jobs / auto bugfix phases.
 
 ## Non-goals
 
@@ -89,5 +110,5 @@ Sidebar: **Delivery** (collapsible) → children:
 ## Acceptance
 
 - Logged-in operator: Delivery Requirements backed by SQLite API — create Worker-bound eng-req, browse `M.m.p`, edit and approve a version (survives reload).  
-- Designs / Roadmap / Gates readable from the same store.  
+- Designs / Roadmap readable from the same store.  
 - Design chapter + phases `p_0.33.1` (UI) / `p_0.33.2` (schema) documented.

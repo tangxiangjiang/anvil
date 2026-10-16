@@ -61,7 +61,7 @@ func main() {
 
 ## Status
 
-Product is at **0.37 delivered** (a complete permission-mode ladder: a mode that never asks and runs only what the rules allow, a written `ask` rule that outranks `bypass`, and a workspace file that can declare the mode its sessions start in — SDK, editor host and VS Code extension). Full per-milestone index: [`doc/roadmaps/v1.0/README.md`](doc/roadmaps/v1.0/README.md).
+Product is at **0.38 delivered** — a session a person can recognise and come back to: it is named by its first message, every finished tool card opens the change it made, and a reloaded window re-attaches to its session and draws the stored conversation back. 0.35–0.38 are the editor line (VS Code extension, tool permissions, permission modes, session identity); **0.39** is in progress on the Delivery side (execute bind + test campaign loop). Full per-milestone index: [`doc/roadmaps/v1.0/README.md`](doc/roadmaps/v1.0/README.md).
 
 | Era | Milestones | What |
 |-----|-----------|------|
