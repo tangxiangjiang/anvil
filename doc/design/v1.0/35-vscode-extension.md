@@ -151,6 +151,16 @@ The client sets these per session, on `session.new` / `session.resume`:
 | Usage display | terminal `JobDoneBody.usage` |
 | Model picker | `models.list` → `anvil.ListModels` ([12](12-model-gateway.md)) |
 
+### The extension tree as built (p_0.35.4)
+
+`editors/vscode/src/`: `protocol.ts` (the contract, mirroring `proto.go`), `hostClient.ts` (spawn, framing, correlation, teardown), `session.ts` (the conversation state machine), `errors.ts` (code → presentation), `settings.ts`, `hostManager.ts` (lifecycle), `chatPanel.ts` (the view), `extension.ts` (wiring). `media/` holds the webview's `chat.js`, `chat.css` and the activity-bar icon.
+
+- **The `vscode` boundary is the test boundary.** Everything above the last three imports no `vscode`, so it runs under a plain Node test driving a real child process. Anything needing `vscode` is kept thin and delegates downward; the alternative — mocking the editor API — would have tested the mock.
+- **One host per window, spawned lazily.** The first prompt starts it, not activation. It is stopped on `deactivate`, on a workspace-folder change (the child's cwd *is* the workspace root), and on a configuration change (the host reads its config at spawn). A crash is reported once and the next prompt restarts it.
+- **The webview is a rendering surface only.** Sessions, approvals and error classification live on the extension side; the HTML holds no state the host needs, and everything it renders from the host goes through `textContent`, never `innerHTML` — tool output is arbitrary file content and command output, and it must not be able to add markup or script to the panel. The document is served under a CSP with a per-render nonce and no network sources.
+- **Trust is declared, not just checked.** `capabilities.untrustedWorkspaces.supported: false` keeps VS Code from activating the extension in a folder the user has not trusted; the spawn path asserts it as well, because a UI check is a message, not an enforcement point.
+- **Testing two ways.** `test/fixtures/fake-host.mjs` speaks the real protocol from a script, which is what makes the state machine testable without a key or a network — but a stub only pins the extension's *assumptions* about the Go side. Two integration tests therefore drive the real `anvil-host` binary with the model call aimed at `127.0.0.1:9`, which ends the run offline and deterministically and pins the wire against the actual Go writer.
+
 ## Placement
 
 - Extension (TypeScript): repository root **`editors/vscode/`** — mirrors the `app/` precedent from [26](26-mobile-app.md) of keeping non-Go clients outside `source/`.
@@ -159,7 +169,7 @@ The client sets these per session, on `session.new` / `session.resume`:
 
 ## Security
 
-- **Workspace trust**: refuse to run in an untrusted workspace.
+- **Workspace trust**: refused twice over — declared in `capabilities.untrustedWorkspaces` so the extension does not activate, and asserted at the spawn path so no future caller can start the agent in a folder the user has not trusted.
 - API key lives in VS Code **SecretStorage**, injected into the host child's env at spawn; never written to settings or logs.
 - The sidecar holds the same cwd sandbox as any Anvil local agent ([08](08-security.md)); path escapes remain tool errors.
 - Approvals default to deny; `bypass` is opt-in and visibly flagged.
@@ -176,7 +186,7 @@ The client sets these per session, on `session.new` / `session.resume`:
 
 ## Acceptance (milestone)
 
-1. Installing the platform VSIX and opening a trusted workspace starts the host; the panel streams assistant text and tool cards.
+1. Installing the platform VSIX and opening a trusted workspace starts the host; the panel streams assistant text and tool cards. (The extension half of this is p_0.35.4 — the VSIX is p_0.35.7.)
 2. Mutating tools prompt; deny returns a tool error to the model; allow-for-session stops re-prompting for that tool.
 3. A `shell` command, a `run_tests`, and an MCP tool call each prompt (the gate gap is closed). The gate is closed as of p_0.35.3; the last two need the host to be able to *configure* those tools first, which the settings work brings.
 4. Diff review shows the result of an edit before it is applied.

@@ -1,0 +1,21 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "compile + build host",
+      "type": "shell",
+      "command": "npm run compile && npm run build:host",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": "$tsc",
+      "group": { "kind": "build", "isDefault": true }
+    },
+    {
+      "label": "watch",
+      "type": "shell",
+      "command": "npm run watch",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": "$tsc-watch",
+      "isBackground": true
+    }
+  ]
+}

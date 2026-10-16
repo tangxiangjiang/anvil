@@ -1,0 +1,148 @@
+{
+  "name": "anvil-vscode",
+  "displayName": "Anvil",
+  "description": "Anvil agent in VS Code: streaming chat, tool cards, per-call approvals.",
+  "version": "0.35.4",
+  "publisher": "anvil-dev",
+  "license": "MIT",
+  "private": true,
+  "engines": {
+    "vscode": "^1.105.0"
+  },
+  "categories": [
+    "AI",
+    "Programming Languages"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Anvil runs an agent that reads, edits, and executes commands in this workspace."
+    },
+    "virtualWorkspaces": {
+      "supported": false,
+      "description": "The host child needs a real working directory to read and write files in."
+    }
+  },
+  "main": "./out/src/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "anvil",
+          "title": "Anvil",
+          "icon": "media/anvil.svg"
+        }
+      ]
+    },
+    "views": {
+      "anvil": [
+        {
+          "type": "webview",
+          "id": "anvil.chatPanel",
+          "name": "Chat",
+          "icon": "media/anvil.svg",
+          "contextualTitle": "Anvil"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "anvil.openChat",
+        "title": "Anvil: Open Chat",
+        "category": "Anvil"
+      },
+      {
+        "command": "anvil.stop",
+        "title": "Anvil: Stop",
+        "category": "Anvil",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "anvil.setApiKey",
+        "title": "Anvil: Set API Key",
+        "category": "Anvil"
+      },
+      {
+        "command": "anvil.clearApiKey",
+        "title": "Anvil: Clear API Key",
+        "category": "Anvil"
+      },
+      {
+        "command": "anvil.restartHost",
+        "title": "Anvil: Restart Host",
+        "category": "Anvil"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "anvil.stop",
+          "when": "view == anvil.chatPanel && anvil.running",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Anvil",
+      "properties": {
+        "anvil.hostPath": {
+          "type": "string",
+          "default": "anvil-host",
+          "markdownDescription": "Path to the `anvil-host` sidecar binary. Defaults to `anvil-host` on `PATH`; a relative path is resolved against the workspace folder."
+        },
+        "anvil.provider": {
+          "type": "string",
+          "enum": [
+            "openai",
+            "anthropic"
+          ],
+          "default": "openai",
+          "description": "Model provider. Sent in session.new, not through the environment."
+        },
+        "anvil.model": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Model id (for example `gpt-5.2`). Empty means the host's default."
+        },
+        "anvil.baseUrl": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "OpenAI-compatible base URL, for example `https://api.openai.com/v1`. Empty means the provider default."
+        },
+        "anvil.maxSteps": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "description": "Maximum agent steps per turn. 0 uses the host default."
+        },
+        "anvil.store": {
+          "type": "string",
+          "enum": [
+            "",
+            "jsonl",
+            "sqlite"
+          ],
+          "default": "",
+          "description": "Session store kind. Empty uses the host default."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "watch": "tsc -p . --watch",
+    "build:host": "node scripts/build-host.mjs",
+    "lint": "eslint src test scripts media",
+    "test:unit": "node --test \"out/test/unit/*.test.js\"",
+    "test:integration": "node --test \"out/test/integration/*.test.js\"",
+    "test": "npm run compile && npm run lint && npm run build:host && node --test \"out/test/**/*.test.js\""
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "@types/vscode": "^1.105.0",
+    "eslint": "^9.39.5",
+    "globals": "^14.0.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.71.2"
+  }
+}
