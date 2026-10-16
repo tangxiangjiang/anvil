@@ -4,6 +4,8 @@
 
 Independent **local-only** Go Agent SDK. Capability-aligned with Cursor’s local agent API shape (`Create` / `Prompt` / `Send` / `Stream` / `Wait`), but runs your own tool loop against **OpenAI-compatible** or **Anthropic** HTTP APIs — not the Cursor runtime.
 
+The repository also carries an **automated coding tool-chain** (scheduler, worker daemon, web console, mobile app) and, from 0.35, a **VS Code extension**. Those are separate surfaces that consume the SDK; they do not depend on each other.
+
 ## Layout
 
 | Path | Purpose |
@@ -58,19 +60,14 @@ func main() {
 
 ## Status
 
-| Milestone | Doc |
-|-----------|-----|
-| 0.1 MVP | [`m_0.1_mvp.md`](doc/roadmaps/v1.0/m_0.1_mvp.md) |
-| 0.2 Resume / Cancel / interactive | [`m_0.2_resume.md`](doc/roadmaps/v1.0/m_0.2_resume.md) |
-| 0.3 Extensibility | [`m_0.3_extensibility.md`](doc/roadmaps/v1.0/m_0.3_extensibility.md) |
-| 0.4 Coding UX (stream / patch / rules) | [`m_0.4_coding_ux.md`](doc/roadmaps/v1.0/m_0.4_coding_ux.md) |
-| 0.5 Operator (List/Get / usage / eval) | [`m_0.5_operator.md`](doc/roadmaps/v1.0/m_0.5_operator.md) |
-| 0.6 Scale (progress / MCP HTTP / SQLite / CLI) | [`m_0.6_scale.md`](doc/roadmaps/v1.0/m_0.6_scale.md) |
-| 0.7 Streaming & errors (design 07) | [`m_0.7_streaming_errors.md`](doc/roadmaps/v1.0/m_0.7_streaming_errors.md) |
-| 0.8 Security (design 08) | [`m_0.8_security.md`](doc/roadmaps/v1.0/m_0.8_security.md) |
-| 0.9 Extensibility depth (design 09) | [`m_0.9_extensibility.md`](doc/roadmaps/v1.0/m_0.9_extensibility.md) |
-| 0.10 Cursor SDK local parity (design 10) | [`m_0.10_sdk_parity.md`](doc/roadmaps/v1.0/m_0.10_sdk_parity.md) |
-| Index | [`doc/roadmaps/v1.0/README.md`](doc/roadmaps/v1.0/README.md) |
+Product is at **0.34 delivered**, **0.35 planned**. Full per-milestone index: [`doc/roadmaps/v1.0/README.md`](doc/roadmaps/v1.0/README.md).
+
+| Era | Milestones | What |
+|-----|-----------|------|
+| Core SDK | 0.1 – 0.10 | Create / Prompt / Resume, streaming & stable error codes, security hardening, tools & sandbox, MCP, Cursor SDK **local** parity |
+| Agent capabilities | 0.11 – 0.22 | worker daemon, model gateway, retrieval, hooks & skills, web search, LSP, git tools, test & build, vision, plugins, dev memory, project search |
+| Automated coding tool-chain | 0.23 – 0.34 | YAML ops config, scheduler hub, web fleet console, mobile app, app fleets, clusters/workers, sandbox workers, loop guard, job event stream, sandbox code review, delivery UI, workspace domain |
+| Editor client | 0.35 | VS Code extension + `anvil-host` (**planned**) — [design 35](doc/design/v1.0/35-vscode-extension.md) |
 
 ### Inspect agents (0.5)
 
@@ -356,7 +353,7 @@ Logs: `.dev/*.log`. Ctrl+C in the script terminal stops the stack.
 
 See [`doc/design/v1.0/26-mobile-app.md`](doc/design/v1.0/26-mobile-app.md) and [`app/README.md`](app/README.md).
 
-Still deferred: Bridge, cloud agents, full hooks catalog, IDE plugin, OIDC/RBAC, job event streaming via scheduler, workflow/milestone DAG on mobile.
+Still deferred: Cursor Bridge, cloud agents, full hooks catalog, OIDC/RBAC, workflow/milestone DAG on mobile. A first-party VS Code extension is no longer deferred — it is milestone **0.35** ([design 35](doc/design/v1.0/35-vscode-extension.md)).
 
 ## License
 
