@@ -19,7 +19,7 @@ reports. The protocol between the two is chapter 35 of the design docs
 Download or build the VSIX for your platform and install it:
 
 ```bash
-code --install-extension anvil-vscode-0.36.2-win32-x64.vsix
+code --install-extension anvil-vscode-0.37.2-win32-x64.vsix
 ```
 
 Nothing else is needed: the `anvil-host` sidecar for that platform travels
@@ -58,7 +58,7 @@ The sidecar is found in this order, and the first hit wins:
 npm run package:vsix                 # this machine's platform
 npm run package:vsix -- --target linux-x64
 npm run package:all                  # one VSIX per target, in sequence
-npm run smoke:vsix -- --vsix anvil-vscode-0.36.2-win32-x64.vsix
+npm run smoke:vsix -- --vsix anvil-vscode-0.37.2-win32-x64.vsix
 ```
 
 Targets: `win32-x64`, `win32-arm64`, `linux-x64`, `linux-arm64`, `darwin-x64`,
@@ -116,7 +116,7 @@ names both sides and stops rather than failing later inside a tool call.
 | `anvil.vision` | Accept pasted images; off by default |
 | `anvil.rules` | Load `AGENTS.md` and `.anvil/rules/*.md`; on by default |
 | `anvil.cursorRules` | Also load `.cursor/rules/*.md|.mdc`; on by default |
-| `anvil.permissions` | Read the workspace's `.anvil/permissions.json`; on by default. Off means the session ignores the file — and an approval card has nothing to offer under "always allow", because a rule written into a file this session does not read would not be in force |
+| `anvil.permissions` | Read the workspace's `.anvil/permissions.json`; on by default. Off means the session ignores the file — the rules **and** the `defaultMode` it may declare — and an approval card has nothing to offer under "always allow", because a rule written into a file this session does not read would not be in force |
 | `anvil.hostPath` | The sidecar to spawn; empty uses the bundled one, then `PATH` |
 
 The API key is **not** a setting. Run **Anvil: Set API Key**; it goes into VS
@@ -167,14 +167,21 @@ a log line.
   extended thinking must be echoed back with a signature the SDK does not carry
   yet, so it does not appear there.
 - **Keeps the conversation across a mode change.** `ask`, `accept edits`,
-  `plan`, and `bypass` are session options in the SDK, so switching one closes
-  the session and re-opens it under the same agent: same history, new mode. The
-  mode is remembered per workspace. `bypass` is flagged in the composer, and a
-  mode change is refused while a turn is running. `bypass` stops the *asking*,
-  not the policy: a `deny` written in `.anvil/permissions.json` still refuses the
-  call, and the editor loads that file — and `.anvil/hooks.json`, which no client
-  loaded before 0.36 — for every new session. See
-  [`doc/design/v1.0/36-tool-permissions.md`](../../doc/design/v1.0/36-tool-permissions.md).
+  `plan`, `no asking`, and `bypass` are session options in the SDK, so switching
+  one closes the session and re-opens it under the same agent: same history, new
+  mode. The mode is remembered per workspace, and the select's **Workspace
+  default** entry gives up that memory so the workspace's own file decides again.
+  You are told which mode is in force and where it came from: one from
+  `.anvil/permissions.json` is announced once per session, and a declaration the
+  host would not honour — `bypass` may not be granted by a project file — is a
+  warning carrying the host's own words. `no asking` runs only what the rules
+  already allow and never prompts; `bypass` is flagged in the composer. Both stop
+  at the *asking*, not the policy: a `deny` in `.anvil/permissions.json` still
+  refuses the call, a written `ask` rule still raises the card even under
+  `bypass`, and the editor loads that file — and `.anvil/hooks.json`, which no
+  client loaded before 0.36 — for every new session. A mode change is refused
+  while a turn is running. See
+  [`doc/design/v1.0/37-permission-modes.md`](../../doc/design/v1.0/37-permission-modes.md).
 - **Keeps the conversation when you close the tab.** The tab is a view of a
   session, not the session itself: closing it leaves the agent and the host
   running, and reopening it re-announces the session, the mode and any approval
@@ -224,11 +231,41 @@ Type `/` in the composer for the catalogue. Built-ins:
 **Anvil: Open Permission Rules** (also the **Permissions** button on the composer) opens this
 workspace's `.anvil/permissions.json`, creating it with an empty rule set if it is not there
 yet. That file is what decides whether a tool call runs, stops to ask you, or is refused
-outright — see the section below.
+outright — see *Permission modes and rules*.
 
 Skills in the workspace (`.anvil/skills/<id>/SKILL.md`) are listed as commands
 of their own: running one turns that skill on for the conversation. `@`
 references a file or folder for the next prompt.
+
+## Permission modes and rules
+
+The **mode** decides only whether a call stops to ask; the **rules** decide what it may do.
+The select in the composer has five modes and one entry that is not a mode:
+
+| Mode | What it does |
+| --- | --- |
+| **Ask** | Every gated call waits for you |
+| **Accept edits** | In-workspace edits apply without asking; shell, verify, egress and external tools still ask |
+| **Plan** | The workspace-changing tools are withheld and the agent is told to plan |
+| **No asking** | For a run with nobody watching: only calls the rules already allow run, and nothing ever prompts |
+| **Bypass** | Nothing prompts — but a rule you wrote that says `ask` still does, and a `deny` still refuses |
+| **Workspace default** | No opinion: the mode is whatever `.anvil/permissions.json` declares, or `ask` |
+
+The mode is remembered per workspace; **Workspace default** gives that memory up, and the
+entry's label then shows the mode actually in force (*Workspace default (Plan)*). A mode that
+came from the file is announced once per session, so a repository cannot quietly decide how
+much runs unattended. `.anvil/permissions.json` may declare one:
+
+```json
+{ "version": 1, "defaultMode": "accept_edits", "rules": [] }
+```
+
+`"defaultMode": "bypass"` is **refused** — a project file may not grant a mode that approves
+everything without showing it — so the session starts in `ask` and the panel tells you why, in
+the host's own words. Anything else the ladder does not have is refused the same way, and a
+declaration that is not a bare lowercase word is a file error with a line number, like a
+misspelled effect. Turning `anvil.permissions` off ignores the declaration along with the
+rules.
 
 ## Tests
 

@@ -83,6 +83,12 @@ does not attempt to analyse shadowing for them.
 }
 ```
 
+Two keys, and one more added by [37](37-permission-modes.md): `"defaultMode"` names the mode a
+session opens in when the client sends none, with the `bypass` ban and the refusal wording that
+chapter describes. It is a field of this file, not a rule, so nothing here interprets it — but
+anything that *rewrites* the file has to carry it, which is why the write path names it
+explicitly ([37](37-permission-modes.md)).
+
 `pattern` is interpreted per tool, because the useful pattern for a command string is not
 the useful pattern for a path:
 

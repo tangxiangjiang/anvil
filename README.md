@@ -61,7 +61,7 @@ func main() {
 
 ## Status
 
-Product is at **0.36 delivered** (tool permissions: a workspace rule file, a shell analyzer, and a `deny` that holds with nobody to ask — SDK, editor host and VS Code extension). Full per-milestone index: [`doc/roadmaps/v1.0/README.md`](doc/roadmaps/v1.0/README.md).
+Product is at **0.37 delivered** (a complete permission-mode ladder: a mode that never asks and runs only what the rules allow, a written `ask` rule that outranks `bypass`, and a workspace file that can declare the mode its sessions start in — SDK, editor host and VS Code extension). Full per-milestone index: [`doc/roadmaps/v1.0/README.md`](doc/roadmaps/v1.0/README.md).
 
 | Era | Milestones | What |
 |-----|-----------|------|
@@ -70,6 +70,7 @@ Product is at **0.36 delivered** (tool permissions: a workspace rule file, a she
 | Automated coding tool-chain | 0.23 – 0.34 | YAML ops config, scheduler hub, web fleet console, mobile app, app fleets, clusters/workers, sandbox workers, loop guard, job event stream, sandbox code review, delivery UI, workspace domain |
 | Editor client | 0.35 | VS Code extension + `anvil-host` sidecar, packaged as per-platform VSIX — [design 35](doc/design/v1.0/35-vscode-extension.md) |
 | Tool permissions | 0.36 | `.anvil/permissions.json` rule set, a shell analyzer that proves read-only, the loading switch that makes `.anvil/hooks.json` real, and an approval card that remembers the pattern rather than the tool — [design 36](doc/design/v1.0/36-tool-permissions.md) |
+| Permission modes | 0.37 | A complete mode ladder — `dont_ask` runs only what the rules allow and `bypass` no longer overrules a written `ask` rule — plus `"defaultMode"` in the same workspace file, resolved by the host and reported to the composer — [design 37](doc/design/v1.0/37-permission-modes.md) |
 
 ### VS Code extension (0.35)
 
@@ -87,7 +88,7 @@ by `internal/editorhost/independence_test.go`.
 cd editors/vscode
 npm install
 npm run package:vsix          # this platform; --target <id> / --all for the rest
-code --install-extension anvil-vscode-0.36.2-win32-x64.vsix
+code --install-extension anvil-vscode-0.37.2-win32-x64.vsix
 ```
 
 A platform VSIX carries the matching `anvil-host`, cross-compiled with
@@ -175,6 +176,29 @@ Options.PermissionRules: []anvil.PermissionRule{
   {Effect: "deny", Tool: "shell", Pattern: "rm -rf:*", Reason: "destructive"},
 }
 ```
+
+### Permission modes (0.37)
+
+A mode decides only **whether to ask** — never what the rules mean. Five of them:
+`ask`, `accept_edits`, `plan`, `dont_ask`, `bypass`. See
+[design 37](doc/design/v1.0/37-permission-modes.md).
+
+- **`dont_ask`** is for a run with nobody watching: every gated call the workspace's rules do
+  not already allow is refused, with the reason, and no prompt is ever raised. An `allow` rule
+  still runs the call, and a `deny` still refuses.
+- **A written `ask` rule outranks `bypass`.** A blanket "do not ask" is not an answer about
+  `git push:*` in particular, so the rule wins and the card says which rule it was.
+- **A workspace can declare the mode its sessions start in**, in the same file:
+
+```json
+{ "version": 1, "defaultMode": "accept_edits", "rules": [] }
+```
+
+A client that sends no mode gets the declared one; one that sends a mode gets what it asked
+for. `"defaultMode": "bypass"` is refused — a repository is not a person — so the session
+starts in `ask` and both the session result and `permissions.get` carry a sentence saying so.
+`load_permissions: false` ignores the declaration along with the rules. Writing a rule from
+the approval card leaves the declaration alone.
 
 ### SDK local parity (0.10)
 

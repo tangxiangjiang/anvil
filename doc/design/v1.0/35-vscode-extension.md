@@ -66,7 +66,7 @@ Messages marked ← are server→client **notifications** (no `id`); → are cli
 | → | `models.list` | → `ModelInfo[]` for the picker |
 | → | **`skills.list`** | `scan_user?`, `skill_dirs?` → `skills[]{id, name, description, path, always}` |
 | → | **`rules.list`** | `load_project?`, `load_cursor_rules?` → `files[]{path, bytes, included, truncated}` |
-| → | **`permissions.get`** | → `path`, `exists`, `rules[]{index, effect, tool, pattern, reason, describe}`, `problem?{message, line?, column?}` — the workspace rule file, or why it will not compile |
+| → | **`permissions.get`** | → `path`, `exists`, `rules[]{index, effect, tool, pattern, reason, describe}`, `default_mode?`, `default_mode_refused?`, `problem?{message, line?, column?}` — the workspace rule file, or why it will not compile |
 | → | **`permissions.add`** | `rule{effect?, tool, pattern?, reason?}`, `request_id?` → `path`, `index`, `rules[]`, `decided_by?`, `approved?` — append one rule, and settle the pending call when the file now decides it |
 
 ### Event payload comes from the public SDK types
@@ -136,7 +136,12 @@ Both bodies share one cap; past it, **both are dropped together** and `truncated
 | `ask` (default) | every gated call round-trips to the UI |
 | `accept_edits` | the `write` / `edit` selectors are dropped from the gated set, so in-workspace edits apply without asking; `shell` / `verify` still do |
 | `plan` | `DisallowedTools: ["write","edit","shell","verify"]` + a directive to produce a plan and stop. Pure SDK composition — no new code. |
-| `bypass` | user opts in explicitly; UI shows a persistent warning |
+| `dont_ask` | the same group set `ask` gates, answered by a callback that always says no: only what the rules already allow runs, and nothing prompts |
+| `bypass` | user opts in explicitly; UI shows a persistent warning. A rule of effect `ask` still raises the card — the mode skips the asking, not the policy |
+
+`dont_ask` and `bypass` are the same mechanism read in two directions, which is the whole of
+[37](37-permission-modes.md): "never ask" cannot be implemented as *no callback*, because the
+SDK runs every tool when nobody is there to ask — no callback is `bypass`, not refusal.
 
 Each mode is a **composition of public SDK options**, not a special case inside the callback: `accept_edits` works by narrowing the group set it passes as `Options.PermissionGroups`, and `plan` by adding `Options.DisallowedTools`. The sandbox already confines path-taking tools to the workspace, so "in workspace" needs no extra check.
 
@@ -144,12 +149,12 @@ The client sets these per session, on `session.new` / `session.resume`:
 
 | Param | Meaning |
 |-------|---------|
-| `permission_mode` | `ask` (default) / `accept_edits` / `plan` / `bypass` |
+| `permission_mode` | `ask` / `accept_edits` / `plan` / `dont_ask` / `bypass`. **Omit it** and the host resolves the mode itself — the workspace's declaration if it has one, else `ask` — and reports it back on the session result |
 | `permission_groups` | overrides the default gated set (`write, edit, shell, verify, web, mcp`); ignored in `bypass` |
 | `approval_timeout_ms` | per-session wait for an answer; `0` = default 5m, negative = until the run ends |
 | `test_command` / `build_command` | argv for `run_tests` / `build`. Without them the host registers neither tool, so those calls cannot reach an approval at all |
 | `vision` | opt in to image attachments; off by default, and a prompt carrying one without it is refused |
-| `load_permissions` / `load_hooks` | read `.anvil/permissions.json` / `.anvil/hooks.json` for this session. Absent means **on**: the workspace policy files a user wrote apply when their editor opens the workspace. `load_permissions: false` also means the approval card has no rule to offer — a rule written into a file the session does not read would not be in force, so the host refuses (`-32600`) rather than writing one |
+| `load_permissions` / `load_hooks` | read `.anvil/permissions.json` / `.anvil/hooks.json` for this session. Absent means **on**: the workspace policy files a user wrote apply when their editor opens the workspace. One switch governs the rules file whole — `load_permissions: false` also ignores the `defaultMode` it declares, and also means the approval card has no rule to offer, so the host refuses (`-32600`) rather than writing a rule into a file the session does not read |
 
 - **Session allowlist**: the host remembers `(session, tool, scope)` approvals and short-circuits the callback. In-memory per session; not persisted. `scope` is opaque to the host — it compares it verbatim and takes it from `preview.path`, so a client can offer "always allow shell" (no scope) and "always allow edits to this file" (that path) through one field. A **rule set** above this layer (milestone **0.36**, [36](36-tool-permissions.md)) resolves before the callback, so a rule decides without consulting this list — and a rule `allow` is why the shell/write/edit hook denies moved to the unconditional `preExec` stage.
 - **Diff review before apply**: for `write_file` / `edit_file` / `apply_patch` the SDK computes the resulting diff at gate time and puts it on `preview`. `apply_patch` is dry-run through the existing patch implementation, so the files it reports are the files it would touch — and the dry run must not mutate anything. This is the review-changes flow.
@@ -306,6 +311,45 @@ and the workspace gains a command that opens the file all of it is about.
   session ignores the file: the setting's description says so, the panel warns when the file is
   opened in that state, and the host refuses a rule written for a call in a session that would
   not read it.
+
+### The mode the workspace declares as built (p_0.37.2)
+
+The ladder became complete in p_0.37.1 ([37](37-permission-modes.md)); this phase is what the
+composer does with a mode it did not choose.
+
+- **"No opinion" is a choice the select has to be able to show.** The mode select gained a
+  leading *Workspace default* entry, and it is the only way back to letting the file decide —
+  the client's stored choice is a per-workspace habit, and clearing it is not expressible as
+  any of the five modes. In that state the client sends **no** `permission_mode` key at all:
+  sending `""` would be a mode the host has to reject, and the whole point is that this client
+  has nothing to say. The stored choice lives in `workspaceState` under `anvil.permissionMode`,
+  and choosing the empty entry deletes the key rather than storing the empty string.
+- **The select and the banner are driven by different values.** One is what this workspace
+  chose; the other is what the session is actually in, which the file may be why. The `mode`
+  message therefore carries both (`mode`, possibly empty, and `resolved` plus `source`), and
+  the `''` option's label is rewritten to name the resolved mode — *Workspace default (Plan)* —
+  so the control does not read as "nothing is set" while a mode is plainly in force.
+- **The banner says where the mode came from, once per session.** `file` and `default` are the
+  two sources that need saying; `request` is the user's own click and needs no announcement. A
+  refused declaration is a warning carrying the host's own sentence, because the client has no
+  better wording for a rule it did not make. "Once" is keyed on the whole resolved picture —
+  mode, source, refusal — since a session is re-opened for every option change and can be
+  re-opened by a skill or a model call, and a notice tied to the *open* event would repeat.
+- **`dont_ask` gets a banner, `bypass` keeps its warning.** They are the two modes that change
+  what the surface means rather than which calls prompt, so they are the two the panel
+  announces in the composer's own strip.
+- **The mode words cannot drift.** Four places name a mode — `proto.go`'s constants,
+  `protocol.ts`'s list, `chatPanel.ts`'s label table and `<option>`s, and `media/chat.js`'s
+  copy of the labels — and none is generated from another. `test/unit/permissionModes.test.ts`
+  reads all four as text and fails on a missing label, a missing `<option>`, a list in a
+  different order, or a source word the host does not send. Every one of those failures is
+  silent at runtime: an unlabelled option, an `undefined` in the select, a mode nobody can
+  choose. Same shape as `permissionKinds.test.ts`, and for the same reason.
+- **The resolution itself is covered where it can be seen.** The Go tests pin what
+  `resolveMode` decides; `test/integration/modeResolution.test.ts` drives the scripted host —
+  which resolves the mode the way the real one does, from the file and the request — and
+  asserts what the client sent and what came back, including the refusal path. That the mode
+  reaches the *DOM* is the one part no test here can reach, and it is listed as a manual check.
 
 ## Placement
 

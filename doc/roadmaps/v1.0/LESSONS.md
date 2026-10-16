@@ -133,3 +133,33 @@ is why the check is a test that reads both sides as text, not a comment asking f
 | The extension version and the host banner move together, and they are numbered differently | The drift check compares *minor* lines, so bumping `package.json` alone would warn on every spawn. But `package.json` is numbered by the **phase** that changed the client (0.35.7 … 0.36.2) while the host's `Version` is numbered by the **milestone** (0.35.0-dev → 0.36.0-dev): one binary serves a whole line, one package serves one phase. Two schemes, one release line, and the minor has to agree across them |
 
 See also: [m_0.36/p_0.36.2.md](m_0.36/p_0.36.2.md), [36-tool-permissions.md](../../design/v1.0/36-tool-permissions.md), [35-vscode-extension.md](../../design/v1.0/35-vscode-extension.md).
+
+## 2026-10-16 — the mode a workspace declares
+
+**Setup:** p_0.37.2 gives `.anvil/permissions.json` a `"defaultMode"`, resolves it in the host
+against what the client sent, and reports the result — plus the refusal when a project file
+declares `bypass` — back to the composer.
+
+**What happened:** the interesting part was not the resolution, which is four lines, but making
+"no opinion" a state that survives the whole path. The client had to be able to send *nothing*
+(sending `""` is a mode the host must reject, and the point is that the client has nothing to
+say), show a control for it (an `<option value="">` that deletes the stored key rather than
+storing an empty string), and render two different things at once — the choice it remembers and
+the mode actually in force, which the file may be why. The other half was a file that is
+rewritten whole: `AddPermissionRule` rebuilds `.anvil/permissions.json` from what it parsed, so
+a field it does not know about is a field the first "always allow" click deletes.
+
+**Takeaways for later phases**
+
+| Lesson | Implication |
+|--------|-------------|
+| A whole-file rewrite must carry every field it did not understand | The declaration is threaded through `AddPermissionRule` explicitly and pinned by a test that also asserts the file's order on disk. The failure mode is not a crash — it is a workspace that stops starting the way it used to, a day later, in someone else's window |
+| Split the parser's question from the ladder's | `internal/permissions` checks the *shape* (a bare lowercase word, with a place to point at), the host owns the *vocabulary* and the ban. So a malformed declaration fails `session.new` naming the line, while a well-formed word the ladder lacks opens the session in `ask` and is reported in words. A file that will not parse is a file nobody can trust for anything; a word the host does not know is one line of it |
+| A refusal needs one wording and two carriers | `refusedMode` returns the sentence and both `permission_mode_refused` and `default_mode_refused` carry it verbatim. Two phrasings for one refusal is how a user reads two explanations of one problem — and `default_mode` is left *empty* rather than filled with the substituted mode, because a file that declared `bypass` did not ask for `ask` |
+| One switch governs the file, not most of it | `load_permissions: false` skips the declaration as well as the rules. Anything else makes "ignore the file" mean "ignore the parts I did not want to think about" |
+| A fixture that echoes cannot test a client that sent nothing | The scripted host used to answer `params.permission_mode \|\| 'ask'`. It now resolves the mode the way the real host does — request, then file, then `ask` — because "the client has no opinion" is precisely the case a stub that repeats its input can never observe |
+| The same short list in four files is four chances to drift | `proto.go`, `protocol.ts`, `chatPanel.ts` and `media/chat.js` each name the modes, and none is generated from another. One test reads all four as text; the failures it prevents — an unlabelled option, an `undefined` in the select, a mode nobody can choose — are all silent |
+| A pinned vocabulary makes the shape of the declaration part of the contract | The drift test parses `protocol.ts` by regex, so rewriting `PermissionModeSources` as an array of named constants broke the test rather than the code. Either pin the literals or teach the test the new shape — but the test is doing its job: it noticed that the thing it pins had moved |
+| Find which assertion failed before theorizing about why | A drift test reported `actual: []` and cost several rounds of regex debugging on the *first* assertion. It was the second one. The failure output names the assertion; read that line first |
+
+See also: [m_0.37/p_0.37.2.md](m_0.37/p_0.37.2.md), [37-permission-modes.md](../../design/v1.0/37-permission-modes.md), [08-security.md](../../design/v1.0/08-security.md).

@@ -134,8 +134,14 @@ It is **refused and reported**, not fatal, and not silent:
 |---|---|
 | The session | Starts in `ask`, which is also what a file that declares nothing gets |
 | The session result | `permission_mode_refused` carries a sentence naming the value |
-| `permissions.get` | `default_mode_refused` carries the same sentence; `default_mode` reports what the host *would* honour |
+| `permissions.get` | `default_mode_refused` carries the same sentence, and `default_mode` is **left empty** |
 | The client | Says so once, where the user is looking |
+
+`default_mode` is empty rather than filled with the mode that was substituted, and the
+difference matters: a reader given `default_mode: "ask"` for a file that declares `bypass`
+would take the file to have asked for `ask`. The two fields are one answer between them — the
+declaration the host would honour, or the one it will not, in words — and never both. A file
+that declares nothing has neither.
 
 Fatal was rejected for a specific reason: a session that refuses to start because of a file
 somebody else committed is a workspace that a repository can disable. Silence was rejected for
@@ -151,6 +157,31 @@ declares something the host declines is a policy question with a known-safe answ
 A declaration that is not a bare lowercase word at all — `"Bypass"`, `"accept edits"`, `""` —
 is the parser's business, not the host's, and is reported like a misspelled effect: a problem
 on the file, with the place, so it can be fixed where it is written.
+
+## What the composer shows
+
+The panel is where a person sees which mode is in force, and the resolution above gives it two
+different things to show: the choice it stored for this workspace, and the mode the host
+actually resolved. They are not the same, so the select and the banner are not driven by the
+same value.
+
+- **The select** lists the modes plus one entry that is not a mode: *Workspace default*. It
+  renders that entry with the resolved mode in its label (*Workspace default (Plan)*) and is
+  the only way back to letting the file decide, because the client has no other word for "I
+  have no opinion". Choosing a mode is per-workspace state — it is a habit, so it lives in the
+  window's storage rather than in a file.
+- **The banner** is driven by the resolved mode, not the chosen one, and always says where it
+  came from. A mode that arrived from the file is announced once per session, naming the file
+  (`Mode Plan comes from this workspace's .anvil/permissions.json`), and a declaration the host
+  refused is announced once, at the volume of a warning, with the sentence the host sent.
+- **Once per session** is literal, and it is keyed on the whole resolved picture — mode,
+  source, and refusal. A session is re-opened whenever an option changes, and a session can be
+  re-opened by a skill or by the model; a notice tied to the open event would repeat itself on
+  each one.
+
+The client never reads `.anvil/permissions.json` to find the mode. It sends what it knows and
+renders what it is told, so there is one implementation of the resolution and it is the one
+that can enforce it.
 
 ## Writing a rule must not delete the declaration
 
