@@ -74,3 +74,31 @@ See also: [m_0.35/p_0.35.8.md](m_0.35/p_0.35.8.md), [35-vscode-extension.md](../
 | Reasoner output is a firehose, and a dropped event is permanent | `Run.emit` drops silently when its buffer fills, and the transcript is append-only, so a dropped *text* chunk corrupts the turn. Coalesce reasoning by size (200 chars) at the source rather than forwarding one event per token |
 
 See also: [m_0.35/p_0.35.9.md](m_0.35/p_0.35.9.md), [35-vscode-extension.md](../../design/v1.0/35-vscode-extension.md).
+
+## 2026-10-16 — a deny that has to hold when nobody is there
+
+**Setup:** p_0.36.1 adds a user-authored rule file whose `deny` must hold even with no approval
+channel: a library embedder that installs no callback, the CLI, and `bypass`.
+
+**What happened:** the SDK says it in one line — *groups alone open no gate: with no
+`PermissionFunc` installed there is nobody to ask, and `Execute` keeps running every tool* —
+and that line decides where policy may live. Implemented in the callback, a `deny` is not a
+deny; it is a request to a component that may not exist. Reading the existing comment was the
+whole design. The same sentence, applied to a different mechanism, then showed that the file
+hooks' shell/write/edit denies had been living inside the composed callback: correct until the
+day a rule `allow` short-circuits the callback, and then silently skipped. Moving them to
+`preExec` also *defined* the precedence order, rather than the order being asserted in a doc
+and true nowhere.
+
+**Takeaways for later phases**
+
+| Lesson | Implication |
+|--------|-------------|
+| A policy implemented inside an optional callback is not a policy | `Options.Permission` is optional, so anything that must hold without a client belongs in `Execute` (or `preExec`), before the callback. Ask "who runs this when the callback is nil?" of every new check |
+| Two checks at different stages are the reason a precedence list is real | The moment hook denies moved to `preExec`, "hook deny > rule deny" stopped being a claim in a table and became a property of the code path. If the order cannot be read off the call graph, it is documentation, not design |
+| A feature that was never wired is indistinguishable from one that does not work | `.anvil/hooks.json` deny rules were implemented, unit-tested and documented, and loaded by **neither** client, because loading hung off `SettingSourceProject` and no client set it. A unit test that constructs the SDK by hand cannot see this; the test has to go through the client's own option-building path |
+| A rule that admits a call must be provable from what the user was shown | Matching facts come from the preview, so a read — which names no target path on its card — cannot be matched by path. The honest move was to document the boundary and keep the tool-name rule, not to match raw argument JSON that no card displays |
+| An analyzer that refuses everything unusual will refuse the ordinary | "No unquoted brace metacharacter" made `find . -exec rm {} +` unprovable, and find's `{}` is not brace expansion — bash expands a brace only with a comma or a range. The escape hatch had to be exactly `{}` as a whole token, because `{-delete,}` *would* expand and rewrite a later argument, and a matcher comparing the line as written would then match something the shell never runs |
+| A token prefix is the only safe prefix | `git status:*` must not admit `git status && rm -rf /` nor `git statusx`, and `strings.HasPrefix` admits both. Split, lex, compare argv — and require a single segment, so a compound line can never match a prefix rule |
+
+See also: [m_0.36/p_0.36.1.md](m_0.36/p_0.36.1.md), [36-tool-permissions.md](../../design/v1.0/36-tool-permissions.md).
