@@ -122,6 +122,18 @@ func (d Decision) String() string {
 	return fmt.Sprintf("%s %s %q", d.Effect, d.Tool, d.Pattern)
 }
 
+// Ref names the rule the way a reader of the file finds it: the file, the
+// rule's position counted the way a reader counts, the rule as written, and its
+// reason. A denial and an approval card both quote this, so the same words
+// appear wherever the decision is explained.
+func (d Decision) Ref() string {
+	ref := fmt.Sprintf(".anvil/%s rule %d (%s)", FileName, d.Index+1, d.String())
+	if d.Reason != "" {
+		ref += ": " + d.Reason
+	}
+	return ref
+}
+
 // Set is a compiled rule set. A nil *Set holds no rules and has no opinion about
 // anything, so a caller can carry nil to mean "this workspace has no rule file"
 // without a special case at every use.
@@ -156,6 +168,25 @@ func (s *Set) Len() int {
 		return 0
 	}
 	return len(s.rules)
+}
+
+// Describe names the rule at position i, counted from zero in the order Rules
+// returns, the way a reader of the file would cite it. It goes through Decision
+// so that a list of rules and the explanation of a decision spell a rule the
+// same way; a position outside the set describes nothing.
+func (s *Set) Describe(i int) string {
+	if s == nil || i < 0 || i >= len(s.rules) {
+		return ""
+	}
+	r := s.rules[i]
+	return Decision{
+		Matched: true,
+		Effect:  r.effect,
+		Index:   i,
+		Tool:    r.tool,
+		Pattern: r.pattern,
+		Reason:  r.reason,
+	}.Ref()
 }
 
 // Evaluate decides a call. Rules are tried in file order and the outcome is:

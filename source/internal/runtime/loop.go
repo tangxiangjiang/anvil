@@ -13,6 +13,7 @@ import (
 	"github.com/anvil-dev/anvil/internal/compress"
 	"github.com/anvil-dev/anvil/internal/id"
 	"github.com/anvil-dev/anvil/internal/llm"
+	"github.com/anvil-dev/anvil/internal/permissions"
 	"github.com/anvil-dev/anvil/internal/prompt"
 	"github.com/anvil-dev/anvil/internal/redact"
 	"github.com/anvil-dev/anvil/internal/tools"
@@ -30,6 +31,10 @@ type Event struct {
 	Step       int
 	MaxSteps   int // 0 = unlimited
 	Code       string
+	// Rule is the workspace rule that decided a tool call, on tool_result. It is
+	// nil when no rule did — including when the call was allowed by a callback or
+	// ran ungated.
+	Rule *permissions.Decision
 }
 
 // DefaultMaxSteps is deprecated: MaxSteps 0 means unlimited. Kept as 0 for callers.
@@ -312,6 +317,10 @@ func runToolCalls(
 			Name:       tc.Name,
 			Content:    content,
 			IsError:    results[i].IsError,
+			// The rule travels with the result rather than with the call: which
+			// rule decides a call is only known once it has been decided, and the
+			// card it explains is the one keyed by this call id.
+			Rule: results[i].Rule,
 		})
 		toolMsg := llm.Message{
 			Role:       llm.RoleTool,

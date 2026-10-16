@@ -173,6 +173,10 @@ func (s *Server) dispatch(ctx context.Context, req *Request) (any, *RPCError) {
 		return s.handleSkillsList(ctx, req.Params)
 	case MethodRulesList:
 		return s.handleRulesList(ctx, req.Params)
+	case MethodPermissionsGet:
+		return s.handlePermissionsGet(ctx, req.Params)
+	case MethodPermissionsAdd:
+		return s.handlePermissionsAdd(ctx, req.Params)
 	case MethodApprovalResponse:
 		return s.handleApprovalResponse(req.Params)
 	default:
@@ -228,7 +232,7 @@ func (s *Server) handleInitialize(params json.RawMessage) (any, *RPCError) {
 }
 
 func capabilities() []string {
-	return []string{"streaming", "sessions", "resume", "cancel", "models", "approval", "context", "vision", "plan", "skills", "rules"}
+	return []string{"streaming", "sessions", "resume", "cancel", "models", "approval", "context", "vision", "plan", "skills", "rules", "permissions"}
 }
 
 // ---------------------------------------------------------------------------
@@ -567,6 +571,143 @@ func (s *Server) handleRulesList(ctx context.Context, params json.RawMessage) (a
 }
 
 // ---------------------------------------------------------------------------
+// permissions
+// ---------------------------------------------------------------------------
+
+// handlePermissionsGet reports the workspace rule file: where it is, whether it
+// is there, what it says, and — when it will not compile — where it is broken.
+//
+// A malformed file is a result, not an error. The client's job with it is to
+// open the file at the line and let the user fix it, which it cannot do with an
+// error string alone; and the SDK's own refusal to run under a policy it cannot
+// read stays where it belongs, in session.new.
+func (s *Server) handlePermissionsGet(_ context.Context, _ json.RawMessage) (any, *RPCError) {
+	cwd := s.cwdPath()
+	path := anvil.PermissionRulesPath(cwd)
+	out := PermissionsResult{Path: path, Rules: []RuleInfo{}}
+
+	rules, err := anvil.LoadPermissionRules(cwd)
+	if err != nil {
+		out.Exists = true
+		out.Problem = ruleProblem(err)
+		return out, nil
+	}
+	if _, statErr := os.Stat(path); statErr == nil {
+		out.Exists = true
+	}
+	out.Rules = ruleInfos(rules)
+	return out, nil
+}
+
+// handlePermissionsAdd appends one rule the user asked for and reports what that
+// did to the call they were looking at.
+//
+// The whole point of "always allow" is that it covers the call in front of you,
+// so when the client names the pending approval the rule was written for, the
+// host evaluates the file as it now stands against that very call and answers
+// the approval itself — but only if an allow rule is what decides it. A rule
+// that loses to a deny, or to an ask, is written all the same (it is a file the
+// user asked to change) and reported as not having settled the call, because the
+// alternative is a card that disappears while the policy says no.
+func (s *Server) handlePermissionsAdd(_ context.Context, params json.RawMessage) (any, *RPCError) {
+	p, err := decode[PermissionsAddParams](params)
+	if err != nil {
+		return nil, errInvalidParams("permissions.add: " + err.Error())
+	}
+	if strings.TrimSpace(p.Rule.Tool) == "" {
+		return nil, errInvalidParams("permissions.add: rule.tool is required")
+	}
+	// The card's buttons are all "always allow", so an omitted effect means
+	// allow. A client editing the file by hand sends the word it wants.
+	effect := strings.TrimSpace(p.Rule.Effect)
+	if effect == "" {
+		effect = anvil.PermissionEffectAllow
+	}
+	var pending pendingRequest
+	if p.RequestID != "" {
+		var ok bool
+		pending, ok = s.approvals.lookup(p.RequestID)
+		if !ok {
+			return nil, errCode(CodeNoApproval, errNoPendingApproval.Error())
+		}
+		sess, ok := s.session(pending.sessionID)
+		if !ok {
+			return nil, errCode(CodeNoSession, "unknown session: "+pending.sessionID)
+		}
+		if !sess.loadPermissions {
+			return nil, errCode(CodeInvalidRequest,
+				"permissions.add: this session was created with load_permissions off, so a rule written here would not apply to the call being approved")
+		}
+	}
+
+	cwd := s.cwdPath()
+	rules, err := anvil.AddPermissionRule(cwd, anvil.PermissionRule{
+		Effect:  effect,
+		Tool:    p.Rule.Tool,
+		Pattern: p.Rule.Pattern,
+		Reason:  p.Rule.Reason,
+	})
+	if err != nil {
+		var perr *anvil.PermissionRuleError
+		if errors.As(err, &perr) {
+			// Appending to a file that cannot be read is refused — that is the one
+			// thing an append must never do — and the error says exactly where the
+			// file is broken so the client can send the user there.
+			return nil, errCode(CodeHostError, perr.Error())
+		}
+		return nil, errHost(err)
+	}
+
+	out := PermissionsAddResult{Path: anvil.PermissionRulesPath(cwd), Rules: ruleInfos(rules)}
+	// One-based, the number the appended rule is cited by.
+	out.Index = len(rules)
+
+	if p.RequestID == "" {
+		return out, nil
+	}
+	// Which rule decides the call now is not necessarily the one just written,
+	// so it is evaluated rather than assumed.
+	if m := anvil.EvaluatePermissionRules(rules, pending.call.tool, pending.call.args); m != nil {
+		out.DecidedBy = ruleInfo(m)
+		if m.Effect == anvil.PermissionEffectAllow {
+			if err := s.approvals.answer(ApprovalResponseParams{
+				RequestID: p.RequestID,
+				Decision:  DecisionAllow,
+			}); err != nil {
+				return nil, errCode(CodeNoApproval, err.Error())
+			}
+			out.Approved = true
+		}
+	}
+	return out, nil
+}
+
+// ruleInfos names the rules of a set for the wire: where each one sits and how
+// the SDK cites it, in the order the file lists them.
+func ruleInfos(rules []anvil.PermissionRule) []RuleInfo {
+	out := make([]RuleInfo, 0, len(rules))
+	described := anvil.DescribePermissionRules(rules)
+	for i, r := range rules {
+		info := RuleInfo{Index: i + 1, RuleSpec: RuleSpec(r)}
+		if i < len(described) {
+			info.Describe = described[i]
+		}
+		out = append(out, info)
+	}
+	return out
+}
+
+// ruleProblem converts a rule-file error into the wire shape, with the place
+// when the parser knows one.
+func ruleProblem(err error) *RuleProblem {
+	var perr *anvil.PermissionRuleError
+	if !errors.As(err, &perr) {
+		return nil
+	}
+	return &RuleProblem{Message: perr.Message, Line: perr.Line, Column: perr.Column}
+}
+
+// ---------------------------------------------------------------------------
 // option assembly
 // ---------------------------------------------------------------------------
 
@@ -577,6 +718,10 @@ func (s *Server) handleRulesList(ctx context.Context, params json.RawMessage) (a
 // does not cross the protocol.
 func (s *Server) buildOptions(p SessionParams, sess *session) (anvil.Options, *RPCError) {
 	groups := groupsForMode(sess.mode, p.PermissionGroups)
+	// Resolved once, here, because two things depend on it: the SDK option below,
+	// and whether a rule written from this session's approval card would be in
+	// force at all.
+	sess.loadPermissions = boolOr(p.LoadPermissions, true)
 	opts := anvil.Options{
 		PermissionGroups: groups,
 		Provider:         anvil.Provider(firstNonEmpty(p.Provider, s.cfg.Provider, os.Getenv("ANVIL_PROVIDER"))),
@@ -595,7 +740,7 @@ func (s *Server) buildOptions(p SessionParams, sess *session) (anvil.Options, *R
 			// opened is policy they wrote for it. A malformed file therefore fails
 			// session.new with the path named, which is the intended trade.
 			LoadHooks:       boolOr(p.LoadHooks, true),
-			LoadPermissions: boolOr(p.LoadPermissions, true),
+			LoadPermissions: sess.loadPermissions,
 			Store:           p.Store,
 		},
 		// Off unless the client asks: Vision.Enabled is what makes the SDK
@@ -743,7 +888,8 @@ func (s *Server) permissionHook(sess *session, timeout time.Duration) anvil.Perm
 
 		requestID := "appr-" + newID()
 		runID := sess.activeRunID()
-		p := s.approvals.begin(sess.id, runID, requestID, timeout)
+		call := pendingCall{tool: req.ToolName, args: req.Args}
+		p := s.approvals.begin(sess.id, runID, requestID, call, timeout)
 		s.notify(NotifyApprovalRequest, ApprovalRequestParams{
 			RequestID: requestID,
 			SessionID: sess.id,
@@ -752,6 +898,10 @@ func (s *Server) permissionHook(sess *session, timeout time.Duration) anvil.Perm
 			Args:      req.Args,
 			Preview:   approvalPreview(req.Preview),
 			Decisions: []string{DecisionAllow, DecisionAllowSession, DecisionDeny},
+			Rule:      ruleInfo(req.Rule),
+			// Only offered when the session actually reads the rule file: a rule
+			// written into a file this session ignores would be a button that lies.
+			Remember:  rememberOptions(sess, call),
 			TimeoutMS: int(timeout / time.Millisecond),
 		})
 
@@ -776,6 +926,29 @@ func (s *Server) permissionHook(sess *session, timeout time.Duration) anvil.Perm
 // as preview.path and may echo it back narrowed; the host never interprets it.
 func approvalScope(p anvil.ToolPreview) string {
 	return p.Path
+}
+
+// rememberOptions is what an approval card may offer as "always allow" for this
+// call.
+//
+// The choices come from the SDK, which proves each one against the call itself —
+// a rule that would not decide it is not offered. The host adds one condition of
+// its own: nothing is offered by a session that does not read the rule file,
+// because writing a rule there would change nothing about the call in front of
+// the user.
+func rememberOptions(sess *session, call pendingCall) []RememberOption {
+	if !sess.loadPermissions {
+		return nil
+	}
+	options := anvil.PermissionRuleOptions(call.tool, call.args)
+	out := make([]RememberOption, 0, len(options))
+	for _, o := range options {
+		out = append(out, RememberOption{
+			Kind: o.Kind,
+			Rule: RuleSpec{Effect: o.Rule.Effect, Tool: o.Rule.Tool, Pattern: o.Rule.Pattern, Reason: o.Rule.Reason},
+		})
+	}
+	return out
 }
 
 func approvalPreview(p anvil.ToolPreview) ApprovalPreview {

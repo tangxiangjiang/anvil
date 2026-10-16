@@ -389,14 +389,23 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 		return nil, nil, nil, nil, nil, err
 	}
 	reg.SetPermissionRules(permRules)
+	if opts.Local.LoadPermissions {
+		// The file is re-read for each call when the workspace owns the policy:
+		// it can be edited, or appended to by an approval card, while a session is
+		// open. A file that stops parsing keeps the policy it last read cleanly.
+		reg.SetPermissionRulesSource(permissions.NewSource(cwd, permissionRules(opts.PermissionRules), permRules))
+	}
 	// What is left here is the caller's own callback: the file hooks are checked in
 	// preExec now, so that a rule that allows a call cannot skip them.
 	if perm := opts.Permission; perm != nil {
-		reg.SetPermission(func(ctx context.Context, name string, args json.RawMessage, preview tools.Preview) (json.RawMessage, error) {
+		reg.SetPermission(func(ctx context.Context, call tools.GatedCall) (json.RawMessage, error) {
 			dec, err := perm(ctx, PermissionRequest{
-				ToolName: name,
-				Args:     args,
-				Preview:  toToolPreview(preview),
+				ToolName: call.Name,
+				Args:     call.Args,
+				Preview:  toToolPreview(call.Preview),
+				// Which rule asked, when one did. A client shows it, so a prompt
+				// never appears without a reason the user can act on.
+				Rule: permissionRuleMatch(call.Rule),
 			})
 			if err != nil {
 				return nil, err
@@ -404,14 +413,14 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 			if !dec.Allow {
 				msg := dec.Message
 				if msg == "" {
-					msg = "permission denied for tool " + name
+					msg = "permission denied for tool " + call.Name
 				}
 				return nil, fmt.Errorf("%s", msg)
 			}
 			if len(dec.Args) > 0 {
 				return dec.Args, nil
 			}
-			return args, nil
+			return call.Args, nil
 		})
 	}
 	if hookFile != nil {
@@ -972,6 +981,7 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 			Step:       ev.Step,
 			MaxSteps:   ev.MaxSteps,
 			Code:       Code(ev.Code),
+			Rule:       permissionRuleMatch(ev.Rule),
 		})
 	})
 

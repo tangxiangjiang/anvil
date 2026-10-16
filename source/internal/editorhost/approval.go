@@ -5,6 +5,7 @@ package editorhost
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"time"
@@ -30,10 +31,29 @@ type approvalBroker struct {
 type pendingApproval struct {
 	sessionID string
 	runID     string
+	// call is the call this card is about, kept for as long as the card is up so
+	// a rule written from it can be evaluated against the very call it was
+	// written for.
+	call pendingCall
 	// timeout is how long to wait; zero or less waits until the run ends.
 	timeout time.Duration
 	ch      chan ApprovalResponseParams
 	settled bool
+}
+
+// pendingCall identifies a gated call the way the SDK's rule evaluator wants it:
+// a tool name and the arguments it was given. Nothing about the preview is kept,
+// because a rule matches arguments, never a rendering of them.
+type pendingCall struct {
+	tool string
+	args json.RawMessage
+}
+
+// pendingRequest is what permissions.add needs to know about the card it is
+// writing a rule for.
+type pendingRequest struct {
+	sessionID string
+	call      pendingCall
 }
 
 func newApprovalBroker() *approvalBroker {
@@ -67,10 +87,11 @@ func (b *approvalBroker) sessionAllowed(sessionID, tool, scope string) bool {
 
 // begin registers a request. The caller must call wait or cancel afterwards;
 // begin alone would leak the entry.
-func (b *approvalBroker) begin(sessionID, runID, requestID string, timeout time.Duration) *pendingApproval {
+func (b *approvalBroker) begin(sessionID, runID, requestID string, call pendingCall, timeout time.Duration) *pendingApproval {
 	p := &pendingApproval{
 		sessionID: sessionID,
 		runID:     runID,
+		call:      call,
 		timeout:   timeout,
 		ch:        make(chan ApprovalResponseParams, 1),
 	}
@@ -78,6 +99,20 @@ func (b *approvalBroker) begin(sessionID, runID, requestID string, timeout time.
 	b.pending[requestID] = p
 	b.mu.Unlock()
 	return p
+}
+
+// lookup finds a request that is still waiting. It is how permissions.add learns
+// which call, in which session, a rule is being written for — and it reports
+// false for a card that has already been answered, timed out or been aborted, so
+// nothing is settled on behalf of a question nobody is looking at any more.
+func (b *approvalBroker) lookup(requestID string) (pendingRequest, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	p, ok := b.pending[requestID]
+	if !ok {
+		return pendingRequest{}, false
+	}
+	return pendingRequest{sessionID: p.sessionID, call: p.call}, true
 }
 
 // forget deregisters a request. It reports whether this caller was the one that

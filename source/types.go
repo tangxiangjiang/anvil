@@ -72,4 +72,9 @@ type Event struct {
 	Step       int // 1-based LLM round; set on EventProgress
 	MaxSteps   int // configured limit; set on EventProgress
 	Code       Code // set on EventError when classifiable (0.7+)
+	// Rule is the workspace rule that decided this call, set on EventToolResult
+	// when one did (0.36+). It is nil for a call no rule decided — an ungated
+	// read, a call the mode gate allowed untouched, or one a callback approved —
+	// so a client shows "allowed by rule 2" only where a rule is really why.
+	Rule *PermissionRuleMatch
 }

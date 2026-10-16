@@ -83,12 +83,15 @@ func execTool(a *Agent, name string, args map[string]any) toolExecResult {
 		raw = b
 	}
 	res := a.registry.Execute(context.Background(), name, raw)
-	return toolExecResult{Content: res.Content, IsError: res.IsError}
+	return toolExecResult{Content: res.Content, IsError: res.IsError, Rule: permissionRuleMatch(res.Rule)}
 }
 
 type toolExecResult struct {
 	Content string
 	IsError bool
+	// Rule is the workspace rule that decided the call, when one did — the same
+	// thing the tool_result event carries.
+	Rule *PermissionRuleMatch
 }
 
 // --- baseline: no groups means today's behaviour, unchanged -----------------

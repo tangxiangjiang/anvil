@@ -19,6 +19,35 @@ import (
 // nobody can review.
 const FileName = "permissions.json"
 
+// Error is a rule-file problem, with the place in the text when the reader
+// knows one. A client that shows the file turns Line and Column into a
+// squiggle; a client that only prints it uses Error.
+type Error struct {
+	Message string
+	// Line and Column are one-based, and both zero when the problem belongs to
+	// no particular place — a version this build does not read, or a rule whose
+	// effect is misspelled.
+	Line   int
+	Column int
+}
+
+func (e *Error) Error() string {
+	if e.Line > 0 {
+		return fmt.Sprintf("line %d, column %d: %s", e.Line, e.Column, e.Message)
+	}
+	return e.Message
+}
+
+// Position reports the line and column an error from Load or Parse points at,
+// or (0, 0) when it points at no particular place.
+func Position(err error) (line, col int) {
+	var e *Error
+	if errors.As(err, &e) {
+		return e.Line, e.Column
+	}
+	return 0, 0
+}
+
 // Load reads the rule file from a workspace.
 //
 // A missing file is not an error and not an empty policy: it returns (nil, nil),
@@ -114,10 +143,10 @@ func jsonError(err error, data []byte) error {
 		offset = typeErr.Offset
 	}
 	if offset < 0 {
-		return err
+		return &Error{Message: err.Error()}
 	}
 	line, col := lineColumn(data, offset)
-	return fmt.Errorf("line %d, column %d: %w", line, col, err)
+	return &Error{Line: line, Column: col, Message: err.Error()}
 }
 
 // lineColumn converts a byte offset from encoding/json, which counts from one,

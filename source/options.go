@@ -306,6 +306,10 @@ type PermissionRequest struct {
 	// It is best-effort: an empty Kind means the tool's effect could not be
 	// previewed, not that the call is harmless.
 	Preview ToolPreview
+	// Rule is the workspace rule that insisted on this prompt, when one did
+	// (0.36+). It is nil when the mode gate alone is the reason the client is
+	// being asked, so a prompt can always say why it appeared.
+	Rule *PermissionRuleMatch
 }
 
 // ToolPreview is a description of a pending tool call's effect.

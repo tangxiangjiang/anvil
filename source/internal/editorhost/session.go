@@ -27,6 +27,11 @@ type session struct {
 	// SDK accept an attachment — so it is recorded here rather than read back
 	// from the agent when a prompt arrives.
 	vision bool
+	// loadPermissions is whether the session reads .anvil/permissions.json. It is
+	// recorded for one reason: a rule written from a card in a session that does
+	// not read that file would not be in force for the call it was written for,
+	// so the host refuses to write it rather than promising what it cannot keep.
+	loadPermissions bool
 
 	mu      sync.Mutex
 	agent   *anvil.Agent
@@ -38,6 +43,8 @@ type session struct {
 // newSession reserves an id before the agent exists. The permission callback
 // needs the session's identity at option-build time, and the SDK needs the
 // options before it can hand back an agent, so the agent is attached afterwards.
+// loadPermissions is filled in by buildOptions, which is where the option that
+// decides it is resolved.
 func newSession(id, cwd, mode string, vision bool) *session {
 	return &session{id: id, cwd: cwd, mode: mode, vision: vision}
 }
@@ -143,7 +150,28 @@ func projectEvent(sessionID, runID string, ev anvil.Event) (EventParams, bool) {
 		Step:       ev.Step,
 		MaxSteps:   ev.MaxSteps,
 		Code:       string(ev.Code),
+		Rule:       ruleInfo(ev.Rule),
 	}, true
+}
+
+// ruleInfo projects a deciding rule onto the wire shape. It is nil in, nil out:
+// a call no rule decided must not be given one, or "it just ran" would become
+// indistinguishable from "a rule allowed it".
+func ruleInfo(m *anvil.PermissionRuleMatch) *RuleInfo {
+	if m == nil {
+		return nil
+	}
+	return &RuleInfo{
+		Index:    m.Index + 1,
+		RuleSpec: ruleSpec(m),
+		Describe: m.Describe(),
+	}
+}
+
+// ruleSpec is the rule as the file spells it, which is what a client writes back
+// when it copies a rule, or edits one.
+func ruleSpec(m *anvil.PermissionRuleMatch) RuleSpec {
+	return RuleSpec{Effect: m.Effect, Tool: m.Tool, Pattern: m.Pattern, Reason: m.Reason}
 }
 
 // projectDone builds the terminal envelope from anvil.RunResult. res may be nil

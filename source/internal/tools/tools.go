@@ -46,6 +46,12 @@ func shouldSkipDir(name string) bool {
 type Result struct {
 	Content string
 	IsError bool
+	// Rule is the workspace rule that decided this call, when one did. It rides
+	// on the result rather than being announced where it is decided because the
+	// registry has no event sink: the runtime, which has one, reads it from here
+	// and puts it on the tool_result, so a card can say which rule allowed a call
+	// that never asked.
+	Rule *permissions.Decision
 }
 
 // Tool is an executable tool.
@@ -63,6 +69,9 @@ type Registry struct {
 	permission PermissionFunc
 	permGroups map[string]bool
 	permRules  *permissions.Set
+	// permSource, when set, re-reads the rule file for each call and supersedes
+	// permRules. See SetPermissionRulesSource.
+	permSource *permissions.Source
 	preExec    PreExecFunc
 	postExec   PostExecFunc
 	indexEmbed IndexEmbed
@@ -200,9 +209,34 @@ func (r *Registry) SetPermissionRules(set *permissions.Set) {
 	r.permRules = set
 }
 
+// SetPermissionRulesSource installs a rule set that is re-read for each call,
+// which is what a policy file in an open workspace needs: the user edits it, and
+// the editor's approval card appends to it, while the session is running.
+//
+// A source replaces any static set. Callers whose rules are constants keep using
+// SetPermissionRules, where the evaluation path is untouched by any of this.
+func (r *Registry) SetPermissionRulesSource(src *permissions.Source) {
+	if r == nil {
+		return
+	}
+	r.permSource = src
+}
+
 // PermissionFunc decides allow/deny/rewrite for a gated tool call, given the
-// call's preview.
-type PermissionFunc func(ctx context.Context, name string, args json.RawMessage, preview Preview) (json.RawMessage, error)
+// call's preview and, when one asked for it, the rule that did.
+type PermissionFunc func(ctx context.Context, call GatedCall) (json.RawMessage, error)
+
+// GatedCall is one call reaching the permission hook.
+type GatedCall struct {
+	Name string
+	Args json.RawMessage
+	// Preview is what the call would do, computed without doing it.
+	Preview Preview
+	// Rule is the workspace rule that insisted on this prompt, when one did. It
+	// is nil when the mode gate alone asked, so a client can say why it is being
+	// asked instead of only that it is.
+	Rule *permissions.Decision
+}
 
 var mutatingTools = map[string]bool{
 	"write_file":  true,
@@ -255,12 +289,24 @@ func (r *Registry) Execute(ctx context.Context, name string, args json.RawMessag
 	}
 	// The workspace's written policy is consulted before the callback, because
 	// the callback is optional and the policy is not. See SetPermissionRules.
+	rules := r.permRules
+	if r.permSource != nil {
+		// The file is the interface, so it is read per call: a rule the user just
+		// wrote — by hand, or by choosing "always allow" on an approval card —
+		// decides the next call rather than the next session. A read that fails
+		// yields the last policy that read cleanly; see permissions.Source.Read.
+		rules, _ = r.permSource.Read()
+	}
 	var decision permissions.Decision
-	if r.permRules.Len() > 0 {
-		decision = r.permRules.Evaluate(callFacts(name, args), runtime.GOOS)
+	if rules.Len() > 0 {
+		decision = rules.Evaluate(callFacts(name, args), runtime.GOOS)
+	}
+	var decidedBy *permissions.Decision
+	if decision.Matched {
+		decidedBy = &decision
 	}
 	if decision.Matched && decision.Effect == permissions.Deny {
-		return Result{Content: ruleDenyMessage(name, decision), IsError: true}
+		return Result{Content: ruleDenyMessage(name, decision), IsError: true, Rule: decidedBy}
 	}
 	// A rule that asks insists on a prompt even for a tool the gate would not
 	// have covered; a rule that allows runs the call without one; and no rule at
@@ -269,14 +315,25 @@ func (r *Registry) Execute(ctx context.Context, name string, args json.RawMessag
 	if decision.Matched {
 		ask = decision.Effect == permissions.Ask
 	}
+	// askedBy is what the callback is told: the rule that asked, or nothing when
+	// the mode gate is the reason. An allow never reaches the callback at all.
+	var askedBy *permissions.Decision
+	if ask && decision.Matched {
+		askedBy = decidedBy
+	}
 	if ask {
 		switch {
 		case r.permission != nil:
 			// A denied call is reported to the model as a tool error rather than
 			// aborting the run, so the model can adapt instead of dying.
-			next, err := r.permission(ctx, name, args, r.PreviewFor(name, args))
+			next, err := r.permission(ctx, GatedCall{
+				Name:    name,
+				Args:    args,
+				Preview: r.PreviewFor(name, args),
+				Rule:    askedBy,
+			})
 			if err != nil {
-				return Result{Content: err.Error(), IsError: true}
+				return Result{Content: err.Error(), IsError: true, Rule: decidedBy}
 			}
 			if next != nil {
 				execArgs = next
@@ -284,7 +341,7 @@ func (r *Registry) Execute(ctx context.Context, name string, args json.RawMessag
 		case decision.Matched:
 			// Nobody to ask, and a rule that says "ask" must never quietly become
 			// "run it".
-			return Result{Content: ruleNoChannelMessage(name, decision), IsError: true}
+			return Result{Content: ruleNoChannelMessage(name, decision), IsError: true, Rule: decidedBy}
 		}
 	}
 	res = t.Execute(ctx, execArgs)
@@ -293,6 +350,7 @@ func (r *Registry) Execute(ctx context.Context, name string, args json.RawMessag
 		res = r.postExec(ctx, name, execArgs, res)
 		res.Content = truncate(res.Content, r.maxOutput)
 	}
+	res.Rule = decidedBy
 	return res
 }
 
@@ -308,30 +366,27 @@ func callFacts(name string, args json.RawMessage) permissions.CallFacts {
 	}
 }
 
+// CallFactsFor is callFacts, exported for the SDK's public rule helpers.
+//
+// A client that explains a rule decision — which "always allow" may be written
+// for a call, whether a rule would decide it — has to evaluate rules against the
+// same facts the registry itself decides on. Letting it derive those facts from
+// the wire instead is how an explanation starts disagreeing with the decision it
+// explains, so the facts are read here, from the arguments, exactly once.
+func CallFactsFor(name string, args json.RawMessage) permissions.CallFacts {
+	return callFacts(name, args)
+}
+
 // ruleDenyMessage explains a denial to the model the way the file spells the
 // rule, so it can be quoted back and found.
 func ruleDenyMessage(name string, d permissions.Decision) string {
-	return name + " denied by " + ruleRef(d)
+	return name + " denied by " + d.Ref()
 }
 
 // ruleNoChannelMessage is the fail-closed answer when a rule asks for
 // confirmation in a run that has no way to ask for it.
 func ruleNoChannelMessage(name string, d permissions.Decision) string {
-	return name + " denied: " + ruleRef(d) + " asks for confirmation and no approval channel is installed"
-}
-
-// ruleRef names one rule out of .anvil/permissions.json, with its position
-// counted the way a reader counts.
-func ruleRef(d permissions.Decision) string {
-	pattern := ""
-	if d.Pattern != "" {
-		pattern = fmt.Sprintf(" %q", d.Pattern)
-	}
-	ref := fmt.Sprintf(".anvil/permissions.json rule %d (%s %s%s)", d.Index+1, d.Effect, d.Tool, pattern)
-	if d.Reason != "" {
-		ref += ": " + d.Reason
-	}
-	return ref
+	return name + " denied: " + d.Ref() + " asks for confirmation and no approval channel is installed"
 }
 
 func (r *Registry) resolvePath(p string) (string, error) {

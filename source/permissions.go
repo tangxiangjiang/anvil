@@ -3,6 +3,12 @@
 
 package anvil
 
+import (
+	"fmt"
+
+	"github.com/anvil-dev/anvil/internal/permissions"
+)
+
 // PermissionRule is one rule of the workspace rule set (0.36+).
 //
 // Rules decide a tool call before Options.Permission is consulted, which is why
@@ -30,4 +36,97 @@ type PermissionRule struct {
 	Tool    string
 	Pattern string
 	Reason  string
+}
+
+// Permission rule effects (0.36+). These are the three words a rule file may
+// write in its "effect" field, and the three a client has to render.
+const (
+	// PermissionEffectAllow runs a matching call without asking.
+	PermissionEffectAllow = "allow"
+	// PermissionEffectAsk forces the approval prompt for a matching call, even
+	// when the mode gate would not have gated that tool.
+	PermissionEffectAsk = "ask"
+	// PermissionEffectDeny refuses a matching call. Nothing overrides it — not a
+	// session allowlist, not bypass.
+	PermissionEffectDeny = "deny"
+)
+
+// PermissionRuleMatch names the rule that decided one call, so a client can say
+// why a call ran without asking, or why it was refused (0.36+).
+//
+// It is the rule as the file spells it: Index is its position among the file's
+// rules counted from zero, and Pattern and Reason are what the user wrote.
+// Describe renders it the way a denial does, which is the wording to show when a
+// person needs to find the rule and change it.
+type PermissionRuleMatch struct {
+	Effect  string
+	Index   int
+	Tool    string
+	Pattern string
+	Reason  string
+}
+
+// Describe names the rule the way a reader of the file finds it, e.g.
+// `.anvil/permissions.json rule 4 (deny shell "rm -rf:*"): destructive`.
+func (m *PermissionRuleMatch) Describe() string {
+	if m == nil {
+		return ""
+	}
+	return decisionOf(m).Ref()
+}
+
+// PermissionRuleError reports a rule file that could not be read. Path is
+// absolute, Message never repeats it, and Line and Column are zero when the
+// problem belongs to no particular place — a misspelled key, or a version this
+// build does not read.
+type PermissionRuleError struct {
+	Path    string
+	Message string
+	Line    int
+	Column  int
+}
+
+func (e *PermissionRuleError) Error() string {
+	where := e.Path
+	if e.Line > 0 {
+		where = fmt.Sprintf("%s:%d:%d", e.Path, e.Line, e.Column)
+	}
+	if e.Message == "" {
+		return where
+	}
+	return where + ": " + e.Message
+}
+
+// decisionOf projects the public match back onto the internal decision, so the
+// wording lives in one place rather than in every client that explains a rule.
+func decisionOf(m *PermissionRuleMatch) permissions.Decision {
+	if m == nil {
+		return permissions.Decision{}
+	}
+	effect, ok := permissions.ParseEffect(m.Effect)
+	if !ok {
+		effect = permissions.Allow
+	}
+	return permissions.Decision{
+		Matched: true,
+		Effect:  effect,
+		Index:   m.Index,
+		Tool:    m.Tool,
+		Pattern: m.Pattern,
+		Reason:  m.Reason,
+	}
+}
+
+// permissionRuleMatch projects an internal decision onto the public type.
+func permissionRuleMatch(d *permissions.Decision) *PermissionRuleMatch {
+	if d == nil || !d.Matched {
+		return nil
+	}
+	return &PermissionRuleMatch{
+		Effect:  d.Effect.String(),
+		Index:   d.Index,
+		Tool:    d.Tool,
+		Pattern: d.Pattern,
+		Reason:  d.Reason,
+	}
 }

@@ -24,7 +24,7 @@ import (
 const ProtocolVersion = 1
 
 // Version is the host build version, overridable at link time.
-var Version = "0.35.0-dev"
+var Version = "0.36.0-dev"
 
 // Client to host request methods.
 const (
@@ -39,7 +39,14 @@ const (
 	MethodModelsList    = "models.list"
 	MethodSkillsList    = "skills.list"
 	MethodRulesList     = "rules.list"
-	MethodShutdown      = "shutdown"
+	// MethodPermissionsGet reads the workspace rule file — the effective policy
+	// for this workspace, and the place to put a squiggle when it will not
+	// compile.
+	MethodPermissionsGet = "permissions.get"
+	// MethodPermissionsAdd appends one rule to that file, and answers the pending
+	// approval it was written for when the new file decides it.
+	MethodPermissionsAdd = "permissions.add"
+	MethodShutdown       = "shutdown"
 
 	// MethodApprovalResponse answers a pending approval.request. It is the only
 	// client request that resolves a notification the host sent earlier.
@@ -163,8 +170,8 @@ type SessionParams struct {
 	// from "sent as false": both default to ON for a workspace the editor opened,
 	// because .anvil/hooks.json and .anvil/permissions.json are policy the user
 	// wrote for that workspace. A client that wants them off has to say so.
-	LoadHooks       *bool `json:"load_hooks,omitempty"`
-	LoadPermissions *bool `json:"load_permissions,omitempty"`
+	LoadHooks       *bool    `json:"load_hooks,omitempty"`
+	LoadPermissions *bool    `json:"load_permissions,omitempty"`
 	BuiltinTools    []string `json:"builtin_tools,omitempty"`
 	DisallowedTools []string `json:"disallowed_tools,omitempty"`
 	Skills          []string `json:"skills,omitempty"`
@@ -201,6 +208,104 @@ type SessionResult struct {
 	// PermissionMode is the mode the session was actually created with, after
 	// defaults were applied.
 	PermissionMode string `json:"permission_mode"`
+}
+
+// ---------------------------------------------------------------------------
+// permissions.get / permissions.add
+// ---------------------------------------------------------------------------
+
+// RuleSpec is one rule as the workspace file spells it. It is the same shape in
+// both directions: what a client reads out of the file, and what it asks the
+// host to append.
+type RuleSpec struct {
+	// Effect is "allow", "ask", or "deny". Empty means allow when a client is
+	// asking for a rule to be written.
+	Effect string `json:"effect,omitempty"`
+	Tool   string `json:"tool"`
+	// Pattern is what the rule matches, read according to the call's facts: a
+	// command line for shell, a path glob for the file tools, a tool-name glob
+	// for anything else. Empty matches every call to the tool.
+	Pattern string `json:"pattern,omitempty"`
+	// Reason is shown to whoever the rule decides about: the model's tool error
+	// for a deny, the card for an ask.
+	Reason string `json:"reason,omitempty"`
+}
+
+// RuleInfo is one rule of a set as a client sees it: the rule, where it sits,
+// and how to describe it.
+type RuleInfo struct {
+	// Index is the rule's position as the SDK counts it — one-based, the number a
+	// denial quotes ("permissions.json rule 2"), and so the same number Describe
+	// mentions. It is not an array offset.
+	Index int `json:"index"`
+	RuleSpec
+	// Describe is the SDK's own sentence for this rule, the one a denial quotes.
+	// A client shows it rather than composing its own, so the explanation of a
+	// decision is written in the words that decision uses.
+	Describe string `json:"describe,omitempty"`
+}
+
+// RuleProblem is a rule file that will not compile, as the parser sees it.
+type RuleProblem struct {
+	Message string `json:"message"`
+	// Line and Column are one-based, and zero when the problem belongs to no
+	// particular place — a version this build does not read, say.
+	Line   int `json:"line,omitempty"`
+	Column int `json:"column,omitempty"`
+}
+
+// PermissionsResult is the workspace rule file's state.
+type PermissionsResult struct {
+	// Path is absolute, so a client can open the file even before it exists.
+	Path string `json:"path"`
+	// Exists reports that the file is on disk. False with no Problem is a
+	// workspace that has written down nothing.
+	Exists bool `json:"exists"`
+	// Rules is the file's rules, in the order that decides.
+	Rules []RuleInfo `json:"rules"`
+	// Problem is set when the file exists but cannot be read as rules. It is a
+	// result rather than an error because a client asked to see the state of the
+	// file, and a file somebody is halfway through editing is one of its states —
+	// reported with the place, so it can be fixed where it is edited.
+	Problem *RuleProblem `json:"problem,omitempty"`
+}
+
+// PermissionsAddParams appends one rule to the workspace rule file.
+type PermissionsAddParams struct {
+	Rule RuleSpec `json:"rule"`
+	// RequestID, when set, names the pending approval this rule is being written
+	// for. The host then answers that approval itself if the file now decides it,
+	// so "always allow" takes effect on the call in front of the user instead of
+	// on the next one.
+	RequestID string `json:"request_id,omitempty"`
+}
+
+// PermissionsAddResult reports what the file became and what that did to the
+// call the rule was written for.
+type PermissionsAddResult struct {
+	Path  string     `json:"path"`
+	Index int        `json:"index"`
+	Rules []RuleInfo `json:"rules"`
+	// DecidedBy is the rule that decides the pending call now, which is not
+	// always the one just written: a deny outranks an allow and an ask outranks
+	// it too, wherever in the file each one sits.
+	DecidedBy *RuleInfo `json:"decided_by,omitempty"`
+	// Approved reports that the host answered the pending approval with allow,
+	// because the file now decides the call. False means the card still has to be
+	// answered — DecidedBy says what stood in the way.
+	Approved bool `json:"approved,omitempty"`
+}
+
+// RememberOption is one "always allow" a client may offer on an approval card.
+//
+// Every option was evaluated against the very call being shown, so a button
+// built from one always writes a rule that decides that call; a choice that
+// would write a rule doing nothing is not offered at all.
+type RememberOption struct {
+	// Kind labels the choice: "exact", "prefix", "readonly", "path", or "tool".
+	// The host decides it, so a client never derives a label from the pattern.
+	Kind string   `json:"kind"`
+	Rule RuleSpec `json:"rule"`
 }
 
 // ---------------------------------------------------------------------------
@@ -282,6 +387,15 @@ type ApprovalRequestParams struct {
 	// Decisions lists the answers this host accepts, so a client can render
 	// buttons from the protocol rather than hard-coding them.
 	Decisions []string `json:"decisions"`
+	// Rule is the workspace rule that insisted on this prompt, when one did. It
+	// is nil when the mode gate alone is the reason, so a card never claims a
+	// rule asked when none did.
+	Rule *RuleInfo `json:"rule,omitempty"`
+	// Remember lists the "always allow" choices this call can honestly be
+	// offered, each one already proven against it. Empty means no rule shape
+	// would decide this call — a compound shell line, say — so the card offers
+	// none rather than offering one that would not work.
+	Remember []RememberOption `json:"remember,omitempty"`
 	// TimeoutMS is how long the host will wait, for a UI countdown.
 	TimeoutMS int `json:"timeout_ms,omitempty"`
 }
@@ -527,6 +641,10 @@ type EventParams struct {
 	Step       int             `json:"step,omitempty"`
 	MaxSteps   int             `json:"max_steps,omitempty"`
 	Code       string          `json:"code,omitempty"`
+	// Rule is the workspace rule that decided this tool result, when one did. It
+	// is how a call that ran without a prompt says why it did not need one: nil
+	// means no rule decided it, which is not the same as "some rule allowed it".
+	Rule *RuleInfo `json:"rule,omitempty"`
 }
 
 // DoneParams is the terminal envelope of a run, projected from anvil.RunResult.

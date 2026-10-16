@@ -67,6 +67,35 @@ func TestParseRefusesUnknownFields(t *testing.T) {
 	}
 }
 
+// The position is what a client turns into a squiggle, so it has to survive the
+// wrapping Load does and be absent — not zero-valued-looking — for a problem
+// that belongs to no place in the text.
+func TestPositionOfAParseError(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "{\n  \"rules\": [\n    {\"effect\": \"allow\", \"tool\": \"shell\",}\n  ]\n}\n")
+	_, err := Load(dir)
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	line, col := Position(err)
+	if line != 3 || col <= 0 {
+		t.Fatalf("Position = %d,%d, want line 3", line, col)
+	}
+
+	// An unknown field carries no offset — encoding/json does not report one —
+	// and the honest position for it is none.
+	_, err = Parse([]byte(`{"rules":[{"effect":"allow","tool":"shell","patern":"ls"}]}`))
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	if line, col := Position(err); line != 0 || col != 0 {
+		t.Fatalf("Position = %d,%d, want no place", line, col)
+	}
+	if line, col := Position(nil); line != 0 || col != 0 {
+		t.Fatalf("Position(nil) = %d,%d", line, col)
+	}
+}
+
 func TestParseRefusesBadRules(t *testing.T) {
 	cases := []struct {
 		name string

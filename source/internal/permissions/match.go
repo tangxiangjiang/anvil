@@ -16,6 +16,11 @@ import (
 // cannot be matched by name for this reason; write the command out instead.
 const readonlyPattern = "readonly"
 
+// ReadonlyPattern is readonlyPattern, exported for the SDK's public helpers,
+// which build rule text a client can write into the file. One spelling, in one
+// place: a client that guessed at it would write a rule that never applies.
+const ReadonlyPattern = readonlyPattern
+
 // covers reports whether one rule matches one call.
 //
 // Which fact the pattern is compared against is decided by the facts themselves
