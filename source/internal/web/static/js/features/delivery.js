@@ -5188,11 +5188,11 @@ window.Features.delivery = {
   openTestCasesModal({ engId, major, minor, msTitle, acceptance }) {
     const key = `tcases:${engId}:${major}.${minor}`;
     const chat = this.polishChat(key, {
-      id: key,
+      id: "tc-cases-chat",
       title: "Chat",
       emptyHint: "Describe coverage to draft. Save turns AI replies into ready cases.",
-      tall: true,
-      rows: 3,
+      tall: false,
+      rows: 2,
       allowDrop: false,
       onSend: async ({ composed }, c) => {
         const hint = String(composed || "").trim().slice(0, 200);
@@ -5205,12 +5205,12 @@ window.Features.delivery = {
       },
     });
     this.showUiModal(`
-      <div class="modal-card del-cases-modal">
-        <h3 style="margin-top:0">Draft cases · ${this.esc(msTitle || `${major}.${minor}`)}</h3>
-        <p class="muted" style="margin-top:0">Use the chat below. Each AI reply becomes one case (or split a reply with <code>---</code>).</p>
+      <div class="modal-card modal-wide del-cases-modal">
+        <h3>Draft cases · ${this.esc(msTitle || `${major}.${minor}`)}</h3>
+        <p class="muted del-cases-lead">Use the chat below. Each AI reply becomes one case (or split a reply with <code>---</code>).</p>
         <div id="tc-chat-host" class="del-cases-chat">${chat.render()}</div>
         <div class="err" id="tc-err"></div>
-        <div class="toolbar" style="margin-top:1rem;justify-content:flex-end">
+        <div class="toolbar del-cases-footer">
           <button type="button" class="ghost" data-close-ui>Cancel</button>
           <button type="button" id="tc-save">Save cases</button>
         </div>

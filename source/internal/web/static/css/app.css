@@ -932,10 +932,62 @@ span.del-crumb { color: var(--text); }
   background: #121820;
 }
 .del-case-title { font-size: 0.88rem; }
-.del-cases-modal .del-cases-chat { margin-top: 0.5rem; }
-.del-cases-modal .ai-chat {
-  max-height: min(28rem, 70vh);
+.del-cases-modal {
+  width: min(560px, 94vw);
+  max-height: min(88vh, 720px);
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+.del-cases-modal h3 { margin: 0; flex-shrink: 0; }
+.del-cases-lead { margin: 0; flex-shrink: 0; font-size: 0.88rem; }
+.del-cases-chat {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.del-cases-modal .ai-chat,
+.del-cases-modal .ai-chat.del-chat,
+.del-cases-modal .ai-chat.card {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  height: 100%;
   margin: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+.del-cases-modal .ai-chat-tall,
+.del-cases-modal .del-chat-tall {
+  min-height: 0 !important;
+}
+.del-cases-modal .ai-chat-log {
+  flex: 1 1 auto;
+  min-height: 10rem;
+  max-height: none;
+}
+.del-cases-modal .ai-chat-composer { flex-shrink: 0; }
+.del-cases-modal .ai-chat-composer-actions {
+  justify-content: flex-end;
+  position: static;
+}
+.del-cases-modal #tc-err { flex-shrink: 0; min-height: 0; }
+.del-cases-footer {
+  flex-shrink: 0;
+  margin: 0;
+  padding-top: 0.35rem;
+  border-top: 1px solid var(--border);
+  justify-content: flex-end;
+  gap: 0.5rem;
+  position: relative;
+  z-index: 1;
+  background: var(--panel);
 }
 .del-rm-grid {
   display: grid;
