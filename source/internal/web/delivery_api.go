@@ -508,11 +508,12 @@ func (s *Server) handleDelivery(w http.ResponseWriter, r *http.Request) {
 			vid := parts[2]
 			if r.Method == http.MethodPatch {
 				var body struct {
-					Title           *string `json:"title"`
-					Gate            *string `json:"gate"`
-					SubArchitecture *string `json:"sub_architecture"`
-					ClassDesign     *string `json:"class_design"`
-					SortOrder       *int    `json:"sort_order"`
+					Title           *string   `json:"title"`
+					Gate            *string   `json:"gate"`
+					SubArchitecture *string   `json:"sub_architecture"`
+					ClassDesign     *string   `json:"class_design"`
+					SortOrder       *int      `json:"sort_order"`
+					DependsOn       *[]string `json:"depends_on"`
 				}
 				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 					http.Error(w, "bad json", http.StatusBadRequest)
@@ -521,7 +522,7 @@ func (s *Server) handleDelivery(w http.ResponseWriter, r *http.Request) {
 				v, err := s.delivery.PatchDesignVersion(id, vid, delivery.PatchDesignVersionInput{
 					Title: body.Title, Gate: body.Gate,
 					SubArchitecture: body.SubArchitecture, ClassDesign: body.ClassDesign,
-					SortOrder: body.SortOrder,
+					SortOrder: body.SortOrder, DependsOn: body.DependsOn,
 				})
 				if err != nil {
 					http.Error(w, err.Error(), http.StatusBadRequest)
@@ -585,29 +586,84 @@ func (s *Server) handleDelivery(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// roadmap/milestones/{id} — canvas position
+	// roadmap/milestones/{id} — canvas position / Worker / run_state / Execute
 	if strings.HasPrefix(path, "roadmap/milestones/") {
 		id := strings.TrimPrefix(path, "roadmap/milestones/")
 		id = strings.Trim(id, "/")
 		if id != "" && !strings.Contains(id, "/") && r.Method == http.MethodPatch {
 			var body struct {
-				X *float64 `json:"x"`
-				Y *float64 `json:"y"`
+				X               *float64 `json:"x"`
+				Y               *float64 `json:"y"`
+				ExecuteWorkerID *string  `json:"execute_worker_id"`
+				RunState        *string  `json:"run_state"`
+				Execute         *bool    `json:"execute"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				http.Error(w, "bad json", http.StatusBadRequest)
 				return
 			}
-			if body.X == nil || body.Y == nil {
-				http.Error(w, "x and y required", http.StatusBadRequest)
+			exec := body.Execute != nil && *body.Execute
+			if body.X == nil && body.Y == nil && body.ExecuteWorkerID == nil && body.RunState == nil && !exec {
+				http.Error(w, "x/y, execute_worker_id, run_state, or execute required", http.StatusBadRequest)
 				return
 			}
-			m, err := s.delivery.PatchMilestonePosition(id, *body.X, *body.Y)
+			if (body.X != nil) != (body.Y != nil) {
+				http.Error(w, "x and y must both be set when moving", http.StatusBadRequest)
+				return
+			}
+			m, err := s.delivery.PatchMilestone(id, delivery.PatchMilestoneInput{
+				X:               body.X,
+				Y:               body.Y,
+				ExecuteWorkerID: body.ExecuteWorkerID,
+				RunState:        body.RunState,
+				Execute:         exec,
+			})
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
 			writeJSON(w, http.StatusOK, m)
+			return
+		}
+	}
+
+	if path == "polishes" && r.Method == http.MethodPost {
+		var body struct {
+			EngReqID string `json:"eng_req_id"`
+			Major    int    `json:"major"`
+			Minor    int    `json:"minor"`
+			Title    string `json:"title"`
+			Body     string `json:"body"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+		p, err := s.delivery.CreatePolish(delivery.CreatePolishInput{
+			EngReqID: body.EngReqID,
+			Major:    body.Major,
+			Minor:    body.Minor,
+			Title:    body.Title,
+			Body:     body.Body,
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, http.StatusOK, p)
+		return
+	}
+
+	if strings.HasPrefix(path, "polishes/") {
+		rest := strings.TrimPrefix(path, "polishes/")
+		parts := strings.Split(rest, "/")
+		if len(parts) == 2 && parts[1] == "run" && r.Method == http.MethodPost {
+			p, err := s.delivery.RunPolish(parts[0])
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			writeJSON(w, http.StatusOK, p)
 			return
 		}
 	}

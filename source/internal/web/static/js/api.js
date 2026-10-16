@@ -263,5 +263,22 @@ window.api = {
         { x, y },
       );
     },
+    deliveryPatchMilestone(id, body) {
+      return api.req(
+        "PATCH",
+        "/api/v1/delivery/roadmap/milestones/" + encodeURIComponent(id),
+        body || {},
+      );
+    },
+    deliveryCreatePolish(body) {
+      return api.req("POST", "/api/v1/delivery/polishes", body || {});
+    },
+    deliveryRunPolish(id) {
+      return api.req(
+        "POST",
+        "/api/v1/delivery/polishes/" + encodeURIComponent(id) + "/run",
+        {},
+      );
+    },
   },
 };

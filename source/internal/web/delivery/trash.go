@@ -160,6 +160,9 @@ FROM delivery_req_versions WHERE major=?`, major)
 		return TrashItem{}, err
 	}
 	for _, db := range bundle.Designs {
+		if _, err := tx.Exec(`DELETE FROM delivery_design_version_deps WHERE design_id=?`, db.Design.ID); err != nil {
+			return TrashItem{}, err
+		}
 		if _, err := tx.Exec(`DELETE FROM delivery_design_versions WHERE design_id=?`, db.Design.ID); err != nil {
 			return TrashItem{}, err
 		}
@@ -320,6 +323,12 @@ VALUES(?,?,?,?,?,?)`,
 		}
 		_ = drows.Close()
 		for _, did := range ids {
+			if _, err := tx.Exec(`DELETE FROM delivery_design_version_deps WHERE design_id=?`, did); err != nil {
+				return RestoreTrashResult{}, err
+			}
+			if _, err := tx.Exec(`DELETE FROM delivery_design_versions WHERE design_id=?`, did); err != nil {
+				return RestoreTrashResult{}, err
+			}
 			if _, err := tx.Exec(`DELETE FROM delivery_design_options WHERE design_id=?`, did); err != nil {
 				return RestoreTrashResult{}, err
 			}
@@ -422,11 +431,13 @@ VALUES(?,?,?,?,?,?,?,?)`, oid, newID, o.Title, o.Summary, o.Tradeoffs, o.Risks, 
 				return RestoreTrashResult{}, err
 			}
 		}
+		idMap := map[string]string{} // old version id → new
 		for _, v := range db.Versions {
 			vid := v.ID
 			if mode == RestoreAppend {
 				vid = fmt.Sprintf("%s_v%d", newID, v.SortOrder)
 			}
+			idMap[v.ID] = vid
 			st := v.Status
 			if st == "" {
 				if designVersionReady(v) {
@@ -441,6 +452,20 @@ VALUES(?,?,?,?,?,?,?,?,?)`,
 				vid, newID, v.SortOrder, v.Title, v.Gate, v.SubArchitecture, v.ClassDesign, st, v.UpdatedAt)
 			if err != nil {
 				return RestoreTrashResult{}, err
+			}
+		}
+		for _, v := range db.Versions {
+			newVid := idMap[v.ID]
+			for _, dep := range v.DependsOn {
+				newDep, ok := idMap[dep]
+				if !ok {
+					continue
+				}
+				if _, err := tx.Exec(`
+INSERT INTO delivery_design_version_deps(design_id, version_id, depends_on_id) VALUES(?,?,?)`,
+					newID, newVid, newDep); err != nil {
+					return RestoreTrashResult{}, err
+				}
 			}
 		}
 	}

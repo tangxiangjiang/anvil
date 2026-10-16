@@ -143,17 +143,16 @@ Clusters
                   └── Worker # checkout (path + branch) on a Dev Node
 ```
 
-**Delivery** — planning surfaces (bind **Project**; execute picks a Worker):
+**Delivery** — planning surfaces. Top hop is always **Generation (major)**; then Project / Design / Milestone. Execute still picks a Worker:
 
 ```
 Delivery
-├── Projects (home)       # picker by project name · Workspace groups
-├── Requirements          # per Project → generation → milestone → versions
-├── Designs               # list → detail (ADR + Versions: Gate / Sub-architecture / Class design)
-└── Roadmap               # milestone topology + phase chains (gates live on Design Versions)
+├── Requirements          # Generations → major → Project/milestones → versions
+├── Designs               # Generations → major → Design detail (ADR + Versions)
+└── Roadmap               # Generations → major → milestone workspace (phases + Execute)
 ```
 
-Primary entry: **Delivery → pick Project by name**. Clusters “Open in Delivery” is optional deep link.
+Primary entry: **Requirements home = Generation plan + Project picker**. Click a major to scope; open a Project for the full milestone edit flow. Designs / Roadmap open on the same Generation plan, then drill into that major. Clusters “Open in Delivery” remains an optional deep link.
 
 Cross-links: Project ↔ Req versions ↔ Design ↔ Milestone/Phase; Worker is the execute checkout. Export on Design / Roadmap toolbars.
 
@@ -183,9 +182,10 @@ Example: `1.33.1` → major `1` (世代) · minor `33` (milestone 0.33) · patch
 
 | Surface | Purpose |
 |---------|---------|
-| **Eng-req list** | Per console: which Workers have an engineering requirement; show worker label, `project_rel`, `reqs_rel`, status |
-| **Create eng-req** | Pick **Worker** (from cluster inventory) → set **reqs subdirectory** (sandbox browser under that project) → title |
-| **Version browser** | After open: milestones (`major.minor`) with version list (`patch`); create version nodes |
+| **Generation index** | First screen: `delivery_majors` cards (0.x, 1.x, …); open one → work under that major |
+| **Major home** | Projects / milestones that have versions in this major; link to Project picker |
+| **Create eng-req** | Pick **Project/Worker** (inventory) → set **reqs subdirectory** → title; milestone attaches to developing major |
+| **Version browser** | After open Project: milestones (`major.minor`) with version list (`patch`); create version nodes |
 | **Version detail** | Goals, delivery note, **completion criteria** (capabilities to ship) — **fields drive export** |
 | **Req chat dock** | Polish current version slice → **field patches** (not blind whole-doc rewrite) |
 | **Lifecycle status** | Read-only on milestone; starts `awaiting_design`; advanced by Design / Roadmap / later execute |
@@ -196,14 +196,15 @@ Empty state: “Bind Worker & set reqs folder” before any version exists.
 
 | Surface | Purpose |
 |---------|---------|
-| **Design list** | Filter by req, status |
+| **Generation index** | Same majors as Requirements; open → designs for that major |
+| **Design list** | Under major: filter by status |
 | **Design detail** | Bound `req_id` + `major.minor`; **structured ADR** + ordered **Versions** (execution units); links to roadmap |
 | **ADR** | Context · Decision · Consequences · Spec · Architecture (mermaid) · Sequence (mermaid) · Sample & capacity — Markdown Edit/Preview |
-| **Version cards** | Per Version: title + **Gate** + **Sub-architecture** + **Class design** (Markdown Edit/Preview; mermaid OK on Sub-architecture) |
+| **Version cards** | Per Version: title + **Depends on** (sibling DAG) + **Gate** + **Sub-architecture** + **Class design** (Markdown Edit/Preview; mermaid OK on Sub-architecture) |
 | **Design chat dock** | Cite ADR sections or Version fields; mock polish appends to Decision / Gate |
 | **View** | Compose full Design Markdown (ADR + Versions) for review (Preview / raw) |
 | **Approve gate** | After View; ≥1 Version with Gate / Sub-architecture / Class design; sets `approved` |
-| **Bootstrap** | **Approved only** → seeds eng-req patches + roadmap phases from Versions (idempotent) |
+| **Bootstrap** | **Approved only** → topo-order Versions by deps, then seed eng-req patches + roadmap phases (idempotent) |
 
 Toolbar flow: **Save** (draft) → **View** → **Approve** → **Bootstrap roadmap**.
 
@@ -213,9 +214,10 @@ Primary planning canvas — see §5 interactions below (graph chat, per-node cha
 
 | Chrome | Behavior |
 |--------|----------|
-| **Canvas** | Milestone nodes + dependency edges; select node → right inspector |
-| **Inspector** | Milestone fields, phase chain, bound design slices; **Mark ready for development** |
-| **Phase strip** | Inside inspector or bottom drawer: `p1 → p2 → p3` reorder / add / status |
+| **Generation index** | Majors first; open → milestones for that major only |
+| **Graph + cards** | Milestone nodes for **this major** (drag); rich cards: Worker, Start/Pause/Stop, Design/Req links, Polish list |
+| **Polish** | On complete: modal + AI assist → save into Version + card ▶ run (mock until Jobs) |
+| **Phase strip** | Phases under the milestone (seeded from Design Versions; shown as phase count on cards) |
 | **Graph chat** | Floating/docked: whole-graph polish → `GraphPatch` preview → Apply / Discard |
 | **Node chat** | From inspector: context = node + neighbors + design/req slices → local patch |
 | **Export** | Preview markdown tabs (`m_*.md`, `p_*.md`) → write to configured export root |
@@ -369,7 +371,7 @@ Illustrative numbering after current cutoff (**0.32** = sandbox code review + VS
 | **0.34** | Markdown export + `.anvil/delivery/` project mirror derived from UI/store |
 | **0.35** | Roadmap graph editor + GraphPatch apply |
 | **0.36** | AI bootstrap / per-node chat → patches; delivery retrieval |
-| **0.37** | Execute: phase jobs, Gates constraints, **test stage**, buglist → Roadmap loop, milestone accept → merge main |
+| **0.37** | Execute: **0.37.1** Worker bind + Execute → `in_development`; then phase jobs, Gates constraints, **test stage**, buglist → Roadmap loop, milestone accept → merge main |
 
 Exact numbers follow Anvil’s normal `doc/design` + `doc/roadmaps` process when promoted from this vision doc.
 

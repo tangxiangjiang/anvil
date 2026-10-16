@@ -7,6 +7,8 @@ package delivery
 import (
 	"database/sql"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -102,6 +104,12 @@ CREATE TABLE IF NOT EXISTS delivery_design_versions (
   status TEXT NOT NULL DEFAULT 'draft',
   updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS delivery_design_version_deps (
+  design_id TEXT NOT NULL,
+  version_id TEXT NOT NULL REFERENCES delivery_design_versions(id) ON DELETE CASCADE,
+  depends_on_id TEXT NOT NULL REFERENCES delivery_design_versions(id) ON DELETE CASCADE,
+  PRIMARY KEY (version_id, depends_on_id)
+);
 CREATE TABLE IF NOT EXISTS delivery_milestones (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
@@ -109,7 +117,19 @@ CREATE TABLE IF NOT EXISTS delivery_milestones (
   acceptance TEXT NOT NULL DEFAULT '',
   x REAL NOT NULL DEFAULT 0,
   y REAL NOT NULL DEFAULT 0,
-  sort_order INTEGER NOT NULL DEFAULT 0
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  execute_worker_id TEXT NOT NULL DEFAULT '',
+  run_state TEXT NOT NULL DEFAULT 'idle'
+);
+CREATE TABLE IF NOT EXISTS delivery_polishes (
+  id TEXT PRIMARY KEY,
+  eng_req_id TEXT NOT NULL,
+  major INTEGER NOT NULL,
+  minor INTEGER NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  body TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'ready',
+  created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS delivery_phases (
   id TEXT PRIMARY KEY,
@@ -161,7 +181,59 @@ CREATE TABLE IF NOT EXISTS delivery_trash (
 	if err := s.ensureDesignADRColumns(); err != nil {
 		return err
 	}
-	return s.ensureDesignVersionsTable()
+	if err := s.ensureDesignVersionsTable(); err != nil {
+		return err
+	}
+	if err := s.ensureDesignVersionDepsTable(); err != nil {
+		return err
+	}
+	if err := s.ensureMilestoneExecuteWorker(); err != nil {
+		return err
+	}
+	if err := s.ensureMilestoneRunState(); err != nil {
+		return err
+	}
+	return s.ensurePolishesTable()
+}
+
+// ensureMilestoneExecuteWorker adds execute_worker_id on older DBs (0.37.1).
+func (s *Store) ensureMilestoneExecuteWorker() error {
+	_, err := s.db.Exec(`ALTER TABLE delivery_milestones ADD COLUMN execute_worker_id TEXT NOT NULL DEFAULT ''`)
+	if err == nil {
+		return nil
+	}
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "duplicate column") {
+		return nil
+	}
+	return err
+}
+
+func (s *Store) ensureMilestoneRunState() error {
+	_, err := s.db.Exec(`ALTER TABLE delivery_milestones ADD COLUMN run_state TEXT NOT NULL DEFAULT 'idle'`)
+	if err == nil {
+		return nil
+	}
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "duplicate column") {
+		return nil
+	}
+	return err
+}
+
+func (s *Store) ensurePolishesTable() error {
+	_, err := s.db.Exec(`
+CREATE TABLE IF NOT EXISTS delivery_polishes (
+  id TEXT PRIMARY KEY,
+  eng_req_id TEXT NOT NULL,
+  major INTEGER NOT NULL,
+  minor INTEGER NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  body TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'ready',
+  created_at TEXT NOT NULL
+)`)
+	return err
 }
 
 // ensureDesignVersionsTable creates delivery_design_versions on older DBs.
@@ -177,6 +249,18 @@ CREATE TABLE IF NOT EXISTS delivery_design_versions (
   class_design TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'draft',
   updated_at TEXT NOT NULL
+)`)
+	return err
+}
+
+// ensureDesignVersionDepsTable creates Version depends_on edges on older DBs.
+func (s *Store) ensureDesignVersionDepsTable() error {
+	_, err := s.db.Exec(`
+CREATE TABLE IF NOT EXISTS delivery_design_version_deps (
+  design_id TEXT NOT NULL,
+  version_id TEXT NOT NULL REFERENCES delivery_design_versions(id) ON DELETE CASCADE,
+  depends_on_id TEXT NOT NULL REFERENCES delivery_design_versions(id) ON DELETE CASCADE,
+  PRIMARY KEY (version_id, depends_on_id)
 )`)
 	return err
 }
@@ -306,14 +390,15 @@ type DesignOption struct {
 
 // DesignVersion is one AI execution boundary under a Design (Gate + Sub-architecture + Class design).
 type DesignVersion struct {
-	ID              string `json:"id"`
-	SortOrder       int    `json:"sort_order"`
-	Title           string `json:"title"`
-	Gate            string `json:"gate"`
-	SubArchitecture string `json:"sub_architecture"`
-	ClassDesign     string `json:"class_design"`
-	Status          string `json:"status"` // draft | ready
-	UpdatedAt       string `json:"updated_at"`
+	ID              string   `json:"id"`
+	SortOrder       int      `json:"sort_order"`
+	Title           string   `json:"title"`
+	Gate            string   `json:"gate"`
+	SubArchitecture string   `json:"sub_architecture"`
+	ClassDesign     string   `json:"class_design"`
+	Status          string   `json:"status"`               // draft | ready
+	DependsOn       []string `json:"depends_on,omitempty"` // prerequisite Version ids
+	UpdatedAt       string   `json:"updated_at"`
 }
 
 func designVersionReady(v DesignVersion) bool {
@@ -423,15 +508,37 @@ type Phase struct {
 	Status string `json:"status"`
 }
 
+// Run-state values for milestone execute controls (pre-Job).
+const (
+	RunIdle    = "idle"
+	RunRunning = "running"
+	RunPaused  = "paused"
+	RunStopped = "stopped"
+)
+
 // Milestone is a roadmap canvas node.
 type Milestone struct {
-	ID         string  `json:"id"`
-	Title      string  `json:"title"`
-	Status     string  `json:"status"`
-	Acceptance string  `json:"acceptance"`
-	X          float64 `json:"x"`
-	Y          float64 `json:"y"`
-	Phases     []Phase `json:"phases"`
+	ID              string  `json:"id"`
+	Title           string  `json:"title"`
+	Status          string  `json:"status"`
+	Acceptance      string  `json:"acceptance"`
+	X               float64 `json:"x"`
+	Y               float64 `json:"y"`
+	ExecuteWorkerID string  `json:"execute_worker_id"`
+	RunState        string  `json:"run_state"`
+	Phases          []Phase `json:"phases"`
+}
+
+// Polish is a post-complete requirement polish item under a milestone.
+type Polish struct {
+	ID        string `json:"id"`
+	EngReqID  string `json:"eng_req_id"`
+	Major     int    `json:"major"`
+	Minor     int    `json:"minor"`
+	Title     string `json:"title"`
+	Body      string `json:"body"`
+	Status    string `json:"status"`
+	CreatedAt string `json:"created_at"`
 }
 
 // Edge is a milestone dependency.
@@ -467,6 +574,7 @@ type Snapshot struct {
 	Designs    []Design    `json:"designs"`
 	Roadmap    Roadmap     `json:"roadmap"`
 	Gates      []Gate      `json:"gates"`
+	Polishes   []Polish    `json:"polishes"`
 }
 
 // Snapshot loads the full Delivery graph for the UI.
@@ -498,6 +606,11 @@ func (s *Store) Snapshot() (Snapshot, error) {
 		return out, err
 	}
 	out.Gates = gates
+	polishes, err := s.listPolishes()
+	if err != nil {
+		return out, err
+	}
+	out.Polishes = polishes
 	var trashN int
 	_ = s.db.QueryRow(`SELECT COUNT(*) FROM delivery_trash`).Scan(&trashN)
 	out.TrashCount = trashN
@@ -1237,6 +1350,9 @@ SELECT id FROM delivery_designs WHERE eng_req_id=? AND major=? AND minor=?`, eng
 	}
 	_ = drows.Close()
 	for _, id := range designIDs {
+		if _, err := tx.Exec(`DELETE FROM delivery_design_version_deps WHERE design_id=?`, id); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(`DELETE FROM delivery_design_versions WHERE design_id=?`, id); err != nil {
 			return err
 		}
@@ -1636,18 +1752,42 @@ FROM delivery_design_versions WHERE design_id=? ORDER BY sort_order, id`, design
 	}
 	defer rows.Close()
 	var list []DesignVersion
+	byID := map[string]*DesignVersion{}
 	for rows.Next() {
 		var v DesignVersion
 		if err := rows.Scan(&v.ID, &v.SortOrder, &v.Title, &v.Gate, &v.SubArchitecture, &v.ClassDesign, &v.Status, &v.UpdatedAt); err != nil {
 			return nil, err
 		}
 		v.refreshStatus()
+		v.DependsOn = []string{}
 		list = append(list, v)
 	}
-	if list == nil {
-		list = []DesignVersion{}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
-	return list, rows.Err()
+	if list == nil {
+		return []DesignVersion{}, nil
+	}
+	for i := range list {
+		byID[list[i].ID] = &list[i]
+	}
+	drows, err := s.db.Query(`
+SELECT version_id, depends_on_id FROM delivery_design_version_deps
+WHERE design_id=? ORDER BY version_id, depends_on_id`, designID)
+	if err != nil {
+		return nil, err
+	}
+	defer drows.Close()
+	for drows.Next() {
+		var vid, dep string
+		if err := drows.Scan(&vid, &dep); err != nil {
+			return nil, err
+		}
+		if v := byID[vid]; v != nil {
+			v.DependsOn = append(v.DependsOn, dep)
+		}
+	}
+	return list, drows.Err()
 }
 
 func validateDesignVersionsForApprove(vers []DesignVersion) error {
@@ -1663,7 +1803,146 @@ func validateDesignVersionsForApprove(vers []DesignVersion) error {
 			return fmt.Errorf("%s needs Gate, Sub-architecture, and Class design", label)
 		}
 	}
+	if _, err := topoSortVersions(vers); err != nil {
+		return err
+	}
 	return nil
+}
+
+// topoSortVersions returns Versions in prerequisite-first order (stable by sort_order, id).
+func topoSortVersions(vers []DesignVersion) ([]DesignVersion, error) {
+	if len(vers) == 0 {
+		return []DesignVersion{}, nil
+	}
+	byID := map[string]DesignVersion{}
+	indeg := map[string]int{}
+	// dependents[prereq] = versions that depend on prereq
+	dependents := map[string][]string{}
+	for _, v := range vers {
+		byID[v.ID] = v
+		indeg[v.ID] = 0
+	}
+	for _, v := range vers {
+		seen := map[string]bool{}
+		for _, dep := range v.DependsOn {
+			if dep == "" || dep == v.ID {
+				return nil, fmt.Errorf("invalid dependency on %s", v.ID)
+			}
+			if _, ok := byID[dep]; !ok {
+				return nil, fmt.Errorf("version %s depends on unknown %s", v.ID, dep)
+			}
+			if seen[dep] {
+				continue
+			}
+			seen[dep] = true
+			indeg[v.ID]++
+			dependents[dep] = append(dependents[dep], v.ID)
+		}
+	}
+	var ready []string
+	for id, d := range indeg {
+		if d == 0 {
+			ready = append(ready, id)
+		}
+	}
+	sort.Slice(ready, func(i, j int) bool {
+		a, b := byID[ready[i]], byID[ready[j]]
+		if a.SortOrder != b.SortOrder {
+			return a.SortOrder < b.SortOrder
+		}
+		return a.ID < b.ID
+	})
+	var out []DesignVersion
+	for len(ready) > 0 {
+		id := ready[0]
+		ready = ready[1:]
+		out = append(out, byID[id])
+		var unlocked []string
+		for _, child := range dependents[id] {
+			indeg[child]--
+			if indeg[child] == 0 {
+				unlocked = append(unlocked, child)
+			}
+		}
+		sort.Slice(unlocked, func(i, j int) bool {
+			a, b := byID[unlocked[i]], byID[unlocked[j]]
+			if a.SortOrder != b.SortOrder {
+				return a.SortOrder < b.SortOrder
+			}
+			return a.ID < b.ID
+		})
+		ready = append(ready, unlocked...)
+	}
+	if len(out) != len(vers) {
+		return nil, fmt.Errorf("Version dependency cycle detected")
+	}
+	return out, nil
+}
+
+func (s *Store) replaceVersionDepends(designID, versionID string, dependsOn []string) error {
+	ids := map[string]bool{}
+	rows, err := s.db.Query(`SELECT id FROM delivery_design_versions WHERE design_id=?`, designID)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var id string
+		_ = rows.Scan(&id)
+		ids[id] = true
+	}
+	_ = rows.Close()
+	if !ids[versionID] {
+		return fmt.Errorf("version not found")
+	}
+	unique := make([]string, 0, len(dependsOn))
+	seen := map[string]bool{}
+	for _, dep := range dependsOn {
+		dep = strings.TrimSpace(dep)
+		if dep == "" {
+			continue
+		}
+		if dep == versionID {
+			return fmt.Errorf("version cannot depend on itself")
+		}
+		if !ids[dep] {
+			return fmt.Errorf("depends_on %q is not a Version on this design", dep)
+		}
+		if seen[dep] {
+			continue
+		}
+		seen[dep] = true
+		unique = append(unique, dep)
+	}
+	// Provisional graph for cycle check
+	list, err := s.listDesignVersions(designID)
+	if err != nil {
+		return err
+	}
+	for i := range list {
+		if list[i].ID == versionID {
+			list[i].DependsOn = unique
+			break
+		}
+	}
+	if _, err := topoSortVersions(list); err != nil {
+		return err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(`DELETE FROM delivery_design_version_deps WHERE design_id=? AND version_id=?`, designID, versionID); err != nil {
+		return err
+	}
+	for _, dep := range unique {
+		if _, err := tx.Exec(`
+INSERT INTO delivery_design_version_deps(design_id, version_id, depends_on_id) VALUES(?,?,?)`,
+			designID, versionID, dep); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // AddDesignVersionInput creates a Version card under a draft design.
@@ -1702,6 +1981,7 @@ func (s *Store) AddDesignVersion(designID string, in AddDesignVersionInput) (Des
 		Gate:            strings.TrimSpace(in.Gate),
 		SubArchitecture: strings.TrimSpace(in.SubArchitecture),
 		ClassDesign:     strings.TrimSpace(in.ClassDesign),
+		DependsOn:       []string{},
 		UpdatedAt:       ts,
 	}
 	v.refreshStatus()
@@ -1723,6 +2003,7 @@ type PatchDesignVersionInput struct {
 	SubArchitecture *string
 	ClassDesign     *string
 	SortOrder       *int
+	DependsOn       *[]string // when set, replaces dependency set
 }
 
 // PatchDesignVersion updates one Version under a draft design.
@@ -1766,8 +2047,23 @@ WHERE id=? AND design_id=?`,
 	if err != nil {
 		return DesignVersion{}, err
 	}
+	if in.DependsOn != nil {
+		if err := s.replaceVersionDepends(designID, versionID, *in.DependsOn); err != nil {
+			return DesignVersion{}, err
+		}
+	}
 	_, _ = s.db.Exec(`UPDATE delivery_designs SET updated_at=? WHERE id=?`, v.UpdatedAt, designID)
-	return v, nil
+	// Reload with depends_on
+	list, err := s.listDesignVersions(designID)
+	if err != nil {
+		return DesignVersion{}, err
+	}
+	for _, x := range list {
+		if x.ID == versionID {
+			return x, nil
+		}
+	}
+	return DesignVersion{}, fmt.Errorf("version not found")
 }
 
 // DeleteDesignVersion removes a Version and renumbers remaining 1..n (draft designs only).
@@ -1794,6 +2090,10 @@ func (s *Store) DeleteDesignVersion(designID, versionID string) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(`DELETE FROM delivery_design_version_deps WHERE design_id=? AND (version_id=? OR depends_on_id=?)`,
+		designID, versionID, versionID); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(`DELETE FROM delivery_design_versions WHERE id=? AND design_id=?`, versionID, designID); err != nil {
 		return err
 	}
@@ -1831,6 +2131,9 @@ func (s *Store) DeleteDesign(id string) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(`DELETE FROM delivery_design_version_deps WHERE design_id=?`, id); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(`DELETE FROM delivery_design_versions WHERE design_id=?`, id); err != nil {
 		return err
 	}
@@ -1853,6 +2156,9 @@ func (s *Store) ApproveDesign(id string) (Design, error) {
 		return d, nil
 	}
 	if err := validateDesignVersionsForApprove(d.Versions); err != nil {
+		return Design{}, err
+	}
+	if err := s.renumberVersionsByTopo(id); err != nil {
 		return Design{}, err
 	}
 	d.Status = "approved"
@@ -1886,7 +2192,27 @@ func (s *Store) BootstrapDesignRoadmap(id string) (Design, error) {
 	return s.getDesign(id)
 }
 
-// seedRoadmapFromDesign aligns eng-req patches and canvas phases 1:1 with Design Versions.
+// renumberVersionsByTopo sets sort_order 1..n from topological dependency order.
+func (s *Store) renumberVersionsByTopo(designID string) error {
+	list, err := s.listDesignVersions(designID)
+	if err != nil {
+		return err
+	}
+	ordered, err := topoSortVersions(list)
+	if err != nil {
+		return err
+	}
+	ts := nowRFC3339()
+	for i, v := range ordered {
+		if _, err := s.db.Exec(`UPDATE delivery_design_versions SET sort_order=?, updated_at=? WHERE id=? AND design_id=?`,
+			i+1, ts, v.ID, designID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// seedRoadmapFromDesign aligns eng-req patches and canvas phases 1:1 with Design Versions (topo order).
 func (s *Store) seedRoadmapFromDesign(designID string) error {
 	d, err := s.getDesign(designID)
 	if err != nil {
@@ -1895,6 +2221,18 @@ func (s *Store) seedRoadmapFromDesign(designID string) error {
 	if len(d.Versions) == 0 {
 		return nil
 	}
+	if err := s.renumberVersionsByTopo(designID); err != nil {
+		return err
+	}
+	d, err = s.getDesign(designID)
+	if err != nil {
+		return err
+	}
+	ordered, err := topoSortVersions(d.Versions)
+	if err != nil {
+		return err
+	}
+	d.Versions = ordered
 	if err := s.alignEngReqPatchesFromVersions(d); err != nil {
 		return err
 	}
@@ -2082,11 +2420,46 @@ func truncateRunes(s string, n int) string {
 	return string(r[:n]) + "…"
 }
 
+// PatchMilestoneInput updates canvas position, execute Worker, run_state, and/or Execute.
+type PatchMilestoneInput struct {
+	X               *float64
+	Y               *float64
+	ExecuteWorkerID *string
+	RunState        *string
+	Execute         bool
+}
+
 // PatchMilestonePosition updates canvas card coordinates (persisted).
 func (s *Store) PatchMilestonePosition(id string, x, y float64) (Milestone, error) {
+	return s.PatchMilestone(id, PatchMilestoneInput{X: &x, Y: &y})
+}
+
+func normalizeRunState(s string) (string, error) {
+	switch strings.TrimSpace(strings.ToLower(s)) {
+	case RunIdle, RunRunning, RunPaused, RunStopped:
+		return strings.TrimSpace(strings.ToLower(s)), nil
+	default:
+		return "", fmt.Errorf("invalid run_state %q", s)
+	}
+}
+
+// PatchMilestone updates position and/or execute_worker_id / run_state; Execute advances lifecycle.
+func (s *Store) PatchMilestone(id string, in PatchMilestoneInput) (Milestone, error) {
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return Milestone{}, fmt.Errorf("milestone id required")
+	}
+	cur, err := s.getMilestone(id)
+	if err != nil {
+		return Milestone{}, err
+	}
+
+	x, y := cur.X, cur.Y
+	if in.X != nil {
+		x = *in.X
+	}
+	if in.Y != nil {
+		y = *in.Y
 	}
 	if x < 0 {
 		x = 0
@@ -2094,14 +2467,50 @@ func (s *Store) PatchMilestonePosition(id string, x, y float64) (Milestone, erro
 	if y < 0 {
 		y = 0
 	}
-	// Cap runaway values from bad clients.
 	if x > 20000 {
 		x = 20000
 	}
 	if y > 20000 {
 		y = 20000
 	}
-	res, err := s.db.Exec(`UPDATE delivery_milestones SET x=?, y=? WHERE id=?`, x, y, id)
+
+	workerID := cur.ExecuteWorkerID
+	if in.ExecuteWorkerID != nil {
+		workerID = strings.TrimSpace(*in.ExecuteWorkerID)
+	}
+
+	runState := cur.RunState
+	if runState == "" {
+		runState = RunIdle
+	}
+	if in.RunState != nil {
+		rs, err := normalizeRunState(*in.RunState)
+		if err != nil {
+			return Milestone{}, err
+		}
+		runState = rs
+	}
+
+	status := cur.Status
+	if in.Execute {
+		if workerID == "" {
+			return Milestone{}, fmt.Errorf("execute_worker_id required to execute")
+		}
+		if len(cur.Phases) == 0 {
+			return Milestone{}, fmt.Errorf("milestone has no phases; Bootstrap from Designs first")
+		}
+		status = LifeInDevelopment
+		runState = RunRunning
+		if bind := parseMilestoneBind(id); bind != nil {
+			if err := s.SetMilestoneLifecycle(bind.EngID, bind.Major, bind.Minor, LifeInDevelopment); err != nil {
+				return Milestone{}, err
+			}
+		}
+	}
+
+	res, err := s.db.Exec(`
+UPDATE delivery_milestones SET x=?, y=?, execute_worker_id=?, run_state=?, status=? WHERE id=?`,
+		x, y, workerID, runState, status, id)
 	if err != nil {
 		return Milestone{}, err
 	}
@@ -2109,11 +2518,56 @@ func (s *Store) PatchMilestonePosition(id string, x, y float64) (Milestone, erro
 	if n == 0 {
 		return Milestone{}, fmt.Errorf("milestone not found")
 	}
+	return s.getMilestone(id)
+}
+
+type milestoneBind struct {
+	EngID string
+	Major int
+	Minor int
+}
+
+// parseMilestoneBind parses bootstrap id `ms_{engId}_{major}_{minor}`.
+func parseMilestoneBind(msID string) *milestoneBind {
+	id := strings.TrimSpace(msID)
+	if !strings.HasPrefix(id, "ms_") {
+		return nil
+	}
+	rest := id[3:]
+	// Find last two _N_N segments.
+	i := strings.LastIndex(rest, "_")
+	if i <= 0 {
+		return nil
+	}
+	minorStr := rest[i+1:]
+	rest2 := rest[:i]
+	j := strings.LastIndex(rest2, "_")
+	if j < 0 {
+		return nil
+	}
+	majorStr := rest2[j+1:]
+	engID := rest2[:j]
+	if engID == "" {
+		return nil
+	}
+	major, err1 := strconv.Atoi(majorStr)
+	minor, err2 := strconv.Atoi(minorStr)
+	if err1 != nil || err2 != nil {
+		return nil
+	}
+	return &milestoneBind{EngID: engID, Major: major, Minor: minor}
+}
+
+func (s *Store) getMilestone(id string) (Milestone, error) {
 	var m Milestone
-	err = s.db.QueryRow(`
-SELECT id, title, status, acceptance, x, y FROM delivery_milestones WHERE id=?`, id).Scan(
-		&m.ID, &m.Title, &m.Status, &m.Acceptance, &m.X, &m.Y)
+	err := s.db.QueryRow(`
+SELECT id, title, status, acceptance, x, y, execute_worker_id, COALESCE(run_state,'idle')
+FROM delivery_milestones WHERE id=?`, id).Scan(
+		&m.ID, &m.Title, &m.Status, &m.Acceptance, &m.X, &m.Y, &m.ExecuteWorkerID, &m.RunState)
 	if err != nil {
+		if err == sql.ErrNoRows {
+			return Milestone{}, fmt.Errorf("milestone not found")
+		}
 		return Milestone{}, err
 	}
 	ph, err := s.listPhases(m.ID)
@@ -2135,13 +2589,14 @@ func (s *Store) nextMilestoneCanvasSlot() (x, y float64) {
 func (s *Store) loadRoadmap() (Roadmap, error) {
 	var rm Roadmap
 	rows, err := s.db.Query(`
-SELECT id, title, status, acceptance, x, y FROM delivery_milestones ORDER BY sort_order, id`)
+SELECT id, title, status, acceptance, x, y, execute_worker_id, COALESCE(run_state,'idle')
+FROM delivery_milestones ORDER BY sort_order, id`)
 	if err != nil {
 		return rm, err
 	}
 	for rows.Next() {
 		var m Milestone
-		if err := rows.Scan(&m.ID, &m.Title, &m.Status, &m.Acceptance, &m.X, &m.Y); err != nil {
+		if err := rows.Scan(&m.ID, &m.Title, &m.Status, &m.Acceptance, &m.X, &m.Y, &m.ExecuteWorkerID, &m.RunState); err != nil {
 			_ = rows.Close()
 			return rm, err
 		}
@@ -2222,6 +2677,129 @@ FROM delivery_gates WHERE status='pending' ORDER BY created_at DESC`)
 	return list, rows.Err()
 }
 
+func (s *Store) listPolishes() ([]Polish, error) {
+	rows, err := s.db.Query(`
+SELECT id, eng_req_id, major, minor, title, body, status, created_at
+FROM delivery_polishes ORDER BY created_at DESC, id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var list []Polish
+	for rows.Next() {
+		var p Polish
+		if err := rows.Scan(&p.ID, &p.EngReqID, &p.Major, &p.Minor, &p.Title, &p.Body, &p.Status, &p.CreatedAt); err != nil {
+			return nil, err
+		}
+		list = append(list, p)
+	}
+	if list == nil {
+		list = []Polish{}
+	}
+	return list, rows.Err()
+}
+
+// CreatePolishInput authors a polish under a milestone bind.
+type CreatePolishInput struct {
+	EngReqID string
+	Major    int
+	Minor    int
+	Title    string
+	Body     string
+}
+
+// CreatePolish inserts a polish and appends a line to the head Version success field.
+func (s *Store) CreatePolish(in CreatePolishInput) (Polish, error) {
+	engID := strings.TrimSpace(in.EngReqID)
+	if engID == "" {
+		return Polish{}, fmt.Errorf("eng_req_id required")
+	}
+	title := strings.TrimSpace(in.Title)
+	body := strings.TrimSpace(in.Body)
+	if title == "" && body == "" {
+		return Polish{}, fmt.Errorf("title or body required")
+	}
+	if title == "" {
+		title = truncateRunes(body, 48)
+	}
+	eng, err := s.GetEngReq(engID)
+	if err != nil {
+		return Polish{}, err
+	}
+	var head *ReqVersion
+	for i := range eng.Versions {
+		v := &eng.Versions[i]
+		if v.Major == in.Major && v.Minor == in.Minor {
+			if head == nil || v.Patch < head.Patch {
+				head = v
+			}
+		}
+	}
+	if head == nil {
+		return Polish{}, fmt.Errorf("milestone %d.%d not found", in.Major, in.Minor)
+	}
+
+	ts := nowRFC3339()
+	id := fmt.Sprintf("pol_%d", time.Now().UnixNano())
+	_, err = s.db.Exec(`
+INSERT INTO delivery_polishes(id, eng_req_id, major, minor, title, body, status, created_at)
+VALUES(?,?,?,?,?,?,?,?)`,
+		id, engID, in.Major, in.Minor, title, body, "ready", ts)
+	if err != nil {
+		return Polish{}, err
+	}
+
+	line := "· Polish: " + title
+	if body != "" && body != title {
+		line += " — " + truncateRunes(body, 120)
+	}
+	next := strings.TrimSpace(head.Success)
+	if next != "" {
+		next += "\n"
+	}
+	next += line
+	_, err = s.db.Exec(`
+UPDATE delivery_req_versions SET success=?, updated_at=?
+WHERE eng_req_id=? AND major=? AND minor=? AND patch=?`,
+		next, ts, engID, head.Major, head.Minor, head.Patch)
+	if err != nil {
+		return Polish{}, err
+	}
+
+	return Polish{
+		ID: id, EngReqID: engID, Major: in.Major, Minor: in.Minor,
+		Title: title, Body: body, Status: "ready", CreatedAt: ts,
+	}, nil
+}
+
+// RunPolish marks a polish running then done (mock until Jobs land).
+func (s *Store) RunPolish(id string) (Polish, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return Polish{}, fmt.Errorf("polish id required")
+	}
+	var p Polish
+	err := s.db.QueryRow(`
+SELECT id, eng_req_id, major, minor, title, body, status, created_at
+FROM delivery_polishes WHERE id=?`, id).Scan(
+		&p.ID, &p.EngReqID, &p.Major, &p.Minor, &p.Title, &p.Body, &p.Status, &p.CreatedAt)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return Polish{}, fmt.Errorf("polish not found")
+		}
+		return Polish{}, err
+	}
+	if p.Status == "done" {
+		return p, nil
+	}
+	_, err = s.db.Exec(`UPDATE delivery_polishes SET status=? WHERE id=?`, "done", id)
+	if err != nil {
+		return Polish{}, err
+	}
+	p.Status = "done"
+	return p, nil
+}
+
 // EnsureSeed ensures default majors; inserts demo eng rows when empty.
 func (s *Store) EnsureSeed() error {
 	if err := s.ensureDefaultMajors(); err != nil {
@@ -2263,9 +2841,11 @@ func (s *Store) Reset() error {
 	defer func() { _ = tx.Rollback() }()
 	for _, q := range []string{
 		`DELETE FROM delivery_gates`,
+		`DELETE FROM delivery_polishes`,
 		`DELETE FROM delivery_edges`,
 		`DELETE FROM delivery_phases`,
 		`DELETE FROM delivery_milestones`,
+		`DELETE FROM delivery_design_version_deps`,
 		`DELETE FROM delivery_design_versions`,
 		`DELETE FROM delivery_design_options`,
 		`DELETE FROM delivery_designs`,
@@ -2357,6 +2937,12 @@ VALUES(?,?,?,?,?,?,?,?,?)`,
 		if err != nil {
 			return err
 		}
+	}
+	_, err = tx.Exec(`
+INSERT INTO delivery_design_version_deps(design_id, version_id, depends_on_id) VALUES(?,?,?)`,
+		"des_demo_1", "des_demo_1_v2", "des_demo_1_v1")
+	if err != nil {
+		return err
 	}
 
 	_, err = tx.Exec(`

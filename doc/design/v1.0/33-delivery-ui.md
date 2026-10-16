@@ -66,27 +66,31 @@ Working-state on the worker project (`.anvil/delivery/`) and markdown export are
 | POST | `/api/v1/delivery/eng-reqs/{id}/versions/{M}/{m}/{p}/approve` | Set approved + gate |
 | PATCH | `/api/v1/delivery/designs/{id}` | ADR sections |
 | POST | `/api/v1/delivery/designs/{id}/versions` | Add Design Version |
-| PATCH | `/api/v1/delivery/designs/{id}/versions/{vid}` | Update Gate / Sub-architecture / Class design |
+| PATCH | `/api/v1/delivery/designs/{id}/versions/{vid}` | Update Gate / Sub-architecture / Class design / `depends_on` |
 | DELETE | `/api/v1/delivery/designs/{id}/versions/{vid}` | Remove Version (draft) |
 | POST | `/api/v1/delivery/designs/{id}/approve` | Approve when Versions complete |
 | POST | `/api/v1/delivery/designs/{id}/bootstrap` | Seed roadmap phases from Versions |
+| PATCH | `/api/v1/delivery/roadmap/milestones/{id}` | Canvas `x`/`y`; optional `execute_worker_id`; optional `execute: true` → `in_development` |
 
 Workers for the create picker: cluster inventory when available; otherwise snapshot may include denormalized workers from existing eng-reqs plus seed helpers.
 
 ## Screens
 
-Sidebar: **Delivery** (collapsible) → children:
+Sidebar: **Delivery** (collapsible) → children. **Shared top layer:** each surface opens on **Generations** (`delivery_majors`) first — `major` / 大版本 — then drills into scoped work.
 
-1. **Requirements** — rounded card list + `+` create wizard (scheduler → node → worker → project FS pick/create reqs dir; auto `major.minor` milestone) → version browser → detail + Approve  
-2. **Designs** — list + detail (**structured ADR** + ordered **Versions**; no Option cards)  
+Routes: `#/delivery/{requirements|designs|roadmap}` → major index; `#/delivery/{section}/m/{M}/…` → scoped under that generation.
+
+1. **Requirements** — Home keeps **Generation plan** (Edit / Start / Seal / Add) **and** Project picker. Click a major → `m/{M}` scoped milestones; open a Project → eng-req home (same Generation plan filter + milestones) → version detail + Approve.  
+
+2. **Designs** — Generations → `m/{M}` design cards → detail (**structured ADR** + ordered **Versions**). New design defaults to current major.  
 
 **Design flow:** **Save** (draft) → **View** (composed Markdown) → **Approve** (after View; Versions complete). After Approve the workspace is **view-only** (no Save / edit / chat); toolbar shows **View** + **Bootstrap roadmap** to publish phases.  
 
 **ADR storage** (`delivery_designs`): `adr_*` section columns; composed `adr` kept for export/legacy. Old rows with only `adr` hydrate into **Decision**.  
 
-**Design Versions** (`delivery_design_versions`): ordered execution units under one Design/ADR — each has **Gate**, **Sub-architecture**, **Class design** (Markdown + mermaid Edit/Preview). Approve requires ≥1 Version with all three fields filled. Approve / Bootstrap seed eng-req patches + canvas phases 1:1 by sort order.  
+**Design Versions** (`delivery_design_versions` + `delivery_design_version_deps`): execution units under one Design/ADR — each has **Gate**, **Sub-architecture**, **Class design**, and **Depends on** (DAG of sibling Versions). Approve requires complete fields and an acyclic graph; Bootstrap **topo-sorts** Versions then seeds eng-req patches + canvas phases 1:1 (renumbers `sort_order`).  
 
-3. **Roadmap** — canvas + inspector phase chain; milestone cards are **draggable** (`PATCH …/roadmap/milestones/{id}` persists `x`/`y`). No Gates tab — gates live on Design Versions.  
+3. **Roadmap** — Generations → `m/{M}` **graph** (drag) + **control cards**: Worker, Start / Pause / Stop (`run_state` + Execute lifecycle), Design / Requirements links, **Polish** (complete milestones → modal + AI assist → store on Version + card ▶ run). No separate execute page. No Gates tab — gates live on Design Versions.  
 
 ## Non-goals
 

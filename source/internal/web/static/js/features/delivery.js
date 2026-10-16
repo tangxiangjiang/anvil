@@ -10,6 +10,7 @@ window.Features.delivery = {
     if (!this.data.gates) this.data.gates = [];
     if (!this.data.majors) this.data.majors = [];
     if (!this.data.roadmap) this.data.roadmap = { milestones: [], edges: [] };
+    if (!this.data.polishes) this.data.polishes = [];
     if (this.selectedMajor == null) {
       const dev = (this.data.majors || []).find((m) => m.status === "developing");
       this.selectedMajor = dev ? dev.major : (this.data.majors[0] && this.data.majors[0].major);
@@ -56,15 +57,15 @@ window.Features.delivery = {
   sectionMeta: {
     requirements: {
       title: "Requirements",
-      sub: "Project → milestones (major.minor.patch)",
+      sub: "Generation plan · Project · milestone (major.minor.patch)",
     },
     designs: {
       title: "Designs",
-      sub: "Save draft · View Markdown · Approve · then Bootstrap roadmap",
+      sub: "Generation plan · Design · Save → View → Approve → Bootstrap",
     },
     roadmap: {
       title: "Roadmap",
-      sub: "Milestone graph · phase chain (gates live on Design Versions)",
+      sub: "Generation plan · milestone · Worker · Execute",
     },
   },
 
@@ -82,7 +83,7 @@ window.Features.delivery = {
 
   parseRoute() {
     let hash = location.hash || "#/delivery/requirements";
-    // Legacy Gates routes → Roadmap graph (gates now live on Design Versions).
+    // Legacy Gates routes → Roadmap (gates live on Design Versions).
     if (
       hash === "#/delivery/gates" ||
       hash.startsWith("#/delivery/gates/") ||
@@ -93,20 +94,67 @@ window.Features.delivery = {
       location.hash = hash;
     }
     const parts = hash.replace(/^#\/?/, "").split("/").filter(Boolean);
-    // delivery/requirements[/:engId[/:M/:m/:p]]
-    // delivery/designs[/:id]
-    // delivery/roadmap[/:msId]
+    // delivery/{section}
+    // delivery/{section}/m/{M}[/{msId}]
+    // delivery/requirements/projects
+    // delivery/requirements/{engId}[/{M}/{m}/{p}]
+    // delivery/designs/{desId}
     const section = parts[1] || "requirements";
-    const msId = section === "roadmap" && parts[2] ? parts[2] : null;
-    return {
+    const empty = {
       section,
+      engId: null,
+      major: null,
+      minor: null,
+      patch: null,
+      desId: null,
+      msId: null,
+      routeMajor: null,
+      projectsPicker: false,
+    };
+
+    if (parts[2] === "m" && parts[3] != null && parts[3] !== "") {
+      const routeMajor = Number(parts[3]);
+      if (Number.isNaN(routeMajor)) return empty;
+      if (section === "roadmap") {
+        return { ...empty, routeMajor, msId: parts[4] || null };
+      }
+      if (section === "designs") {
+        return { ...empty, routeMajor };
+      }
+      if (section === "requirements") {
+        return { ...empty, routeMajor };
+      }
+      return { ...empty, routeMajor };
+    }
+
+    if (section === "requirements" && parts[2] === "projects") {
+      return { ...empty, projectsPicker: true };
+    }
+
+    if (section === "designs") {
+      return { ...empty, desId: parts[2] || null };
+    }
+
+    if (section === "roadmap") {
+      // Legacy #/delivery/roadmap/{msId} (no m/{M})
+      return { ...empty, msId: parts[2] || null };
+    }
+
+    return {
+      ...empty,
       engId: parts[2] || null,
       major: parts[3] != null ? Number(parts[3]) : null,
       minor: parts[4] != null ? Number(parts[4]) : null,
       patch: parts[5] != null ? Number(parts[5]) : null,
-      desId: section === "designs" ? parts[2] || null : null,
-      msId,
     };
+  },
+
+  goMajor(section, major) {
+    location.hash = `#/delivery/${section}/m/${major}`;
+  },
+
+  majorLabel(major) {
+    return major === 0 ? "0.x" : `${major}.x`;
   },
 
   onRoute() {
@@ -198,47 +246,107 @@ window.Features.delivery = {
       return;
     }
     const route = this.parseRoute();
+    if (route.routeMajor != null) this.selectedMajor = route.routeMajor;
     const meta = this.sectionMeta[route.section] || {
       title: "Delivery",
       sub: "",
     };
 
+    // Legacy roadmap/{msId} → roadmap/m/{M}/{msId}
+    if (
+      route.section === "roadmap" &&
+      route.msId &&
+      route.routeMajor == null
+    ) {
+      const bind = this.parseRoadmapMsBind(route.msId);
+      if (bind) {
+        location.hash = `#/delivery/roadmap/m/${bind.major}/${encodeURIComponent(route.msId)}`;
+        return;
+      }
+    }
+
     let body = "";
     if (route.section === "requirements") {
-      if (!route.engId) body = this.viewWorkspace();
-      else if (route.major == null) body = this.viewWorkerHome(route.engId);
-      else if (route.patch == null)
-        body = this.viewMilestoneView(route.engId, route.major, route.minor);
+      if (route.engId) {
+        if (route.major == null) body = this.viewWorkerHome(route.engId);
+        else if (route.patch == null)
+          body = this.viewMilestoneView(route.engId, route.major, route.minor);
+        else
+          body = this.viewVersionDetail(
+            route.engId,
+            route.major,
+            route.minor,
+            route.patch,
+          );
+      } else if (route.routeMajor != null)
+        body = this.viewRequirementsByMajor(route.routeMajor);
+      else if (route.projectsPicker)
+        body = this.viewWorkspace();
       else
-        body = this.viewVersionDetail(
-          route.engId,
-          route.major,
-          route.minor,
-          route.patch,
-        );
+        // Home: full Generation plan (edit/start/seal) + Project picker — major is entry, not a replacement.
+        body = `${this.viewMajorIndex("requirements")}${this.viewWorkspace()}`;
     } else if (route.section === "designs") {
-      body = route.desId ? this.viewDesDetail(route.desId) : this.viewDesList();
+      if (route.desId) body = this.viewDesDetail(route.desId);
+      else if (route.routeMajor != null)
+        body = this.viewDesList(route.routeMajor);
+      else body = this.viewMajorIndex("designs");
     } else if (route.section === "roadmap") {
-      body = this.viewRoadmap(route.msId);
+      // Detail page removed: deep link → major list + focus card.
+      if (route.msId && route.routeMajor != null) {
+        this._rmFocusMs = route.msId;
+        location.hash = `#/delivery/roadmap/m/${route.routeMajor}`;
+        return;
+      }
+      if (route.routeMajor != null)
+        body = this.viewRoadmapList(route.routeMajor);
+      else body = this.viewMajorIndex("roadmap");
     } else {
       body = `<p class="muted">Unknown section. Open a Delivery item in the sidebar.</p>`;
     }
 
+    const reqHome =
+      route.section === "requirements" &&
+      !route.engId &&
+      route.routeMajor == null &&
+      !route.projectsPicker;
+    const majorIndex =
+      !route.engId &&
+      !route.desId &&
+      !route.msId &&
+      !route.projectsPicker &&
+      route.routeMajor == null &&
+      (route.section === "designs" || route.section === "roadmap");
     const isWorkspace =
-      route.section === "requirements" && !route.engId;
+      route.section === "requirements" &&
+      (route.projectsPicker || reqHome);
+    const majorScope =
+      route.routeMajor != null &&
+      !route.engId &&
+      !route.desId &&
+      !route.msId;
     const workerHome =
       route.section === "requirements" && route.engId && route.major == null;
     const engHome = workerHome ? this.findEng(route.engId) : null;
     const wHome = engHome ? this.findWorker(engHome.worker_id) : null;
     const headActions =
-      isWorkspace || workerHome
+      reqHome || majorIndex || workerHome || majorScope
         ? ""
         : `<button type="button" class="ghost" id="del-reset">Reset demo data</button>`;
     let metaTitle = meta.title;
     let metaSub = meta.sub;
-    if (isWorkspace) {
+    if (reqHome) {
+      metaTitle = "Requirements";
+      metaSub =
+        "Generation plan · pick a major or a Project (execute picks a Worker later)";
+    } else if (majorIndex) {
+      metaTitle = "Generations";
+      metaSub = `Pick a major line · then ${meta.title}`;
+    } else if (majorScope) {
+      metaTitle = this.majorLabel(route.routeMajor);
+      metaSub = `${meta.title} under this generation`;
+    } else if (route.projectsPicker) {
       metaTitle = "Projects";
-      metaSub = "Pick a Project by name · Delivery binds here (execute picks a Worker later)";
+      metaSub = "Pick a Project by name · Delivery binds here";
     } else if (workerHome) {
       metaTitle = engHome?.title || engHome?.project_key || wHome?.label || engHome?.worker_id || "Project";
       metaSub = engHome?.project_key
@@ -277,7 +385,13 @@ window.Features.delivery = {
     this.bindMilestoneCards();
     this.bindVerTips();
     this.bind(route);
-    if (isWorkspace) this.loadWorkspaceInventory();
+    if (
+      isWorkspace ||
+      reqHome ||
+      (route.section === "requirements" && route.routeMajor != null)
+    ) {
+      this.loadWorkspaceInventory();
+    }
   },
 
   /** Fixed-position version tips so .main overflow does not clip them. */
@@ -446,7 +560,11 @@ window.Features.delivery = {
     this._clustersLoaded = true;
     this._wsLoading = false;
     const route = this.parseRoute();
-    if (this.el && route.section === "requirements" && !route.engId) {
+    if (
+      this.el &&
+      route.section === "requirements" &&
+      (!route.engId || route.projectsPicker || route.routeMajor != null)
+    ) {
       this.render();
     }
   },
@@ -495,6 +613,15 @@ window.Features.delivery = {
 
   bindMajorPlan() {
     const el = this.el;
+    el.querySelectorAll("[data-major-open]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const maj = Number(btn.getAttribute("data-major-open"));
+        const sec =
+          btn.getAttribute("data-section") || this.parseRoute().section;
+        this.selectedMajor = maj;
+        this.goMajor(sec, maj);
+      });
+    });
     el.querySelectorAll("[data-major-select]").forEach((btn) => {
       btn.addEventListener("click", () => {
         this.selectedMajor = Number(btn.getAttribute("data-major-select"));
@@ -1081,6 +1208,9 @@ window.Features.delivery = {
         const cards = [...el.querySelectorAll("[data-ver-id]")];
         for (const card of cards) {
           const vid = card.getAttribute("data-ver-id");
+          const depends_on = [...card.querySelectorAll("[data-ver-dep]:checked")].map(
+            (cb) => cb.value,
+          );
           await api.v1.deliveryPatchDesignVersion(des.id, vid, {
             title: card.querySelector("[data-ver-title]")?.value ?? "",
             gate: card.querySelector('textarea[data-ver-field="gate"]')?.value ?? "",
@@ -1088,6 +1218,7 @@ window.Features.delivery = {
               card.querySelector('textarea[data-ver-field="sub_architecture"]')?.value ?? "",
             class_design:
               card.querySelector('textarea[data-ver-field="class_design"]')?.value ?? "",
+            depends_on,
           });
         }
       };
@@ -1160,7 +1291,7 @@ window.Features.delivery = {
         try {
           await api.v1.deliveryBootstrapDesign(des.id);
           await this.reload();
-          this.go("roadmap", `ms_${des.eng_req_id}_${des.major}_${des.minor}`);
+          location.hash = `#/delivery/roadmap/m/${des.major}/ms_${des.eng_req_id}_${des.major}_${des.minor}`;
         } catch (e) {
           this.showNotice(e.message || String(e), "Bootstrap failed");
         }
@@ -1175,27 +1306,263 @@ window.Features.delivery = {
     }
 
     if (route.section === "roadmap") {
-      this.bindRoadmapCanvas(el);
-      el.querySelectorAll("[data-ms-ready]").forEach((btn) => {
-        btn.addEventListener("click", async () => {
-          const engId = btn.getAttribute("data-eng");
-          const major = Number(btn.getAttribute("data-major"));
-          const minor = Number(btn.getAttribute("data-minor"));
-          try {
-            await api.v1.deliverySetMilestoneStatus(
-              engId,
-              major,
-              minor,
-              "awaiting_development",
-            );
-            await this.reload();
-            this.render();
-          } catch (e) {
-            this.showNotice(e.message || String(e), "Mark ready failed");
-          }
+      el.querySelector("#rm-filter")?.addEventListener("change", (ev) => {
+        this._rmFilter = ev.target.value || "all";
+        this.render();
+      });
+      if (route.routeMajor != null) {
+        this.loadExecuteWorkers();
+        this.bindRoadmapCanvas(el);
+        this.bindMilestoneCardControls(el);
+        if (this._rmFocusMs) {
+          const focusId = this._rmFocusMs;
+          this._rmFocusMs = null;
+          requestAnimationFrame(() => this.focusMilestoneCard(el, focusId));
+        }
+      }
+    }
+  },
+
+  bindMilestoneCardControls(el) {
+    el.querySelectorAll(".del-ms-worker").forEach((sel) => {
+      sel.addEventListener("change", async () => {
+        const msId = sel.getAttribute("data-ms");
+        const workerId = (sel.value || "").trim();
+        if (!msId) return;
+        try {
+          const saved = await api.v1.deliveryPatchMilestone(msId, {
+            execute_worker_id: workerId,
+          });
+          const m = (this.data.roadmap?.milestones || []).find(
+            (n) => n.id === msId,
+          );
+          if (m) m.execute_worker_id = saved.execute_worker_id || "";
+          this.render();
+        } catch (e) {
+          this.showNotice(e.message || String(e), "Could not save Worker");
+        }
+      });
+    });
+    el.querySelectorAll("[data-ms-start]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const msId = btn.getAttribute("data-ms-start");
+        const card = btn.closest("[data-ms-card]");
+        const workerId = (
+          card?.querySelector(".del-ms-worker")?.value || ""
+        ).trim();
+        btn.disabled = true;
+        try {
+          await api.v1.deliveryPatchMilestone(msId, {
+            execute_worker_id: workerId,
+            execute: true,
+          });
+          await this.reload();
+          this.render();
+        } catch (e) {
+          this.showNotice(e.message || String(e), "Start failed");
+          btn.disabled = false;
+        }
+      });
+    });
+    el.querySelectorAll("[data-ms-pause]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const msId = btn.getAttribute("data-ms-pause");
+        try {
+          await api.v1.deliveryPatchMilestone(msId, { run_state: "paused" });
+          await this.reload();
+          this.render();
+        } catch (e) {
+          this.showNotice(e.message || String(e), "Pause failed");
+        }
+      });
+    });
+    el.querySelectorAll("[data-ms-stop]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const msId = btn.getAttribute("data-ms-stop");
+        try {
+          await api.v1.deliveryPatchMilestone(msId, { run_state: "stopped" });
+          await this.reload();
+          this.render();
+        } catch (e) {
+          this.showNotice(e.message || String(e), "Stop failed");
+        }
+      });
+    });
+    el.querySelectorAll("[data-ms-polish]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        this.openPolishModal({
+          engId: btn.getAttribute("data-eng"),
+          major: Number(btn.getAttribute("data-major")),
+          minor: Number(btn.getAttribute("data-minor")),
+          msTitle: btn.getAttribute("data-title") || "",
         });
       });
+    });
+    el.querySelectorAll("[data-polish-run]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const id = btn.getAttribute("data-polish-run");
+        btn.disabled = true;
+        try {
+          await api.v1.deliveryRunPolish(id);
+          await this.reload();
+          this.render();
+          this.showNotice("Polish run finished (mock).", "Polish");
+        } catch (e) {
+          this.showNotice(e.message || String(e), "Polish run failed");
+          btn.disabled = false;
+        }
+      });
+    });
+  },
+
+  openPolishModal({ engId, major, minor, msTitle }) {
+    const key = `polish:${engId}:${major}.${minor}`;
+    const chat = this.polishChat(key, {
+      id: key,
+      title: "AI assist",
+      emptyHint: "Describe what to polish; mock AI appends a draft into the note.",
+      tall: false,
+      rows: 2,
+      allowDrop: false,
+      onSend: async ({ composed }, c) => {
+        const suggestion =
+          "(mock polish) Clarify acceptance: " +
+          String(composed || "").trim().slice(0, 280);
+        c.appendMessage("ai", suggestion);
+        const modal = this.uiModal();
+        const bodyEl = modal?.querySelector("#pol-body");
+        const titleEl = modal?.querySelector("#pol-title");
+        if (bodyEl) {
+          const cur = bodyEl.value.trim();
+          bodyEl.value = cur ? cur + "\n" + suggestion : suggestion;
+        }
+        if (titleEl && !titleEl.value.trim()) {
+          titleEl.value = "Polish " + (msTitle || `${major}.${minor}`);
+        }
+      },
+    });
+    this.showUiModal(`
+      <div class="modal-card del-polish-modal">
+        <h3 style="margin-top:0">Polish · ${this.esc(msTitle || `${major}.${minor}`)}</h3>
+        <p class="muted" style="margin-top:0">Saved into the requirement Version and listed on the milestone card.</p>
+        <label>Title</label>
+        <input id="pol-title" placeholder="Short polish title" value="Polish ${this.esc(msTitle || `${major}.${minor}`)}" />
+        <label>Polish note</label>
+        <textarea id="pol-body" rows="5" placeholder="What to polish in requirements…"></textarea>
+        <div id="pol-chat-host" class="del-polish-chat">${chat.render()}</div>
+        <div class="err" id="pol-err"></div>
+        <div class="toolbar" style="margin-top:1rem;justify-content:flex-end">
+          <button type="button" class="ghost" data-close-ui>Cancel</button>
+          <button type="button" id="pol-save">Save polish</button>
+        </div>
+      </div>`);
+    const modal = this.uiModal();
+    chat.mount(modal);
+    modal.querySelector("#pol-save").onclick = async () => {
+      const err = modal.querySelector("#pol-err");
+      if (err) err.textContent = "";
+      const title = (modal.querySelector("#pol-title")?.value || "").trim();
+      const body = (modal.querySelector("#pol-body")?.value || "").trim();
+      if (!title && !body) {
+        if (err) err.textContent = "Add a title or polish note.";
+        return;
+      }
+      try {
+        await api.v1.deliveryCreatePolish({
+          eng_req_id: engId,
+          major,
+          minor,
+          title: title || body.slice(0, 48),
+          body,
+        });
+        this.closeUiModal();
+        if (this._chats) delete this._chats[key];
+        await this.reload();
+        this.render();
+      } catch (e) {
+        if (err) err.textContent = e.message || String(e);
+      }
+    };
+  },
+
+  /** Flatten cluster inventory workers for Roadmap Execute picker. */
+  async loadExecuteWorkers() {
+    if (this._execWorkersLoading || this._execWorkersLoaded) return;
+    this._execWorkersLoading = true;
+    try {
+      const data = await api.v1.clusters();
+      const out = [];
+      const seen = new Set();
+      for (const f of data.clusters || []) {
+        for (const n of f.nodes || []) {
+          for (const w of n.workers || []) {
+            if (!w?.id || seen.has(w.id)) continue;
+            seen.add(w.id);
+            out.push({
+              id: w.id,
+              label: w.git_branch || w.name || w.project_rel || w.id,
+              fleet: f.name || f.id || "",
+              node: n.name || n.id || "",
+              project_rel: (w.project_rel || w.project_path || "").replace(
+                /^\/+|\/+$/g,
+                "",
+              ),
+            });
+          }
+        }
+      }
+      this._execWorkers = out;
+      this._execWorkersLoaded = true;
+      if (this.el && this.parseRoute().section === "roadmap") {
+        this.render();
+      }
+    } catch (_) {
+      this._execWorkers = this._execWorkers || [];
+      this._execWorkersLoaded = true;
     }
+    this._execWorkersLoading = false;
+  },
+
+  /** Worker choices for Execute: inventory preferred, then snapshot workers. */
+  executeWorkerChoices(eng) {
+    const byId = new Map();
+    const add = (w) => {
+      if (!w?.id || String(w.id).startsWith("proj:")) return;
+      if (byId.has(w.id)) return;
+      byId.set(w.id, {
+        id: w.id,
+        label: w.label || w.id,
+        fleet: w.fleet || "",
+        node: w.node || "",
+        project_rel: (w.project_rel || "").replace(/^\/+|\/+$/g, ""),
+      });
+    };
+    for (const w of this._execWorkers || []) add(w);
+    for (const w of this.data.workers || []) add(w);
+    let list = [...byId.values()];
+    const prefer =
+      eng &&
+      (eng.project_key || eng.project_rel || "").replace(/^\/+|\/+$/g, "");
+    if (prefer) {
+      const matched = list.filter(
+        (w) =>
+          w.project_rel === prefer ||
+          w.project_rel.endsWith("/" + prefer) ||
+          prefer.endsWith("/" + w.project_rel),
+      );
+      const rest = list.filter((w) => !matched.includes(w));
+      list = matched.concat(rest);
+    }
+    return list;
+  },
+
+  milestoneLifecycle(eng, major, minor) {
+    if (!eng) return "";
+    const vers = (eng.versions || []).filter(
+      (v) => v.major === major && v.minor === minor,
+    );
+    if (!vers.length) return "";
+    return vers[0].status || "";
   },
 
   /** Pointer-drag milestone cards; persist x/y; click (no drag) selects. */
@@ -1218,12 +1585,22 @@ window.Features.delivery = {
       }
     };
 
+    const visibleIds = new Set(
+      [...el.querySelectorAll(".del-node[data-ms]")].map((n) =>
+        n.getAttribute("data-ms"),
+      ),
+    );
+    const routeMaj = el.querySelector(".del-roadmap-graph")?.getAttribute("data-major");
+
     const redrawEdges = () => {
       if (!svg) return;
-      const milestones = this.data.roadmap?.milestones || [];
+      const milestones = (this.data.roadmap?.milestones || []).filter((m) =>
+        visibleIds.has(m.id),
+      );
       const edgesList = this.data.roadmap?.edges || [];
       const paths = edgesList
         .map((e) => {
+          if (!visibleIds.has(e.from) || !visibleIds.has(e.to)) return "";
           const a = milestones.find((m) => m.id === e.from);
           const b = milestones.find((m) => m.id === e.to);
           if (!a || !b) return "";
@@ -1300,7 +1677,7 @@ window.Features.delivery = {
         node.classList.remove("dragging");
         const id = node.getAttribute("data-ms");
         if (!moved) {
-          this.go("roadmap", id);
+          this.focusMilestoneCard(el, id);
           return;
         }
         const x = parseFloat(node.style.left) || 0;
@@ -1360,15 +1737,18 @@ window.Features.delivery = {
     return !!(prev && prev.status === "sealed");
   },
 
-  viewMajorPlan() {
+  /** Shared generation cards. mode "index" opens section/m/{M}; "filter" selects on Project home. */
+  majorCardsHtml(mode, section) {
     const majors = this.data.majors || [];
     const lastMajor = majors.length
       ? majors.reduce((a, m) => Math.max(a, m.major), majors[0].major)
       : null;
-    const cards = majors
+    return majors
       .map((m) => {
         const sel =
-          this.selectedMajor === m.major ? " del-major-card-selected" : "";
+          mode === "filter" && this.selectedMajor === m.major
+            ? " del-major-card-selected"
+            : "";
         const stCls =
           m.status === "developing"
             ? "ok"
@@ -1388,7 +1768,7 @@ window.Features.delivery = {
           );
         }
         if (next === "developing" && !canStart) {
-          const prevLabel = m.major - 1 === 0 ? "0.x" : m.major - 1 + ".x";
+          const prevLabel = this.majorLabel(m.major - 1);
           actions.push(
             `<span class="muted del-major-blocked">Seal ${this.esc(prevLabel)} first</span>`,
           );
@@ -1399,14 +1779,38 @@ window.Features.delivery = {
           </button>`);
         }
         if (canDelete) {
-          actions.push(`<button type="button" class="ghost danger del-major-del" data-major-delete="${m.major}">Delete</button>`);
+          actions.push(
+            `<button type="button" class="ghost danger del-major-del" data-major-delete="${m.major}">Delete</button>`,
+          );
         }
+        const openAttr =
+          mode === "index"
+            ? `data-major-open="${m.major}" data-section="${this.esc(section)}"`
+            : `data-major-select="${m.major}"`;
+        const enterLabel =
+          mode === "index"
+            ? section === "designs"
+              ? "Open Designs"
+              : section === "roadmap"
+                ? "Open Roadmap"
+                : "Open Requirements"
+            : "Select generation";
+        const counts = this.majorWorkCounts(m.major);
+        const countLine =
+          mode === "index"
+            ? `<div class="muted del-major-counts">${counts.milestones} milestone${counts.milestones === 1 ? "" : "s"} · ${counts.designs} design${counts.designs === 1 ? "" : "s"}</div>`
+            : "";
         return `
       <div class="del-major-card${sel}">
-        <button type="button" class="del-major-hit" data-major-select="${m.major}">
-          <div class="del-major-num">${m.major === 0 ? "0.x" : m.major + ".x"}</div>
-          <div class="del-major-title">${this.esc(m.title || "Untitled")}</div>
-        </button>
+        <div class="del-major-card-head">
+          <button type="button" class="del-major-hit" ${openAttr} title="${this.esc(enterLabel)}">
+            <div class="del-major-num">${this.esc(this.majorLabel(m.major))}</div>
+            <div class="del-major-title">${this.esc(m.title || "Untitled")}</div>
+            ${countLine}
+          </button>
+          <button type="button" class="del-enter-btn" ${openAttr}
+            title="${this.esc(enterLabel)}" aria-label="${this.esc(enterLabel)}">→</button>
+        </div>
         <div class="del-major-status-row">
           <span class="badge ${stCls}">${this.esc(this.majorStatusLabel(m.status))}</span>
         </div>
@@ -1415,7 +1819,35 @@ window.Features.delivery = {
       </div>`;
       })
       .join("");
+  },
+
+  majorWorkCounts(major) {
+    let milestones = 0;
+    const seen = new Set();
+    for (const e of this.data.eng_reqs || []) {
+      for (const v of e.versions || []) {
+        if (v.major !== major) continue;
+        const k = `${e.id}:${v.major}.${v.minor}`;
+        if (seen.has(k)) continue;
+        seen.add(k);
+        milestones++;
+      }
+    }
+    const designs = (this.data.designs || []).filter((d) => d.major === major)
+      .length;
+    return { milestones, designs };
+  },
+
+  /** Generation plan editor + optional “open section under this major”. */
+  viewMajorIndex(section) {
     const trashN = this.data.trash_count || 0;
+    const secLabel =
+      section === "designs"
+        ? "Designs"
+        : section === "roadmap"
+          ? "Roadmap"
+          : "Requirements";
+    const openHint = `Edit / Start / Seal manage the line · use → to enter ${secLabel} for that generation`;
     return `
       <div class="del-major-plan">
         <div class="del-major-plan-head">
@@ -1425,14 +1857,128 @@ window.Features.delivery = {
             Trash${trashN ? ` (${trashN})` : ""}
           </button>
         </div>
+        <p class="muted del-major-open-hint">${this.esc(openHint)}</p>
         <div class="del-major-grid">
-          ${cards}
+          ${this.majorCardsHtml("index", section)}
           <button type="button" class="del-major-card del-major-card-add" id="del-major-add" title="Add major">
             <span class="del-req-plus">+</span>
             <span class="muted">Add major</span>
           </button>
         </div>
       </div>`;
+  },
+
+  /** Generation plan on Project home — select filters milestones; Edit/Start/Seal unchanged. */
+  viewMajorPlan() {
+    const trashN = this.data.trash_count || 0;
+    return `
+      <div class="del-major-plan">
+        <div class="del-major-plan-head">
+          <h3 style="margin:0">Generation plan</h3>
+          <span class="muted">major line · e.g. 0.x → 1.0 · select to filter milestones</span>
+          <button type="button" class="ghost" id="del-trash-open" style="margin-left:auto">
+            Trash${trashN ? ` (${trashN})` : ""}
+          </button>
+        </div>
+        <div class="del-major-grid">
+          ${this.majorCardsHtml("filter", "requirements")}
+          <button type="button" class="del-major-card del-major-card-add" id="del-major-add" title="Add major">
+            <span class="del-req-plus">+</span>
+            <span class="muted">Add major</span>
+          </button>
+        </div>
+      </div>`;
+  },
+
+  /** Requirements under one major: projects/engs that have milestones in this generation. */
+  viewRequirementsByMajor(major) {
+    const label = this.majorLabel(major);
+    const plan = (this.data.majors || []).find((m) => m.major === major);
+    const rows = [];
+    for (const eng of this.data.eng_reqs || []) {
+      const groups = {};
+      for (const v of eng.versions || []) {
+        if (v.major !== major) continue;
+        const k = `${v.major}.${v.minor}`;
+        groups[k] = groups[k] || {
+          major: v.major,
+          minor: v.minor,
+          versions: [],
+        };
+        groups[k].versions.push(v);
+      }
+      const milestones = Object.values(groups).sort((a, b) => b.minor - a.minor);
+      if (!milestones.length) continue;
+      const w = this.findWorker(eng.worker_id);
+      rows.push({ eng, w, milestones });
+    }
+    const cards = rows.length
+      ? rows
+          .map(({ eng, w, milestones }) => {
+            const projHref = `#/delivery/requirements/${this.esc(eng.id)}`;
+            const projName = eng.title || eng.project_key || w?.label || eng.id;
+            const msBits = milestones
+              .map((ms) => {
+                const head = ms.versions.sort((a, b) => a.patch - b.patch)[0];
+                return `<a class="del-rm-major-ms" href="#/delivery/requirements/${this.esc(eng.id)}/${ms.major}/${ms.minor}">
+                  <div class="del-rm-major-ms-main">
+                    <code>${this.esc(`${ms.major}.${ms.minor}`)}</code>
+                    <span>${this.esc(head?.title || "Milestone")}</span>
+                    ${head ? this.badge(head.status) : ""}
+                  </div>
+                  <span class="del-enter-chevron" aria-hidden="true">→</span>
+                </a>`;
+              })
+              .join("");
+            return `
+        <div class="del-maj-proj-card">
+          <div class="del-maj-proj-head">
+            <div class="del-maj-proj-id">
+              <div class="del-inspector-kicker muted">Project</div>
+              <strong class="del-maj-proj-title">${this.esc(projName)}</strong>
+              <div class="muted del-req-card-meta">
+                <code>${this.esc(eng.project_key || w?.project_rel || "—")}</code>
+                ${this.badge(eng.status)}
+              </div>
+            </div>
+            <a class="del-enter-btn" href="${projHref}"
+              title="Open project home" aria-label="Open project ${this.esc(projName)}">→</a>
+          </div>
+          <div class="del-maj-proj-ms">
+            <div class="del-maj-proj-ms-head muted">
+              Milestones in ${this.esc(label)}
+              <span>· jump straight into one</span>
+            </div>
+            <div class="del-rm-major-ms-list">${msBits}</div>
+          </div>
+        </div>`;
+          })
+          .join("")
+      : `<div class="del-canvas-empty" style="min-height:10rem">
+           <strong>No milestones in ${this.esc(label)} yet</strong>
+           <p class="muted">Open a Project and add a milestone under this generation, or create Requirements from the project picker.</p>
+         </div>`;
+
+    return `
+      <p class="del-crumbs">
+        <a href="#/delivery/requirements">Generations</a>
+        <span class="muted">/</span>
+        <span>${this.esc(label)}</span>
+      </p>
+      ${
+        plan
+          ? `<p class="muted" style="margin:0 0 0.75rem">${this.esc(plan.title || "")}${plan.summary ? " — " + this.esc(plan.summary) : ""}</p>`
+          : ""
+      }
+      <div class="toolbar del-rm-list-bar" style="margin-bottom:0.75rem">
+        <a class="ghost" href="#/delivery/requirements/projects">Project picker</a>
+        <span class="muted" style="flex:1">${rows.length} project${rows.length === 1 ? "" : "s"} with work in ${this.esc(label)}</span>
+      </div>
+      <p class="muted del-maj-proj-legend">
+        Project → opens the Project home (all milestones). Rows below → open that milestone directly.
+      </p>
+      <div class="del-req-grid">${cards}</div>
+      <div id="del-create-modal" class="modal" hidden></div>`;
   },
 
   versionTipHtml(versions) {
@@ -1458,14 +2004,30 @@ window.Features.delivery = {
       .join("");
   },
 
-  /** Requirements entry: Projects grouped by Workspace (find by name). */
+  /** Project picker — also embedded under Requirements home below Generation plan. */
   viewWorkspace() {
+    const route = this.parseRoute();
+    const embedded =
+      route.section === "requirements" &&
+      !route.engId &&
+      route.routeMajor == null &&
+      !route.projectsPicker;
+    const crumbs = embedded
+      ? `<div class="del-req-section-head" style="margin-top:1.25rem">
+           <h3 style="margin:0">Projects</h3>
+           <span class="muted">open a Project to author milestones</span>
+         </div>`
+      : `<p class="del-crumbs">
+           <a href="#/delivery/requirements">Requirements</a>
+           <span class="muted">/</span>
+           <span>Projects</span>
+         </p>`;
     if (!this._clustersLoaded) {
-      return `<p class="muted">Loading projects…</p>
+      return `${crumbs}<p class="muted">Loading projects…</p>
         <div id="del-create-modal" class="modal" hidden></div>`;
     }
     if (this._clustersError) {
-      return `<p class="err">${this.esc(this._clustersError)}</p>
+      return `${crumbs}<p class="err">${this.esc(this._clustersError)}</p>
         <p class="muted">Open Clusters to check connectivity, then refresh.</p>
         <div id="del-create-modal" class="modal" hidden></div>`;
     }
@@ -1478,6 +2040,7 @@ window.Features.delivery = {
       </div>`;
     if (!catalog.length) {
       return `
+        ${crumbs}
         ${filterBox}
         <div class="card">
           <p class="muted">No workspaces yet. Create a Workspace and Project under Clusters, then return here.</p>
@@ -1546,7 +2109,7 @@ window.Features.delivery = {
       </section>`;
       })
       .join("");
-    return `${filterBox}${sections || `<p class="muted">No projects match “${this.esc(this._projFilter || "")}”.</p>`}
+    return `${crumbs}${filterBox}${sections || `<p class="muted">No projects match “${this.esc(this._projFilter || "")}”.</p>`}
       <div id="del-create-modal" class="modal" hidden></div>`;
   },
 
@@ -2885,11 +3448,17 @@ window.Features.delivery = {
       </div>`;
       })
       .join("");
+    const genCrumb =
+      this.selectedMajor != null
+        ? `<a href="#/delivery/requirements/m/${this.selectedMajor}">${this.esc(this.majorLabel(this.selectedMajor))}</a>
+        <span class="muted">/</span>`
+        : "";
     return `
       <p class="del-crumbs">
-        <a href="#/delivery/requirements">Workspace</a>
+        <a href="#/delivery/requirements">Generations</a>
         <span class="muted">/</span>
-        <span>${this.esc(w ? w.label : eng.worker_id)}</span>
+        ${genCrumb}
+        <span>${this.esc(eng.title || eng.project_key || (w && w.label) || eng.worker_id)}</span>
       </p>
       <div class="card" style="margin-bottom:1rem">
         <div class="toolbar">
@@ -2907,7 +3476,7 @@ window.Features.delivery = {
         <h3 style="margin:0">Milestones <span class="muted">major.minor</span></h3>
       </div>
       <p class="muted" style="margin:0 0 0.65rem;font-size:0.85rem">
-        All requirements for this Worker. Click a milestone to open View.
+        Milestones for this Project. Click one to open View.
       </p>
       <div class="del-ms-grid">
         ${cards}
@@ -3032,9 +3601,11 @@ window.Features.delivery = {
     });
     return `
       <p class="del-crumbs">
-        <a href="#/delivery/requirements">Workspace</a>
+        <a href="#/delivery/requirements">Generations</a>
         <span class="muted">/</span>
-        <a href="#/delivery/requirements/${this.esc(eng.id)}">${this.esc(w ? w.label : eng.worker_id)}</a>
+        <a href="#/delivery/requirements/m/${major}">${this.esc(this.majorLabel(major))}</a>
+        <span class="muted">/</span>
+        <a href="#/delivery/requirements/${this.esc(eng.id)}">${this.esc(eng.title || (w && w.label) || eng.worker_id)}</a>
         <span class="muted">/</span>
         <code>${this.esc(msKey)}</code>
       </p>
@@ -3137,10 +3708,15 @@ window.Features.delivery = {
       },
     });
     return `
-      <p>
-        <a href="#/delivery/requirements">Workspace</a> /
-        <a href="#/delivery/requirements/${this.esc(eng.id)}">${this.esc(w ? w.label : eng.worker_id)}</a> /
-        <a href="#/delivery/requirements/${this.esc(eng.id)}/${major}/${minor}"><code>${major}.${minor}</code></a> /
+      <p class="del-crumbs">
+        <a href="#/delivery/requirements">Generations</a>
+        <span class="muted">/</span>
+        <a href="#/delivery/requirements/m/${major}">${this.esc(this.majorLabel(major))}</a>
+        <span class="muted">/</span>
+        <a href="#/delivery/requirements/${this.esc(eng.id)}">${this.esc(eng.title || (w && w.label) || eng.worker_id)}</a>
+        <span class="muted">/</span>
+        <a href="#/delivery/requirements/${this.esc(eng.id)}/${major}/${minor}"><code>${major}.${minor}</code></a>
+        <span class="muted">/</span>
         <code>${this.esc(key)}</code>
       </p>
       <div class="del-split del-split-chatwide">
@@ -3170,7 +3746,7 @@ window.Features.delivery = {
   },
 
   /** Milestones that do not yet have a design (for New design picker). */
-  designCandidateMilestones() {
+  designCandidateMilestones(onlyMajor) {
     const have = new Set(
       (this.data.designs || []).map((d) => `${d.eng_req_id}:${d.major}.${d.minor}`),
     );
@@ -3178,6 +3754,7 @@ window.Features.delivery = {
     for (const eng of this.data.eng_reqs || []) {
       const seen = new Set();
       for (const v of eng.versions || []) {
+        if (onlyMajor != null && v.major !== onlyMajor) continue;
         const key = `${eng.id}:${v.major}.${v.minor}`;
         if (seen.has(key) || have.has(key)) continue;
         seen.add(key);
@@ -3261,12 +3838,19 @@ window.Features.delivery = {
   },
 
   openCreateDesignModal() {
-    const cands = this.designCandidateMilestones();
+    const route = this.parseRoute();
+    const onlyMajor =
+      route.routeMajor != null ? route.routeMajor : this.selectedMajor;
+    const cands = this.designCandidateMilestones(onlyMajor);
     if (!cands.length) {
+      const scope =
+        onlyMajor != null
+          ? ` in ${this.majorLabel(onlyMajor)}`
+          : "";
       this.showUiModal(`
         <div class="modal-card">
           <h3 style="margin-top:0">New design</h3>
-          <p class="muted">Every milestone already has a design, or there are no requirements yet.</p>
+          <p class="muted">Every milestone already has a design${this.esc(scope)}, or there are no requirements yet.</p>
           <div class="toolbar" style="margin-top:1rem;justify-content:flex-end">
             <button type="button" data-close-ui>OK</button>
           </div>
@@ -3317,9 +3901,11 @@ window.Features.delivery = {
     };
   },
 
-  viewDesList() {
+  viewDesList(routeMajor) {
     const filter = this._desFilter || "all";
+    const majLabel = this.majorLabel(routeMajor);
     const list = (this.data.designs || []).filter((d) => {
+      if (d.major !== routeMajor) return false;
       if (filter === "all") return true;
       return (d.status || "") === filter;
     });
@@ -3358,6 +3944,11 @@ window.Features.delivery = {
       })
       .join("");
     return `
+      <p class="del-crumbs">
+        <a href="#/delivery/designs">Generations</a>
+        <span class="muted">/</span>
+        <span>${this.esc(majLabel)}</span>
+      </p>
       <div class="toolbar del-des-list-bar">
         <label class="muted" style="margin:0">Status</label>
         <select id="des-filter" style="width:auto;margin:0">
@@ -3365,10 +3956,10 @@ window.Features.delivery = {
           <option value="draft"${filter === "draft" ? " selected" : ""}>Draft</option>
           <option value="approved"${filter === "approved" ? " selected" : ""}>Approved</option>
         </select>
-        <span class="muted" style="flex:1">${list.length} design${list.length === 1 ? "" : "s"}</span>
+        <span class="muted" style="flex:1">${list.length} design${list.length === 1 ? "" : "s"} in ${this.esc(majLabel)}</span>
       </div>
       <div class="del-des-grid">
-        ${cards}
+        ${cards || `<p class="muted" style="grid-column:1/-1">No designs in ${this.esc(majLabel)} yet.</p>`}
         <button type="button" class="del-des-card del-des-card-add" id="des-new-card"
           title="New design">
           <span class="del-req-plus">+</span>
@@ -3581,6 +4172,12 @@ window.Features.delivery = {
       ver.class_design =
         card.querySelector('textarea[data-ver-field="class_design"]')?.value ??
         ver.class_design;
+      const depBoxes = card.querySelectorAll("[data-ver-dep]");
+      if (depBoxes.length) {
+        ver.depends_on = [...depBoxes]
+          .filter((cb) => cb.checked)
+          .map((cb) => cb.value);
+      }
     }
     return snap;
   },
@@ -3615,11 +4212,26 @@ window.Features.delivery = {
       push("_(No Versions yet.)_");
       push("");
     } else {
+      const byId = Object.fromEntries(vers.map((v) => [v.id, v]));
       vers.forEach((v, i) => {
         const ord = v.sort_order || i + 1;
         const name = (v.title || "").trim() || `Version ${ord}`;
         push(`### v${ord} — ${name}`);
         push("");
+        const deps = v.depends_on || [];
+        if (deps.length) {
+          const labels = deps.map((id) => {
+            const p = byId[id];
+            if (!p) return id;
+            const po = p.sort_order || "?";
+            return `v${po} — ${(p.title || "").trim() || "Untitled"}`;
+          });
+          push(`**Depends on:** ${labels.join(", ")}`);
+          push("");
+        } else {
+          push("**Depends on:** _(none)_");
+          push("");
+        }
         section("Gate", v.gate);
         section("Sub-architecture", v.sub_architecture);
         section("Class design", v.class_design);
@@ -3676,6 +4288,7 @@ window.Features.delivery = {
             gate: v.gate || "",
             sub_architecture: v.sub_architecture || "",
             class_design: v.class_design || "",
+            depends_on: v.depends_on || [],
           });
         }
       }
@@ -3765,7 +4378,7 @@ window.Features.delivery = {
         this.closeUiModal();
         await this.reload();
         const fresh = (this.data.designs || []).find((x) => x.id === designId) || d;
-        this.go("roadmap", `ms_${fresh.eng_req_id}_${fresh.major}_${fresh.minor}`);
+        location.hash = `#/delivery/roadmap/m/${fresh.major}/ms_${fresh.eng_req_id}_${fresh.major}_${fresh.minor}`;
       } catch (e) {
         if (errEl) errEl.textContent = e.message || String(e);
         else this.showNotice(e.message || String(e), "Bootstrap failed");
@@ -3816,10 +4429,49 @@ window.Features.delivery = {
       </div>`;
   },
 
-  renderVersionCard(ver, approved) {
+  renderVersionDepends(ver, allVers, approved) {
+    const deps = new Set(ver.depends_on || []);
+    const others = (allVers || []).filter((x) => x.id !== ver.id);
+    if (!others.length) {
+      return `<div class="del-ver-deps muted">Depends on — no other Versions yet.</div>`;
+    }
+    if (approved) {
+      const byId = Object.fromEntries(others.map((x) => [x.id, x]));
+      const chips = [...deps]
+        .map((id) => {
+          const p = byId[id];
+          if (!p) return null;
+          return `<span class="del-ver-dep-chip">v${p.sort_order} · ${this.esc(p.title || "Untitled")}</span>`;
+        })
+        .filter(Boolean);
+      return `
+        <div class="del-ver-deps del-ver-deps-ro">
+          <div class="del-ver-deps-label muted">Depends on</div>
+          <div class="del-ver-dep-chips">${chips.join("") || `<span class="muted">None</span>`}</div>
+        </div>`;
+    }
+    const boxes = others
+      .map((o) => {
+        const checked = deps.has(o.id) ? " checked" : "";
+        return `<label class="del-ver-dep-opt">
+          <input type="checkbox" data-ver-dep value="${this.esc(o.id)}"${checked} />
+          <span>v${o.sort_order} · ${this.esc(o.title || "Untitled")}</span>
+        </label>`;
+      })
+      .join("");
+    return `
+      <div class="del-ver-deps">
+        <div class="del-ver-deps-label">Depends on</div>
+        <p class="muted del-ver-deps-hint">Prerequisites that must finish before this Version.</p>
+        <div class="del-ver-dep-list">${boxes}</div>
+      </div>`;
+  },
+
+  renderVersionCard(ver, allVers, approved) {
     const fields = this.versionFieldDefs()
       .map((def) => this.renderVersionFieldPane(ver, def, approved))
       .join("");
+    const depsBlock = this.renderVersionDepends(ver, allVers, approved);
     const ready = (ver.status || "") === "ready" || this.versionsReady([ver]);
     if (approved) {
       return `
@@ -3829,6 +4481,7 @@ window.Features.delivery = {
           <strong class="del-ver-title-ro">${this.esc(ver.title || `Version ${ver.sort_order}`)}</strong>
           <span class="badge ok">Locked</span>
         </div>
+        ${depsBlock}
         ${fields}
       </div>`;
     }
@@ -3841,6 +4494,7 @@ window.Features.delivery = {
           ${ready ? `<span class="badge ok">Ready</span>` : `<span class="badge">Draft</span>`}
           <button type="button" class="ghost" data-ver-delete="${this.esc(ver.id)}" title="Remove Version">×</button>
         </div>
+        ${depsBlock}
         ${fields}
       </div>`;
   },
@@ -3867,7 +4521,7 @@ window.Features.delivery = {
     const vers = d.versions || [];
     const msKey = `${d.major}.${d.minor}`;
     const reqHref = `#/delivery/requirements/${this.esc(d.eng_req_id)}/${d.major}/${d.minor}`;
-    const verCards = vers.map((v) => this.renderVersionCard(v, approved)).join("");
+    const verCards = vers.map((v) => this.renderVersionCard(v, vers, approved)).join("");
     const adrSections = this.adrSectionDefs();
     const adrHtml = adrSections.map((s) => this.renderAdrPane(s, d, approved)).join("");
     const fieldDefs = this.versionFieldDefs();
@@ -3999,18 +4653,20 @@ window.Features.delivery = {
       : chat.render();
     return `
       <p class="del-crumbs">
-        <a href="#/delivery/designs">Designs</a>
+        <a href="#/delivery/designs">Generations</a>
         <span class="muted">/</span>
-        <a href="#/delivery/requirements/${this.esc(d.eng_req_id)}">${this.esc(w ? w.label || w.id : eng?.title || d.eng_req_id)}</a>
+        <a href="#/delivery/designs/m/${d.major}">${this.esc(this.majorLabel(d.major))}</a>
         <span class="muted">/</span>
-        <a href="${reqHref}"><code>${this.esc(msKey)}</code></a>
+        <span>${this.esc(d.title)}</span>
       </p>
       <div class="del-split${approved ? "" : " del-split-chatwide"}">
         <div class="del-main">
           <div class="card${approved ? " del-des-locked" : ""}">
             <div class="toolbar">
               <div style="flex:1;min-width:0">
-                <div class="muted">Bound req <code>${this.esc(d.version || msKey)}</code>
+                <div class="muted">Bound
+                  <a href="#/delivery/requirements/${this.esc(d.eng_req_id)}">${this.esc(w ? w.label || w.id : eng?.title || d.eng_req_id)}</a>
+                  · <a href="${reqHref}"><code>${this.esc(d.version || msKey)}</code></a>
                   · ${approved ? "approved · view only" : "draft workspace"}</div>
                 <h3 style="margin:0.25rem 0 0">${this.esc(d.title)}</h3>
                 <p class="del-flow-hint">${this.esc(flowHint)}</p>
@@ -4035,6 +4691,282 @@ window.Features.delivery = {
           <div class="del-des-ver-list">${verCards || `<p class="muted">No Versions yet — add one to define AI execution boundaries.</p>`}</div>
         </div>
         ${chatHtml}
+      </div>`;
+  },
+
+  /** Milestones under one generation (major): graph + card list. */
+  viewRoadmapList(routeMajor) {
+    const NODE_W = 216;
+    const NODE_H = 78;
+    const majLabel = this.majorLabel(routeMajor);
+    const allMs = this.data.roadmap?.milestones || [];
+    const edgesList = this.data.roadmap?.edges || [];
+    const filter = this._rmFilter || "all";
+    const rows = allMs
+      .map((m) => {
+        const bind = this.parseRoadmapMsBind(m.id);
+        const eng = bind ? this.findEng(bind.engId) : null;
+        const life = bind
+          ? this.milestoneLifecycle(eng, bind.major, bind.minor)
+          : m.status || "";
+        const nPh = (m.phases || []).length;
+        const worker =
+          this.findWorker(m.execute_worker_id)?.label ||
+          m.execute_worker_id ||
+          "";
+        const project =
+          eng?.project_key ||
+          eng?.title ||
+          (eng ? this.findWorker(eng.worker_id)?.label : "") ||
+          "";
+        const msKey = bind != null ? `${bind.major}.${bind.minor}` : "";
+        return { m, bind, eng, life, nPh, worker, project, msKey };
+      })
+      .filter((r) => {
+        if (!r.bind || r.bind.major !== routeMajor) return false;
+        if (filter === "all") return true;
+        if (filter === "ready")
+          return r.life === "awaiting_development" || r.life === "awaiting_roadmap";
+        if (filter === "running") return r.life === "in_development";
+        if (filter === "planned")
+          return !r.life || r.life === "planned" || r.life === "awaiting_design";
+        return true;
+      })
+      .sort((a, b) => {
+        if (a.bind && b.bind && a.bind.minor !== b.bind.minor)
+          return a.bind.minor - b.bind.minor;
+        const ta = (a.m.title || "").toLowerCase();
+        const tb = (b.m.title || "").toLowerCase();
+        return ta.localeCompare(tb);
+      });
+
+    const idSet = new Set(rows.map((r) => r.m.id));
+    let maxX = 640;
+    let maxY = 280;
+    for (const r of rows) {
+      maxX = Math.max(maxX, (r.m.x || 0) + NODE_W + 48);
+      maxY = Math.max(maxY, (r.m.y || 0) + NODE_H + 48);
+    }
+    const canvasW = Math.max(640, Math.ceil(maxX));
+    const canvasH = Math.max(300, Math.ceil(maxY));
+
+    const nodes = rows
+      .map((r) => {
+        const m = r.m;
+        const st = (r.life || m.status || "planned").toLowerCase();
+        return `<div class="del-node del-node-${this.esc(st)}" role="button" tabindex="0"
+          data-ms="${this.esc(m.id)}" style="left:${m.x || 0}px;top:${m.y || 0}px;width:${NODE_W}px"
+          title="Drag to arrange · click to focus card controls">
+          <span class="del-node-accent" aria-hidden="true"></span>
+          <span class="del-node-grip" aria-hidden="true"></span>
+          <span class="del-node-title">${this.esc(m.title)}</span>
+          <span class="del-node-meta">
+            ${this.badge(r.life || m.status)}
+            <span class="muted">${r.nPh} phase${r.nPh === 1 ? "" : "s"}</span>
+          </span>
+        </div>`;
+      })
+      .join("");
+
+    const edges = edgesList
+      .map((e) => {
+        if (!idSet.has(e.from) || !idSet.has(e.to)) return "";
+        const a = allMs.find((m) => m.id === e.from);
+        const b = allMs.find((m) => m.id === e.to);
+        if (!a || !b) return "";
+        const x1 = (a.x || 0) + NODE_W;
+        const y1 = (a.y || 0) + NODE_H / 2;
+        const x2 = b.x || 0;
+        const y2 = (b.y || 0) + NODE_H / 2;
+        const mx = (x1 + x2) / 2;
+        return `<path d="M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}"
+          class="del-edge" fill="none" marker-end="url(#del-arrow)" />`;
+      })
+      .join("");
+
+    const graphBody = rows.length
+      ? `<svg class="del-edges" width="${canvasW}" height="${canvasH}" aria-hidden="true">
+            <defs>
+              <marker id="del-arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+                <path d="M0,0 L9,3 L0,6 Z" fill="var(--accent)" opacity="0.75" />
+              </marker>
+            </defs>
+            ${edges}
+          </svg>
+          <div class="del-nodes" style="width:${canvasW}px;height:${canvasH}px">${nodes}</div>`
+      : `<div class="del-canvas-empty">
+           <strong>No milestones in ${this.esc(majLabel)}</strong>
+           <p class="muted">Approve a Design in this generation, then <em>Bootstrap roadmap</em> — one node per milestone.</p>
+           <a class="ghost" href="#/delivery/designs/m/${routeMajor}">Open Designs · ${this.esc(majLabel)}</a>
+         </div>`;
+
+    const cards = rows.length
+      ? rows.map((r) => this.milestoneControlCardHtml(r, routeMajor)).join("")
+      : "";
+
+    return `
+      <p class="del-crumbs">
+        <a href="#/delivery/roadmap">Generations</a>
+        <span class="muted">/</span>
+        <span>${this.esc(majLabel)}</span>
+      </p>
+      <div class="toolbar del-rm-list-bar">
+        <label class="muted" style="margin:0">Status</label>
+        <select id="rm-filter" style="width:auto;margin:0">
+          <option value="all"${filter === "all" ? " selected" : ""}>All</option>
+          <option value="ready"${filter === "ready" ? " selected" : ""}>Awaiting ready / roadmap</option>
+          <option value="running"${filter === "running" ? " selected" : ""}>In development</option>
+          <option value="planned"${filter === "planned" ? " selected" : ""}>Planned / design</option>
+        </select>
+        <span class="muted" style="flex:1">${rows.length} milestone${rows.length === 1 ? "" : "s"} in ${this.esc(majLabel)}</span>
+        <span class="muted" style="font-size:0.85rem">Graph · drag · controls on cards</span>
+      </div>
+      <div class="del-roadmap-graph card del-canvas" data-major="${routeMajor}">${graphBody}</div>
+      ${
+        cards
+          ? `<div class="del-req-section-head" style="margin-top:1rem">
+               <h3 style="margin:0">Milestones</h3>
+               <span class="muted">Worker · Start / Pause / Stop · Design / Req · Polish</span>
+             </div>
+             <div class="del-rm-ctrl-grid">${cards}</div>`
+          : ""
+      }`;
+  },
+
+  polishesForBind(engId, major, minor) {
+    return (this.data.polishes || []).filter(
+      (p) =>
+        p.eng_req_id === engId && p.major === major && p.minor === minor,
+    );
+  },
+
+  focusMilestoneCard(root, msId) {
+    const el = root || this.el;
+    if (!el || !msId) return;
+    const card = [...el.querySelectorAll("[data-ms-card]")].find(
+      (c) => c.getAttribute("data-ms-card") === msId,
+    );
+    if (!card) return;
+    card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    card.classList.add("del-rm-card-focus");
+    setTimeout(() => card.classList.remove("del-rm-card-focus"), 1600);
+  },
+
+  milestoneControlCardHtml(r, routeMajor) {
+    const m = r.m;
+    const bind = r.bind;
+    const run = (m.run_state || "idle").toLowerCase();
+    const life = r.life || m.status || "";
+    const des = this.findDesignForMilestone(m);
+    const desHref = des ? `#/delivery/designs/${this.esc(des.id)}` : "";
+    const reqHref =
+      bind &&
+      `#/delivery/requirements/${this.esc(bind.engId)}/${bind.major}/${bind.minor}`;
+    const workerChoices = this.executeWorkerChoices(r.eng);
+    const curWorker = (m.execute_worker_id || "").trim();
+    const optionParts = [`<option value="">Worker…</option>`];
+    if (curWorker && !workerChoices.some((w) => w.id === curWorker)) {
+      optionParts.push(
+        `<option value="${this.esc(curWorker)}" selected>${this.esc(curWorker)} (saved)</option>`,
+      );
+    }
+    for (const w of workerChoices) {
+      const meta = [w.node, w.project_rel].filter(Boolean).join(" · ");
+      const label = meta ? `${w.label} · ${meta}` : w.label;
+      const sel = w.id === curWorker ? " selected" : "";
+      optionParts.push(
+        `<option value="${this.esc(w.id)}"${sel}>${this.esc(label)}</option>`,
+      );
+    }
+    const canStart =
+      !!curWorker &&
+      r.nPh > 0 &&
+      (life === "awaiting_development" ||
+        life === "in_development" ||
+        run === "paused" ||
+        run === "stopped" ||
+        life === "");
+    const canPause = run === "running";
+    const canStop = run === "running" || run === "paused";
+    const showPolish =
+      life === "complete" || life === "testing" || life === "done";
+    const polishes =
+      bind != null ? this.polishesForBind(bind.engId, bind.major, bind.minor) : [];
+    const polishRows = polishes.length
+      ? `<ul class="del-polish-list">
+          ${polishes
+            .map(
+              (p) => `
+            <li class="del-polish-row">
+              <div class="del-polish-main">
+                <span class="del-polish-title">${this.esc(p.title || "Polish")}</span>
+                ${this.badge(p.status)}
+              </div>
+              <button type="button" class="del-icon-btn del-polish-run" data-polish-run="${this.esc(p.id)}"
+                title="Run polish" aria-label="Run polish" ${p.status === "done" ? "disabled" : ""}>▶</button>
+            </li>`,
+            )
+            .join("")}
+        </ul>`
+      : showPolish
+        ? `<p class="muted del-polish-empty">No polish items yet.</p>`
+        : "";
+
+    return `
+      <div class="del-rm-ctrl-card" data-ms-card="${this.esc(m.id)}" id="ms-card-${this.esc(m.id)}">
+        <div class="del-rm-ctrl-top">
+          <div class="del-rm-ctrl-id">
+            <strong class="del-rm-card-title">${this.esc(m.title)}</strong>
+            <div class="del-rm-card-meta muted">
+              ${r.msKey ? `<code>${this.esc(r.msKey)}</code>` : ""}
+              ${r.project ? `<span>· ${this.esc(r.project)}</span>` : ""}
+              <span>· ${r.nPh} phase${r.nPh === 1 ? "" : "s"}</span>
+              <span>· run ${this.esc(run)}</span>
+            </div>
+          </div>
+          ${this.badge(life || m.status)}
+        </div>
+        <div class="del-rm-ctrl-links">
+          ${
+            desHref
+              ? `<a href="${desHref}">Design</a>`
+              : `<span class="muted">No design</span>`
+          }
+          ${
+            reqHref
+              ? `<a href="${reqHref}">Requirements</a>`
+              : `<span class="muted">No req bind</span>`
+          }
+        </div>
+        <div class="del-rm-ctrl-run">
+          <select class="del-ms-worker" data-ms="${this.esc(m.id)}"
+            ${workerChoices.length || curWorker ? "" : "disabled"}>
+            ${optionParts.join("")}
+          </select>
+          <div class="del-rm-ctrl-btns">
+            <button type="button" class="del-run-btn" data-ms-start="${this.esc(m.id)}"
+              title="Start" ${canStart ? "" : "disabled"}>▶ Start</button>
+            <button type="button" class="del-run-btn ghost" data-ms-pause="${this.esc(m.id)}"
+              title="Pause" ${canPause ? "" : "disabled"}>⏸ Pause</button>
+            <button type="button" class="del-run-btn ghost" data-ms-stop="${this.esc(m.id)}"
+              title="Stop" ${canStop ? "" : "disabled"}>⏹ Stop</button>
+            ${
+              showPolish && bind
+                ? `<button type="button" class="ghost" data-ms-polish
+                     data-eng="${this.esc(bind.engId)}" data-major="${bind.major}" data-minor="${bind.minor}"
+                     data-title="${this.esc(m.title)}">Polish</button>`
+                : ""
+            }
+          </div>
+        </div>
+        ${
+          showPolish || polishes.length
+            ? `<div class="del-polish-block">
+                 <div class="del-polish-head muted">Polish</div>
+                 ${polishRows}
+               </div>`
+            : ""
+        }
       </div>`;
   },
 
@@ -4065,59 +4997,36 @@ window.Features.delivery = {
     return designs.find((d) => d.title === ms.title) || null;
   },
 
-  viewRoadmap(selectedId) {
-    const NODE_W = 216;
-    const NODE_H = 78;
-    const g = this.data.roadmap || { milestones: [], edges: [] };
-    const milestones = g.milestones || [];
-    const edgesList = g.edges || [];
-    const selected =
-      milestones.find((m) => m.id === selectedId) || milestones[0] || null;
-
-    let maxX = 640;
-    let maxY = 280;
-    for (const m of milestones) {
-      maxX = Math.max(maxX, (m.x || 0) + NODE_W + 48);
-      maxY = Math.max(maxY, (m.y || 0) + NODE_H + 48);
-    }
-    const canvasW = Math.max(640, Math.ceil(maxX));
-    const canvasH = Math.max(300, Math.ceil(maxY));
-
-    const nodes = milestones
-      .map((m) => {
-        const sel = selected && m.id === selected.id ? " selected" : "";
-        const nPh = (m.phases || []).length;
-        const st = (m.status || "planned").toLowerCase();
-        return `<div class="del-node del-node-${this.esc(st)}${sel}" role="button" tabindex="0"
-          data-ms="${this.esc(m.id)}" style="left:${m.x || 0}px;top:${m.y || 0}px;width:${NODE_W}px"
-          title="Drag to reposition · click to inspect">
-          <span class="del-node-accent" aria-hidden="true"></span>
-          <span class="del-node-grip" aria-hidden="true"></span>
-          <span class="del-node-title">${this.esc(m.title)}</span>
-          <span class="del-node-meta">
-            ${this.badge(m.status)}
-            <span class="muted">${nPh} phase${nPh === 1 ? "" : "s"}</span>
-          </span>
+  /** Single milestone workspace — Versions are phases under it. */
+  viewRoadmap(selectedId, routeMajor) {
+    const milestones = this.data.roadmap?.milestones || [];
+    const selected = milestones.find((m) => m.id === selectedId) || null;
+    const bindGuess = selected
+      ? this.parseRoadmapMsBind(selected.id)
+      : this.parseRoadmapMsBind(selectedId);
+    const maj =
+      routeMajor != null
+        ? routeMajor
+        : bindGuess
+          ? bindGuess.major
+          : this.selectedMajor;
+    const listHref =
+      maj != null
+        ? `#/delivery/roadmap/m/${maj}`
+        : "#/delivery/roadmap";
+    if (!selected) {
+      return `
+        <div class="toolbar del-roadmap-bar">
+          <a class="ghost" href="${listHref}">← Milestones</a>
+        </div>
+        <div class="del-canvas-empty">
+          <strong>Milestone not found</strong>
+          <p class="muted">This id is not on the roadmap. Pick one from the list.</p>
+          <a class="ghost" href="${listHref}">Milestones</a>
         </div>`;
-      })
-      .join("");
+    }
 
-    const edges = edgesList
-      .map((e) => {
-        const a = milestones.find((m) => m.id === e.from);
-        const b = milestones.find((m) => m.id === e.to);
-        if (!a || !b) return "";
-        const x1 = (a.x || 0) + NODE_W;
-        const y1 = (a.y || 0) + NODE_H / 2;
-        const x2 = b.x || 0;
-        const y2 = (b.y || 0) + NODE_H / 2;
-        const mx = (x1 + x2) / 2;
-        return `<path d="M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}"
-          class="del-edge" fill="none" marker-end="url(#del-arrow)" />`;
-      })
-      .join("");
-
-    const phases = selected?.phases || [];
+    const phases = selected.phases || [];
     const phaseList = phases.length
       ? phases
           .map(
@@ -4129,139 +5038,147 @@ window.Features.delivery = {
         </li>`,
           )
           .join("")
-      : `<li class="del-phase-empty muted">No phases yet — Approve a Design and Bootstrap to seed from Versions.</li>`;
+      : `<li class="del-phase-empty muted">No phases yet — Bootstrap from Design seeds Design Versions as the phase chain under this milestone.</li>`;
 
     const boundDes = this.findDesignForMilestone(selected);
-    const bind = selected ? this.parseRoadmapMsBind(selected.id) : null;
+    const bind = this.parseRoadmapMsBind(selected.id);
     const eng = bind ? this.findEng(bind.engId) : null;
+    const life = bind
+      ? this.milestoneLifecycle(eng, bind.major, bind.minor)
+      : selected.status || "";
+    const msKey = bind ? `${bind.major}.${bind.minor}` : "";
     const reqHref =
       bind &&
       `#/delivery/requirements/${this.esc(bind.engId)}/${bind.major}/${bind.minor}`;
     const desHref = boundDes ? `#/delivery/designs/${this.esc(boundDes.id)}` : "";
+    const project =
+      eng?.project_key ||
+      eng?.title ||
+      (eng ? this.findWorker(eng.worker_id)?.label : "") ||
+      "";
 
-    const readyRows = [];
-    const seen = new Set();
-    for (const e of this.data.eng_reqs || []) {
-      for (const v of e.versions || []) {
-        if (v.status !== "awaiting_roadmap") continue;
-        const key = `${e.id}:${v.major}.${v.minor}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        const msMatch = milestones.find(
-          (m) => m.id === `ms_${e.id}_${v.major}_${v.minor}`,
-        );
-        readyRows.push({
-          engId: e.id,
-          major: v.major,
-          minor: v.minor,
-          title: `${e.title} · ${v.major}.${v.minor}`,
-          msId: msMatch?.id || "",
-        });
-      }
+    const workerChoices = this.executeWorkerChoices(eng);
+    const curWorker = (selected.execute_worker_id || "").trim();
+    const optionParts = [`<option value="">Select Worker…</option>`];
+    if (curWorker && !workerChoices.some((w) => w.id === curWorker)) {
+      const orphan = this.findWorker(curWorker);
+      const lab = orphan?.label || curWorker;
+      optionParts.push(
+        `<option value="${this.esc(curWorker)}" selected>${this.esc(lab)} (saved)</option>`,
+      );
     }
+    for (const w of workerChoices) {
+      const meta = [w.node, w.project_rel].filter(Boolean).join(" · ");
+      const label = meta ? `${w.label} · ${meta}` : w.label;
+      const sel = w.id === curWorker ? " selected" : "";
+      optionParts.push(
+        `<option value="${this.esc(w.id)}"${sel}>${this.esc(label)}</option>`,
+      );
+    }
+    const workerSelectHtml = optionParts.join("");
+    const canExecute =
+      !!curWorker &&
+      phases.length > 0 &&
+      (life === "awaiting_development" ||
+        life === "in_development" ||
+        life === "");
+    const execHint = !phases.length
+      ? "Bootstrap phases from Designs before Execute."
+      : life === "awaiting_roadmap"
+        ? "Mark ready first."
+        : life &&
+            life !== "awaiting_development" &&
+            life !== "in_development"
+          ? `Lifecycle is ${this.lifecycleLabel(life)}.`
+          : !curWorker
+            ? "Pick an execute Worker (checkout)."
+            : life === "in_development"
+              ? "Already in development — re-bind Worker or Execute again to confirm."
+              : "Execute advances this milestone to in development (no Job yet).";
 
-    const readyBlock = `
-      <div class="del-ready-block">
-        <div class="del-inspector-sec-head">
-          <h4>Awaiting roadmap</h4>
-          <span class="muted">${readyRows.length}</span>
-        </div>
-        ${
-          readyRows.length
-            ? `<p class="muted del-ready-hint">Mark ready to unlock app development.</p>
-               <ul class="del-ready-list">
-               ${readyRows
-                 .map(
-                   (r) => `
-                 <li class="del-ready-row">
-                   <div class="del-ready-main">
-                     <span class="del-ready-title">${this.esc(r.title)}</span>
-                     ${
-                       r.msId
-                         ? `<a class="muted" href="#/delivery/roadmap/${this.esc(r.msId)}">Show on graph</a>`
-                         : `<span class="muted">No canvas node yet</span>`
-                     }
-                   </div>
-                   <button type="button" data-ms-ready data-eng="${this.esc(r.engId)}"
-                     data-major="${r.major}" data-minor="${r.minor}">Mark ready</button>
-                 </li>`,
-                 )
-                 .join("")}
-               </ul>`
-            : `<p class="muted del-ready-hint">No milestones waiting — approve a Design (or none pending).</p>`
-        }
-      </div>`;
+    const markReady =
+      life === "awaiting_roadmap" && bind
+        ? `<button type="button" data-ms-ready data-eng="${this.esc(bind.engId)}"
+             data-major="${bind.major}" data-minor="${bind.minor}">Mark ready</button>`
+        : "";
 
-    const canvasBody = milestones.length
-      ? `<svg class="del-edges" width="${canvasW}" height="${canvasH}" aria-hidden="true">
-            <defs>
-              <marker id="del-arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
-                <path d="M0,0 L9,3 L0,6 Z" fill="var(--accent)" opacity="0.75" />
-              </marker>
-            </defs>
-            ${edges}
-          </svg>
-          <div class="del-nodes" style="width:${canvasW}px;height:${canvasH}px">${nodes}</div>`
-      : `<div class="del-canvas-empty">
-           <strong>No milestones on the canvas</strong>
-           <p class="muted">Approve a Design, then <em>Bootstrap roadmap</em> to seed phases from Versions — or reset demo data for sample nodes.</p>
-           <a class="ghost" href="#/delivery/designs">Open Designs</a>
-         </div>`;
-
-    const inspector = selected
-      ? `
-        <div class="del-inspector-head">
-          <div class="del-inspector-kicker muted">Milestone</div>
-          <h3 class="del-inspector-title">${this.esc(selected.title)}</h3>
-          <div class="del-inspector-badges">${this.badge(selected.status)}</div>
-        </div>
-        ${
-          selected.acceptance
-            ? `<p class="del-inspector-accept">${this.esc(selected.acceptance)}</p>`
-            : `<p class="muted del-inspector-accept">No acceptance text on this node.</p>`
-        }
-        <div class="del-inspector-links">
-          ${
-            desHref
-              ? `<a href="${desHref}">Open design</a>`
-              : `<span class="muted">No bound design</span>`
-          }
-          ${
-            reqHref
-              ? `<a href="${reqHref}">Req ${bind.major}.${bind.minor}</a>`
-              : eng
-                ? ""
-                : ""
-          }
-        </div>
-        <div class="del-inspector-sec">
-          <div class="del-inspector-sec-head">
-            <h4>Phase chain</h4>
-            <span class="muted">${phases.length} · = patch</span>
-          </div>
-          <ol class="del-phases">${phaseList}</ol>
-        </div>
-        ${readyBlock}`
-      : `
-        <div class="del-inspector-head">
-          <h3 class="del-inspector-title">Inspector</h3>
-          <p class="muted">Select a milestone on the graph.</p>
-        </div>
-        ${readyBlock}`;
-
+    const majLabel = maj != null ? this.majorLabel(maj) : "";
     return `
-      <div class="del-roadmap-wrap">
+      <div class="del-rm-detail">
+        <p class="del-crumbs">
+          <a href="#/delivery/roadmap">Generations</a>
+          <span class="muted">/</span>
+          ${
+            maj != null
+              ? `<a href="${listHref}">${this.esc(majLabel)}</a><span class="muted">/</span>`
+              : ""
+          }
+          <span>${this.esc(selected.title)}</span>
+        </p>
         <div class="toolbar del-roadmap-bar">
-          <span class="muted">${milestones.length} milestone${milestones.length === 1 ? "" : "s"}</span>
-          <span class="muted">·</span>
-          <span class="muted">${edgesList.length} edge${edgesList.length === 1 ? "" : "s"}</span>
+          <a class="ghost" href="${listHref}">← Milestones</a>
           <span class="muted" style="flex:1;text-align:right;font-size:0.85rem">
-            Drag cards to arrange (position saved) · click to inspect · Bootstrap from Designs seeds phases
+            One milestone · Design Versions land as phases
           </span>
         </div>
-        <div class="del-roadmap">
-          <div class="del-canvas card">${canvasBody}</div>
-          <aside class="card del-inspector">${inspector}</aside>
+        <div class="del-rm-detail-grid">
+          <section class="card del-rm-detail-main">
+            <div class="del-inspector-kicker muted">Milestone${msKey ? ` · ${this.esc(msKey)}` : ""}</div>
+            <h2 class="del-rm-detail-title">${this.esc(selected.title)}</h2>
+            <div class="del-inspector-badges">${this.badge(life || selected.status)}</div>
+            ${
+              project
+                ? `<p class="muted del-rm-detail-project">Project · ${this.esc(project)}</p>`
+                : ""
+            }
+            ${
+              selected.acceptance
+                ? `<p class="del-inspector-accept">${this.esc(selected.acceptance)}</p>`
+                : ""
+            }
+            <div class="del-inspector-links">
+              ${
+                desHref
+                  ? `<a href="${desHref}">Open design</a>`
+                  : `<span class="muted">No bound design</span>`
+              }
+              ${
+                reqHref
+                  ? `<a href="${reqHref}">Requirements ${this.esc(msKey)}</a>`
+                  : ""
+              }
+            </div>
+            ${
+              markReady
+                ? `<div class="del-ready-block">${markReady}
+                     <p class="muted del-ready-hint">Unlocks Execute for this milestone.</p>
+                   </div>`
+                : ""
+            }
+            <div class="del-inspector-sec">
+              <div class="del-inspector-sec-head">
+                <h4>Phase chain</h4>
+                <span class="muted">${phases.length} · from Design Versions</span>
+              </div>
+              <ol class="del-phases">${phaseList}</ol>
+            </div>
+          </section>
+          <aside class="card del-inspector del-rm-detail-side">
+            <div class="del-exec-block" style="border:none;margin:0;padding:0">
+              <div class="del-inspector-sec-head">
+                <h4>Execute</h4>
+                ${life ? this.badge(life) : `<span class="muted">—</span>`}
+              </div>
+              <label class="del-exec-label muted" for="del-exec-worker">Worker</label>
+              <select id="del-exec-worker" data-ms="${this.esc(selected.id)}"
+                ${workerChoices.length || curWorker ? "" : "disabled"}>
+                ${workerSelectHtml}
+              </select>
+              <p class="muted del-exec-hint">${this.esc(execHint)}</p>
+              <button type="button" id="del-exec-run" data-ms="${this.esc(selected.id)}"
+                ${canExecute ? "" : "disabled"}>Execute</button>
+            </div>
+          </aside>
         </div>
       </div>`;
   },
