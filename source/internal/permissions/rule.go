@@ -138,6 +138,18 @@ type rule struct {
 	reason  string
 }
 
+// Rules returns the rules as written, in the order they decide.
+func (s *Set) Rules() []Rule {
+	if s == nil {
+		return nil
+	}
+	out := make([]Rule, 0, len(s.rules))
+	for _, r := range s.rules {
+		out = append(out, Rule{Effect: r.effect.String(), Tool: r.tool, Pattern: r.pattern, Reason: r.reason})
+	}
+	return out
+}
+
 // Len reports how many rules the set holds.
 func (s *Set) Len() int {
 	if s == nil {

@@ -158,6 +158,13 @@ type SessionParams struct {
 	LoadRules       bool     `json:"load_rules,omitempty"`
 	LoadCursorRules bool     `json:"load_cursor_rules,omitempty"`
 	SettingSources  []string `json:"setting_sources,omitempty"`
+
+	// LoadHooks and LoadPermissions are pointers so that "not sent" is distinct
+	// from "sent as false": both default to ON for a workspace the editor opened,
+	// because .anvil/hooks.json and .anvil/permissions.json are policy the user
+	// wrote for that workspace. A client that wants them off has to say so.
+	LoadHooks       *bool `json:"load_hooks,omitempty"`
+	LoadPermissions *bool `json:"load_permissions,omitempty"`
 	BuiltinTools    []string `json:"builtin_tools,omitempty"`
 	DisallowedTools []string `json:"disallowed_tools,omitempty"`
 	Skills          []string `json:"skills,omitempty"`
@@ -212,8 +219,11 @@ const (
 	// ModePlan removes the tools that can change the workspace, so the model
 	// produces a plan and stops.
 	ModePlan = "plan"
-	// ModeBypass installs no gate at all. The client is expected to say so
-	// loudly; the host deliberately does not soften it.
+	// ModeBypass installs a callback that approves every call without showing it.
+	// The client is expected to say so loudly; the host deliberately does not
+	// soften it. What bypass does *not* skip is the workspace's written policy:
+	// a deny rule is still decided in the registry, where no callback can reach
+	// it, and a rule that asks is simply answered yes.
 	ModeBypass = "bypass"
 )
 

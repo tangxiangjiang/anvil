@@ -5,6 +5,7 @@ package editorhost
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -465,7 +466,11 @@ func TestAcceptEditsSkipsTheWritePrompt(t *testing.T) {
 	}
 }
 
-func TestBypassInstallsNoGate(t *testing.T) {
+// Bypass still answers every call itself — it just installs a callback that
+// approves rather than no callback at all, so that a deny written in the
+// workspace's policy file has something to hold against. See
+// TestBypassStillHonoursADenyRule for the other half.
+func TestBypassApprovesWithoutAsking(t *testing.T) {
 	llm := newStubLLM(t,
 		toolTurn("call_1", "write_file", `{"path":"a.txt","content":"one"}`),
 		toolTurn("call_2", "shell", `{"command":"echo hi"}`),
@@ -485,6 +490,172 @@ func TestBypassInstallsNoGate(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "a.txt")); err != nil {
 		t.Fatalf("bypass must let the write through: %v", err)
+	}
+}
+
+// --- the workspace's own policy file -----------------------------------------
+
+// writePolicy drops a .anvil/permissions.json into a workspace that has already
+// been initialized. Sessions read it when they are opened, so a policy written
+// here applies to every session this test opens next.
+func writePolicy(t *testing.T, dir, body string) {
+	t.Helper()
+	anvilDir := filepath.Join(dir, ".anvil")
+	if err := os.MkdirAll(anvilDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(anvilDir, "permissions.json"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Bypass skips the asking. It does not skip the policy: a deny the user wrote
+// down is the one thing a "run everything" mode may not quietly overrule.
+func TestBypassStillHonoursADenyRule(t *testing.T) {
+	llm := newStubLLM(t,
+		toolTurn("call_1", "shell", `{"command":"rm -rf build"}`),
+		textTurn("done"),
+	)
+	h, dir := initHost(t, llm.baseURL())
+	writePolicy(t, dir, `{"version":1,"rules":[
+		{"effect":"deny","tool":"shell","pattern":"rm -rf:*","reason":"no destructive commands"}
+	]}`)
+	sessionID := startSession(t, h, SessionParams{PermissionMode: ModeBypass})
+
+	if err := os.MkdirAll(filepath.Join(dir, "build"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	asks := 0
+	out := promptRun(t, h, sessionID, "clean up", func(map[string]any) map[string]any {
+		asks++
+		return map[string]any{"decision": DecisionAllow}
+	})
+
+	if asks != 0 {
+		t.Fatalf("bypass must not prompt even when a rule denies, got %d asks", asks)
+	}
+	results := toolResultsOf(t, out.events)
+	if len(results) != 1 || results[0]["is_error"] != true {
+		t.Fatalf("the deny must reach the model as a tool error, got %v", results)
+	}
+	content, _ := results[0]["content"].(string)
+	for _, want := range []string{"permissions.json", "no destructive commands"} {
+		if !strings.Contains(content, want) {
+			t.Errorf("the refusal %q does not mention %q", content, want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "build")); err != nil {
+		t.Fatalf("a denied command must not have run: %v", err)
+	}
+}
+
+// A workspace that commits a policy file gets it enforced without the client
+// having to ask: an undefined load_permissions means on.
+func TestWorkspacePolicyIsOnByDefault(t *testing.T) {
+	llm := newStubLLM(t,
+		toolTurn("call_1", "write_file", `{"path":"secret.txt","content":"one"}`),
+		textTurn("done"),
+	)
+	h, dir := initHost(t, llm.baseURL())
+	writePolicy(t, dir, `{"version":1,"rules":[
+		{"effect":"deny","tool":"write_file","pattern":"secret.txt"}
+	]}`)
+	sessionID := startSession(t, h, SessionParams{})
+
+	asks := 0
+	out := promptRun(t, h, sessionID, "write", func(map[string]any) map[string]any {
+		asks++
+		return map[string]any{"decision": DecisionAllow}
+	})
+
+	if asks != 0 {
+		t.Fatalf("a deny must decide before the prompt, got %d asks", asks)
+	}
+	results := toolResultsOf(t, out.events)
+	if len(results) != 1 || results[0]["is_error"] != true {
+		t.Fatalf("the rule should have refused the write, got %v", results)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "secret.txt")); err == nil {
+		t.Fatal("a denied write must not reach the disk")
+	}
+}
+
+// The switch exists so a client that manages policy elsewhere can turn the file
+// off — and then the same file has no effect at all.
+func TestLoadPermissionsFalseIgnoresTheFile(t *testing.T) {
+	llm := newStubLLM(t,
+		toolTurn("call_1", "write_file", `{"path":"secret.txt","content":"one"}`),
+		textTurn("done"),
+	)
+	h, dir := initHost(t, llm.baseURL())
+	writePolicy(t, dir, `{"version":1,"rules":[
+		{"effect":"deny","tool":"write_file","pattern":"secret.txt"}
+	]}`)
+	off := false
+	sessionID := startSession(t, h, SessionParams{LoadPermissions: &off})
+
+	out := promptRun(t, h, sessionID, "write", autoApprove)
+	results := toolResultsOf(t, out.events)
+	if len(results) != 1 || results[0]["is_error"] == true {
+		t.Fatalf("with the file switched off the write should go through, got %v", results)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "secret.txt")); err != nil {
+		t.Fatalf("the write should have reached the disk: %v", err)
+	}
+}
+
+// The point of the whole feature, end to end: in one turn the model runs a
+// read-only command and a destructive one, and only the second one is worth a
+// prompt. `ls` is admitted by the analyzer through a `readonly` rule; nothing
+// admits `rm -rf build`, so it still asks — and a deny leaves the directory.
+func TestReadonlyRuleSilencesOnlyTheHarmlessCommand(t *testing.T) {
+	llm := newStubLLM(t,
+		toolTurn("call_1", "shell", `{"command":"ls"}`),
+		toolTurn("call_2", "shell", `{"command":"rm -rf build"}`),
+		textTurn("done"),
+	)
+	h, dir := initHost(t, llm.baseURL())
+	writePolicy(t, dir, `{"version":1,"rules":[
+		{"effect":"allow","tool":"shell","pattern":"readonly","reason":"read-only commands"}
+	]}`)
+	if err := os.MkdirAll(filepath.Join(dir, "build"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sessionID := startSession(t, h, SessionParams{})
+
+	var asked []string
+	out := promptRun(t, h, sessionID, "look then clean", func(req map[string]any) map[string]any {
+		cmd, _ := req["args"].(map[string]any)
+		asked = append(asked, fmt.Sprint(cmd["command"]))
+		return map[string]any{"decision": DecisionDeny}
+	})
+
+	if len(asked) != 1 || asked[0] != "rm -rf build" {
+		t.Fatalf("only the destructive command should have asked, asked %v", asked)
+	}
+	results := toolResultsOf(t, out.events)
+	if len(results) != 2 || results[0]["is_error"] == true {
+		t.Fatalf("the allowed command must have run, got %v", results)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "build")); err != nil {
+		t.Fatalf("the denied command must not have run: %v", err)
+	}
+}
+
+// A rule file that cannot be read fails the session instead of being skipped:
+// an unreadable policy is not the same thing as no policy.
+func TestMalformedPolicyFailsTheSession(t *testing.T) {
+	llm := newStubLLM(t, textTurn("ok"))
+	h, dir := initHost(t, llm.baseURL())
+	writePolicy(t, dir, `{"version":1,"rules":[{"effect":"deny"}]}`)
+
+	m := h.call(MethodSessionNew, SessionParams{})
+	rpcErr, ok := rpcErrorOf(m)
+	if !ok {
+		t.Fatalf("session.new should fail on a malformed policy, got %v", m)
+	}
+	if !strings.Contains(rpcErr.Message, "permissions.json") {
+		t.Fatalf("the error must name the file, got %q", rpcErr.Message)
 	}
 }
 

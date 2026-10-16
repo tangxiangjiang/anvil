@@ -591,6 +591,11 @@ func (s *Server) buildOptions(p SessionParams, sess *session) (anvil.Options, *R
 			CWD:             s.cwdPath(),
 			LoadRules:       p.LoadRules,
 			LoadCursorRules: p.LoadCursorRules,
+			// Both default to on: a policy file in the workspace the user just
+			// opened is policy they wrote for it. A malformed file therefore fails
+			// session.new with the path named, which is the intended trade.
+			LoadHooks:       boolOr(p.LoadHooks, true),
+			LoadPermissions: boolOr(p.LoadPermissions, true),
 			Store:           p.Store,
 		},
 		// Off unless the client asks: Vision.Enabled is what makes the SDK
@@ -627,10 +632,27 @@ func (s *Server) buildOptions(p SessionParams, sess *session) (anvil.Options, *R
 		// goes with it is a prompt prefix; see handlePrompt.
 		opts.DisallowedTools = append(append([]string(nil), opts.DisallowedTools...), planDisallowedTools...)
 	}
-	if sess.mode != ModeBypass {
+	if sess.mode == ModeBypass {
+		// Bypass skips the asking, not the policy. Installing a callback that
+		// approves without being shown anything is what makes a rule that asks
+		// mean "run it" here, while a rule that denies still denies — the deny is
+		// decided in the registry, before this callback is reached.
+		opts.Permission = func(context.Context, anvil.PermissionRequest) (anvil.PermissionDecision, error) {
+			return anvil.PermissionDecision{Allow: true}, nil
+		}
+	} else {
 		opts.Permission = s.permissionHook(sess, approvalTimeout(p.ApprovalTimeoutMS))
 	}
 	return opts, nil
+}
+
+// boolOr reads a tri-state request field: absent means the default the host
+// chose, and only an explicit false turns it off.
+func boolOr(v *bool, def bool) bool {
+	if v == nil {
+		return def
+	}
+	return *v
 }
 
 // planDisallowedTools is what plan mode withholds. Everything else stays

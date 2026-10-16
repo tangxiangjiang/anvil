@@ -18,8 +18,15 @@ type Preview struct {
 	// "summary" (recognised but not previewable), or "" (nothing to say).
 	Kind string
 
-	// Path is the workspace-relative target for a diff preview.
+	// Path is the workspace-relative target for a diff preview. A call that
+	// touches several files joins their names here for display, which is why
+	// Paths exists.
 	Path string
+	// Paths are the paths the call touches, one entry each and unjoined. A
+	// permission rule matches these rather than Path: a filename may itself
+	// contain the separator Path joins with, and re-splitting it would read one
+	// file as two.
+	Paths []string
 	// Diff is a unified diff of the projected change, for Kind == "diff".
 	Diff string
 	// Before and After are the file's body before and after the projected
@@ -70,17 +77,18 @@ func (r *Registry) PreviewFor(name string, args json.RawMessage) Preview {
 		}
 		abs, err := r.resolvePath(in.Path)
 		if err != nil {
-			return Preview{Kind: PreviewSummary, Path: in.Path, Summary: err.Error()}
+			return Preview{Kind: PreviewSummary, Path: in.Path, Paths: []string{in.Path}, Summary: err.Error()}
 		}
 		data, err := os.ReadFile(abs)
 		if err != nil {
-			return Preview{Kind: PreviewSummary, Path: in.Path, Summary: err.Error()}
+			return Preview{Kind: PreviewSummary, Path: in.Path, Paths: []string{in.Path}, Summary: err.Error()}
 		}
 		text := string(data)
 		if count := strings.Count(text, in.OldString); count != 1 {
 			return Preview{
 				Kind:    PreviewSummary,
 				Path:    in.Path,
+				Paths:   []string{in.Path},
 				Summary: editCountSummary(count),
 			}
 		}
@@ -105,6 +113,67 @@ func (r *Registry) PreviewFor(name string, args json.RawMessage) Preview {
 	default:
 		return Preview{Kind: PreviewSummary, Summary: string(args)}
 	}
+}
+
+// commandOf is the shell command line a call would run, read straight from the
+// arguments. It answers "" for every other tool, and it reads nothing from disk:
+// a permission rule must be decidable without doing any of the work the call
+// would do.
+func commandOf(name string, args json.RawMessage) string {
+	if name != "shell" {
+		return ""
+	}
+	var in struct {
+		Command string `json:"command"`
+	}
+	if json.Unmarshal(args, &in) != nil {
+		return ""
+	}
+	return in.Command
+}
+
+// pathsOf is every path a call touches, read straight from the arguments. Like
+// commandOf it reads nothing from disk and computes no diff, so a call a rule
+// settles outright never pays for a preview it does not show.
+//
+// Nil means "no paths", and it also means "not knowable": a patch that does not
+// parse has no paths to name, so a path rule cannot match it and the call is
+// asked about instead.
+func pathsOf(name string, args json.RawMessage) []string {
+	switch name {
+	case "write_file", "edit_file":
+		var in struct {
+			Path string `json:"path"`
+		}
+		if json.Unmarshal(args, &in) != nil || in.Path == "" {
+			return nil
+		}
+		return []string{in.Path}
+	case "apply_patch":
+		var in struct {
+			Patch string `json:"patch"`
+		}
+		if json.Unmarshal(args, &in) != nil || in.Patch == "" {
+			return nil
+		}
+		ops, err := parsePatch(in.Patch)
+		if err != nil {
+			return nil
+		}
+		return opPaths(ops)
+	}
+	return nil
+}
+
+// opPaths names every path a parsed patch touches, in the order it touches them.
+// The preview and the rule matcher both go through here, so the paths a rule
+// matches are the paths the approval card shows.
+func opPaths(ops []patchOp) []string {
+	paths := make([]string, 0, len(ops))
+	for _, op := range ops {
+		paths = append(paths, op.Path)
+	}
+	return paths
 }
 
 func editCountSummary(count int) string {
@@ -147,25 +216,22 @@ func (r *Registry) patchPreview(args json.RawMessage) Preview {
 	if err != nil {
 		return Preview{Kind: PreviewSummary, Summary: err.Error()}
 	}
-	var paths []string
+	paths := opPaths(ops)
 	var diffs []string
 	for _, op := range ops {
 		switch op.Kind {
 		case patchAdd:
-			paths = append(paths, op.Path)
 			diffs = append(diffs, unifiedDiff(op.Path, "", op.AddContent))
 		case patchDelete:
-			paths = append(paths, op.Path)
 			pre, err := r.readForPreview(op.Path)
 			if err != nil {
-				return Preview{Kind: PreviewSummary, Path: op.Path, Summary: err.Error()}
+				return Preview{Kind: PreviewSummary, Path: op.Path, Paths: []string{op.Path}, Summary: err.Error()}
 			}
 			diffs = append(diffs, unifiedDiff(op.Path, pre, ""))
 		case patchUpdate:
-			paths = append(paths, op.Path)
 			pre, err := r.readForPreview(op.Path)
 			if err != nil {
-				return Preview{Kind: PreviewSummary, Path: op.Path, Summary: err.Error()}
+				return Preview{Kind: PreviewSummary, Path: op.Path, Paths: []string{op.Path}, Summary: err.Error()}
 			}
 			text := pre
 			for i, h := range op.Hunks {
@@ -174,6 +240,7 @@ func (r *Registry) patchPreview(args json.RawMessage) Preview {
 					return Preview{
 						Kind:    PreviewSummary,
 						Path:    op.Path,
+						Paths:   []string{op.Path},
 						Summary: hunkErrorSummary(op.Path, i, err),
 					}
 				}
@@ -186,9 +253,10 @@ func (r *Registry) patchPreview(args json.RawMessage) Preview {
 	// there is no single pre- or post-image to hand a diff editor. The
 	// concatenated diff is what the caller shows instead.
 	return Preview{
-		Kind: PreviewDiff,
-		Path: strings.Join(paths, ", "),
-		Diff: strings.Join(diffs, ""),
+		Kind:  PreviewDiff,
+		Path:  strings.Join(paths, ", "),
+		Paths: paths,
+		Diff:  strings.Join(diffs, ""),
 	}
 }
 
@@ -222,11 +290,12 @@ func (r *Registry) readForPreview(path string) (string, error) {
 func (r *Registry) diffPreview(path, next string) Preview {
 	pre, err := r.readForPreview(path)
 	if err != nil {
-		return Preview{Kind: PreviewSummary, Path: path, Summary: err.Error()}
+		return Preview{Kind: PreviewSummary, Path: path, Paths: []string{path}, Summary: err.Error()}
 	}
 	return Preview{
 		Kind:   PreviewDiff,
 		Path:   path,
+		Paths:  []string{path},
 		Diff:   unifiedDiff(path, pre, next),
 		Before: pre,
 		After:  next,

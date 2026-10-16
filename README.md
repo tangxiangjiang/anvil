@@ -61,7 +61,7 @@ func main() {
 
 ## Status
 
-Product is at **0.35 delivered**. Full per-milestone index: [`doc/roadmaps/v1.0/README.md`](doc/roadmaps/v1.0/README.md).
+Product is at **0.35 delivered**, with **0.36 in progress** (tool permissions: a workspace rule file, a shell analyzer, and a `deny` that holds with nobody to ask). Full per-milestone index: [`doc/roadmaps/v1.0/README.md`](doc/roadmaps/v1.0/README.md).
 
 | Era | Milestones | What |
 |-----|-----------|------|
@@ -69,6 +69,7 @@ Product is at **0.35 delivered**. Full per-milestone index: [`doc/roadmaps/v1.0/
 | Agent capabilities | 0.11 – 0.22 | worker daemon, model gateway, retrieval, hooks & skills, web search, LSP, git tools, test & build, vision, plugins, dev memory, project search |
 | Automated coding tool-chain | 0.23 – 0.34 | YAML ops config, scheduler hub, web fleet console, mobile app, app fleets, clusters/workers, sandbox workers, loop guard, job event stream, sandbox code review, delivery UI, workspace domain |
 | Editor client | 0.35 | VS Code extension + `anvil-host` sidecar, packaged as per-platform VSIX — [design 35](doc/design/v1.0/35-vscode-extension.md) |
+| Tool permissions | 0.36 (in progress) | `.anvil/permissions.json` rule set, a shell analyzer that proves read-only, and the loading switch that makes `.anvil/hooks.json` real — [design 36](doc/design/v1.0/36-tool-permissions.md) |
 
 ### VS Code extension (0.35)
 
@@ -121,6 +122,49 @@ Offline eval: `cd source && go test ./eval`
 Local: anvil.LocalOptions{
   CWD:       ".",
   LoadRules: true, // AGENTS.md + .anvil/rules/*.md
+}
+```
+
+### Tool permissions (0.36)
+
+A workspace can write down what the agent may do, in `.anvil/permissions.json` — and the
+rules hold whether or not a client is there to ask, `bypass` included. See
+[design 36](doc/design/v1.0/36-tool-permissions.md).
+
+```json
+{
+  "version": 1,
+  "rules": [
+    { "effect": "allow", "tool": "shell", "pattern": "readonly", "reason": "read-only commands" },
+    { "effect": "allow", "tool": "shell", "pattern": "git status:*" },
+    { "effect": "deny",  "tool": "shell", "pattern": "rm -rf:*", "reason": "destructive" },
+    { "effect": "allow", "tool": "write_file", "pattern": "src/**/*.go" },
+    { "effect": "ask",   "tool": "apply_patch", "pattern": "**/*.md" }
+  ]
+}
+```
+
+Across effects **`deny` > `ask` > `allow`** — one matching deny defeats every allow; within
+one effect the first rule in the file wins. `pattern` is read per call, not per tool:
+`readonly` means the analyzer proved the whole command line non-mutating, otherwise an exact
+command or a `prefix:*` compared token by token (so `git status:*` does not admit
+`git status && rm -rf /`), and on a call that touches files it is a path glob that has to
+cover **every** path the call touches. A missing file means no rules; a malformed one fails
+session creation, naming the line.
+
+The library and the CLI read the files only when asked to, and the editor host and CLI
+default both switches on:
+
+```go
+Local: anvil.LocalOptions{
+  CWD:             ".",
+  LoadPermissions: true, // .anvil/permissions.json
+  LoadHooks:       true, // .anvil/hooks.json — no client loaded this before 0.36
+}
+// Rules can also be installed from code; they come after the file's, so the
+// numbers a rule error names still point at the file.
+Options.PermissionRules: []anvil.PermissionRule{
+  {Effect: "deny", Tool: "shell", Pattern: "rm -rf:*", Reason: "destructive"},
 }
 ```
 

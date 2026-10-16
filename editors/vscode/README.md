@@ -157,7 +157,11 @@ a log line.
   `plan`, and `bypass` are session options in the SDK, so switching one closes
   the session and re-opens it under the same agent: same history, new mode. The
   mode is remembered per workspace. `bypass` is flagged in the composer, and a
-  mode change is refused while a turn is running.
+  mode change is refused while a turn is running. `bypass` stops the *asking*,
+  not the policy: a `deny` written in `.anvil/permissions.json` still refuses the
+  call, and the editor loads that file — and `.anvil/hooks.json`, which no client
+  loaded before 0.36 — for every new session. See
+  [`doc/design/v1.0/36-tool-permissions.md`](../../doc/design/v1.0/36-tool-permissions.md).
 - **Keeps the conversation when you close the tab.** The tab is a view of a
   session, not the session itself: closing it leaves the agent and the host
   running, and reopening it re-announces the session, the mode and any approval

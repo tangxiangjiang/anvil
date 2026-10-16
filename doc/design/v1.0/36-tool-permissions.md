@@ -90,11 +90,19 @@ the useful pattern for a path:
 | `shell` | Literal `readonly` (the analyzer's verdict), an exact command, or `prefix:*` |
 | `write_file`, `edit_file` | A workspace-relative path glob (with `**/`) |
 | `apply_patch` | A path glob that must cover **every** path the patch touches |
-| anything else | A glob over the tool's dry-run-free argument summary; omitted ⇒ match by tool name |
+| anything else | A glob over the tool **name** — a second way of writing the tool-name glob |
 
 Tool names may be globbed (`mcp_*`). `run_tests` and `build` are in the last row on purpose:
 their preview is the **configured** argv, not the model's arguments, so a command-shaped
 rule on them could not see what it claims to see, and name matching is the honest form.
+
+A call that carries neither a command nor paths has no fact for a shape-specific pattern to
+be compared against, so its `pattern` is compared with the **tool name**. A path-shaped
+pattern on such a call therefore matches nothing, and the call is asked about: `read_file`
+carries no path fact, so `{"effect":"ask","tool":"read_file","pattern":"**/*.md"}` never
+fires, while `{"effect":"ask","tool":"read_file"}` fires on every read. Letting a rule match
+a read by path means widening the card first, so that a pattern still only ever matches
+something the user was shown — that is p_0.36.2's job, not a silent widening here.
 
 **An omission is not a wildcard in the dangerous direction.** An empty `pattern` matches by
 tool name alone, and an empty path list — a call whose paths could not be determined — never
@@ -164,6 +172,15 @@ The rule engine never computes a diff or a patch body. It reads the cheap facts 
 expensive preview is computed exactly where it was before — when someone is actually going
 to be asked.
 
+The one case where that no longer holds is `bypass`. The mode requests no gated groups, but
+an empty group set falls back to `IsMutating` (`internal/tools/tools.go`), so a mutating call
+still reaches the `ask` branch — and because `bypass` now installs an always-allow callback
+rather than none, `Execute` builds a preview for it and hands it to a callback that approves
+without looking. A wasted dry run per mutating call in `bypass` is the accepted price of
+keeping `deny` alive in that mode without a second decision path; before, the whole block was
+skipped for want of a callback, which is exactly the hole this chapter closes. The preview is
+built in memory from a file already being read, and `bypass` is not a default mode.
+
 ## Failure modes
 
 | Situation | Behaviour | Why |
@@ -211,6 +228,9 @@ the CLI does the same. A malformed file therefore fails session creation with th
 - A model in the decision path, at any point.
 - OS-level isolation: containers, seccomp, filesystems — [32](32-sandbox-code-review.md).
 - Rule inheritance (user level, enterprise managed settings) and rule distribution.
+- Path rules on reads (`read_file`, `grep`, `glob`): those calls carry no path fact, so a rule
+  on one matches by tool name. Widening them means widening the card in the same move —
+  p_0.36.2.
 - A complete shell grammar; anything unproven is `cannot-prove`.
 - Per-hunk approval policy and persisting approvals across sessions.
 

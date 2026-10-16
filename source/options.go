@@ -65,6 +65,15 @@ type Options struct {
 	// Has no effect unless Permission is also set, since there is nobody to ask.
 	PermissionGroups []string
 
+	// PermissionRules is a rule set given in code (0.36+). Unlike PermissionGroups
+	// it needs no callback to take effect: a deny holds whether or not Permission
+	// is set, and an allow runs the call without a prompt.
+	//
+	// Rules written in .anvil/permissions.json come first when LocalOptions
+	// asks for them, so the file keeps the order a reader sees and these append
+	// to it.
+	PermissionRules []PermissionRule
+
 	// HistoryMaxChars enables context compression when history exceeds this size (0 = off).
 	HistoryMaxChars int
 	// HistoryKeepRecent is how many trailing messages to keep verbatim when compressing.
@@ -223,6 +232,16 @@ type LocalOptions struct {
 	// When SettingSources includes "project", .cursor/rules are loaded even if this is false.
 	LoadCursorRules bool
 
+	// LoadHooks loads .anvil/hooks.json (off by default, 0.36+). Before this
+	// existed the file was reachable only through SettingSources containing
+	// "project", which neither the editor host nor the CLI ever set — so its deny
+	// rules never applied in either. It is a switch of its own now.
+	LoadHooks bool
+	// LoadPermissions loads .anvil/permissions.json (off by default, 0.36+). A
+	// malformed file fails Create rather than being ignored: silently dropping a
+	// policy somebody wrote is worse than refusing to start.
+	LoadPermissions bool
+
 	// Store selects the session backend: "jsonl" (default) or "sqlite".
 	Store string
 
@@ -294,8 +313,13 @@ type ToolPreview struct {
 	// Kind is "diff", "command", "summary", or "" when there is nothing to show.
 	Kind string
 	// Path is the target of a diff preview; for apply_patch it lists every file
-	// the patch touches, comma-separated.
+	// the patch touches, comma-separated, for display.
 	Path string
+	// Paths are the paths the call touches, one entry each and unjoined — what a
+	// permission rule matches, since a filename may contain the separator Path
+	// joins with. Empty means the call touches no file, or that its paths could
+	// not be determined.
+	Paths []string
 	// Diff is a unified diff of the projected change, for Kind == "diff".
 	Diff string
 	// Before and After are the target's body before and after the projected

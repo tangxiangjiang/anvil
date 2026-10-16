@@ -18,6 +18,7 @@ import (
 
 	"github.com/anvil-dev/anvil/internal/llm"
 	"github.com/anvil-dev/anvil/internal/lsp"
+	"github.com/anvil-dev/anvil/internal/permissions"
 )
 
 const defaultMaxOutput = 64 * 1024
@@ -61,6 +62,7 @@ type Registry struct {
 	tools      map[string]Tool
 	permission PermissionFunc
 	permGroups map[string]bool
+	permRules  *permissions.Set
 	preExec    PreExecFunc
 	postExec   PostExecFunc
 	indexEmbed IndexEmbed
@@ -180,6 +182,24 @@ func (r *Registry) SetPermissionGroups(selectors []string) {
 	r.permGroups = ExpandToolSelectors(selectors)
 }
 
+// SetPermissionRules installs the workspace rule set. nil clears it.
+//
+// The rules are evaluated in Execute rather than inside PermissionFunc, and the
+// paragraph above is the reason: a callback is optional, so a policy that has to
+// hold for a caller which installed none cannot live in one. A rule therefore
+// denies for the CLI and for a library embedder, and it denies in bypass, where
+// there is no prompt to answer; a rule that allows skips a prompt that was never
+// going to be answered differently.
+//
+// With no rules installed, the decision path is exactly what it was before this
+// existed.
+func (r *Registry) SetPermissionRules(set *permissions.Set) {
+	if r == nil {
+		return
+	}
+	r.permRules = set
+}
+
 // PermissionFunc decides allow/deny/rewrite for a gated tool call, given the
 // call's preview.
 type PermissionFunc func(ctx context.Context, name string, args json.RawMessage, preview Preview) (json.RawMessage, error)
@@ -233,15 +253,38 @@ func (r *Registry) Execute(ctx context.Context, name string, args json.RawMessag
 			return Result{Content: err.Error(), IsError: true}
 		}
 	}
-	if r.permission != nil && r.gated(name, t) {
-		// A denied call is reported to the model as a tool error rather than
-		// aborting the run, so the model can adapt instead of dying.
-		next, err := r.permission(ctx, name, args, r.PreviewFor(name, args))
-		if err != nil {
-			return Result{Content: err.Error(), IsError: true}
-		}
-		if next != nil {
-			execArgs = next
+	// The workspace's written policy is consulted before the callback, because
+	// the callback is optional and the policy is not. See SetPermissionRules.
+	var decision permissions.Decision
+	if r.permRules.Len() > 0 {
+		decision = r.permRules.Evaluate(callFacts(name, args), runtime.GOOS)
+	}
+	if decision.Matched && decision.Effect == permissions.Deny {
+		return Result{Content: ruleDenyMessage(name, decision), IsError: true}
+	}
+	// A rule that asks insists on a prompt even for a tool the gate would not
+	// have covered; a rule that allows runs the call without one; and no rule at
+	// all leaves the gate to decide, exactly as before.
+	ask := r.gated(name, t)
+	if decision.Matched {
+		ask = decision.Effect == permissions.Ask
+	}
+	if ask {
+		switch {
+		case r.permission != nil:
+			// A denied call is reported to the model as a tool error rather than
+			// aborting the run, so the model can adapt instead of dying.
+			next, err := r.permission(ctx, name, args, r.PreviewFor(name, args))
+			if err != nil {
+				return Result{Content: err.Error(), IsError: true}
+			}
+			if next != nil {
+				execArgs = next
+			}
+		case decision.Matched:
+			// Nobody to ask, and a rule that says "ask" must never quietly become
+			// "run it".
+			return Result{Content: ruleNoChannelMessage(name, decision), IsError: true}
 		}
 	}
 	res = t.Execute(ctx, execArgs)
@@ -251,6 +294,44 @@ func (r *Registry) Execute(ctx context.Context, name string, args json.RawMessag
 		res.Content = truncate(res.Content, r.maxOutput)
 	}
 	return res
+}
+
+// callFacts are the facts a permission rule may match on: the tool name, the
+// shell command line, and the paths the call touches. All three are functions of
+// the arguments alone, so a rule costs no dry run and no disk read — and a rule
+// can only ever match what the approval card shows.
+func callFacts(name string, args json.RawMessage) permissions.CallFacts {
+	return permissions.CallFacts{
+		Tool:    name,
+		Command: commandOf(name, args),
+		Paths:   pathsOf(name, args),
+	}
+}
+
+// ruleDenyMessage explains a denial to the model the way the file spells the
+// rule, so it can be quoted back and found.
+func ruleDenyMessage(name string, d permissions.Decision) string {
+	return name + " denied by " + ruleRef(d)
+}
+
+// ruleNoChannelMessage is the fail-closed answer when a rule asks for
+// confirmation in a run that has no way to ask for it.
+func ruleNoChannelMessage(name string, d permissions.Decision) string {
+	return name + " denied: " + ruleRef(d) + " asks for confirmation and no approval channel is installed"
+}
+
+// ruleRef names one rule out of .anvil/permissions.json, with its position
+// counted the way a reader counts.
+func ruleRef(d permissions.Decision) string {
+	pattern := ""
+	if d.Pattern != "" {
+		pattern = fmt.Sprintf(" %q", d.Pattern)
+	}
+	ref := fmt.Sprintf(".anvil/permissions.json rule %d (%s %s%s)", d.Index+1, d.Effect, d.Tool, pattern)
+	if d.Reason != "" {
+		ref += ": " + d.Reason
+	}
+	return ref
 }
 
 func (r *Registry) resolvePath(p string) (string, error) {

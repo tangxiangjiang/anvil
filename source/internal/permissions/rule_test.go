@@ -194,3 +194,56 @@ func TestChapterExampleCompiles(t *testing.T) {
 		}
 	}
 }
+
+// Rules() hands the rules back as written, in the order they decide. The agent
+// builds a session's policy by compiling the workspace file's rules, appending
+// the caller's, and compiling the two together, so the round trip has to be
+// exact: a dropped reason or a reordered pair would change which rule decides
+// without changing a line of the file the user reads.
+func TestRulesRoundTripIsExact(t *testing.T) {
+	want := []Rule{
+		{Effect: "allow", Tool: "shell", Pattern: "readonly", Reason: "read-only commands"},
+		{Effect: "allow", Tool: "shell", Pattern: "git status:*"},
+		{Effect: "deny", Tool: "shell", Pattern: "rm -rf:*", Reason: "destructive"},
+		{Effect: "ask", Tool: "apply_patch", Pattern: "**/*.md"},
+		{Effect: "deny", Tool: "mcp_*"},
+	}
+	set, err := New(want)
+	if err != nil {
+		t.Fatalf("New = %v", err)
+	}
+
+	got := set.Rules()
+	if len(got) != len(want) {
+		t.Fatalf("Rules() has %d rules, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("Rules()[%d] = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+
+	again, err := New(got)
+	if err != nil {
+		t.Fatalf("New(Rules()) = %v", err)
+	}
+	for _, f := range []CallFacts{
+		{Tool: "shell", Command: "git log --oneline -1"},
+		{Tool: "shell", Command: "git status --short"},
+		{Tool: "shell", Command: "rm -rf build"},
+		{Tool: "shell", Command: "curl https://example.com"},
+		{Tool: "apply_patch", Paths: []string{"README.md"}},
+		{Tool: "mcp_fetch"},
+		{Tool: "write_file", Paths: []string{"a.go"}},
+	} {
+		if a, b := set.Evaluate(f, "linux"), again.Evaluate(f, "linux"); a != b {
+			t.Errorf("Evaluate(%+v) = %s, but %s after a Rules() round trip", f, a, b)
+		}
+	}
+
+	// A nil set is a workspace with no rules, and it hands back nothing to
+	// concatenate rather than a panic or an empty rule.
+	if got := (*Set)(nil).Rules(); got != nil {
+		t.Errorf("nil set Rules() = %v, want nil", got)
+	}
+}

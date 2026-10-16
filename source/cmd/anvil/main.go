@@ -220,7 +220,11 @@ func buildOptions(cwd string, f cliFlags) (anvil.Options, error) {
 		APIKey:      apiKey,
 		BaseURL:     baseURL,
 		Model:       anvil.Model{ID: model},
-		Local:       anvil.LocalOptions{CWD: abs, Store: storeKind},
+		// A workspace opened from the CLI gets the same treatment as one opened in
+		// the editor: the policy files it carries apply. Neither was loaded before
+		// 0.36, so this is the first version in which a deny written in
+		// .anvil/hooks.json or .anvil/permissions.json stops the CLI.
+		Local:       anvil.LocalOptions{CWD: abs, Store: storeKind, LoadHooks: true, LoadPermissions: true},
 		MaxSteps:    maxSteps,
 		MaxWallTime: maxWall,
 	}, nil

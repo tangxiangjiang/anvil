@@ -21,6 +21,7 @@ import (
 	"github.com/anvil-dev/anvil/internal/llm"
 	"github.com/anvil-dev/anvil/internal/lsp"
 	"github.com/anvil-dev/anvil/internal/mcp"
+	"github.com/anvil-dev/anvil/internal/permissions"
 	"github.com/anvil-dev/anvil/internal/plugin"
 	"github.com/anvil-dev/anvil/internal/prompt"
 	"github.com/anvil-dev/anvil/internal/rules"
@@ -360,8 +361,11 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 		return nil, nil, nil, nil, nil, err
 	}
 
+	// LoadHooks is a switch of its own (0.36+). The file used to be reachable only
+	// through SettingSources, which neither the editor host nor the CLI ever set,
+	// so every deny written in .anvil/hooks.json was inert in both.
 	var hookFile *hooks.File
-	if opts.Local.HasSettingSource(SettingSourceProject) {
+	if opts.Local.LoadHooks || opts.Local.HasSettingSource(SettingSourceProject) {
 		hf, _, err := hooks.Load(cwd)
 		if err != nil {
 			if lspSup != nil {
@@ -377,8 +381,17 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 		CWD:           cwd,
 	}
 	reg.SetPermissionGroups(opts.PermissionGroups)
-	perm := composePermission(opts.Permission, hookFile, hookOpts)
-	if perm != nil {
+	permRules, err := buildPermissionRules(cwd, opts)
+	if err != nil {
+		if lspSup != nil {
+			lspSup.Close()
+		}
+		return nil, nil, nil, nil, nil, err
+	}
+	reg.SetPermissionRules(permRules)
+	// What is left here is the caller's own callback: the file hooks are checked in
+	// preExec now, so that a rule that allows a call cannot skip them.
+	if perm := opts.Permission; perm != nil {
 		reg.SetPermission(func(ctx context.Context, name string, args json.RawMessage, preview tools.Preview) (json.RawMessage, error) {
 			dec, err := perm(ctx, PermissionRequest{
 				ToolName: name,
@@ -407,7 +420,25 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 		reg.SetPreExec(func(ctx context.Context, name string, args json.RawMessage) error {
 			o := ho
 			o.Ctx = ctx
-			if name == "read_file" {
+			// The checks that decide whether a call may run at all live here, where
+			// they run whether or not anyone installed a permission callback. They
+			// used to sit inside the callback, which meant a caller with no callback
+			// — the CLI, a library embedder — never saw them, and a rule that allowed
+			// a call skipped them even when one was installed.
+			switch name {
+			case "shell":
+				var in struct {
+					Command string `json:"command"`
+				}
+				_ = json.Unmarshal(args, &in)
+				if deny, msg := hf.CheckShell(in.Command, o); deny {
+					return fmt.Errorf("%s", msg)
+				}
+			case "write_file", "edit_file", "apply_patch":
+				if deny, msg := hf.CheckMutate(name, string(args), o); deny {
+					return fmt.Errorf("%s", msg)
+				}
+			case "read_file":
 				if deny, msg := hf.CheckRead(string(args), o); deny {
 					return fmt.Errorf("%s", msg)
 				}
@@ -665,6 +696,7 @@ func toToolPreview(p tools.Preview) ToolPreview {
 	out := ToolPreview{
 		Kind:    p.Kind,
 		Path:    p.Path,
+		Paths:   p.Paths,
 		Diff:    p.Diff,
 		Command: p.Command,
 		Summary: p.Summary,
@@ -679,34 +711,43 @@ func toToolPreview(p tools.Preview) ToolPreview {
 	return out
 }
 
-func composePermission(user PermissionFunc, hookFile *hooks.File, hookOpts hooks.CheckOpts) PermissionFunc {
-	if user == nil && hookFile == nil {
+// buildPermissionRules compiles the workspace rule file and the rules given in
+// code into one set, the file's first.
+//
+// The order is the point: within one effect the first matching rule decides, so
+// the file's rules have to be the ones a reader of the file sees at the top.
+func buildPermissionRules(cwd string, opts Options) (*permissions.Set, error) {
+	// Validated on its own first, so an error names a rule the caller can count
+	// rather than a position in the merged list.
+	code, err := permissions.New(permissionRules(opts.PermissionRules))
+	if err != nil {
+		return nil, newError("permission rules", false, err)
+	}
+	var rules []permissions.Rule
+	if opts.Local.LoadPermissions {
+		file, err := permissions.Load(cwd)
+		if err != nil {
+			return nil, newError("load permissions", false, err)
+		}
+		rules = append(rules, file.Rules()...)
+	}
+	rules = append(rules, code.Rules()...)
+	set, err := permissions.New(rules)
+	if err != nil {
+		return nil, newError("permission rules", false, err)
+	}
+	return set, nil
+}
+
+func permissionRules(rules []PermissionRule) []permissions.Rule {
+	if len(rules) == 0 {
 		return nil
 	}
-	return func(ctx context.Context, req PermissionRequest) (PermissionDecision, error) {
-		if hookFile != nil {
-			o := hookOpts
-			o.Ctx = ctx
-			switch req.ToolName {
-			case "shell":
-				var in struct {
-					Command string `json:"command"`
-				}
-				_ = json.Unmarshal(req.Args, &in)
-				if deny, msg := hookFile.CheckShell(in.Command, o); deny {
-					return PermissionDecision{Allow: false, Message: msg}, nil
-				}
-			case "write_file", "edit_file", "apply_patch":
-				if deny, msg := hookFile.CheckMutate(req.ToolName, string(req.Args), o); deny {
-					return PermissionDecision{Allow: false, Message: msg}, nil
-				}
-			}
-		}
-		if user != nil {
-			return user(ctx, req)
-		}
-		return PermissionDecision{Allow: true}, nil
+	out := make([]permissions.Rule, 0, len(rules))
+	for _, r := range rules {
+		out = append(out, permissions.Rule{Effect: r.Effect, Tool: r.Tool, Pattern: r.Pattern, Reason: r.Reason})
 	}
+	return out
 }
 
 func sanitizeName(s string) string {
