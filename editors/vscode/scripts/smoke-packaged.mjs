@@ -35,6 +35,10 @@ const REQUIRED = [
   // it is missing from the package -- the transcript would just render as
   // unstyled text. This line is the only thing that would notice.
   'media/markdown.js',
+  // Marketplace + editor-tab brand mark (from icon/anvil.ico).
+  'media/icon.png',
+  // Activity-bar monochrome glyph (VS Code tints it).
+  'media/anvil.svg',
   'bin/hosts.json',
 ];
 /**

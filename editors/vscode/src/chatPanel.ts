@@ -295,7 +295,6 @@ export class ChatPanel implements HostListener {
         localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, 'media')],
       },
     );
-    panel.iconPath = vscode.Uri.joinPath(this.context.extensionUri, 'media', 'anvil.svg');
     this.adopt(panel);
   }
 
@@ -309,6 +308,8 @@ export class ChatPanel implements HostListener {
     // Each document announces itself once; until it does, nothing is listening.
     this.listening = false;
     this.pending = [];
+    // Brand mark on the editor tab (marketplace icon is package.json `icon`).
+    panel.iconPath = vscode.Uri.joinPath(this.context.extensionUri, 'media', 'icon.png');
     panel.webview.options = {
       enableScripts: true,
       localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, 'media')],
