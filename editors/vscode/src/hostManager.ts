@@ -20,12 +20,16 @@ import {
   Method,
   ModelEntry,
   PermissionMode,
+  ModeSourceDefault,
+  ModeSourceRequest,
+  PermissionModeSource,
   PermissionsAddParams,
   PermissionsAddResult,
   PermissionsResult,
   RuleFileInfo,
   RuleSpec,
   SessionInfo,
+  SessionResult,
   SkillEntry,
 } from './protocol';
 import { RunFailure } from './errors';
@@ -37,7 +41,22 @@ export interface HostListener {
   onApprovalWithdrawn?: (requestId: string) => void;
   onDone?: (done: DoneParams, failure: RunFailure) => void;
   onState?: (state: SessionState, runId?: string) => void;
+  /** A session opened, with the mode the host resolved for it. */
+  onSession?: (result: SessionResult) => void;
   onNotice?: (level: 'info' | 'warn' | 'error', message: string) => void;
+}
+
+/**
+ * The mode a live session is actually running under, and where it came from. It
+ * is not the same thing as the choice this client sent: the host resolves that
+ * against the workspace's `.anvil/permissions.json`, and a declaration it will
+ * not honour comes back refused rather than obeyed.
+ */
+export interface ResolvedMode {
+  mode: PermissionMode;
+  source: PermissionModeSource;
+  /** What the workspace declared and the host would not honour, in words. */
+  refused?: string;
 }
 
 export class HostManager {
@@ -55,6 +74,14 @@ export class HostManager {
    * manager opens, so they survive a host restart as well as a re-open.
    */
   private overrides: Partial<SessionConfig> = {};
+  /**
+   * What the host resolved for the live session. Kept here rather than read back
+   * from the session because it is the host's answer, not this client's request,
+   * and cleared when the session closes: with nothing open there is nothing
+   * resolved, and showing a stale mode would say the next session runs under an
+   * option nobody has chosen yet.
+   */
+  private resolvedMode: ResolvedMode | undefined;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -88,6 +115,14 @@ export class HostManager {
         onApprovalWithdrawn: this.listener.onApprovalWithdrawn,
         onDone: this.listener.onDone,
         onState: this.listener.onState,
+        onSession: (result) => {
+          this.resolvedMode = {
+            mode: result.permission_mode,
+            source: result.permission_mode_source,
+            refused: result.permission_mode_refused,
+          };
+          this.listener.onSession?.(result);
+        },
         onLog: this.log,
       },
     );
@@ -181,6 +216,8 @@ export class HostManager {
     const session = this.session;
     this.client = undefined;
     this.session = undefined;
+    // Whatever the host had resolved died with it.
+    this.resolvedMode = undefined;
     this.log(`host exited (code ${info.code ?? 'none'}${info.signal ? `, signal ${info.signal}` : ''})`);
 
     // A run that was in flight will never reach its `done`: the child that owed
@@ -235,6 +272,7 @@ export class HostManager {
     const client = this.client;
     this.session = undefined;
     this.client = undefined;
+    this.resolvedMode = undefined;
     if (session) await session.close().catch(() => undefined);
     if (client) await client.stop();
     this.crashed = false;
@@ -367,17 +405,31 @@ export class HostManager {
     runId?: string;
     sessionId?: string;
     agentId?: string;
-    mode: PermissionMode;
+    /** The mode in force, or undefined while nothing has resolved one. */
+    mode?: PermissionMode;
+    modeSource: PermissionModeSource;
+    modeRefused?: string;
   } {
     const session = this.session;
-    const mode = this.overrides.permission_mode ?? 'ask';
-    if (!session) return { state: 'idle', mode };
+    const chosen = this.overrides.permission_mode;
+    if (!session) {
+      // Nothing is open, so the host has resolved nothing: the only thing there
+      // is to show is the choice this client would send.
+      return {
+        state: 'idle',
+        mode: chosen,
+        modeSource: chosen ? ModeSourceRequest : ModeSourceDefault,
+      };
+    }
+    const resolved = this.resolvedMode;
     return {
       state: session.currentState,
       runId: session.activeRun,
       sessionId: session.id,
       agentId: session.agent,
-      mode,
+      mode: resolved?.mode ?? chosen ?? 'ask',
+      modeSource: resolved?.source ?? (chosen ? ModeSourceRequest : ModeSourceDefault),
+      modeRefused: resolved?.refused,
     };
   }
 

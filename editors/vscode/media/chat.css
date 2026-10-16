@@ -893,6 +893,26 @@ body.bypass-mode .composer {
   border-color: var(--vscode-editorWarning-foreground, orange);
 }
 
+/*
+ * No-asking is the mirror, and it gets the same treatment for the same reason:
+ * a mode that answers every unapproved call with "no" changes what the agent can
+ * do, and the user has to be able to see which of the two mirrors is on. It is
+ * not a warning — refusing is the safe direction — so it is drawn in the info
+ * colour rather than the warning one.
+ */
+.dont-ask {
+  margin: 0 0 6px;
+  padding: 4px calc(var(--anvil-gap) + 1px);
+  border-radius: 4px;
+  font-size: 0.9em;
+  border-left: 3px solid var(--vscode-editorInfo-foreground, dodgerblue);
+  background: var(--vscode-inputValidation-infoBackground, rgba(30, 144, 255, 0.12));
+}
+
+body.dont-ask-mode .composer {
+  border-color: var(--vscode-editorInfo-foreground, dodgerblue);
+}
+
 /* --- slash palette -------------------------------------------------------- */
 
 /*

@@ -10,7 +10,7 @@
 
 import { ChildProcess } from 'node:child_process';
 import * as path from 'node:path';
-import { ApprovalRequest, Decision, DoneParams, HostEvent } from '../../src/protocol';
+import { ApprovalRequest, Decision, DoneParams, HostEvent, SessionResult } from '../../src/protocol';
 import { HostClient } from '../../src/hostClient';
 import { ChatSession, SessionConfig } from '../../src/session';
 
@@ -29,6 +29,8 @@ export interface Harness {
   withdrawn: string[];
   dones: Array<{ done: DoneParams; failure: { kind: string; message: string; isError: boolean } }>;
   states: Array<{ state: string; runId?: string }>;
+  /** Every session the extension opened, as the host described it. */
+  sessions: SessionResult[];
   /** The child, for assertions about its lifetime. */
   child: ChildProcess;
   stop(): Promise<void>;
@@ -52,6 +54,7 @@ export async function startFakeHost(scenario: Scenario, options: HarnessOptions 
   const withdrawn: string[] = [];
   const dones: Harness['dones'] = [];
   const states: Array<{ state: string; runId?: string }> = [];
+  const sessions: SessionResult[] = [];
 
   const client = new HostClient({
     command: process.execPath,
@@ -68,6 +71,7 @@ export async function startFakeHost(scenario: Scenario, options: HarnessOptions 
     onApprovalWithdrawn: (id) => withdrawn.push(id),
     onDone: (done, failure) => dones.push({ done, failure }),
     onState: (state, runId) => states.push({ state, runId }),
+    onSession: (result) => sessions.push(result),
     onLog: (line) => log.push(line),
   });
   client.setNotificationHandler((method, params) => session.handle(method, params));
@@ -85,6 +89,7 @@ export async function startFakeHost(scenario: Scenario, options: HarnessOptions 
     withdrawn,
     dones,
     states,
+    sessions,
     child: client.process as ChildProcess,
     stop: () => client.stop(),
   };

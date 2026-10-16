@@ -37,6 +37,7 @@ import {
   DoneParams,
   HostEvent,
   PermissionMode,
+  PermissionModeSource,
   PermissionModes,
   PermissionsResult,
   RuleFileInfo,
@@ -44,6 +45,7 @@ import {
   RuleProblem,
   RuleSpec,
   SessionInfo,
+  SessionResult,
   SkillEntry,
 } from './protocol';
 import { RunFailure } from './errors';
@@ -104,7 +106,7 @@ type Outbound =
   | { type: 'changes'; files: Array<Pick<ChangedFile, 'path' | 'kind'>> }
   | { type: 'commands'; commands: SlashCommand[] }
   | { type: 'help'; commands: SlashCommand[] }
-  | { type: 'mode'; mode: PermissionMode }
+  | { type: 'mode'; mode: PermissionMode | ''; resolved: PermissionMode; source: PermissionModeSource }
   | { type: 'rules'; files: RuleFileInfo[] }
   | { type: 'session'; agentId: string; started: boolean }
   /**
@@ -121,11 +123,19 @@ type Outbound =
 /** Where the chosen permission mode is remembered between windows. */
 const MODE_KEY = 'anvil.permissionMode';
 
-/** How the modes are named to the user. The wire values are the SDK's. */
+/**
+ * How the modes are named to the user. The wire values are the SDK's.
+ *
+ * `dont_ask` is the one to be careful with: it is the mirror of `bypass`, and
+ * what it refuses is the asking, not the policy — anything the workspace's rules
+ * allow still runs. Its label says what it is rather than what it sounds like,
+ * because "don't ask" on its own reads as "run everything", which is `bypass`.
+ */
 const MODE_LABELS: Record<PermissionMode, string> = {
   ask: 'Ask',
   accept_edits: 'Accept edits',
   plan: 'Plan',
+  dont_ask: 'No asking',
   bypass: 'Bypass',
 };
 
@@ -133,10 +143,31 @@ function isPermissionMode(value: string): value is PermissionMode {
   return (PermissionModes as readonly string[]).includes(value);
 }
 
-/** The mode this workspace last used. An unknown stored value means `ask`. */
-function readMode(context: vscode.ExtensionContext): PermissionMode {
+/** What the composer says after the user has chosen a mode, or cleared it. */
+function modeNotice(mode: PermissionMode | undefined): string {
+  switch (mode) {
+    case undefined:
+      return 'Mode: whatever this workspace declares in .anvil/permissions.json.';
+    case 'bypass':
+      return 'Bypass is on: tool calls run without asking. Nothing will be shown for approval.';
+    case 'dont_ask':
+      return "No asking: anything this workspace's rules do not allow is refused, and nothing is shown for approval.";
+    default:
+      return `Mode: ${MODE_LABELS[mode]}.`;
+  }
+}
+
+/**
+ * The mode this workspace last chose, or undefined when it has no stored choice.
+ *
+ * Undefined is a real state and not `ask`: a client with no opinion sends no
+ * `permission_mode` at all, which is what lets the workspace's
+ * `.anvil/permissions.json` decide. Sending `ask` would silently outrank the
+ * file, and every workspace would look like one that had chosen it.
+ */
+function readMode(context: vscode.ExtensionContext): PermissionMode | undefined {
   const stored = context.workspaceState.get<string>(MODE_KEY);
-  return stored !== undefined && isPermissionMode(stored) ? stored : 'ask';
+  return stored !== undefined && isPermissionMode(stored) ? stored : undefined;
 }
 
 export class ChatPanel implements HostListener {
@@ -165,8 +196,20 @@ export class ChatPanel implements HostListener {
   private catalogue: SlashCommand[] | undefined;
   /** The rule files the last session reported, re-announced to a reloaded view. */
   private rules: RuleFileInfo[] = [];
-  /** The permission mode in force, remembered per workspace. */
-  private mode: PermissionMode = 'ask';
+  /**
+   * The permission mode this workspace last chose, remembered per workspace, or
+   * undefined when it has chosen none. Undefined is not `ask`: it is the state
+   * in which nothing is sent and the workspace's `.anvil/permissions.json`
+   * decides, which is what makes a team's choice something it can commit.
+   */
+  private mode: PermissionMode | undefined;
+  /**
+   * The last resolved mode a notice was posted for, so a session re-opened for
+   * an unrelated reason (a model change) does not repeat what the user already
+   * read. Keyed by the whole picture, because "the file decided" and "the file
+   * was refused" are different things to say.
+   */
+  private announcedMode = '';
   /**
    * A rule file that will not compile, reported against the file itself rather
    * than only as a failed session. Created on first use: a window that never
@@ -252,10 +295,18 @@ export class ChatPanel implements HostListener {
   private ensureManager(): HostManager {
     if (!this.manager) {
       this.manager = new HostManager(this.context, this.log, this);
-      // The mode is remembered per workspace, so it has to be in force before
-      // the session that will carry it is created. This only records the
-      // choice; a session is not opened to hold it.
-      void this.manager.applyOptions({ permission_mode: this.mode });
+      // The mode is remembered per workspace, so it has to be in force before the
+      // session that will carry it is created. This only records the choice; a
+      // session is not opened to hold it.
+      //
+      // Nothing is recorded when the workspace has no stored choice, and that is
+      // the point of the guard: sending `permission_mode: undefined` would travel
+      // as no key at all, but recording an override for it would still make this
+      // client look like it had an opinion — and it is the client having none that
+      // lets the workspace's file decide.
+      if (this.mode !== undefined) {
+        void this.manager.applyOptions({ permission_mode: this.mode });
+      }
     }
     return this.manager;
   }
@@ -275,7 +326,7 @@ export class ChatPanel implements HostListener {
       // any open prompt.
       this.post({ type: 'trust', trusted: vscode.workspace.isTrusted });
       this.post({ type: 'vision', enabled: readSettings().session.vision === true });
-      this.post({ type: 'mode', mode: this.mode });
+      this.postMode();
       if (this.rules.length > 0) this.post({ type: 'rules', files: this.rules });
       if (this.manager) this.post({ type: 'state', ...this.manager.state() });
       for (const request of this.pendingApprovals()) {
@@ -385,14 +436,21 @@ export class ChatPanel implements HostListener {
    * Applies a permission mode to the conversation. The mode is a session
    * option, so the session is re-opened under it — same agent, so the history
    * and the transcript both stay.
+   *
+   * The empty string is not a mode and not a mistake: it is the composer's
+   * "Workspace default" entry, which clears the stored choice so that the
+   * workspace's `.anvil/permissions.json` decides again. That is the only way
+   * back to letting the file speak, and without it a client that had once sent
+   * `ask` could never stop outranking the file it was reading.
    */
   private async setMode(mode: string): Promise<void> {
-    if (!isPermissionMode(mode)) {
+    if (mode !== '' && !isPermissionMode(mode)) {
       this.post({ type: 'notice', level: 'warn', message: `Unknown mode: ${mode}` });
-      this.post({ type: 'mode', mode: this.mode });
+      this.postMode();
       return;
     }
-    if (mode === this.mode) return;
+    const chosen: PermissionMode | undefined = mode === '' ? undefined : mode;
+    if (chosen === this.mode) return;
     const manager = this.ensureManager();
     // Checked here rather than left to the re-open, so the refusal is reported
     // as a refusal. `reopen` would throw the same thing, but by then the chosen
@@ -400,29 +458,25 @@ export class ChatPanel implements HostListener {
     // the *next* session — a mode the user was told had been refused.
     if (manager.state().state === 'running') {
       this.post({ type: 'notice', level: 'warn', message: 'Stop the turn before changing the mode.' });
-      this.post({ type: 'mode', mode: this.mode });
+      this.postMode();
       return;
     }
     // false means either "nothing was open to re-open" (the ordinary case
     // before the first prompt: the choice is simply recorded) or "it refused".
     // A live session that did not take the change is the second one.
-    const applied = await manager.applyOptions({ permission_mode: mode });
+    const applied = await manager.applyOptions({ permission_mode: chosen });
     if (!applied && manager.running) {
-      this.post({ type: 'mode', mode: this.mode });
+      this.postMode();
       return;
     }
-    this.mode = mode;
-    await this.context.workspaceState.update(MODE_KEY, mode);
-    this.post({ type: 'mode', mode });
+    this.mode = chosen;
+    // Clearing the key rather than storing the empty string: `readMode` treats
+    // both the same, and an absent key is what a workspace that never chose
+    // anything has.
+    await this.context.workspaceState.update(MODE_KEY, chosen);
+    this.postMode();
     this.postState();
-    this.post({
-      type: 'notice',
-      level: mode === 'bypass' ? 'warn' : 'info',
-      message:
-        mode === 'bypass'
-          ? 'Bypass is on: tool calls run without asking. Nothing will be shown for approval.'
-          : `Mode: ${MODE_LABELS[mode]}.`,
-    });
+    this.post({ type: 'notice', level: chosen === 'bypass' ? 'warn' : 'info', message: modeNotice(chosen) });
   }
 
   // --- session history --------------------------------------------------------
@@ -925,6 +979,17 @@ export class ChatPanel implements HostListener {
     this.sessionsChanged.fire();
   };
 
+  /**
+   * A session opened. The mode the host resolved is the panel's to show, and the
+   * select is re-sent here rather than only when the user changes it: a session
+   * opened under the workspace's declaration is a select that was showing the
+   * wrong thing until now.
+   */
+  onSession = (result: SessionResult): void => {
+    this.postMode();
+    this.announceSessionMode(result);
+  };
+
   onNotice = (level: 'info' | 'warn' | 'error', message: string): void =>
     this.post({ type: 'notice', level, message });
 
@@ -966,19 +1031,62 @@ export class ChatPanel implements HostListener {
     void panel.webview.postMessage(message).then(undefined, () => undefined);
   }
 
-  /** Re-announces where the session stands, mode included. */
+  /** Re-announces where the session stands. The mode travels with `postMode`. */
   private postState(): void {
     const manager = this.manager;
-    this.post(
-      manager
-        ? { type: 'state', ...manager.state() }
-        : { type: 'state', state: 'idle', mode: this.mode },
-    );
+    this.post(manager ? { type: 'state', ...manager.state() } : { type: 'state', state: 'idle' });
   }
 
   /** Stops the active run. Safe when nothing is running. */
   async stop(): Promise<void> {
     await this.manager?.cancel();
+  }
+
+  /**
+   * Tells the view which mode is in force.
+   *
+   * Two things travel, because they are two things: `mode` is the choice this
+   * workspace has stored — empty when it has none — and `resolved` is what the
+   * session actually runs under. They differ whenever the workspace's
+   * `.anvil/permissions.json` supplied the mode, which is exactly the case a
+   * person cannot see from the select alone.
+   */
+  private postMode(): void {
+    const state = this.manager?.state();
+    this.post({
+      type: 'mode',
+      mode: this.mode ?? '',
+      resolved: state?.mode ?? this.mode ?? 'ask',
+      source: state?.modeSource ?? 'default',
+    });
+  }
+
+  /**
+   * A session opened, and the host has said which mode it resolved for it.
+   *
+   * The mode is announced once per distinct answer rather than once per session:
+   * a mode change or a model change re-opens the session, and repeating the same
+   * sentence on every one of those would teach the user to ignore it.
+   */
+  private announceSessionMode(result: SessionResult): void {
+    const key = `${result.permission_mode}\x00${result.permission_mode_source}\x00${result.permission_mode_refused ?? ''}`;
+    if (key === this.announcedMode) return;
+    this.announcedMode = key;
+    if (result.permission_mode_refused) {
+      this.post({
+        type: 'notice',
+        level: 'warn',
+        message: `${result.permission_mode_refused}. This session started in ask.`,
+      });
+      return;
+    }
+    if (result.permission_mode_source === 'file') {
+      this.post({
+        type: 'notice',
+        level: 'info',
+        message: `Mode ${MODE_LABELS[result.permission_mode]} comes from this workspace's .anvil/permissions.json.`,
+      });
+    }
   }
 
   /** Replaces the host child and tells the view to start over. */
@@ -1056,15 +1164,24 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
   <div id="composerDock" class="dock">
     <div id="status" class="status" hidden></div>
     <div id="bypass" class="bypass" hidden>Bypass is on. Tool calls run without asking.</div>
+    <div id="dontAsk" class="dont-ask" hidden>No asking. Only calls this workspace's rules allow will run.</div>
     <form id="composer" class="composer">
       <div id="palette" class="palette" hidden></div>
       <div id="chips" class="chips" hidden></div>
       <textarea id="input" rows="1" placeholder="Describe a change…  (@ references a file, / lists commands)" aria-label="Prompt"></textarea>
       <div class="actions">
+        <!--
+          The empty value is a real choice: "let the workspace decide". It is
+          first because it is what a workspace with no stored choice is in, and
+          the label is filled in by chat.js with the mode it resolved to, since
+          which mode that is depends on a file this side has to read.
+        -->
         <select id="mode" aria-label="Permission mode" title="What the agent may do without asking">
+          <option value="">Workspace default</option>
           <option value="ask">Ask before changes</option>
           <option value="accept_edits">Accept edits</option>
           <option value="plan">Plan only</option>
+          <option value="dont_ask">Only what the rules allow</option>
           <option value="bypass">Bypass approvals</option>
         </select>
         <button id="rules" type="button" class="ghost" title="Which rule files this workspace loaded" hidden>Rules</button>

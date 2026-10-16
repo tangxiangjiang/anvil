@@ -136,7 +136,32 @@ export interface SessionResult {
   provider: string;
   model: string;
   permission_mode: PermissionMode;
+  /**
+   * Where that mode came from: `request` when this client named it, `file` when
+   * the workspace's `.anvil/permissions.json` declared it, `default` when neither
+   * did. The middle one is the reason this travels: "why is this session in
+   * accept_edits" has two answers and only one of them is something just clicked.
+   */
+  permission_mode_source: PermissionModeSource;
+  /**
+   * What the workspace declared and the host would not honour, in words. The
+   * session still started — in `ask` — because one bad line in a project file
+   * must not be a workspace nobody can open; this is what keeps that from being
+   * a silent drop.
+   */
+  permission_mode_refused?: string;
 }
+
+/**
+ * Where a session's mode came from: this client asked for it, the workspace's
+ * `.anvil/permissions.json` declared it, or neither did. The names are the host's
+ * `ModeSource*` constants in `proto.go`, which the same test reads.
+ */
+export const ModeSourceRequest = 'request';
+export const ModeSourceFile = 'file';
+export const ModeSourceDefault = 'default';
+export const PermissionModeSources = [ModeSourceRequest, ModeSourceFile, ModeSourceDefault] as const;
+export type PermissionModeSource = (typeof PermissionModeSources)[number];
 
 // --- permissions -------------------------------------------------------------
 
@@ -184,6 +209,16 @@ export interface PermissionsResult {
   path: string;
   /** False with no `problem` is a workspace that has written down nothing. */
   exists: boolean;
+  /**
+   * The mode the file declares for new sessions, and only when the host would
+   * honour it. Absent means this workspace starts sessions in the ladder's floor
+   * — either because it declares nothing (`default_mode_refused` is absent too)
+   * or because what it declares cannot be honoured. Deliberately not filled in
+   * with `ask` for a file that said nothing: that would read as if the file had.
+   */
+  default_mode?: PermissionMode;
+  /** What the file declared and the host would not honour, in words. */
+  default_mode_refused?: string;
   rules: RuleInfo[];
   /**
    * Set when the file exists but cannot be read as rules. A result rather than
@@ -234,7 +269,14 @@ export interface RememberOption {
 
 // --- approval ----------------------------------------------------------------
 
-export const PermissionModes = ['ask', 'accept_edits', 'plan', 'bypass'] as const;
+/**
+ * The mode ladder, from the one that asks about everything to the one that asks
+ * about nothing. The order is the order the composer offers them, and it is the
+ * host's `PermissionModes` in `proto.go` — `test/unit/permissionModes.test.ts`
+ * reads both as text, because a mode the Go side adds and this line does not have
+ * is one nobody can choose.
+ */
+export const PermissionModes = ['ask', 'accept_edits', 'plan', 'dont_ask', 'bypass'] as const;
 export type PermissionMode = (typeof PermissionModes)[number];
 
 /** Decisions the host accepts, in the order a prompt should offer them. */

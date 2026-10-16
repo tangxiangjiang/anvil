@@ -29,6 +29,7 @@
   const attachButton = document.getElementById('attach');
   const modeSelect = document.getElementById('mode');
   const bypassStrip = document.getElementById('bypass');
+  const dontAskStrip = document.getElementById('dontAsk');
   const rulesButton = document.getElementById('rules');
   const permissionsButton = document.getElementById('permissions');
   const palette = document.getElementById('palette');
@@ -1065,14 +1066,46 @@
    * driven from there, never from what was clicked: the extension can refuse a
    * change (a turn is running, the host said no), and a select that kept the
    * refused value would be lying about what the next tool call will do.
+   *
+   * Two values travel, and they are not the same one. `mode` is the choice this
+   * workspace has stored — empty when it has none, which the select shows as
+   * "Workspace default" — and `resolved` is what the session runs under, which
+   * the workspace's permissions.json may have supplied. The select shows the
+   * first, because that is what clicking it would change; the label says the
+   * second, because that is what the next tool call will actually do.
    */
-  function showMode(mode) {
+  function showMode(msg) {
     if (!modeSelect) return;
-    modeSelect.value = mode;
-    const bypass = mode === 'bypass';
-    bypassStrip.hidden = !bypass;
+    const chosen = msg.mode || '';
+    const resolved = msg.resolved || chosen || 'ask';
+    modeSelect.value = chosen;
+
+    const fallback = modeSelect.querySelector('option[value=""]');
+    if (fallback) {
+      const label = modeLabels[resolved] || resolved;
+      fallback.textContent = chosen === '' ? 'Workspace default (' + label + ')' : 'Workspace default';
+    }
+
+    const bypass = resolved === 'bypass';
+    const dontAsk = resolved === 'dont_ask';
+    if (bypassStrip) bypassStrip.hidden = !bypass;
+    if (dontAskStrip) dontAskStrip.hidden = !dontAsk;
     document.body.classList.toggle('bypass-mode', bypass);
+    document.body.classList.toggle('dont-ask-mode', dontAsk);
   }
+
+  /**
+   * How the modes are named here. It repeats src/chatPanel.ts's MODE_LABELS,
+   * which is unavoidable — media/ is never imported by the extension side — and
+   * test/unit/permissionModes.test.ts is what keeps the two lists equal.
+   */
+  const modeLabels = {
+    ask: 'Ask',
+    accept_edits: 'Accept edits',
+    plan: 'Plan',
+    dont_ask: 'No asking',
+    bypass: 'Bypass',
+  };
 
   // --- slash palette --------------------------------------------------------
 
@@ -1485,7 +1518,7 @@
         showHelp(Array.isArray(msg.commands) ? msg.commands : []);
         return;
       case 'mode':
-        showMode(msg.mode);
+        showMode(msg);
         return;
       case 'rules': {
         rules = Array.isArray(msg.files) ? msg.files : [];

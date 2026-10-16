@@ -44,6 +44,7 @@ const SESSION_RESULT: SessionResult = {
   provider: 'openai',
   model: 'test-model',
   permission_mode: 'ask',
+  permission_mode_source: 'default',
 };
 
 interface Built {

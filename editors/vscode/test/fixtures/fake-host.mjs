@@ -26,6 +26,12 @@
  *                          each, so a test can assert what the client sent
  *   FAKE_HOST_RULES_BROKEN=1  report the workspace rule file as malformed, both
  *                          from permissions.get and from permissions.add
+ *
+ * One thing here is not scripted: the mode a new session starts in. It is
+ * resolved from what the client asked for and from the workspace's
+ * `.anvil/permissions.json`, in the order the real host uses, because a
+ * fixture that always answered the mode it was sent could not show a client
+ * that sent none.
  */
 
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
@@ -80,16 +86,58 @@ let runSeq = 0;
 const approvals = new Map();
 let activeRun = null;
 
+/**
+ * The mode the workspace's own file declares, and whether the host would honour
+ * it.
+ *
+ * The real host resolves a starting mode in the same order — what the client
+ * asked for, then the file, then `ask` — and applies the same ban: a project
+ * file may not grant `bypass`. That ban is the reason this is written out
+ * rather than left to `params.permission_mode || 'ask'`: a client that sent no
+ * choice has to be told both the mode in force and where it came from, and a
+ * fixture that invented one would let the extension's "no opinion of my own"
+ * path pass without ever being exercised.
+ */
+function declaredMode() {
+  let file;
+  try {
+    file = JSON.parse(readFileSync(rulesPath, 'utf8'));
+  } catch {
+    // No file, or one that will not parse: either way nothing is declared. The
+    // real host fails the session on a malformed rules file; that path is the
+    // one `FAKE_HOST_RULES_BROKEN` scripts, and it is not what this is about.
+    return {};
+  }
+  const declared = typeof file.defaultMode === 'string' ? file.defaultMode : '';
+  if (declared === '') return {};
+  if (declared === 'bypass') {
+    return {
+      refused: `the workspace's .anvil/permissions.json declares defaultMode "bypass", which a project file may not grant: a mode that approves everything without showing it is a choice a person makes for a session, not one a repository makes for whoever opens it`,
+    };
+  }
+  return { mode: declared };
+}
+
+function resolveMode(params) {
+  if (params.permission_mode) return { mode: params.permission_mode, source: 'request' };
+  const declared = declaredMode();
+  if (declared.mode) return { mode: declared.mode, source: 'file' };
+  return { mode: 'ask', source: 'default', refused: declared.refused };
+}
+
 function newSession(params) {
   sessionSeq += 1;
   const id = `s${sessionSeq}`;
+  const resolved = resolveMode(params);
   const session = {
     session_id: id,
     agent_id: params.agent_id || `a${sessionSeq}`,
     cwd: process.env.FAKE_HOST_CWD || process.cwd(),
     provider: params.provider || 'openai',
     model: params.model || 'fake-model',
-    permission_mode: params.permission_mode || 'ask',
+    permission_mode: resolved.mode,
+    permission_mode_source: resolved.source,
+    permission_mode_refused: resolved.refused,
     // What the real host keeps for a stored agent, so the extension's session
     // list and its /resume picker have something to render.
     created_at: '2026-01-02T03:04:05Z',
@@ -416,7 +464,7 @@ async function handle(msg) {
       ok(msg.id, { closed: true });
       return;
     }
-    case 'permissions.get':
+    case 'permissions.get': {
       echo('permissions.get', msg.params || {});
       if (rulesBroken) {
         // A result, not an error: the client asked about the state of the file,
@@ -424,8 +472,19 @@ async function handle(msg) {
         ok(msg.id, { path: rulesPath, exists: true, rules: [], problem: rulesProblem });
         return;
       }
-      ok(msg.id, { path: rulesPath, exists: rules.length > 0, rules });
+      // The declared starting mode travels with the rules, because it is a
+      // field of the same file: a panel that showed one without the other
+      // would be showing a file it had only half read.
+      const declared = declaredMode();
+      ok(msg.id, {
+        path: rulesPath,
+        exists: rules.length > 0 || Boolean(declared.mode || declared.refused),
+        rules,
+        default_mode: declared.mode,
+        default_mode_refused: declared.refused,
+      });
       return;
+    }
     case 'permissions.add': {
       echo('permissions.add', msg.params || {});
       if (rulesBroken) {

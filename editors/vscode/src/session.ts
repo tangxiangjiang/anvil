@@ -42,6 +42,14 @@ export interface ChatSessionHandlers {
   onApprovalWithdrawn?: (requestId: string) => void;
   onDone?: (done: DoneParams, failure: RunFailure) => void;
   onState?: (state: SessionState, runId?: string) => void;
+  /**
+   * A session was opened, with the identity the host gave it. It carries the mode
+   * the session actually runs in — which is not always the one this client asked
+   * for: the host resolves it against the workspace's `.anvil/permissions.json`,
+   * and reports what that file declared and was refused. This is the only place
+   * that answer exists, so it is announced here rather than waited for.
+   */
+  onSession?: (result: SessionResult) => void;
   onLog?: LogFn;
 }
 
@@ -170,8 +178,9 @@ export class ChatSession {
         this.conversation = res.agent_id;
         this.opening = undefined;
         this.handlers.onLog?.(
-          `session ${res.session_id} in ${this.cwd} (${res.provider}/${res.model}, ${res.permission_mode})`,
+          `session ${res.session_id} in ${this.cwd} (${res.provider}/${res.model}, ${res.permission_mode} from ${res.permission_mode_source})`,
         );
+        this.handlers.onSession?.(res);
         return res;
       })
       .catch((err: unknown) => {
