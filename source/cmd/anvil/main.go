@@ -408,6 +408,14 @@ func printStream(ch <-chan anvil.Event) {
 			fmt.Printf("\n[progress %d/%d]\n", ev.Step, ev.MaxSteps)
 		case anvil.EventAssistant:
 			fmt.Print(ev.Text)
+		case anvil.EventReasoning:
+			// Printed on its own lines, tagged like the other bracketed events
+			// rather than streamed inline: this goes to a pipe as often as to a
+			// terminal, so it stays plain text with no escapes, and reasoning
+			// must not be mistaken for the answer in a transcript of stdout.
+			if trimmed := strings.TrimSpace(ev.Text); trimmed != "" {
+				fmt.Printf("\n[reasoning] %s\n", trimmed)
+			}
 		case anvil.EventToolCall:
 			fmt.Printf("\n[tool_call %s] %s\n", ev.Name, string(ev.Args))
 		case anvil.EventToolResult:

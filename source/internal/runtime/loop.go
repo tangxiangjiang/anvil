@@ -38,6 +38,12 @@ const DefaultMaxSteps = 0
 // MaxStepsExceededPrefix is the stable prefix of Result.Err when an optional step limit is hit.
 const MaxStepsExceededPrefix = "max steps exceeded"
 
+// reasoningFlushChars is how much streamed reasoning the loop accumulates before
+// emitting it. It bounds the number of reasoning events a round can produce by
+// size rather than by token rate, which matters because the run's event buffer
+// drops silently when full and a dropped assistant chunk cannot be recovered.
+const reasoningFlushChars = 200
+
 // Result is the terminal run result.
 type Result struct {
 	ID       string
@@ -147,13 +153,41 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 		var err error
 		req := llm.Request{Model: cfg.Model, Messages: messages, Tools: toolDefs}
 		if sc, ok := completer.(llm.StreamCompleter); ok {
+			// Reasoning is accumulated and flushed in batches rather than per
+			// chunk. A reasoner emits several times the tokens of its answer,
+			// and Run.emit drops events silently once its buffer fills -- a lost
+			// assistant chunk is permanent, because the transcript is
+			// append-only and never rebuilt. Bounding the reasoning volume at
+			// the source is what keeps the answer's own chunks from being the
+			// ones dropped. Text is never held back: it is what the user is
+			// reading.
+			var reasoning strings.Builder
+			flushReasoning := func() {
+				if reasoning.Len() == 0 {
+					return
+				}
+				emit(Event{Type: "reasoning", Text: reasoning.String()})
+				reasoning.Reset()
+			}
 			resp, err = sc.CompleteStream(ctx, req, func(d llm.Delta) {
+				if d.Reasoning != "" {
+					reasoning.WriteString(d.Reasoning)
+					if reasoning.Len() >= reasoningFlushChars {
+						flushReasoning()
+					}
+				}
 				if d.Text == "" {
 					return
 				}
+				// Reasoning goes first, so a collapsed Thinking block is never
+				// rendered below the answer it explains. streamed stays keyed to
+				// text alone: setting it for a reasoning delta would suppress the
+				// non-streaming fallback below and lose the whole answer.
+				flushReasoning()
 				streamed = true
 				emit(Event{Type: "assistant", Text: d.Text})
 			})
+			flushReasoning() // the round boundary
 		} else {
 			resp, err = completer.Complete(ctx, req)
 		}

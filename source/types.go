@@ -24,6 +24,10 @@ const (
 	EventToolResult EventType = "tool_result"
 	EventDone       EventType = "done"
 	EventError      EventType = "error"
+	// EventReasoning carries the model's thinking, for providers that stream it.
+	// It rides in Text, like EventAssistant, and is display-only: it is not part
+	// of RunResult, is not stored, and has no replay.
+	EventReasoning EventType = "reasoning"
 )
 
 // Usage holds optional token counts from the provider.

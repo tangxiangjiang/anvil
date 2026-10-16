@@ -125,8 +125,8 @@ func (s *session) waitRun(timeout time.Duration) bool {
 // from anvil.RunResult, which is emitted exactly once for every prompt.
 func projectEvent(sessionID, runID string, ev anvil.Event) (EventParams, bool) {
 	switch ev.Type {
-	case anvil.EventProgress, anvil.EventAssistant, anvil.EventToolCall,
-		anvil.EventToolResult, anvil.EventError:
+	case anvil.EventProgress, anvil.EventAssistant, anvil.EventReasoning,
+		anvil.EventToolCall, anvil.EventToolResult, anvil.EventError:
 	default:
 		return EventParams{}, false
 	}

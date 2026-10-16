@@ -78,9 +78,15 @@ type Completer interface {
 	Complete(ctx context.Context, req Request) (*Response, error)
 }
 
-// Delta is a streaming assistant text chunk.
+// Delta is a streaming assistant chunk. At most one provider format fills both
+// fields, but a delta carrying both text and reasoning is legal and the runtime
+// emits both.
 type Delta struct {
 	Text string
+	// Reasoning is the model's thinking, for providers that stream one. It is
+	// display-only: it is not accumulated into Response.Message, not stored, and
+	// never sent back in a request.
+	Reasoning string
 }
 
 // StreamCompleter optionally streams assistant text while assembling the final Response.

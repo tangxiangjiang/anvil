@@ -75,8 +75,21 @@ func (c *OpenAI) CompleteStream(ctx context.Context, req Request, onDelta func(D
 		var chunk struct {
 			Choices []struct {
 				Delta struct {
-					Content   string `json:"content"`
-					ToolCalls []struct {
+					Content string `json:"content"`
+					// Reasoning carries the model's chain of thought on the
+					// OpenAI-compatible providers that stream one in a separate
+					// delta field: `reasoning_content` on DeepSeek, vLLM and LM
+					// Studio, `reasoning` on OpenRouter. Naming the fields is the
+					// whole decode: encoding/json drops unknown keys, so before
+					// this they arrived on the socket and were discarded.
+					//
+					// Decode-only, and deliberately not mirrored onto
+					// llm.Message: openAIMessage is shared with the request
+					// encoder, so a field here that Message also carried would be
+					// how private reasoning got echoed back upstream.
+					ReasoningContent string `json:"reasoning_content"`
+					Reasoning        string `json:"reasoning"`
+					ToolCalls        []struct {
 						Index    int    `json:"index"`
 						ID       string `json:"id"`
 						Type     string `json:"type"`
@@ -113,6 +126,11 @@ func (c *OpenAI) CompleteStream(ctx context.Context, req Request, onDelta func(D
 			continue
 		}
 		delta := chunk.Choices[0].Delta
+		// Reasoning is streamed, never accumulated into msg below: it is shown
+		// once and has no replay, so there is nothing to keep it for.
+		if r := firstNonEmpty(delta.ReasoningContent, delta.Reasoning); r != "" {
+			onDelta(Delta{Reasoning: r})
+		}
 		if delta.Content != "" {
 			content.WriteString(delta.Content)
 			onDelta(Delta{Text: delta.Content})

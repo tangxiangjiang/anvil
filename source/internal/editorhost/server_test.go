@@ -352,6 +352,13 @@ func TestProjectEventDropsSDKDone(t *testing.T) {
 	if !ok || got.Type != "tool_call" || got.Name != "shell" || got.Step != 2 {
 		t.Fatalf("tool_call projection lost fields: %+v", got)
 	}
+	// Reasoning is display-only and carried in Text, so it needs no field of its
+	// own here -- only a place in the whitelist, or the host would drop it while
+	// the CLI and the SDK both carried it.
+	got, ok = projectEvent("s", "r", anvil.Event{Type: anvil.EventReasoning, Text: "hmm"})
+	if !ok || got.Type != "reasoning" || got.Text != "hmm" {
+		t.Fatalf("reasoning projection lost fields: %+v", got)
+	}
 }
 
 // TestProjectDoneFallsBackToRunID covers a Wait that returns no result.
