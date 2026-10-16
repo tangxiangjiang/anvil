@@ -148,7 +148,7 @@ The client sets these per session, on `session.new` / `session.resume`:
 | `test_command` / `build_command` | argv for `run_tests` / `build`. Without them the host registers neither tool, so those calls cannot reach an approval at all |
 | `vision` | opt in to image attachments; off by default, and a prompt carrying one without it is refused |
 
-- **Session allowlist**: the host remembers `(session, tool, scope)` approvals and short-circuits the callback. In-memory per session; not persisted. `scope` is opaque to the host — it compares it verbatim and takes it from `preview.path`, so a client can offer "always allow shell" (no scope) and "always allow edits to this file" (that path) through one field.
+- **Session allowlist**: the host remembers `(session, tool, scope)` approvals and short-circuits the callback. In-memory per session; not persisted. `scope` is opaque to the host — it compares it verbatim and takes it from `preview.path`, so a client can offer "always allow shell" (no scope) and "always allow edits to this file" (that path) through one field. A **rule set** above this layer (milestone **0.36**, [36](36-tool-permissions.md)) resolves before the callback, so a rule decides without consulting this list — and a rule `allow` is why the shell/write/edit hook denies moved to the unconditional `preExec` stage.
 - **Diff review before apply**: for `write_file` / `edit_file` / `apply_patch` the SDK computes the resulting diff at gate time and puts it on `preview`. `apply_patch` is dry-run through the existing patch implementation, so the files it reports are the files it would touch — and the dry run must not mutate anything. This is the review-changes flow.
 - **Command preview**: for `run_tests` and `build` — argv arrays fixed by `Options`, never shell strings — `preview` is that argv. `shell` is the exception: it runs one command string, so `preview.command` carries that string as its single element.
 - **Plan mode's directive is a prompt prefix, not a system-prompt addition.** `Options.SystemPrompt` *replaces* Anvil's default system text, and the host cannot read text it did not write, so it cannot append to it. The host prefixes the plan directive to the user's message instead.
@@ -271,7 +271,7 @@ The transcript rendered assistant prose as escaped text in a `pre-wrap` box and 
 - Becoming a language server / DAP debugger; LSP stays **agent tools** ([16](16-lsp.md)).
 - Any scheduler / `agentd` / cluster path from the extension. This protocol deliberately has none; adding one would be a new, separately-decided capability rather than an extension of it.
 - Notebook cell editing, multi-root in one panel, sub-agent graph UI, checkpoints/rewind.
-- Persisting per-hunk approval policy to disk, or a settings-sync story.
+- Persisting per-hunk approval policy to disk, or a settings-sync story. (A rule set and a shell analyzer are not an extension concern; they are milestone **0.36**, [36](36-tool-permissions.md).)
 - Public marketplace publishing as a milestone acceptance item.
 
 ## Acceptance (milestone)

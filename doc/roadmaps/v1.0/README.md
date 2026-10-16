@@ -1,6 +1,6 @@
 # Roadmaps v1.0 (cutoff)
 
-Versioned delivery for Anvil through product **0.35**. Design cutoff: [`doc/design/v1.0/`](../../design/v1.0/).
+Versioned delivery for Anvil through product **0.36**. Design cutoff: [`doc/design/v1.0/`](../../design/v1.0/).
 
 ## Version index
 
@@ -41,6 +41,7 @@ Versioned delivery for Anvil through product **0.35**. Design cutoff: [`doc/desi
 | 0.33 | Delivery UI + schema | done | [m_0.33_delivery_ui.md](m_0.33_delivery_ui.md) | [33](../../design/v1.0/33-delivery-ui.md) |
 | 0.34 | Workspace domain (Clusters hierarchy) | done | [m_0.34_workspace_domain.md](m_0.34_workspace_domain.md) | [34](../../design/v1.0/34-workspace-domain.md) |
 | 0.35 | VS Code extension + editor host | done | [m_0.35_vscode_extension.md](m_0.35_vscode_extension.md) | [35](../../design/v1.0/35-vscode-extension.md) |
+| 0.36 | Tool permissions (rules + analyzer) | planned | [m_0.36_tool_permissions.md](m_0.36_tool_permissions.md) | [36](../../design/v1.0/36-tool-permissions.md) |
 
 ## Naming
 
