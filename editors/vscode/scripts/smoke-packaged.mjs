@@ -1,7 +1,7 @@
 /*
  * Opens a built VSIX, checks what is inside it, and runs the host it carries.
  *
- *   node scripts/smoke-packaged.mjs --vsix anvil-vscode-0.35.7-win32-x64.vsix
+ *   node scripts/smoke-packaged.mjs --vsix anvil-vscode-<version>-win32-x64.vsix
  *
  * This is the packaging acceptance test that can run without a window: the
  * extension host API is not available here, but the two things that actually
@@ -43,6 +43,23 @@ const FORBIDDEN = ['src/', 'test/', 'scripts/', 'node_modules/', 'out/test/', '.
 function fail(message) {
   console.error(`smoke-packaged: ${message}`);
   process.exit(1);
+}
+
+/**
+ * Removes a temporary tree, and does not fail the run if it cannot.
+ *
+ * On Windows the binary that was just executed can still be held for a moment
+ * after its process exits, and `rmSync` then throws EPERM with no retries by
+ * default — which turned a passing check into a non-zero exit. The package is
+ * what is under test; a leftover directory in `%TEMP%` is not, so a failure
+ * here is a warning at most.
+ */
+function cleanup(path) {
+  try {
+    rmSync(path, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  } catch (err) {
+    console.error(`smoke-packaged: could not remove ${path}: ${err.message}`);
+  }
 }
 
 function parseArg(argv, name) {
@@ -207,6 +224,6 @@ try {
   }
   console.log(`smoke-packaged: OK ${vsix}`);
 } finally {
-  rmSync(dir, { recursive: true, force: true });
-  rmSync(workspace, { recursive: true, force: true });
+  cleanup(dir);
+  cleanup(workspace);
 }
