@@ -280,5 +280,24 @@ window.api = {
         {},
       );
     },
+    deliveryCreateBuglist(body) {
+      return api.req("POST", "/api/v1/delivery/buglist", body || {});
+    },
+    deliveryCreateTestCases(body) {
+      return api.req("POST", "/api/v1/delivery/test-cases", body || {});
+    },
+    deliveryRunTestCases(body) {
+      return api.req("POST", "/api/v1/delivery/test-cases/run", body || {});
+    },
+    deliveryFixBuglist(id) {
+      return api.req(
+        "POST",
+        "/api/v1/delivery/buglist/" + encodeURIComponent(id) + "/fix",
+        {},
+      );
+    },
+    deliveryRegressBuglist(body) {
+      return api.req("POST", "/api/v1/delivery/buglist/regress", body || {});
+    },
   },
 };

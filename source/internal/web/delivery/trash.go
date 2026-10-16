@@ -29,10 +29,10 @@ type TrashItem struct {
 
 // TrashMajorMeta is list-card metadata for a trashed major.
 type TrashMajorMeta struct {
-	Major           int `json:"major"`
-	MilestoneCount  int `json:"milestone_count"`
-	VersionCount    int `json:"version_count"`
-	DesignCount     int `json:"design_count"`
+	Major          int `json:"major"`
+	MilestoneCount int `json:"milestone_count"`
+	VersionCount   int `json:"version_count"`
+	DesignCount    int `json:"design_count"`
 }
 
 // TrashMajorBundle is the serialized major + dependents.
@@ -110,7 +110,7 @@ FROM delivery_req_versions WHERE major=?`, major)
 		return TrashItem{}, err
 	}
 
-	drows, err := s.db.Query(`SELECT ` + designSelectCols + ` FROM delivery_designs WHERE major=?`, major)
+	drows, err := s.db.Query(`SELECT `+designSelectCols+` FROM delivery_designs WHERE major=?`, major)
 	if err != nil {
 		return TrashItem{}, err
 	}
@@ -174,6 +174,15 @@ FROM delivery_req_versions WHERE major=?`, major)
 		}
 	}
 	if _, err := tx.Exec(`DELETE FROM delivery_req_versions WHERE major=?`, major); err != nil {
+		return TrashItem{}, err
+	}
+	if _, err := tx.Exec(`DELETE FROM delivery_buglist_items WHERE major=?`, major); err != nil {
+		return TrashItem{}, err
+	}
+	if _, err := tx.Exec(`DELETE FROM delivery_test_cases WHERE major=?`, major); err != nil {
+		return TrashItem{}, err
+	}
+	if _, err := tx.Exec(`DELETE FROM delivery_polishes WHERE major=?`, major); err != nil {
 		return TrashItem{}, err
 	}
 	if _, err := tx.Exec(`DELETE FROM delivery_gates WHERE ref_id LIKE ?`, fmt.Sprintf("%%:%d.%%", major)); err != nil {
@@ -250,10 +259,10 @@ func (s *Store) PurgeTrash(id string) error {
 
 // RestoreTrashResult describes restore outcome.
 type RestoreTrashResult struct {
-	Major   MajorPlan `json:"major"`
-	Mode    string    `json:"mode"`
-	Conflict bool     `json:"conflict"`
-	Message string    `json:"message"`
+	Major    MajorPlan `json:"major"`
+	Mode     string    `json:"mode"`
+	Conflict bool      `json:"conflict"`
+	Message  string    `json:"message"`
 }
 
 // RestoreMajorFromTrash restores a trashed major.

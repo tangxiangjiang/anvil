@@ -596,15 +596,25 @@ func (s *Server) handleDelivery(w http.ResponseWriter, r *http.Request) {
 				Y               *float64 `json:"y"`
 				ExecuteWorkerID *string  `json:"execute_worker_id"`
 				RunState        *string  `json:"run_state"`
+				TestNote        *string  `json:"test_note"`
 				Execute         *bool    `json:"execute"`
+				SubmitTest      *bool    `json:"submit_test"`
+				PassTest        *bool    `json:"pass_test"`
+				FailTest        *bool    `json:"fail_test"`
+				FailTitle       string   `json:"fail_title"`
+				FailBody        string   `json:"fail_body"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				http.Error(w, "bad json", http.StatusBadRequest)
 				return
 			}
 			exec := body.Execute != nil && *body.Execute
-			if body.X == nil && body.Y == nil && body.ExecuteWorkerID == nil && body.RunState == nil && !exec {
-				http.Error(w, "x/y, execute_worker_id, run_state, or execute required", http.StatusBadRequest)
+			submit := body.SubmitTest != nil && *body.SubmitTest
+			pass := body.PassTest != nil && *body.PassTest
+			fail := body.FailTest != nil && *body.FailTest
+			if body.X == nil && body.Y == nil && body.ExecuteWorkerID == nil && body.RunState == nil &&
+				body.TestNote == nil && !exec && !submit && !pass && !fail {
+				http.Error(w, "x/y, execute_worker_id, run_state, test_note, execute, or test action required", http.StatusBadRequest)
 				return
 			}
 			if (body.X != nil) != (body.Y != nil) {
@@ -616,7 +626,13 @@ func (s *Server) handleDelivery(w http.ResponseWriter, r *http.Request) {
 				Y:               body.Y,
 				ExecuteWorkerID: body.ExecuteWorkerID,
 				RunState:        body.RunState,
+				TestNote:        body.TestNote,
 				Execute:         exec,
+				SubmitTest:      submit,
+				PassTest:        pass,
+				FailTest:        fail,
+				FailTitle:       body.FailTitle,
+				FailBody:        body.FailBody,
 			})
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
@@ -625,6 +641,117 @@ func (s *Server) handleDelivery(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, m)
 			return
 		}
+	}
+
+	if path == "buglist" && r.Method == http.MethodPost {
+		var body struct {
+			EngReqID string `json:"eng_req_id"`
+			Major    int    `json:"major"`
+			Minor    int    `json:"minor"`
+			Title    string `json:"title"`
+			Body     string `json:"body"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+		b, err := s.delivery.CreateBuglistItem(delivery.CreateBuglistInput{
+			EngReqID: body.EngReqID,
+			Major:    body.Major,
+			Minor:    body.Minor,
+			Title:    body.Title,
+			Body:     body.Body,
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, http.StatusOK, b)
+		return
+	}
+
+	if path == "buglist/regress" && r.Method == http.MethodPost {
+		var body struct {
+			EngReqID string `json:"eng_req_id"`
+			Major    int    `json:"major"`
+			Minor    int    `json:"minor"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+		res, err := s.delivery.RegressBuglist(body.EngReqID, body.Major, body.Minor)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
+		return
+	}
+
+	if strings.HasPrefix(path, "buglist/") && r.Method == http.MethodPost {
+		rest := strings.TrimPrefix(path, "buglist/")
+		parts := strings.Split(rest, "/")
+		if len(parts) == 2 && parts[1] == "fix" {
+			b, err := s.delivery.FixBuglistItem(parts[0])
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			writeJSON(w, http.StatusOK, b)
+			return
+		}
+	}
+
+	if path == "test-cases" && r.Method == http.MethodPost {
+		var body struct {
+			EngReqID string `json:"eng_req_id"`
+			Major    int    `json:"major"`
+			Minor    int    `json:"minor"`
+			Cases    []struct {
+				Title string `json:"title"`
+				Body  string `json:"body"`
+			} `json:"cases"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+		drafts := make([]delivery.TestCaseDraft, 0, len(body.Cases))
+		for _, c := range body.Cases {
+			drafts = append(drafts, delivery.TestCaseDraft{Title: c.Title, Body: c.Body})
+		}
+		list, err := s.delivery.CreateTestCases(delivery.CreateTestCasesInput{
+			EngReqID: body.EngReqID,
+			Major:    body.Major,
+			Minor:    body.Minor,
+			Cases:    drafts,
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"cases": list})
+		return
+	}
+
+	if path == "test-cases/run" && r.Method == http.MethodPost {
+		var body struct {
+			EngReqID string `json:"eng_req_id"`
+			Major    int    `json:"major"`
+			Minor    int    `json:"minor"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+		res, err := s.delivery.RunTestCases(body.EngReqID, body.Major, body.Minor)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
+		return
 	}
 
 	if path == "polishes" && r.Method == http.MethodPost {

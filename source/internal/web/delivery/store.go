@@ -119,7 +119,28 @@ CREATE TABLE IF NOT EXISTS delivery_milestones (
   y REAL NOT NULL DEFAULT 0,
   sort_order INTEGER NOT NULL DEFAULT 0,
   execute_worker_id TEXT NOT NULL DEFAULT '',
-  run_state TEXT NOT NULL DEFAULT 'idle'
+  run_state TEXT NOT NULL DEFAULT 'idle',
+  test_note TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS delivery_buglist_items (
+  id TEXT PRIMARY KEY,
+  eng_req_id TEXT NOT NULL,
+  major INTEGER NOT NULL,
+  minor INTEGER NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  body TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'open',
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS delivery_test_cases (
+  id TEXT PRIMARY KEY,
+  eng_req_id TEXT NOT NULL,
+  major INTEGER NOT NULL,
+  minor INTEGER NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  body TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'ready',
+  created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS delivery_polishes (
   id TEXT PRIMARY KEY,
@@ -193,6 +214,15 @@ CREATE TABLE IF NOT EXISTS delivery_trash (
 	if err := s.ensureMilestoneRunState(); err != nil {
 		return err
 	}
+	if err := s.ensureMilestoneTestNote(); err != nil {
+		return err
+	}
+	if err := s.ensureBuglistTable(); err != nil {
+		return err
+	}
+	if err := s.ensureTestCasesTable(); err != nil {
+		return err
+	}
 	return s.ensurePolishesTable()
 }
 
@@ -218,6 +248,48 @@ func (s *Store) ensureMilestoneRunState() error {
 	if strings.Contains(msg, "duplicate column") {
 		return nil
 	}
+	return err
+}
+
+func (s *Store) ensureMilestoneTestNote() error {
+	_, err := s.db.Exec(`ALTER TABLE delivery_milestones ADD COLUMN test_note TEXT NOT NULL DEFAULT ''`)
+	if err == nil {
+		return nil
+	}
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "duplicate column") {
+		return nil
+	}
+	return err
+}
+
+func (s *Store) ensureBuglistTable() error {
+	_, err := s.db.Exec(`
+CREATE TABLE IF NOT EXISTS delivery_buglist_items (
+  id TEXT PRIMARY KEY,
+  eng_req_id TEXT NOT NULL,
+  major INTEGER NOT NULL,
+  minor INTEGER NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  body TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'open',
+  created_at TEXT NOT NULL
+)`)
+	return err
+}
+
+func (s *Store) ensureTestCasesTable() error {
+	_, err := s.db.Exec(`
+CREATE TABLE IF NOT EXISTS delivery_test_cases (
+  id TEXT PRIMARY KEY,
+  eng_req_id TEXT NOT NULL,
+  major INTEGER NOT NULL,
+  minor INTEGER NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  body TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'ready',
+  created_at TEXT NOT NULL
+)`)
 	return err
 }
 
@@ -429,7 +501,7 @@ type Design struct {
 	Title           string          `json:"title"`
 	Status          string          `json:"status"`
 	ChosenOptionID  string          `json:"chosen_option_id"` // legacy; unused for Approve
-	ADR             string          `json:"adr"`             // composed export / legacy summary
+	ADR             string          `json:"adr"`              // composed export / legacy summary
 	AdrContext      string          `json:"adr_context"`
 	AdrDecision     string          `json:"adr_decision"`
 	AdrConsequences string          `json:"adr_consequences"`
@@ -526,6 +598,7 @@ type Milestone struct {
 	Y               float64 `json:"y"`
 	ExecuteWorkerID string  `json:"execute_worker_id"`
 	RunState        string  `json:"run_state"`
+	TestNote        string  `json:"test_note"`
 	Phases          []Phase `json:"phases"`
 }
 
@@ -538,6 +611,30 @@ type Polish struct {
 	Title     string `json:"title"`
 	Body      string `json:"body"`
 	Status    string `json:"status"`
+	CreatedAt string `json:"created_at"`
+}
+
+// BuglistItem is a test-fail / campaign bug bound to a milestone (eng_req + major.minor).
+type BuglistItem struct {
+	ID        string `json:"id"`
+	EngReqID  string `json:"eng_req_id"`
+	Major     int    `json:"major"`
+	Minor     int    `json:"minor"`
+	Title     string `json:"title"`
+	Body      string `json:"body"`
+	Status    string `json:"status"` // open | fixing | verified | closed
+	CreatedAt string `json:"created_at"`
+}
+
+// TestCase is a campaign test case under a milestone bind.
+type TestCase struct {
+	ID        string `json:"id"`
+	EngReqID  string `json:"eng_req_id"`
+	Major     int    `json:"major"`
+	Minor     int    `json:"minor"`
+	Title     string `json:"title"`
+	Body      string `json:"body"`
+	Status    string `json:"status"` // draft | ready | passed | failed
 	CreatedAt string `json:"created_at"`
 }
 
@@ -567,14 +664,16 @@ type Roadmap struct {
 
 // Snapshot is the UI hydrate payload.
 type Snapshot struct {
-	Majors     []MajorPlan `json:"majors"`
-	TrashCount int         `json:"trash_count"`
-	Workers    []WorkerRef `json:"workers"`
-	EngReqs    []EngReq    `json:"eng_reqs"`
-	Designs    []Design    `json:"designs"`
-	Roadmap    Roadmap     `json:"roadmap"`
-	Gates      []Gate      `json:"gates"`
-	Polishes   []Polish    `json:"polishes"`
+	Majors       []MajorPlan   `json:"majors"`
+	TrashCount   int           `json:"trash_count"`
+	Workers      []WorkerRef   `json:"workers"`
+	EngReqs      []EngReq      `json:"eng_reqs"`
+	Designs      []Design      `json:"designs"`
+	Roadmap      Roadmap       `json:"roadmap"`
+	Gates        []Gate        `json:"gates"`
+	Polishes     []Polish      `json:"polishes"`
+	BuglistItems []BuglistItem `json:"buglist_items"`
+	TestCases    []TestCase    `json:"test_cases"`
 }
 
 // Snapshot loads the full Delivery graph for the UI.
@@ -611,6 +710,16 @@ func (s *Store) Snapshot() (Snapshot, error) {
 		return out, err
 	}
 	out.Polishes = polishes
+	bugs, err := s.listBuglistItems()
+	if err != nil {
+		return out, err
+	}
+	out.BuglistItems = bugs
+	cases, err := s.listTestCases()
+	if err != nil {
+		return out, err
+	}
+	out.TestCases = cases
 	var trashN int
 	_ = s.db.QueryRow(`SELECT COUNT(*) FROM delivery_trash`).Scan(&trashN)
 	out.TrashCount = trashN
@@ -922,9 +1031,9 @@ type CreateEngReqInput struct {
 	MilestoneTitle string // version title; defaults to Title
 	Status         string // planned | in_progress | done | draft (default planned)
 	Goals          string
-	NonGoals       string // unused in Requirements UI; kept for store compat
-	Success        string // Completion criteria (capabilities / features to ship)
-	Constraints    string // unused in Requirements UI; kept for store compat
+	NonGoals       string                // unused in Requirements UI; kept for store compat
+	Success        string                // Completion criteria (capabilities / features to ship)
+	Constraints    string                // unused in Requirements UI; kept for store compat
 	Phases         []MilestonePhaseInput // req versions under the milestone (patch 1..N)
 	ShellOnly      bool                  // create eng row without first milestone (Project open)
 }
@@ -1390,7 +1499,7 @@ FROM delivery_req_versions WHERE eng_req_id=? AND major=? AND minor=? ORDER BY p
 		return err
 	}
 	type row struct {
-		PatchN                                                    int
+		PatchN                                                                   int
 		Title, Status, Problem, Goals, NonGoals, Constraints, Success, UpdatedAt string
 	}
 	var all []row
@@ -2420,13 +2529,19 @@ func truncateRunes(s string, n int) string {
 	return string(r[:n]) + "…"
 }
 
-// PatchMilestoneInput updates canvas position, execute Worker, run_state, and/or Execute.
+// PatchMilestoneInput updates canvas position, execute Worker, run_state, Execute, or Test actions.
 type PatchMilestoneInput struct {
 	X               *float64
 	Y               *float64
 	ExecuteWorkerID *string
 	RunState        *string
+	TestNote        *string
 	Execute         bool
+	SubmitTest      bool
+	PassTest        bool
+	FailTest        bool
+	FailTitle       string
+	FailBody        string
 }
 
 // PatchMilestonePosition updates canvas card coordinates (persisted).
@@ -2443,7 +2558,7 @@ func normalizeRunState(s string) (string, error) {
 	}
 }
 
-// PatchMilestone updates position and/or execute_worker_id / run_state; Execute advances lifecycle.
+// PatchMilestone updates position and/or execute_worker_id / run_state; Execute / Test advance lifecycle.
 func (s *Store) PatchMilestone(id string, in PatchMilestoneInput) (Milestone, error) {
 	id = strings.TrimSpace(id)
 	if id == "" {
@@ -2452,6 +2567,23 @@ func (s *Store) PatchMilestone(id string, in PatchMilestoneInput) (Milestone, er
 	cur, err := s.getMilestone(id)
 	if err != nil {
 		return Milestone{}, err
+	}
+
+	actionN := 0
+	if in.Execute {
+		actionN++
+	}
+	if in.SubmitTest {
+		actionN++
+	}
+	if in.PassTest {
+		actionN++
+	}
+	if in.FailTest {
+		actionN++
+	}
+	if actionN > 1 {
+		return Milestone{}, fmt.Errorf("only one of execute, submit_test, pass_test, fail_test allowed")
 	}
 
 	x, y := cur.X, cur.Y
@@ -2491,7 +2623,14 @@ func (s *Store) PatchMilestone(id string, in PatchMilestoneInput) (Milestone, er
 		runState = rs
 	}
 
+	testNote := cur.TestNote
+	if in.TestNote != nil {
+		testNote = strings.TrimSpace(*in.TestNote)
+	}
+
 	status := cur.Status
+	bind := parseMilestoneBind(id)
+
 	if in.Execute {
 		if workerID == "" {
 			return Milestone{}, fmt.Errorf("execute_worker_id required to execute")
@@ -2501,16 +2640,77 @@ func (s *Store) PatchMilestone(id string, in PatchMilestoneInput) (Milestone, er
 		}
 		status = LifeInDevelopment
 		runState = RunRunning
-		if bind := parseMilestoneBind(id); bind != nil {
+		if bind != nil {
 			if err := s.SetMilestoneLifecycle(bind.EngID, bind.Major, bind.Minor, LifeInDevelopment); err != nil {
 				return Milestone{}, err
 			}
 		}
 	}
 
+	if in.SubmitTest {
+		if status != LifeInDevelopment {
+			return Milestone{}, fmt.Errorf("submit_test requires status %s (got %s)", LifeInDevelopment, status)
+		}
+		status = LifeTesting
+		runState = RunStopped
+		if bind != nil {
+			if err := s.SetMilestoneLifecycle(bind.EngID, bind.Major, bind.Minor, LifeTesting); err != nil {
+				return Milestone{}, err
+			}
+		}
+	}
+
+	if in.PassTest {
+		if status != LifeTesting {
+			return Milestone{}, fmt.Errorf("pass_test requires status %s (got %s)", LifeTesting, status)
+		}
+		if bind == nil {
+			return Milestone{}, fmt.Errorf("pass_test requires bound milestone id")
+		}
+		if err := s.assertPassCampaignClean(bind.EngID, bind.Major, bind.Minor); err != nil {
+			return Milestone{}, err
+		}
+		status = LifeComplete
+		runState = RunIdle
+		if err := s.SetMilestoneLifecycle(bind.EngID, bind.Major, bind.Minor, LifeComplete); err != nil {
+			return Milestone{}, err
+		}
+	}
+
+	if in.FailTest {
+		if status != LifeTesting {
+			return Milestone{}, fmt.Errorf("fail_test requires status %s (got %s)", LifeTesting, status)
+		}
+		if bind == nil {
+			return Milestone{}, fmt.Errorf("fail_test requires bound milestone id")
+		}
+		title := strings.TrimSpace(in.FailTitle)
+		body := strings.TrimSpace(in.FailBody)
+		if title == "" && body == "" {
+			return Milestone{}, fmt.Errorf("fail_test requires title or body")
+		}
+		if title == "" {
+			title = truncateRunes(body, 48)
+		}
+		if _, err := s.CreateBuglistItem(CreateBuglistInput{
+			EngReqID: bind.EngID,
+			Major:    bind.Major,
+			Minor:    bind.Minor,
+			Title:    title,
+			Body:     body,
+		}); err != nil {
+			return Milestone{}, err
+		}
+		status = LifeAwaitingRoadmap
+		runState = RunIdle
+		if err := s.SetMilestoneLifecycle(bind.EngID, bind.Major, bind.Minor, LifeAwaitingRoadmap); err != nil {
+			return Milestone{}, err
+		}
+	}
+
 	res, err := s.db.Exec(`
-UPDATE delivery_milestones SET x=?, y=?, execute_worker_id=?, run_state=?, status=? WHERE id=?`,
-		x, y, workerID, runState, status, id)
+UPDATE delivery_milestones SET x=?, y=?, execute_worker_id=?, run_state=?, test_note=?, status=? WHERE id=?`,
+		x, y, workerID, runState, testNote, status, id)
 	if err != nil {
 		return Milestone{}, err
 	}
@@ -2561,9 +2761,9 @@ func parseMilestoneBind(msID string) *milestoneBind {
 func (s *Store) getMilestone(id string) (Milestone, error) {
 	var m Milestone
 	err := s.db.QueryRow(`
-SELECT id, title, status, acceptance, x, y, execute_worker_id, COALESCE(run_state,'idle')
+SELECT id, title, status, acceptance, x, y, execute_worker_id, COALESCE(run_state,'idle'), COALESCE(test_note,'')
 FROM delivery_milestones WHERE id=?`, id).Scan(
-		&m.ID, &m.Title, &m.Status, &m.Acceptance, &m.X, &m.Y, &m.ExecuteWorkerID, &m.RunState)
+		&m.ID, &m.Title, &m.Status, &m.Acceptance, &m.X, &m.Y, &m.ExecuteWorkerID, &m.RunState, &m.TestNote)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return Milestone{}, fmt.Errorf("milestone not found")
@@ -2589,14 +2789,14 @@ func (s *Store) nextMilestoneCanvasSlot() (x, y float64) {
 func (s *Store) loadRoadmap() (Roadmap, error) {
 	var rm Roadmap
 	rows, err := s.db.Query(`
-SELECT id, title, status, acceptance, x, y, execute_worker_id, COALESCE(run_state,'idle')
+SELECT id, title, status, acceptance, x, y, execute_worker_id, COALESCE(run_state,'idle'), COALESCE(test_note,'')
 FROM delivery_milestones ORDER BY sort_order, id`)
 	if err != nil {
 		return rm, err
 	}
 	for rows.Next() {
 		var m Milestone
-		if err := rows.Scan(&m.ID, &m.Title, &m.Status, &m.Acceptance, &m.X, &m.Y, &m.ExecuteWorkerID, &m.RunState); err != nil {
+		if err := rows.Scan(&m.ID, &m.Title, &m.Status, &m.Acceptance, &m.X, &m.Y, &m.ExecuteWorkerID, &m.RunState, &m.TestNote); err != nil {
 			_ = rows.Close()
 			return rm, err
 		}
@@ -2800,6 +3000,389 @@ FROM delivery_polishes WHERE id=?`, id).Scan(
 	return p, nil
 }
 
+func (s *Store) listBuglistItems() ([]BuglistItem, error) {
+	rows, err := s.db.Query(`
+SELECT id, eng_req_id, major, minor, title, body, status, created_at
+FROM delivery_buglist_items ORDER BY created_at DESC, id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var list []BuglistItem
+	for rows.Next() {
+		var b BuglistItem
+		if err := rows.Scan(&b.ID, &b.EngReqID, &b.Major, &b.Minor, &b.Title, &b.Body, &b.Status, &b.CreatedAt); err != nil {
+			return nil, err
+		}
+		list = append(list, b)
+	}
+	if list == nil {
+		list = []BuglistItem{}
+	}
+	return list, rows.Err()
+}
+
+// CreateBuglistInput authors a test-fail stub under a milestone bind.
+type CreateBuglistInput struct {
+	EngReqID string
+	Major    int
+	Minor    int
+	Title    string
+	Body     string
+}
+
+// CreateBuglistItem inserts an open buglist row (does not change lifecycle).
+func (s *Store) CreateBuglistItem(in CreateBuglistInput) (BuglistItem, error) {
+	engID := strings.TrimSpace(in.EngReqID)
+	if engID == "" {
+		return BuglistItem{}, fmt.Errorf("eng_req_id required")
+	}
+	title := strings.TrimSpace(in.Title)
+	body := strings.TrimSpace(in.Body)
+	if title == "" && body == "" {
+		return BuglistItem{}, fmt.Errorf("title or body required")
+	}
+	if title == "" {
+		title = truncateRunes(body, 48)
+	}
+	ts := nowRFC3339()
+	id := fmt.Sprintf("bug_%d", time.Now().UnixNano())
+	_, err := s.db.Exec(`
+INSERT INTO delivery_buglist_items(id, eng_req_id, major, minor, title, body, status, created_at)
+VALUES(?,?,?,?,?,?,?,?)`,
+		id, engID, in.Major, in.Minor, title, body, "open", ts)
+	if err != nil {
+		return BuglistItem{}, err
+	}
+	return BuglistItem{
+		ID: id, EngReqID: engID, Major: in.Major, Minor: in.Minor,
+		Title: title, Body: body, Status: "open", CreatedAt: ts,
+	}, nil
+}
+
+func (s *Store) listTestCases() ([]TestCase, error) {
+	rows, err := s.db.Query(`
+SELECT id, eng_req_id, major, minor, title, body, status, created_at
+FROM delivery_test_cases ORDER BY created_at ASC, id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var list []TestCase
+	for rows.Next() {
+		var c TestCase
+		if err := rows.Scan(&c.ID, &c.EngReqID, &c.Major, &c.Minor, &c.Title, &c.Body, &c.Status, &c.CreatedAt); err != nil {
+			return nil, err
+		}
+		list = append(list, c)
+	}
+	if list == nil {
+		list = []TestCase{}
+	}
+	return list, rows.Err()
+}
+
+func (s *Store) listTestCasesForBind(engID string, major, minor int) ([]TestCase, error) {
+	rows, err := s.db.Query(`
+SELECT id, eng_req_id, major, minor, title, body, status, created_at
+FROM delivery_test_cases WHERE eng_req_id=? AND major=? AND minor=?
+ORDER BY created_at ASC, id`, engID, major, minor)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var list []TestCase
+	for rows.Next() {
+		var c TestCase
+		if err := rows.Scan(&c.ID, &c.EngReqID, &c.Major, &c.Minor, &c.Title, &c.Body, &c.Status, &c.CreatedAt); err != nil {
+			return nil, err
+		}
+		list = append(list, c)
+	}
+	if list == nil {
+		list = []TestCase{}
+	}
+	return list, rows.Err()
+}
+
+func (s *Store) listBuglistForBind(engID string, major, minor int) ([]BuglistItem, error) {
+	rows, err := s.db.Query(`
+SELECT id, eng_req_id, major, minor, title, body, status, created_at
+FROM delivery_buglist_items WHERE eng_req_id=? AND major=? AND minor=?
+ORDER BY created_at DESC, id`, engID, major, minor)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var list []BuglistItem
+	for rows.Next() {
+		var b BuglistItem
+		if err := rows.Scan(&b.ID, &b.EngReqID, &b.Major, &b.Minor, &b.Title, &b.Body, &b.Status, &b.CreatedAt); err != nil {
+			return nil, err
+		}
+		list = append(list, b)
+	}
+	if list == nil {
+		list = []BuglistItem{}
+	}
+	return list, rows.Err()
+}
+
+func (s *Store) findMilestoneByBind(engID string, major, minor int) (Milestone, error) {
+	id := fmt.Sprintf("ms_%s_%d_%d", engID, major, minor)
+	return s.getMilestone(id)
+}
+
+// TestCaseDraft is one case in a batch create.
+type TestCaseDraft struct {
+	Title string `json:"title"`
+	Body  string `json:"body"`
+}
+
+// CreateTestCasesInput batch-creates cases under a bind.
+type CreateTestCasesInput struct {
+	EngReqID string
+	Major    int
+	Minor    int
+	Cases    []TestCaseDraft
+}
+
+// CreateTestCases inserts ready cases for a milestone bind.
+func (s *Store) CreateTestCases(in CreateTestCasesInput) ([]TestCase, error) {
+	engID := strings.TrimSpace(in.EngReqID)
+	if engID == "" {
+		return nil, fmt.Errorf("eng_req_id required")
+	}
+	if len(in.Cases) == 0 {
+		return nil, fmt.Errorf("cases required")
+	}
+	var out []TestCase
+	ts := nowRFC3339()
+	for i, d := range in.Cases {
+		title := strings.TrimSpace(d.Title)
+		body := strings.TrimSpace(d.Body)
+		if title == "" && body == "" {
+			continue
+		}
+		if title == "" {
+			title = truncateRunes(body, 48)
+		}
+		id := fmt.Sprintf("tc_%d_%d", time.Now().UnixNano(), i)
+		_, err := s.db.Exec(`
+INSERT INTO delivery_test_cases(id, eng_req_id, major, minor, title, body, status, created_at)
+VALUES(?,?,?,?,?,?,?,?)`,
+			id, engID, in.Major, in.Minor, title, body, "ready", ts)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, TestCase{
+			ID: id, EngReqID: engID, Major: in.Major, Minor: in.Minor,
+			Title: title, Body: body, Status: "ready", CreatedAt: ts,
+		})
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("cases required")
+	}
+	return out, nil
+}
+
+// RunTestCasesResult is the mock Worker write/run outcome.
+type RunTestCasesResult struct {
+	Cases []TestCase    `json:"cases"`
+	Bugs  []BuglistItem `json:"bugs"`
+}
+
+// RunTestCases mocks Worker writing/running cases; odd-index cases fail and spawn bugs.
+func (s *Store) RunTestCases(engID string, major, minor int) (RunTestCasesResult, error) {
+	var out RunTestCasesResult
+	engID = strings.TrimSpace(engID)
+	if engID == "" {
+		return out, fmt.Errorf("eng_req_id required")
+	}
+	ms, err := s.findMilestoneByBind(engID, major, minor)
+	if err != nil {
+		return out, err
+	}
+	if strings.TrimSpace(ms.ExecuteWorkerID) == "" {
+		return out, fmt.Errorf("execute_worker_id required to run tests")
+	}
+	cases, err := s.listTestCasesForBind(engID, major, minor)
+	if err != nil {
+		return out, err
+	}
+	if len(cases) == 0 {
+		return out, fmt.Errorf("no test cases; draft cases first")
+	}
+	existingBugs, err := s.listBuglistForBind(engID, major, minor)
+	if err != nil {
+		return out, err
+	}
+	openTitles := map[string]bool{}
+	for _, b := range existingBugs {
+		if b.Status == "open" || b.Status == "fixing" {
+			openTitles[b.Title] = true
+		}
+	}
+	for i, c := range cases {
+		st := "passed"
+		if i%2 == 1 {
+			st = "failed"
+		}
+		_, err := s.db.Exec(`UPDATE delivery_test_cases SET status=? WHERE id=?`, st, c.ID)
+		if err != nil {
+			return out, err
+		}
+		c.Status = st
+		out.Cases = append(out.Cases, c)
+		if st == "failed" {
+			bugTitle := "Fail: " + c.Title
+			if openTitles[bugTitle] {
+				continue
+			}
+			b, err := s.CreateBuglistItem(CreateBuglistInput{
+				EngReqID: engID,
+				Major:    major,
+				Minor:    minor,
+				Title:    bugTitle,
+				Body:     "Mock run failed for case: " + c.Title + "\n" + c.Body,
+			})
+			if err != nil {
+				return out, err
+			}
+			openTitles[bugTitle] = true
+			out.Bugs = append(out.Bugs, b)
+		}
+	}
+	if out.Bugs == nil {
+		out.Bugs = []BuglistItem{}
+	}
+	return out, nil
+}
+
+// FixBuglistItem mocks Worker entering fix: open → verified.
+func (s *Store) FixBuglistItem(id string) (BuglistItem, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return BuglistItem{}, fmt.Errorf("buglist id required")
+	}
+	var b BuglistItem
+	err := s.db.QueryRow(`
+SELECT id, eng_req_id, major, minor, title, body, status, created_at
+FROM delivery_buglist_items WHERE id=?`, id).Scan(
+		&b.ID, &b.EngReqID, &b.Major, &b.Minor, &b.Title, &b.Body, &b.Status, &b.CreatedAt)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return BuglistItem{}, fmt.Errorf("buglist item not found")
+		}
+		return BuglistItem{}, err
+	}
+	if b.Status != "open" && b.Status != "fixing" {
+		return BuglistItem{}, fmt.Errorf("fix requires status open or fixing (got %s)", b.Status)
+	}
+	_, err = s.db.Exec(`UPDATE delivery_buglist_items SET status=? WHERE id=?`, "verified", id)
+	if err != nil {
+		return BuglistItem{}, err
+	}
+	b.Status = "verified"
+	return b, nil
+}
+
+// RegressBuglistResult is mock regression outcome for a bind.
+type RegressBuglistResult struct {
+	Bugs  []BuglistItem `json:"bugs"`
+	Cases []TestCase    `json:"cases"`
+}
+
+// RegressBuglist mocks regression: verified → closed; failed cases → passed when no open bugs left after.
+func (s *Store) RegressBuglist(engID string, major, minor int) (RegressBuglistResult, error) {
+	var out RegressBuglistResult
+	engID = strings.TrimSpace(engID)
+	if engID == "" {
+		return out, fmt.Errorf("eng_req_id required")
+	}
+	bugs, err := s.listBuglistForBind(engID, major, minor)
+	if err != nil {
+		return out, err
+	}
+	hasVerified := false
+	for _, b := range bugs {
+		if b.Status == "verified" {
+			hasVerified = true
+			break
+		}
+	}
+	if !hasVerified {
+		return out, fmt.Errorf("no verified bugs to regress")
+	}
+	for _, b := range bugs {
+		switch b.Status {
+		case "verified":
+			_, err := s.db.Exec(`UPDATE delivery_buglist_items SET status=? WHERE id=?`, "closed", b.ID)
+			if err != nil {
+				return out, err
+			}
+			b.Status = "closed"
+		case "open", "fixing":
+			// stay open — regress not clean yet
+		}
+		out.Bugs = append(out.Bugs, b)
+	}
+	// Mark failed cases passed when no open/fixing remain.
+	stillOpen := false
+	for _, b := range out.Bugs {
+		if b.Status == "open" || b.Status == "fixing" {
+			stillOpen = true
+			break
+		}
+	}
+	cases, err := s.listTestCasesForBind(engID, major, minor)
+	if err != nil {
+		return out, err
+	}
+	for _, c := range cases {
+		if !stillOpen && c.Status == "failed" {
+			_, err := s.db.Exec(`UPDATE delivery_test_cases SET status=? WHERE id=?`, "passed", c.ID)
+			if err != nil {
+				return out, err
+			}
+			c.Status = "passed"
+		}
+		out.Cases = append(out.Cases, c)
+	}
+	if out.Bugs == nil {
+		out.Bugs = []BuglistItem{}
+	}
+	if out.Cases == nil {
+		out.Cases = []TestCase{}
+	}
+	return out, nil
+}
+
+func (s *Store) assertPassCampaignClean(engID string, major, minor int) error {
+	cases, err := s.listTestCasesForBind(engID, major, minor)
+	if err != nil {
+		return err
+	}
+	if len(cases) == 0 {
+		return fmt.Errorf("pass_test requires ≥1 test case and a clean run")
+	}
+	for _, c := range cases {
+		if c.Status != "passed" {
+			return fmt.Errorf("pass_test requires all cases passed (case %q is %s)", c.Title, c.Status)
+		}
+	}
+	bugs, err := s.listBuglistForBind(engID, major, minor)
+	if err != nil {
+		return err
+	}
+	for _, b := range bugs {
+		if b.Status == "open" || b.Status == "fixing" {
+			return fmt.Errorf("pass_test blocked: open buglist item %q", b.Title)
+		}
+	}
+	return nil
+}
+
 // EnsureSeed ensures default majors; inserts demo eng rows when empty.
 func (s *Store) EnsureSeed() error {
 	if err := s.ensureDefaultMajors(); err != nil {
@@ -2842,6 +3425,8 @@ func (s *Store) Reset() error {
 	for _, q := range []string{
 		`DELETE FROM delivery_gates`,
 		`DELETE FROM delivery_polishes`,
+		`DELETE FROM delivery_test_cases`,
+		`DELETE FROM delivery_buglist_items`,
 		`DELETE FROM delivery_edges`,
 		`DELETE FROM delivery_phases`,
 		`DELETE FROM delivery_milestones`,
@@ -2884,7 +3469,7 @@ VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
 		return err
 	}
 	versions := []struct {
-		maj, min, pat int
+		maj, min, pat                                                 int
 		title, status, problem, goals, nonGoals, constraints, success string
 	}{
 		{0, 33, 1, "Delivery UI shell", LifeAwaitingRoadmap,
