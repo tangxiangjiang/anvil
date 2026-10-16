@@ -166,6 +166,21 @@ a log line.
   text it was written as. The Thinking row is provider-dependent: Anthropic's
   extended thinking must be echoed back with a signature the SDK does not carry
   yet, so it does not appear there.
+- **Reopens the change a call made.** Every finished card for a call that wrote
+  or edited a file offers **Review changes**, which opens VS Code's own diff
+  editor. It is deliberately not the same thing as the prompt's preview: a call
+  that ran under `accept edits`, under `bypass`, by an `allow` rule, or with
+  `anvil.permissions` off never showed you anything, and those are the calls a
+  way back to matters most for. The diff is the file as the turn found it
+  against the file on disk whenever the extension still holds that before-image
+  — the turn that just finished. Every older card, and an `apply_patch` (which
+  spans files and has no single "before"), opens what the call itself carried,
+  and the tab's title says which it is: *what this call replaced*, *the body
+  this call wrote*, or the patch's own text. A `shell` command that redirects
+  into a file changed it without naming it, so its card offers nothing rather
+  than guessing. A failed call offers nothing either: a change that did not
+  apply is not a change. What it does **not** do is accept, revert or undo
+  anything — it is a view of what happened.
 - **Keeps the conversation across a mode change.** `ask`, `accept edits`,
   `plan`, `no asking`, and `bypass` are session options in the SDK, so switching
   one closes the session and re-opens it under the same agent: same history, new
@@ -289,10 +304,12 @@ wire; they are skipped when the sidecar has not been built.
 and `src/extension.ts` import `vscode` and are therefore not covered by these
 tests — they need an extension host. Keep them thin; the behaviour worth testing
 belongs on this side of the `vscode` boundary. `src/commands.ts`,
-`src/hostBundle.ts`, `src/sessionList.ts` and `src/rulesFile.ts` are split that
-way on purpose: they decide what a typed line means, which binary to run, what
-the session sidebar shows, and what the rules file's skeleton and error positions
-are, and the `vscode`-bound modules above only carry those decisions out. `test/unit/chatLayout.test.ts` is the third kind of check: it reads
+`src/hostBundle.ts`, `src/sessionList.ts`, `src/rulesFile.ts` and
+`src/editDiff.ts` are split that way on purpose: they decide what a typed line
+means, which binary to run, what the session sidebar shows, what the rules
+file's skeleton and error positions are, and what change a finished tool call
+carried and how it should be opened, and the `vscode`-bound modules above only
+carry those decisions out. `test/unit/chatLayout.test.ts` is the third kind of check: it reads
 `media/chat.css` and `media/chat.js` as text and asserts the layout invariants
 those two files have to agree on, since nothing here can render them.
 `test/unit/markdown.test.ts` loads `media/markdown.js` the same way — by
@@ -306,6 +323,14 @@ can see. `test/unit/permissionKinds.test.ts` is the fourth: it reads
 that every "always allow" kind the SDK offers has a label, that the methods are
 spelled alike on both sides, and that the fields the card reads are the ones the
 host sends — three failures that are all silent at runtime.
+`test/unit/toolCardReview.test.ts` is the fifth, over the one click in the panel
+no test here can perform: it reads `media/chat.js`, `src/chatPanel.ts`,
+`src/editDiff.ts` and `src/mentions.ts` and asserts the button sits beside the
+card's `<details>` rather than inside it, that the renderer offers a review only
+where the extension said there was one, that the click hands back the call's
+facts, that a pre-image is used only for the turn it came from, and that the
+tools the review covers are the tools the change tracker follows — a second list
+of file-writing tools is a list that goes stale in silence.
 
 The packaging step has its own check, since it is the part no unit test can
 reach: `npm run smoke:vsix` extracts a built VSIX to a temporary directory,

@@ -173,7 +173,7 @@ The client sets these per session, on `session.new` / `session.resume`:
 | Remember a pattern, not a tool | the card's "always allow" is the host's proven rule shapes — this command, this prefix, read-only, this file — written into `.anvil/permissions.json` (0.36) |
 | Say why a call ran | a tool card that ran unprompted names the rule that allowed it; a refused one shows the rule's `reason` (0.36) |
 | Author the rule file | **Anvil: Open Permission Rules** opens or creates `.anvil/permissions.json`, reporting a malformed one where it is edited (0.36) |
-| Diff review | pre-apply preview; afterwards a changed-files list opening native diffs |
+| Diff review | pre-apply preview; afterwards a changed-files list opening native diffs, and a *Review changes* button on the card of any call that wrote or edited a file |
 | `@` file / folder mentions | `context.mentions` |
 | Selection + diagnostics injection | `context.selection`, `context.diagnostics` |
 | Image paste | `attachments` → the 0.19 vision path ([19](19-vision.md)) |
@@ -350,6 +350,63 @@ composer does with a mode it did not choose.
   which resolves the mode the way the real one does, from the file and the request — and
   asserts what the client sent and what came back, including the refusal path. That the mode
   reaches the *DOM* is the one part no test here can reach, and it is listed as a manual check.
+
+### The change a card opens as built (p_0.38.2)
+
+The pre-apply preview is a diff you have already been shown. The calls nobody was shown — the ones
+that ran under `accept_edits`, under `bypass`, by an `allow` rule, or with no permission rules at
+all — are the ones a way back to the change is worth most, and those are exactly the ones that had
+no preview. A finished card now carries *Review changes*.
+
+- **The change is derived from the call, not handed over by the host.** The obvious design is to
+  attach the preview to `tool_result` as well. It cannot work: the SDK computes a preview only
+  where it is about to ask (`PreviewFor` lives inside the permission branch of `tools.go`), so a
+  host-supplied change would exist exactly when the user had already seen it and be absent in
+  every case this feature is for. A replayed call — p_0.38.3's whole subject — never had one at
+  all, so the host path would need a second implementation for replay, and the two would drift.
+  `src/editDiff.ts` therefore reads the call's own `name` and `args`, which is the only source a
+  live call and a stored one share.
+- **Which file a call touched has one answer, and both features read it.** `reviewOf` derives its
+  paths from `mentions.ts`'s `toolCallPaths`, which is the same function `ChangesTracker` uses to
+  decide what to snapshot. A tool the review understood and the tracker did not would be a card
+  whose pre-image was never taken; the reverse is a snapshot nothing can open. Both are silent,
+  so `test/unit/toolCardReview.test.ts` reads the tool names out of both files and fails if the
+  sets differ.
+- **The card is told whether to offer a review; it does not work it out.** The renderer cannot
+  import a module, and a second list of "tools that change a file" inside `chat.js` is a list that
+  goes stale the first time one is renamed. The panel answers at the `tool_call` event
+  (`reviewable`) from the same `reviewOf` the click will run, and it answers in one place —
+  `postEvent` — so the live event and (from p_0.38.3) the replayed one cannot be given different
+  answers.
+- **The click carries the call's facts, because nothing was kept.** Retaining every call's
+  arguments so a click could look one up would hold a session's worth of file bodies for as long
+  as the tab lives. Instead the card keeps `{runId, name, args}` only for the calls it will offer
+  a review for — a reference to the arguments it is already rendering in the card's IN pane, not
+  a copy — and hands them back with the click. The button appears when the result arrives and not
+  when the call does: a change that failed to apply is not a change, and a diff of one would
+  describe something that never happened. Nothing in that path consults an approval, which is what
+  makes the ungated calls reviewable.
+- **The pre-image is kept with the run that took it.** The tracker snapshots a path before the
+  write, and a *later* turn's snapshot shown under an older card's button would read as that
+  call's edit — one turn's change attributed to another's call. `lastChanges` is therefore
+  `{run, files}` and the lookup refuses a mismatched run id, which also settles the mid-turn case
+  honestly: a click on the running turn's own card, before its `done` has landed, has no
+  pre-image yet and falls back to the arguments.
+- **The fallbacks say what they are.** With no pre-image, an `edit_file` opens the replacement the
+  call carried, both sides of it; a `write_file` opens its body against an empty side, titled
+  *the body this call wrote* — which is what it is, and not a claim that the file was empty, which
+  is why the alternative (reading the file now and calling it the "after") is not taken: it would
+  show the change as nothing. `apply_patch` spans files and has no single "before", so it opens as
+  its own text — `PreviewDocuments.openText`, the one surface this phase adds — named after the
+  file it names, or `patch.diff` when its headers name fewer or more than one.
+- **A review is a record, not a request.** The approval card's diff is closed when the question is
+  answered, which is right for a proposed change. This one answers nothing, is not tracked as a
+  pending decision and is not closed when the run ends — it is a view of something that already
+  happened, and the test asserts the review path never touches the map the approvals are closed
+  through.
+- **The one gap is stated rather than papered over.** A `shell` command that redirects into a file
+  is invisible to the tracker, so its card offers no review. Rescanning the workspace after every
+  turn would close it and cost far more than the gap does — the same judgment p_0.35.9 made.
 
 ## Placement
 

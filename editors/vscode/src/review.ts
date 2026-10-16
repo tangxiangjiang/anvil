@@ -64,6 +64,20 @@ export class PreviewDocuments implements vscode.TextDocumentContentProvider, vsc
     return this.openPreview(before, '', label, `${basename(label)} (deleted)`);
   }
 
+  /**
+   * Opens a body of text as a document of its own, with no diff around it.
+   *
+   * This is the one change that cannot be a two-sided diff: an `apply_patch`
+   * spans files, so there is no single "before" and no single "after" — its own
+   * text is the change, and the reader gets the whole of it in a window that
+   * scrolls rather than a card that clips.
+   */
+  async openText(body: string, label: string): Promise<vscode.Uri[]> {
+    const uri = this.store(randomBytes(8).toString('hex'), 'body', label, body);
+    await vscode.window.showTextDocument(uri, { preview: true });
+    return [uri];
+  }
+
   private store(id: string, side: string, label: string, body: string): vscode.Uri {
     const uri = vscode.Uri.from({
       scheme: PREVIEW_SCHEME,

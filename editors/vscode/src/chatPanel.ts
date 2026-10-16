@@ -18,6 +18,7 @@ import { randomBytes } from 'node:crypto';
 import { dirname } from 'node:path';
 import * as vscode from 'vscode';
 import { ChangesTracker, ChangedFile } from './changes';
+import { PreImage, planReview, reviewOf } from './editDiff';
 import { buildPromptContext, pickMentions } from './editorContext';
 import { attachmentsFromDataUrls } from './attachments';
 import { HostListener, HostManager } from './hostManager';
@@ -70,6 +71,14 @@ type Inbound =
   | { type: 'mode'; mode: string }
   | { type: 'review'; requestId: string }
   | { type: 'reviewChange'; path: string }
+  /**
+   * "Show me what that call changed", from a finished tool card. The call's
+   * facts travel with the click because this is the only place they still
+   * exist: the card already holds the arguments, and keeping a copy of every
+   * call's body in the extension for the length of a session is not worth a
+   * second reference to what the IN pane is already showing.
+   */
+  | { type: 'reviewCall'; toolCallId: string; runId?: string; name?: string; args?: unknown }
   /** A link the transcript rendered. The URL is re-checked before it is opened. */
   | { type: 'openLink'; url: string };
 
@@ -84,7 +93,7 @@ type Outbound =
       agentId?: string;
       mode?: PermissionMode;
     }
-  | { type: 'event'; event: HostEvent }
+  | { type: 'event'; event: HostEvent; reviewable?: boolean }
   | { type: 'approval'; request: ApprovalRequest }
   | { type: 'approvalWithdrawn'; requestId: string }
   /**
@@ -185,8 +194,16 @@ export class ChatPanel implements HostListener {
   private readonly sessionsChanged = new vscode.EventEmitter<void>();
   /** Pre-images for the current turn, so the changed-files list can show diffs. */
   private readonly changes = new ChangesTracker();
-  /** The changed files of the last finished turn, by path. */
-  private lastChanges = new Map<string, ChangedFile>();
+  /**
+   * The changed files of the last finished turn, by path — and which turn that
+   * was. The run id is not decoration: a pre-image belongs to one turn, so a
+   * card from an older run must not be diffed against a later turn's pre-image,
+   * which would attribute one turn's edit to another call.
+   */
+  private lastChanges: { run: string; files: Map<string, ChangedFile> } = {
+    run: '',
+    files: new Map(),
+  };
   /** Review tabs opened for an approval, closed when it is answered. */
   private readonly reviews = new Map<string, vscode.Uri[]>();
   /**
@@ -375,6 +392,9 @@ export class ChatPanel implements HostListener {
       case 'reviewChange':
         await this.openChangeReview(msg.path);
         return;
+      case 'reviewCall':
+        await this.openCallReview(msg);
+        return;
       case 'openLink':
         await this.openLink(msg.url);
         return;
@@ -515,7 +535,7 @@ export class ChatPanel implements HostListener {
   private async clearConversation(): Promise<void> {
     await this.ensureManager().clearConversation();
     this.changes.begin();
-    this.lastChanges = new Map();
+    this.forgetChanges();
     this.post({ type: 'reset' });
     this.post({ type: 'session', agentId: '', started: false });
     this.postState();
@@ -727,7 +747,7 @@ export class ChatPanel implements HostListener {
     // The pre-images this turn will need are gone the moment it starts writing,
     // so the tracker is reset here rather than when the first write arrives.
     this.changes.begin();
-    this.lastChanges = new Map();
+    this.forgetChanges();
     await this.ensureManager()
       .send(text, { context, attachments })
       .catch(() => undefined);
@@ -921,17 +941,101 @@ export class ChatPanel implements HostListener {
   }
 
   private async openChangeReview(path: string): Promise<void> {
-    const change = this.lastChanges.get(path);
+    const change = this.lastChanges.files.get(path);
     if (!change) return;
     if (change.kind === 'deleted') {
       await this.previews.openDeleted(change.before, path);
       return;
     }
+    const uri = this.fileUri(path);
+    if (!uri) return;
+    await this.previews.openAgainstDisk(change.before, uri, path);
+  }
+
+  /**
+   * Opens what a finished tool call changed, from the card's own button.
+   *
+   * This is a record, not a request: it answers nothing, it is not tracked as a
+   * pending decision, and nothing closes it when a run ends. The approval
+   * card's review is the opposite — it belongs to a question that is still
+   * open, and it is closed when the question is answered.
+   */
+  private async openCallReview(call: {
+    toolCallId: string;
+    runId?: string;
+    name?: string;
+    args?: unknown;
+  }): Promise<void> {
+    const review = reviewOf(call.name, call.args);
+    if (!review) {
+      // A card that offered no button, or a host that sent arguments this
+      // client cannot read. Either way there is nothing to open, and inventing
+      // a diff would be worse than saying so.
+      this.log(`no change to review for tool call ${call.toolCallId}`);
+      this.post({
+        type: 'notice',
+        level: 'warn',
+        message: 'This call did not change a file, so there is nothing to review.',
+      });
+      return;
+    }
+
+    const preImage = review.kind === 'patch' ? undefined : this.preImageFor(call.runId, review.path);
+    const plan = planReview(review, preImage);
+
+    if (plan.kind === 'text') {
+      await this.previews.openText(plan.body, plan.label);
+      return;
+    }
+    if (plan.kind === 'memory') {
+      await this.previews.openPreview(plan.before, plan.after, plan.label, plan.title);
+      return;
+    }
+    if (plan.deleted) {
+      await this.previews.openDeleted(plan.before, plan.path);
+      return;
+    }
+    const uri = this.fileUri(plan.path);
+    if (!uri) {
+      this.post({
+        type: 'notice',
+        level: 'warn',
+        message: `There is no workspace folder to open ${plan.path} from.`,
+      });
+      return;
+    }
+    await this.previews.openAgainstDisk(plan.before, uri, plan.path);
+  }
+
+  /**
+   * The pre-image of a path, but only when the call belongs to the turn that
+   * pre-image came from. Any other answer would be a diff of a different
+   * change: the same file written again in a later turn has a later pre-image,
+   * and showing it under an older card's button reads as that call's edit.
+   */
+  private preImageFor(runId: string | undefined, path: string): PreImage | undefined {
+    if (!runId || runId !== this.lastChanges.run) return undefined;
+    const change = this.lastChanges.files.get(path);
+    if (!change) return undefined;
+    return { before: change.before, deleted: change.kind === 'deleted' };
+  }
+
+  /**
+   * A workspace file as a URI, refusing anything that would climb out of the
+   * folder. The path came from the model's tool arguments, so the SDK's sandbox
+   * governs the write and this governs which file a diff describes.
+   */
+  private fileUri(path: string): vscode.Uri | undefined {
     const folder = vscode.workspace.workspaceFolders?.[0];
-    if (!folder) return;
+    if (!folder) return undefined;
     const segments = path.split('/').filter((segment) => segment !== '' && segment !== '..' && segment !== '.');
-    if (segments.length === 0) return;
-    await this.previews.openAgainstDisk(change.before, vscode.Uri.joinPath(folder.uri, ...segments), path);
+    if (segments.length === 0) return undefined;
+    return vscode.Uri.joinPath(folder.uri, ...segments);
+  }
+
+  /** Forgets the last turn's changes, when there is no last turn any more. */
+  private forgetChanges(): void {
+    this.lastChanges = { run: '', files: new Map() };
   }
 
   private async closeReview(requestId: string): Promise<void> {
@@ -950,8 +1054,23 @@ export class ChatPanel implements HostListener {
     if (event.type === 'tool_call') {
       void this.changes.snapshotToolCall(event.name, event.args);
     }
-    this.post({ type: 'event', event });
+    this.postEvent(event);
   };
+
+  /**
+   * Sends one event to the card, with the one thing the card cannot work out
+   * for itself: whether this call has a change to review.
+   *
+   * It is decided here rather than in the renderer because the renderer cannot
+   * read a module, and a second "which tools change a file" list in `chat.js`
+   * would go stale the first time one moved. Everything that puts a tool call
+   * in front of the user — a live event, and a replayed one — comes through
+   * here, so the answer cannot be missing from one path and present on another.
+   */
+  private postEvent(event: HostEvent): void {
+    const reviewable = event.type === 'tool_call' && reviewOf(event.name, event.args) !== undefined;
+    this.post({ type: 'event', event, reviewable });
+  }
 
   onApproval = (request: ApprovalRequest): void => {
     // Also snapshotted here, where nothing can be racing the write: a gated
@@ -967,7 +1086,7 @@ export class ChatPanel implements HostListener {
 
   onDone = (done: DoneParams, failure: RunFailure): void => {
     this.post({ type: 'done', done, failure });
-    void this.reportChanges();
+    void this.reportChanges(done.run_id);
     // The turn changed the stored record — its run count, its status, its
     // updated_at — so the sidebar's copy of it is stale from here on.
     this.sessionsChanged.fire();
@@ -994,10 +1113,12 @@ export class ChatPanel implements HostListener {
     this.post({ type: 'notice', level, message });
 
   /** Reports what the turn actually changed, once the writes have landed. */
-  private async reportChanges(): Promise<void> {
+  private async reportChanges(runId: string): Promise<void> {
     try {
       const files = await this.changes.finish();
-      this.lastChanges = new Map(files.map((file) => [file.path, file]));
+      // Kept with the run that produced them, so a card's review can tell
+      // whether these pre-images are its own turn's.
+      this.lastChanges = { run: runId, files: new Map(files.map((file) => [file.path, file])) };
       this.post({
         type: 'changes',
         files: files.map((file) => ({ path: file.path, kind: file.kind })),

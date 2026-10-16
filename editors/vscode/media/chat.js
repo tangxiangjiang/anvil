@@ -50,6 +50,16 @@
   let round = null;
   /** Tool cards by tool_call_id, so a result can find its call. */
   const toolCards = new Map();
+  /**
+   * The facts a card's review button hands back, by tool_call_id: the call's
+   * name, its arguments, and the run it belonged to.
+   *
+   * They are kept here because the review is derived from the call's own
+   * arguments and the card is the only place they still exist — the extension
+   * keeps no copy of every call's body. What is stored is the same object the
+   * IN pane is already showing as text, so it costs a reference, not a copy.
+   */
+  const callFacts = new Map();
   /** Approval cards by request_id. */
   const approvals = new Map();
   /** Referenced workspace paths, in the order they were picked. */
@@ -107,6 +117,7 @@
   function clearTranscript() {
     endRound();
     toolCards.clear();
+    callFacts.clear();
     approvals.clear();
     mentions = [];
     images = [];
@@ -606,7 +617,7 @@
     return wrap;
   }
 
-  function addToolCall(event) {
+  function addToolCall(event, reviewable) {
     endRound();
     const card = el('details', 'tool');
     const summary = el('summary');
@@ -623,8 +634,47 @@
     }
     card.appendChild(pane);
 
-    if (event.tool_call_id) toolCards.set(event.tool_call_id, card);
+    if (event.tool_call_id) {
+      toolCards.set(event.tool_call_id, card);
+      // Only for a call the extension said has a change to show. The button
+      // itself waits for the result: a change that failed to apply is not a
+      // change, and a diff of one would describe something that never happened.
+      if (reviewable) {
+        callFacts.set(event.tool_call_id, {
+          runId: event.run_id,
+          name: event.name,
+          args: event.args,
+        });
+      }
+    }
     append(card);
+  }
+
+  /**
+   * The review affordance, added below the summary and never inside it.
+   *
+   * `<details>` toggles from its summary alone, so a button within the summary
+   * would have to swallow its own click to stop the card collapsing under it.
+   * Outside, the button is a sibling of the summary, which also means it stays
+   * reachable while the card is closed — and a reader who wants the change
+   * rather than the arguments is exactly the reader who has it closed.
+   */
+  function addReviewButton(card, toolCallId) {
+    const facts = toolCallId ? callFacts.get(toolCallId) : undefined;
+    if (!facts || card.querySelector('button.review')) return;
+    const open = el('button', 'review', 'Review changes');
+    open.type = 'button';
+    open.title = 'Open what this call changed in the diff editor';
+    open.addEventListener('click', () =>
+      vscode.postMessage({
+        type: 'reviewCall',
+        toolCallId,
+        runId: facts.runId,
+        name: facts.name,
+        args: facts.args,
+      }),
+    );
+    card.insertBefore(open, card.querySelector('.pane'));
   }
 
   function addToolResult(event) {
@@ -639,6 +689,10 @@
     const failed = event.is_error === true;
     card.classList.add(failed ? 'failed' : 'done');
     state.textContent = failed ? 'failed' : 'done';
+
+    // A call that failed changed nothing, so its card offers no review; a call
+    // that succeeded offers one when its arguments describe a change at all.
+    if (!failed) addReviewButton(card, event.tool_call_id);
 
     // Why this call ran without stopping, when a rule is the reason — or why it
     // did not run at all, which is the same field on a denial. The host sets it
@@ -1481,7 +1535,7 @@
         const e = msg.event;
         if (e.type === 'assistant') addAssistantChunk(e.text || '');
         else if (e.type === 'reasoning') addReasoning(e.text || '');
-        else if (e.type === 'tool_call') addToolCall(e);
+        else if (e.type === 'tool_call') addToolCall(e, msg.reviewable === true);
         else if (e.type === 'tool_result') addToolResult(e);
         else if (e.type === 'error') addNotice(e.text || 'The run reported an error.');
         else if (e.type === 'progress' && e.text) {

@@ -77,14 +77,28 @@ What it can honestly say:
 | Call | What the card can open |
 |---|---|
 | `edit_file` | The old text and the new text the call carried |
-| `write_file` | The body the call wrote |
-| `apply_patch` | The patch text, with the files its headers name |
+| `write_file` | The body the call wrote, against an empty side |
+| `apply_patch` | The patch text as a document, named for the file its headers name |
 | Anything else | Nothing — the card offers no review rather than an invented one |
 
 And when the client has something better, it uses it: the change tracker snapshot the pre-image
-of every file a turn touched, so for a file this turn wrote, the review is **that image against
-disk** — the same diff the approval card and the changed-files row open. The arguments are the
-fallback, not the ceiling.
+of every file a turn touched, so for a file the **most recently finished** turn wrote, the review
+is **that image against disk** — the same diff the approval card and the changed-files row open.
+The arguments are the fallback, not the ceiling.
+
+The pre-images are held with the run that took them, which is why "most recently finished" is the
+honest bound rather than "the turn that made this change". A later turn's pre-image shown under an
+older card's button would read as that call's edit — one turn's change attributed to another's
+call — so a run id that does not match falls back to the arguments instead. That also settles the
+mid-turn click honestly: a card from the turn still running has no pre-image yet, because the
+tracker has not finished that turn, and shows what its arguments carried.
+
+The fallbacks are labelled rather than dressed up. A `write_file` with no pre-image opens against
+an empty side; the tab says *the body this call wrote*, which is what it is, and not that the file
+was empty. Reading the file from disk and calling it the "after" would be worse — it would show
+the change as nothing. An `apply_patch` is not a diff at all but a document: it opens as its own
+text (`PreviewDocuments.openText`), because it spans files and there is no single "before" it
+belongs to.
 
 Two things the review is **not**:
 
@@ -194,6 +208,8 @@ continue.
 | A title exceeds 80 runes | Cut at 80, ellipsis appended |
 | A call's arguments are malformed | No review affordance; nothing is thrown and nothing is logged as an error |
 | A call changed no file | No review affordance |
+| A call failed | No review affordance — a change that did not apply is not a change |
+| The pre-image held is a different turn's | The review falls back to the call's own arguments |
 | A `shell` command wrote a file | No review affordance — the change tracker cannot see it |
 | The stored agent id is gone | The key is cleared and the tab opens fresh |
 | The host is older than this phase | `session.transcript` answers `-32601`; the tab works without replay |

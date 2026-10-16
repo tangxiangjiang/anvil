@@ -557,6 +557,25 @@ body {
   font-size: 0.9em;
 }
 
+/*
+ * The review affordance on a finished tool card. It sits below the summary and
+ * outside it, so it is there while the card is collapsed — and it is muted like
+ * the approval card's, because opening a diff is a look, not a decision.
+ */
+.tool .review {
+  display: block;
+  margin: 0 8px 6px;
+  background: none;
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.4));
+  color: var(--vscode-textLink-foreground);
+  padding: 2px 8px;
+  font-size: 0.9em;
+}
+
+.tool .review:hover:not(:disabled) {
+  background: var(--vscode-button-secondaryHoverBackground, rgba(128, 128, 128, 0.15));
+}
+
 /* --- buttons -------------------------------------------------------------- */
 
 button {
