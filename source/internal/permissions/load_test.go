@@ -6,6 +6,7 @@ package permissions
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -35,6 +36,94 @@ func TestLoadReadsTheFile(t *testing.T) {
 	}
 	if d := set.Evaluate(CallFacts{Tool: "shell", Command: "rm -rf /"}, "linux"); d.Effect != Deny {
 		t.Errorf("Evaluate = %s, want deny", d)
+	}
+}
+
+// --- the declared starting mode ----------------------------------------------
+//
+// A file may say which mode its workspace's sessions start in. This package
+// checks the shape only: which words are modes is the host's vocabulary, and a
+// second copy of that list living down here is how the two start disagreeing.
+
+func TestParseReadsTheDeclaredMode(t *testing.T) {
+	set, err := Parse([]byte(`{"version":1,"defaultMode":"accept_edits","rules":[]}`))
+	if err != nil {
+		t.Fatalf("Parse = %v", err)
+	}
+	if got := set.DefaultMode(); got != "accept_edits" {
+		t.Fatalf("DefaultMode() = %q, want accept_edits", got)
+	}
+}
+
+// A file that declares nothing, and rules that a program supplied, both have no
+// declaration — and neither is an error.
+func TestNoDeclarationReadsAsEmpty(t *testing.T) {
+	set, err := Parse([]byte(`{"version":1,"rules":[]}`))
+	if err != nil {
+		t.Fatalf("Parse = %v", err)
+	}
+	if got := set.DefaultMode(); got != "" {
+		t.Fatalf("DefaultMode() = %q, want empty", got)
+	}
+	programmatic, err := New([]Rule{{Effect: "allow", Tool: "shell"}})
+	if err != nil {
+		t.Fatalf("New = %v", err)
+	}
+	if got := programmatic.DefaultMode(); got != "" {
+		t.Fatalf("DefaultMode() = %q for rules a program supplied, want empty", got)
+	}
+	var nilSet *Set
+	if got := nilSet.DefaultMode(); got != "" {
+		t.Fatalf("DefaultMode() = %q on a nil set, want empty", got)
+	}
+}
+
+// A word this package cannot read as a mode name is a problem on the file, with
+// the line to fix — not a policy the host has to refuse later. An empty value is
+// in this group on purpose: a mode name is a word, so `""` is a typo rather than
+// a declaration that says nothing.
+func TestMalformedDefaultModePointsAtTheLine(t *testing.T) {
+	cases := []struct {
+		name  string
+		value string
+	}{
+		{"capitalised", "Bypass"},
+		{"a phrase", "accept edits"},
+		{"empty", ""},
+		{"leading digit", "3rd_mode"},
+		{"punctuation", "accept-edits"},
+		{"padded", " accept_edits"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			text := "{\n  \"version\": 1,\n  \"defaultMode\": " + strconv.Quote(tc.value) + ",\n  \"rules\": []\n}\n"
+			_, err := Parse([]byte(text))
+			if err == nil {
+				t.Fatalf("Parse(%s) = nil, want an error", text)
+			}
+			if !strings.Contains(err.Error(), "defaultMode") {
+				t.Errorf("error %q does not name the key", err)
+			}
+			line, col := Position(err)
+			// The key's own position, so the squiggle lands on the declaration
+			// rather than on the file: line 3, which begins with two spaces.
+			if line != 3 || col != 3 {
+				t.Errorf("Position = (%d, %d), want (3, 3)", line, col)
+			}
+		})
+	}
+}
+
+// A word that is shaped like a mode but is not one passes here and is refused by
+// the host: the two checks are deliberately in different packages, and this is
+// what keeps the boundary where the design put it.
+func TestUnknownWordIsStillAWellFormedDeclaration(t *testing.T) {
+	set, err := Parse([]byte(`{"version":1,"defaultMode":"yolo","rules":[]}`))
+	if err != nil {
+		t.Fatalf("Parse = %v, want a bare lowercase word to be read", err)
+	}
+	if got := set.DefaultMode(); got != "yolo" {
+		t.Fatalf("DefaultMode() = %q, want yolo", got)
 	}
 }
 

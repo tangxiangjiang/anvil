@@ -25,6 +25,66 @@ func TestPermissionRulesMissingFileIsNotAnError(t *testing.T) {
 	}
 }
 
+// The rule list and the whole file are two views of one read, so a workspace that
+// declares a starting mode is not a workspace whose rules went missing.
+func TestLoadPermissionRuleFileReadsBothHalves(t *testing.T) {
+	dir := t.TempDir()
+	writeWorkspaceFile(t, dir, ".anvil/permissions.json", `{"version":1,"defaultMode":"accept_edits","rules":[
+		{"effect":"allow","tool":"shell","pattern":"readonly"}
+	]}`)
+	file, err := LoadPermissionRuleFile(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if file == nil {
+		t.Fatal("a file that exists must read as a file")
+	}
+	if file.DefaultMode != "accept_edits" {
+		t.Errorf("DefaultMode = %q, want accept_edits", file.DefaultMode)
+	}
+	if len(file.Rules) != 1 || file.Rules[0].Pattern != "readonly" {
+		t.Errorf("Rules = %+v", file.Rules)
+	}
+	if file.Path != PermissionRulesPath(dir) {
+		t.Errorf("Path = %q, want %q", file.Path, PermissionRulesPath(dir))
+	}
+	// The narrow reader is the same read: the two cannot disagree about the rules.
+	rules, err := LoadPermissionRules(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rules) != len(file.Rules) || rules[0] != file.Rules[0] {
+		t.Errorf("LoadPermissionRules = %+v, LoadPermissionRuleFile = %+v", rules, file.Rules)
+	}
+}
+
+// A workspace that writes nothing down reads as no file at all — not as an empty
+// declaration, which would be a policy nobody wrote.
+func TestLoadPermissionRuleFileMissingIsNil(t *testing.T) {
+	file, err := LoadPermissionRuleFile(t.TempDir())
+	if err != nil || file != nil {
+		t.Fatalf("a workspace with no rule file: %+v, %v", file, err)
+	}
+}
+
+// A declaration the parser refuses is not carried: a caller must not be able to
+// read a mode out of a file the SDK would not load.
+func TestLoadPermissionRuleFileReportsAMalformedDeclaration(t *testing.T) {
+	dir := t.TempDir()
+	writeWorkspaceFile(t, dir, ".anvil/permissions.json", "{\n  \"defaultMode\": \"accept edits\"\n}\n")
+	file, err := LoadPermissionRuleFile(dir)
+	if err == nil {
+		t.Fatalf("a malformed declaration must not read: %+v", file)
+	}
+	var perr *PermissionRuleError
+	if !errors.As(err, &perr) {
+		t.Fatalf("the error must name the file and the place: %T %v", err, err)
+	}
+	if perr.Path != PermissionRulesPath(dir) || perr.Line != 2 || perr.Column == 0 {
+		t.Fatalf("error = %+v", perr)
+	}
+}
+
 // A rule written by the editor's card has to be a rule the SDK accepts, or the
 // button that wrote it would be promising something the next session refuses.
 func TestAddPermissionRuleWritesARuleTheLoaderAccepts(t *testing.T) {
@@ -90,6 +150,59 @@ func TestAddPermissionRuleAppendsAfterTheFile(t *testing.T) {
 	// quote has to be the number a reader counts in the file.
 	if m := EvaluatePermissionRules(added, "shell", shellArgs("git push origin main")); m == nil || m.Index != 2 {
 		t.Fatalf("the appended rule is rule 3: %+v", m)
+	}
+}
+
+// The append rebuilds the file whole, so the declaration is the one thing it
+// could silently lose: the first click on "always allow" would then change how
+// every session in this workspace opens.
+func TestAddPermissionRuleKeepsTheDefaultMode(t *testing.T) {
+	dir := t.TempDir()
+	writeWorkspaceFile(t, dir, ".anvil/permissions.json", `{"version":1,"defaultMode":"accept_edits","rules":[
+		{"effect":"deny","tool":"shell","pattern":"rm -rf:*"}
+	]}`)
+	if _, err := AddPermissionRule(dir, PermissionRule{Effect: "allow", Tool: "shell", Pattern: "git status:*"}); err != nil {
+		t.Fatal(err)
+	}
+	file, err := LoadPermissionRuleFile(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if file.DefaultMode != "accept_edits" {
+		t.Fatalf("DefaultMode = %q after an append, want accept_edits", file.DefaultMode)
+	}
+	if len(file.Rules) != 2 || file.Rules[1].Pattern != "git status:*" {
+		t.Fatalf("rules after an append = %+v", file.Rules)
+	}
+	// And the key is still written where a reader looks for it: before the rules,
+	// so the file a person opens says what it is about before it lists what it does.
+	data, err := os.ReadFile(PermissionRulesPath(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if modeAt, rulesAt := strings.Index(string(data), `"defaultMode"`), strings.Index(string(data), `"rules"`); modeAt < 0 || modeAt > rulesAt {
+		t.Fatalf("the declaration must survive in the text:\n%s", data)
+	}
+}
+
+// A file that declares nothing must not gain a declaration by being written to:
+// an empty string is a malformed file, so it would be a rewrite that bricks the
+// policy on the next load.
+func TestAddPermissionRuleInventsNoDeclaration(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := AddPermissionRule(dir, PermissionRule{Effect: "allow", Tool: "shell", Pattern: "ls:*"}); err != nil {
+		t.Fatal(err)
+	}
+	file, err := LoadPermissionRuleFile(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if file.DefaultMode != "" {
+		t.Fatalf("DefaultMode = %q, want empty", file.DefaultMode)
+	}
+	data, _ := os.ReadFile(PermissionRulesPath(dir))
+	if strings.Contains(string(data), "defaultMode") {
+		t.Fatalf("a workspace that declared nothing must not be given a declaration:\n%s", data)
 	}
 }
 

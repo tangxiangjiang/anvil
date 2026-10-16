@@ -105,6 +105,12 @@ func Parse(data []byte) (*Set, error) {
 		return nil, fmt.Errorf("version %d is not supported; this build reads version %d", f.Version, Version)
 	}
 	set := &Set{}
+	if f.DefaultMode != nil {
+		if !modeWord(*f.DefaultMode) {
+			return nil, defaultModeError(*f.DefaultMode, data)
+		}
+		set.defaultMode = *f.DefaultMode
+	}
 	for i, r := range f.Rules {
 		c, err := compile(r, i+1)
 		if err != nil {
@@ -113,6 +119,23 @@ func Parse(data []byte) (*Set, error) {
 		set.rules = append(set.rules, c)
 	}
 	return set, nil
+}
+
+// defaultModeError points at the declaration rather than at the file, because a
+// value that is not a word is a line to edit. The key is found by searching the
+// text: encoding/json reports an offset for a syntax error but not for a value it
+// decoded happily.
+func defaultModeError(value string, data []byte) error {
+	msg := fmt.Sprintf("defaultMode %q is not a single lowercase word of letters, digits and underscores", value)
+	offset := bytes.Index(data, []byte(`"defaultMode"`))
+	if offset < 0 {
+		return errors.New(msg)
+	}
+	// The key's own position. lineColumn counts the bytes before the offset it is
+	// given, so a 0-based index in doubles as the offset that lands on the first
+	// character of the key.
+	line, col := lineColumn(data, int64(offset))
+	return &Error{Line: line, Column: col, Message: msg}
 }
 
 // compile validates one rule. pos is the rule's position as a reader counts it,

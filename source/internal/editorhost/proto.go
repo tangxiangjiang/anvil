@@ -24,7 +24,7 @@ import (
 const ProtocolVersion = 1
 
 // Version is the host build version, overridable at link time.
-var Version = "0.36.0-dev"
+var Version = "0.37.0-dev"
 
 // Client to host request methods.
 const (
@@ -206,9 +206,30 @@ type SessionResult struct {
 	Provider  string `json:"provider"`
 	Model     string `json:"model"`
 	// PermissionMode is the mode the session was actually created with, after
-	// defaults were applied.
+	// defaults were applied and after the workspace file had its say.
 	PermissionMode string `json:"permission_mode"`
+	// PermissionModeSource is where that mode came from: "request" when the client
+	// named it, "file" when the workspace's .anvil/permissions.json declared it,
+	// "default" when neither did. A client shows it, because "why is this session
+	// in accept_edits" has two different answers and only one of them is something
+	// the person just clicked.
+	PermissionModeSource string `json:"permission_mode_source"`
+	// PermissionModeRefused is what the workspace declared and the host would not
+	// honour, empty when nothing was refused. The session still starts — in "ask" —
+	// because a bad line in a project file must not be a workspace nobody can open;
+	// saying so is what keeps that from being a silent drop.
+	PermissionModeRefused string `json:"permission_mode_refused,omitempty"`
 }
+
+// Where a session's mode came from. See resolveMode.
+const (
+	// ModeSourceRequest is the mode the client sent.
+	ModeSourceRequest = "request"
+	// ModeSourceFile is the mode the workspace's .anvil/permissions.json declared.
+	ModeSourceFile = "file"
+	// ModeSourceDefault is neither: the ladder's floor, ModeAsk.
+	ModeSourceDefault = "default"
+)
 
 // ---------------------------------------------------------------------------
 // permissions.get / permissions.add
@@ -261,6 +282,16 @@ type PermissionsResult struct {
 	// Exists reports that the file is on disk. False with no Problem is a
 	// workspace that has written down nothing.
 	Exists bool `json:"exists"`
+	// DefaultMode is the mode the file declares for new sessions, and only when the
+	// host would honour it. Empty means this workspace starts sessions in the
+	// ladder's floor — either because it declares nothing (DefaultModeRefused is
+	// empty too) or because what it declares cannot be honoured (DefaultModeRefused
+	// says what it was). It is deliberately not filled in with "ask" for a file that
+	// said nothing: that would read as if the file had.
+	DefaultMode string `json:"default_mode,omitempty"`
+	// DefaultModeRefused is what the file declared and the host would not honour,
+	// in words, empty when there is nothing to report.
+	DefaultModeRefused string `json:"default_mode_refused,omitempty"`
 	// Rules is the file's rules, in the order that decides.
 	Rules []RuleInfo `json:"rules"`
 	// Problem is set when the file exists but cannot be read as rules. It is a
@@ -338,6 +369,14 @@ const (
 	// thing no other mode can say.
 	ModeDontAsk = "dont_ask"
 )
+
+// PermissionModes is every mode the ladder has, in the order a composer offers
+// them: from the one that asks about everything to the one that asks about
+// nothing. It is the list permissionMode accepts, and the list the extension's
+// select renders — test/unit/permissionModes.test.ts reads this and protocol.ts
+// and the panel's markup as text, because a mode this side has and the client
+// does not is a silent hole in what a person can choose.
+var PermissionModes = []string{ModeAsk, ModeAcceptEdits, ModePlan, ModeDontAsk, ModeBypass}
 
 // DefaultPermissionGroups is what ModeAsk and ModeAcceptEdits gate when the
 // client names no groups. It closes the historical gap: before 0.35 only

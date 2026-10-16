@@ -43,6 +43,38 @@ func PermissionRulesPath(cwd string) string {
 // naming the file and, when the parser knows it, the place — silently ignoring a
 // policy somebody wrote is worse than refusing to read it.
 func LoadPermissionRules(cwd string) ([]PermissionRule, error) {
+	file, err := LoadPermissionRuleFile(cwd)
+	if err != nil || file == nil {
+		return nil, err
+	}
+	return file.Rules, nil
+}
+
+// PermissionRuleFile is the workspace rule file read whole: what it declares about
+// new sessions, and the rules that decide calls.
+type PermissionRuleFile struct {
+	// Path is absolute, the same path PermissionRulesPath returns.
+	Path string
+	// DefaultMode is the mode the file declares for new sessions, empty when it
+	// declares none. It is the declaration as written: whether the host honours it
+	// is a separate question, and the answer belongs where the modes do.
+	DefaultMode string
+	// Rules are the file's rules, in the order that decides.
+	Rules []PermissionRule
+}
+
+// LoadPermissionRuleFile reads the workspace rule file whole.
+//
+// It is the reader a host uses when it needs more of the file than the rules —
+// which mode the workspace starts sessions in, say. One parser, so that the file's
+// declaration and its rules can never be read two ways by two callers: a second
+// parser of the same bytes is how two answers to "what does this file say" start
+// disagreeing.
+//
+// A missing file returns (nil, nil) — the same "this workspace has written nothing
+// down" the rule list reports — and a file that will not read returns a
+// *PermissionRuleError with the place when there is one.
+func LoadPermissionRuleFile(cwd string) (*PermissionRuleFile, error) {
 	p := PermissionRulesPath(cwd)
 	data, err := os.ReadFile(p)
 	if err != nil {
@@ -55,7 +87,11 @@ func LoadPermissionRules(cwd string) ([]PermissionRule, error) {
 	if err != nil {
 		return nil, ruleFileError(p, err)
 	}
-	return permissionRuleList(set.Rules()), nil
+	return &PermissionRuleFile{
+		Path:        p,
+		DefaultMode: set.DefaultMode(),
+		Rules:       permissionRuleList(set.Rules()),
+	}, nil
 }
 
 // AddPermissionRule appends one rule to the workspace rule file, creating the
@@ -69,23 +105,39 @@ func LoadPermissionRules(cwd string) ([]PermissionRule, error) {
 // parser the SDK uses before anything reaches the disk, so a rule added here is
 // a rule the next session accepts.
 //
+// The file's other contents are carried through, because the write is whole: the
+// declaration of a starting mode is a field of the same file, and dropping it
+// would make the first click on "always allow" quietly change how every session
+// in this workspace opens.
+//
 // The write is a temporary file in the same directory followed by a rename, so
 // an interruption leaves the previous policy intact rather than half of a new
 // one.
 func AddPermissionRule(cwd string, rule PermissionRule) ([]PermissionRule, error) {
-	existing, err := LoadPermissionRules(cwd)
+	existing, err := LoadPermissionRuleFile(cwd)
 	if err != nil {
 		return nil, err
 	}
-	rules := make([]permissions.Rule, 0, len(existing)+1)
-	rules = append(rules, permissionRules(existing)...)
+	rules := make([]permissions.Rule, 0, 1)
+	var declared *string
+	if existing != nil {
+		rules = append(rules, permissionRules(existing.Rules)...)
+		if existing.DefaultMode != "" {
+			mode := existing.DefaultMode
+			declared = &mode
+		}
+	}
 	rules = append(rules, permissions.Rule{
 		Effect:  rule.Effect,
 		Tool:    rule.Tool,
 		Pattern: rule.Pattern,
 		Reason:  rule.Reason,
 	})
-	data, err := json.MarshalIndent(permissions.File{Version: permissions.Version, Rules: rules}, "", "  ")
+	data, err := json.MarshalIndent(permissions.File{
+		Version:     permissions.Version,
+		DefaultMode: declared,
+		Rules:       rules,
+	}, "", "  ")
 	if err != nil {
 		return nil, err
 	}

@@ -244,15 +244,22 @@ func (s *Server) handleSessionNew(ctx context.Context, params json.RawMessage) (
 	if err != nil {
 		return nil, errInvalidParams("session.new: " + err.Error())
 	}
+	// The flag is resolved before the mode because the mode resolution reads the
+	// same file: a session that is not loading .anvil/permissions.json has not
+	// read its declaration either.
+	loadPermissions := boolOr(p.LoadPermissions, true)
 	// The session is reserved before the agent exists: the permission callback
 	// needs its identity, and the SDK needs the options before it can hand back
 	// an agent.
 	sessID := "sess-" + newID()
-	mode, rpcErr := permissionMode(p.PermissionMode)
+	mode, source, refused, rpcErr := s.resolveMode(p.PermissionMode, loadPermissions)
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
 	sess := newSession(sessID, s.cwdPath(), mode, p.Vision)
+	sess.loadPermissions = loadPermissions
+	sess.modeSource = source
+	sess.modeRefused = refused
 	opts, rpcErr := s.buildOptions(p, sess)
 	if rpcErr != nil {
 		return nil, rpcErr
@@ -263,7 +270,7 @@ func (s *Server) handleSessionNew(ctx context.Context, params json.RawMessage) (
 	}
 	sess.attach(agent)
 	s.addSession(sess)
-	s.logf("session.new id=%s agent=%s model=%s mode=%s", sess.id, agent.AgentID(), opts.Model.ID, mode)
+	s.logf("session.new id=%s agent=%s model=%s mode=%s source=%s", sess.id, agent.AgentID(), opts.Model.ID, mode, source)
 	return sessionResult(sess, opts), nil
 }
 
@@ -275,12 +282,19 @@ func (s *Server) handleSessionResume(ctx context.Context, params json.RawMessage
 	if strings.TrimSpace(p.AgentID) == "" {
 		return nil, errInvalidParams("session.resume: agent_id is required")
 	}
-	sessID := "sess-" + newID()
-	mode, rpcErr := permissionMode(p.PermissionMode)
+	// Resume takes the same road to a mode as new does: an agent's transcript does
+	// not record the mode it ran under, and a workspace that declares a starting
+	// mode means it for the next session as much as for the first.
+	loadPermissions := boolOr(p.LoadPermissions, true)
+	mode, source, refused, rpcErr := s.resolveMode(p.PermissionMode, loadPermissions)
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
+	sessID := "sess-" + newID()
 	sess := newSession(sessID, s.cwdPath(), mode, p.Vision)
+	sess.loadPermissions = loadPermissions
+	sess.modeSource = source
+	sess.modeRefused = refused
 	opts, rpcErr := s.buildOptions(p, sess)
 	if rpcErr != nil {
 		return nil, rpcErr
@@ -291,7 +305,7 @@ func (s *Server) handleSessionResume(ctx context.Context, params json.RawMessage
 	}
 	sess.attach(agent)
 	s.addSession(sess)
-	s.logf("session.resume id=%s agent=%s mode=%s", sess.id, agent.AgentID(), mode)
+	s.logf("session.resume id=%s agent=%s mode=%s source=%s", sess.id, agent.AgentID(), mode, source)
 	return sessionResult(sess, opts), nil
 }
 
@@ -586,16 +600,28 @@ func (s *Server) handlePermissionsGet(_ context.Context, _ json.RawMessage) (any
 	path := anvil.PermissionRulesPath(cwd)
 	out := PermissionsResult{Path: path, Rules: []RuleInfo{}}
 
-	rules, err := anvil.LoadPermissionRules(cwd)
+	file, err := anvil.LoadPermissionRuleFile(cwd)
 	if err != nil {
 		out.Exists = true
 		out.Problem = ruleProblem(err)
 		return out, nil
 	}
-	if _, statErr := os.Stat(path); statErr == nil {
-		out.Exists = true
+	if file == nil {
+		return out, nil
 	}
-	out.Rules = ruleInfos(rules)
+	out.Exists = true
+	out.Rules = ruleInfos(file.Rules)
+	// The declaration is reported as the host would read it, and a declaration it
+	// will not honour is reported beside it in words. Filling DefaultMode with
+	// "ask" for a file that declared bypass would read as if the file had said
+	// ask, which is the one thing it plainly did not.
+	if file.DefaultMode != "" {
+		if honoured := honouredMode(file.DefaultMode); honoured != "" {
+			out.DefaultMode = honoured
+		} else {
+			out.DefaultModeRefused = refusedMode(file.DefaultMode)
+		}
+	}
 	return out, nil
 }
 
@@ -718,10 +744,10 @@ func ruleProblem(err error) *RuleProblem {
 // does not cross the protocol.
 func (s *Server) buildOptions(p SessionParams, sess *session) (anvil.Options, *RPCError) {
 	groups := groupsForMode(sess.mode, p.PermissionGroups)
-	// Resolved once, here, because two things depend on it: the SDK option below,
-	// and whether a rule written from this session's approval card would be in
-	// force at all.
-	sess.loadPermissions = boolOr(p.LoadPermissions, true)
+	// loadPermissions was resolved by the caller, before the mode, because the
+	// mode resolution reads the same file. It is read here, not recomputed: two
+	// computations of one flag is how the option and the mode start disagreeing
+	// about whether this session has read the workspace's policy.
 	opts := anvil.Options{
 		PermissionGroups: groups,
 		Provider:         anvil.Provider(firstNonEmpty(p.Provider, s.cfg.Provider, os.Getenv("ANVIL_PROVIDER"))),
@@ -804,16 +830,89 @@ const planPromptPrefix = "Plan mode is on. Research the task and reply with a co
 	"plan of the changes you would make — files, functions, and the shape of each edit. " +
 	"Do not make changes: the editing, shell, and verification tools are unavailable in this mode."
 
-// permissionMode validates a requested mode and applies the default.
+// permissionMode validates a requested mode.
+//
+// An empty request is not an error and not ModeAsk: it means the client has no
+// opinion, and what fills that in is resolveMode, which knows about the
+// workspace. A client that names a word the ladder does not have is a client
+// bug, and it is refused rather than quietly downgraded to ask.
 func permissionMode(raw string) (string, *RPCError) {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "":
-		return ModeAsk, nil
-	case ModeAsk, ModeAcceptEdits, ModePlan, ModeBypass, ModeDontAsk:
-		return strings.ToLower(strings.TrimSpace(raw)), nil
-	default:
-		return "", errInvalidParams("unknown permission_mode: " + raw)
+	clean := strings.ToLower(strings.TrimSpace(raw))
+	if clean == "" {
+		return "", nil
 	}
+	for _, m := range PermissionModes {
+		if clean == m {
+			return clean, nil
+		}
+	}
+	return "", errInvalidParams("unknown permission_mode: " + raw)
+}
+
+// resolveMode decides which mode a new session runs in, and says where that came
+// from.
+//
+//	the mode the client sent
+//	else the one the workspace's .anvil/permissions.json declares
+//	else ask
+//
+// The middle step is the whole point of the declaration: a client with no
+// opinion sends nothing and does not have to know the file exists, so a team's
+// "edits are fine here, nothing runs without a prompt" is committed rather than
+// remembered per machine. It is skipped entirely when the session is not reading
+// that file: a session with load_permissions off has read none of it, and its
+// declaration no more than its rules.
+//
+// A declaration the host will not honour is refused, not obeyed and not
+// silently dropped: bypass, because a mode that approves everything without
+// showing it is a decision a person makes for a session rather than one a
+// repository makes for whoever opens it; and any word the ladder does not have.
+// Either way the session starts in ask and the refusal comes back in words. A
+// workspace nobody can open because of one line in a file is the worse failure.
+//
+// A file that will not parse is not reported here. That refusal belongs to the
+// SDK's own load, which fails session.new naming the file and the place; saying
+// it twice, in two different words, is how the two start disagreeing.
+func (s *Server) resolveMode(requested string, loadPermissions bool) (mode, source, refused string, rpcErr *RPCError) {
+	if requested != "" {
+		mode, rpcErr = permissionMode(requested)
+		return mode, ModeSourceRequest, "", rpcErr
+	}
+	if loadPermissions {
+		if file, err := anvil.LoadPermissionRuleFile(s.cwdPath()); err == nil && file != nil && file.DefaultMode != "" {
+			if honouredMode(file.DefaultMode) != "" {
+				return file.DefaultMode, ModeSourceFile, "", nil
+			}
+			return ModeAsk, ModeSourceDefault, refusedMode(file.DefaultMode), nil
+		}
+	}
+	return ModeAsk, ModeSourceDefault, "", nil
+}
+
+// honouredMode is the declaration as the host will read it: the mode when the
+// ladder has it and a project file may declare it, empty otherwise. It is what
+// makes "the file says something the host will do" one question in one place, so
+// the session result and permissions.get cannot answer it differently.
+func honouredMode(declared string) string {
+	if declared == "" || declared == ModeBypass {
+		return ""
+	}
+	for _, m := range PermissionModes {
+		if declared == m {
+			return declared
+		}
+	}
+	return ""
+}
+
+// refusedMode is the sentence for a declaration the host will not honour. One
+// wording, one place: the session result and permissions.get describe the same
+// refusal, and a client shows this rather than composing its own.
+func refusedMode(declared string) string {
+	if declared == ModeBypass {
+		return `the workspace's .anvil/permissions.json declares defaultMode "bypass", which a project file may not grant: a mode that approves everything without showing it is a choice a person makes for a session, not one a repository makes for whoever opens it`
+	}
+	return fmt.Sprintf("the workspace's .anvil/permissions.json declares defaultMode %q, which is not a permission mode", declared)
 }
 
 // permissionHookForMode is the callback a mode installs, and it sits beside
@@ -1051,12 +1150,14 @@ func (s *Server) handleApprovalResponse(params json.RawMessage) (any, *RPCError)
 
 func sessionResult(sess *session, opts anvil.Options) SessionResult {
 	return SessionResult{
-		SessionID:      sess.id,
-		AgentID:        sess.sdk().AgentID(),
-		CWD:            opts.Local.CWD,
-		Provider:       string(opts.Provider),
-		Model:          opts.Model.ID,
-		PermissionMode: sess.mode,
+		SessionID:             sess.id,
+		AgentID:               sess.sdk().AgentID(),
+		CWD:                   opts.Local.CWD,
+		Provider:              string(opts.Provider),
+		Model:                 opts.Model.ID,
+		PermissionMode:        sess.mode,
+		PermissionModeSource:  sess.modeSource,
+		PermissionModeRefused: sess.modeRefused,
 	}
 }
 

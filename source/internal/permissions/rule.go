@@ -74,9 +74,42 @@ type Rule struct {
 }
 
 // File is the on-disk shape of .anvil/permissions.json.
+//
+// The field order is the order a rewrite writes them, so a human reading the
+// file meets what it says about the workspace before the list of rules.
 type File struct {
-	Version int    `json:"version,omitempty"`
-	Rules   []Rule `json:"rules"`
+	Version int `json:"version,omitempty"`
+	// DefaultMode is the mode a new session starts in when the client sends none.
+	//
+	// It is a pointer so that an absent key and an empty value stay different
+	// files: a mode name is a word, so `""` is a mistake to point at rather than a
+	// declaration that says nothing. Which words are *modes* is the host's
+	// vocabulary, not this package's — see doc/design/v1.0/37-permission-modes.md
+	// — so only the shape is checked here.
+	DefaultMode *string `json:"defaultMode,omitempty"`
+	Rules       []Rule  `json:"rules"`
+}
+
+// modeWord reports whether s could be a mode name at all: one lowercase word of
+// letters, digits and underscores. It is a shape, not a vocabulary — `yolo` passes
+// it and the host refuses it, while `Bypass` and `accept edits` never get that far.
+func modeWord(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r == '_':
+		case r >= '0' && r <= '9':
+			if i == 0 {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // CallFacts are the facts a rule is allowed to match on: exactly what the
@@ -139,6 +172,10 @@ func (d Decision) Ref() string {
 // without a special case at every use.
 type Set struct {
 	rules []rule
+	// defaultMode is the mode the file declares for new sessions, as written, and
+	// empty when it declares none. A successfully parsed file cannot hold an empty
+	// declaration — Parse refuses one — so empty means "nothing declared".
+	defaultMode string
 }
 
 // rule is a validated Rule: the effect is already parsed, so the decision path
@@ -168,6 +205,17 @@ func (s *Set) Len() int {
 		return 0
 	}
 	return len(s.rules)
+}
+
+// DefaultMode is the mode the file declares for new sessions, empty when it
+// declares none. Whether the host will honour it is a separate question: the
+// vocabulary is the host's, and a word this package accepted as a shape may still
+// be one no mode answers to.
+func (s *Set) DefaultMode() string {
+	if s == nil {
+		return ""
+	}
+	return s.defaultMode
 }
 
 // Describe names the rule at position i, counted from zero in the order Rules

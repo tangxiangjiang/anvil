@@ -1051,3 +1051,194 @@ func TestApprovalTimeoutResolution(t *testing.T) {
 		t.Fatalf("got %v", got)
 	}
 }
+
+// --- where a session's starting mode comes from ------------------------------
+//
+// A workspace can say which mode its sessions start in, in the same file it keeps
+// its rules. The client's own choice beats it, and a declaration the host will not
+// honour is refused out loud — a project file is not a way to hand a repository's
+// readers a mode that approves everything.
+
+// The declaration is what the middle of the ladder is for: a client with no
+// opinion sends nothing, so a team's habit becomes something a repository says.
+func TestSessionModeComesFromTheFileWhenTheClientSendsNone(t *testing.T) {
+	llm := newStubLLM(t, textTurn("ok"))
+	h, dir := initHost(t, llm.baseURL())
+	writePolicy(t, dir, `{"version":1,"defaultMode":"accept_edits","rules":[]}`)
+
+	res := resultOf(t, h.callOK(MethodSessionNew, SessionParams{}))
+	if res["permission_mode"] != ModeAcceptEdits {
+		t.Fatalf("mode = %v, want the file's accept_edits", res["permission_mode"])
+	}
+	if res["permission_mode_source"] != ModeSourceFile {
+		t.Fatalf("source = %v, want %q", res["permission_mode_source"], ModeSourceFile)
+	}
+	if _, refused := res["permission_mode_refused"]; refused {
+		t.Fatalf("nothing was refused, got %v", res["permission_mode_refused"])
+	}
+}
+
+// A person at the composer outranks the repository. Without that there would be
+// no way to run one session differently from the file without editing the file.
+func TestAnExplicitModeBeatsTheFile(t *testing.T) {
+	llm := newStubLLM(t, textTurn("ok"))
+	h, dir := initHost(t, llm.baseURL())
+	writePolicy(t, dir, `{"version":1,"defaultMode":"accept_edits","rules":[]}`)
+
+	res := resultOf(t, h.callOK(MethodSessionNew, SessionParams{PermissionMode: ModePlan}))
+	if res["permission_mode"] != ModePlan {
+		t.Fatalf("mode = %v, want the requested plan", res["permission_mode"])
+	}
+	if res["permission_mode_source"] != ModeSourceRequest {
+		t.Fatalf("source = %v, want %q", res["permission_mode_source"], ModeSourceRequest)
+	}
+}
+
+// A workspace that declares nothing is the case every existing workspace is in,
+// and it must read exactly as it did before a declaration existed.
+func TestNoDeclarationStartsInAsk(t *testing.T) {
+	llm := newStubLLM(t, textTurn("ok"))
+	h, dir := initHost(t, llm.baseURL())
+
+	res := resultOf(t, h.callOK(MethodSessionNew, SessionParams{}))
+	if res["permission_mode"] != ModeAsk || res["permission_mode_source"] != ModeSourceDefault {
+		t.Fatalf("a workspace with no policy file: %v %v", res["permission_mode"], res["permission_mode_source"])
+	}
+	// A file with rules but no declaration is the same case, and the one a
+	// workspace reaches by writing a single rule from an approval card.
+	writePolicy(t, dir, `{"version":1,"rules":[{"effect":"allow","tool":"shell","pattern":"readonly"}]}`)
+	res = resultOf(t, h.callOK(MethodSessionNew, SessionParams{}))
+	if res["permission_mode"] != ModeAsk || res["permission_mode_source"] != ModeSourceDefault {
+		t.Fatalf("rules but no declaration: %v %v", res["permission_mode"], res["permission_mode_source"])
+	}
+}
+
+// bypass is a decision a person makes for a session, not one a repository makes
+// for whoever opens it. The session still starts — in ask — and both surfaces say
+// what was refused, because a declaration that is quietly dropped is one its
+// author believes is in force.
+func TestBypassCannotBeDeclaredByAWorkspaceFile(t *testing.T) {
+	llm := newStubLLM(t, textTurn("ok"))
+	h, dir := initHost(t, llm.baseURL())
+	writePolicy(t, dir, `{"version":1,"defaultMode":"bypass","rules":[]}`)
+
+	res := resultOf(t, h.callOK(MethodSessionNew, SessionParams{}))
+	if res["permission_mode"] != ModeAsk {
+		t.Fatalf("mode = %v, want ask: a project file may not grant bypass", res["permission_mode"])
+	}
+	if res["permission_mode_source"] != ModeSourceDefault {
+		t.Fatalf("source = %v, want %q", res["permission_mode_source"], ModeSourceDefault)
+	}
+	refused, _ := res["permission_mode_refused"].(string)
+	if !strings.Contains(refused, "bypass") || !strings.Contains(refused, "project file") {
+		t.Fatalf("the refusal must name the value and the reason, got %q", refused)
+	}
+
+	// The other surface that answers questions about this file: the same refusal
+	// in the same words, so the two cannot describe one file two ways.
+	perms := resultOf(t, h.callOK(MethodPermissionsGet, nil))
+	if _, ok := perms["default_mode"]; ok {
+		t.Fatalf("a refused declaration is not a default mode: %v", perms["default_mode"])
+	}
+	if perms["default_mode_refused"] != refused {
+		t.Fatalf("permissions.get says %v, the session said %q", perms["default_mode_refused"], refused)
+	}
+}
+
+// A word the ladder does not have is the same class of problem as bypass: the
+// file is well formed, the host will not honour it, and the session still starts.
+func TestUnknownDefaultModeIsRefusedAndReported(t *testing.T) {
+	llm := newStubLLM(t, textTurn("ok"))
+	h, dir := initHost(t, llm.baseURL())
+	writePolicy(t, dir, `{"version":1,"defaultMode":"yolo","rules":[]}`)
+
+	res := resultOf(t, h.callOK(MethodSessionNew, SessionParams{}))
+	if res["permission_mode"] != ModeAsk {
+		t.Fatalf("mode = %v, want ask", res["permission_mode"])
+	}
+	refused, _ := res["permission_mode_refused"].(string)
+	if !strings.Contains(refused, "yolo") {
+		t.Fatalf("the refusal must quote the word, got %q", refused)
+	}
+	perms := resultOf(t, h.callOK(MethodPermissionsGet, nil))
+	if perms["default_mode_refused"] != refused {
+		t.Fatalf("permissions.get says %v, the session said %q", perms["default_mode_refused"], refused)
+	}
+}
+
+// permissions.get reports the declaration as the host would read it, and only
+// that: a default_mode of "ask" for a file that declared nothing would read as if
+// the file had said so.
+func TestPermissionsGetReportsTheDeclaration(t *testing.T) {
+	llm := newStubLLM(t, textTurn("ok"))
+	h, dir := initHost(t, llm.baseURL())
+
+	perms := resultOf(t, h.callOK(MethodPermissionsGet, nil))
+	if _, ok := perms["default_mode"]; ok {
+		t.Fatalf("no file, no declaration: %v", perms["default_mode"])
+	}
+	writePolicy(t, dir, `{"version":1,"defaultMode":"dont_ask","rules":[{"effect":"deny","tool":"shell"}]}`)
+	perms = resultOf(t, h.callOK(MethodPermissionsGet, nil))
+	if perms["default_mode"] != ModeDontAsk {
+		t.Fatalf("default_mode = %v, want dont_ask", perms["default_mode"])
+	}
+	if _, refused := perms["default_mode_refused"]; refused {
+		t.Fatalf("dont_ask is a mode, nothing to refuse: %v", perms["default_mode_refused"])
+	}
+	if rules, _ := perms["rules"].([]any); len(rules) != 1 {
+		t.Fatalf("the rules must still be read: %v", perms["rules"])
+	}
+}
+
+// A declaration that is not a bare lowercase word is a problem on the file, with
+// the line to fix — the same refusal a misspelled effect gets, and for the same
+// reason: the user can then find the mistake.
+func TestMalformedDefaultModeIsAFileProblemWithAPlace(t *testing.T) {
+	llm := newStubLLM(t, textTurn("ok"))
+	h, dir := initHost(t, llm.baseURL())
+	writePolicy(t, dir, "{\n  \"defaultMode\": \"accept edits\"\n}\n")
+
+	// session.new refuses, because the SDK refuses to run under a policy it cannot
+	// read — a malformed file is not an empty one.
+	m := h.call(MethodSessionNew, SessionParams{})
+	rpcErr, ok := rpcErrorOf(m)
+	if !ok {
+		t.Fatalf("session.new should fail on a malformed declaration, got %v", m)
+	}
+	if !strings.Contains(rpcErr.Message, "permissions.json") || !strings.Contains(rpcErr.Message, "line 2") {
+		t.Fatalf("the error must name the file and the place, got %q", rpcErr.Message)
+	}
+
+	// permissions.get does not fail: the client asked to see the state of the file,
+	// and this is one of its states. It gets the place to put a squiggle on.
+	perms := resultOf(t, h.callOK(MethodPermissionsGet, nil))
+	problem, _ := perms["problem"].(map[string]any)
+	if problem == nil || problem["line"] != float64(2) {
+		t.Fatalf("the problem must carry the line, got %v", perms["problem"])
+	}
+}
+
+// load_permissions off means the session has read none of that file — its rules no
+// more than its declaration. Honouring one and not the other would make the switch
+// mean something narrower than it says.
+func TestLoadPermissionsOffIgnoresTheDefaultMode(t *testing.T) {
+	llm := newStubLLM(t, textTurn("ok"))
+	h, dir := initHost(t, llm.baseURL())
+	writePolicy(t, dir, `{"version":1,"defaultMode":"accept_edits","rules":[]}`)
+
+	off := false
+	res := resultOf(t, h.callOK(MethodSessionNew, SessionParams{LoadPermissions: &off}))
+	if res["permission_mode"] != ModeAsk || res["permission_mode_source"] != ModeSourceDefault {
+		t.Fatalf("load_permissions off: %v %v", res["permission_mode"], res["permission_mode_source"])
+	}
+	if _, refused := res["permission_mode_refused"]; refused {
+		t.Fatalf("nothing was refused, the file was simply not read: %v", res["permission_mode_refused"])
+	}
+	// With the switch on the same workspace does honour it, so this test is about
+	// the switch and not about the file.
+	on := true
+	res = resultOf(t, h.callOK(MethodSessionNew, SessionParams{LoadPermissions: &on}))
+	if res["permission_mode"] != ModeAcceptEdits || res["permission_mode_source"] != ModeSourceFile {
+		t.Fatalf("load_permissions on: %v %v", res["permission_mode"], res["permission_mode_source"])
+	}
+}
