@@ -40,7 +40,7 @@ Versioned delivery for Anvil through product **0.35**. Design cutoff: [`doc/desi
 | 0.32 | Sandbox code review + VS Code Server | planned | [m_0.32_sandbox_code_review.md](m_0.32_sandbox_code_review.md) | [32](../../design/v1.0/32-sandbox-code-review.md) |
 | 0.33 | Delivery UI + schema | done | [m_0.33_delivery_ui.md](m_0.33_delivery_ui.md) | [33](../../design/v1.0/33-delivery-ui.md) |
 | 0.34 | Workspace domain (Clusters hierarchy) | done | [m_0.34_workspace_domain.md](m_0.34_workspace_domain.md) | [34](../../design/v1.0/34-workspace-domain.md) |
-| 0.35 | VS Code extension + editor host | planned | [m_0.35_vscode_extension.md](m_0.35_vscode_extension.md) | [35](../../design/v1.0/35-vscode-extension.md) |
+| 0.35 | VS Code extension + editor host | in_progress | [m_0.35_vscode_extension.md](m_0.35_vscode_extension.md) | [35](../../design/v1.0/35-vscode-extension.md) |
 
 ## Naming
 

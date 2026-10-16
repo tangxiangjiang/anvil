@@ -67,7 +67,7 @@ Messages marked ← are server→client **notifications** (no `id`); → are cli
 
 ### Event payload comes from the public SDK types
 
-The `event` notification carries the fields of the public **`anvil.Event`** (`Source/types.go`) — `type, text, tool_call_id, name, args, content, is_error, step, max_steps, code` — plus the `session_id` / `run_id` the host adds for correlation. The terminal `done` carries the public **`anvil.RunResult`**: `status, result, steps, usage, err, code`.
+The `event` notification carries the fields of the public **`anvil.Event`** (`source/types.go`) — `type, text, tool_call_id, name, args, content, is_error, step, max_steps, code` — plus the `session_id` / `run_id` the host adds for correlation. The terminal `done` carries the public **`anvil.RunResult`**: `status, result, steps, usage, err, code`.
 
 Deliberately **not** the daemon's `JobEventBody` / `JobDoneBody`: those belong to the tool-chain protocol, and depending on them is exactly the coupling this chapter forbids. The shapes look alike because both derive from the same runtime events — that resemblance is a consequence, not a contract.
 
@@ -80,7 +80,7 @@ Consequences the extension must respect:
 
 ## Approval and permission modes
 
-The SDK already exposes a **blocking** approval hook — `Options.Permission` (`Source/options.go`):
+The SDK already exposes a **blocking** approval hook — `Options.Permission` (`source/options.go`):
 
 ```go
 type PermissionFunc func(ctx, PermissionRequest) (PermissionDecision, error)
@@ -96,7 +96,7 @@ Today the gate fires only when `tools.IsMutating(name)` is true, and that map ho
 
 0.35 closes it **additively**:
 
-- Gate by **tool group** (the group table already exists in `Source/toolfilter.go`: `shell, read, write, edit, search, skills, web, lsp, git, verify, vision, mcp`).
+- Gate by **tool group** (the group table already exists in `source/toolfilter.go`: `shell, read, write, edit, search, skills, web, lsp, git, verify, vision, mcp`).
 - New option `Options.PermissionGroups []string`; **empty keeps today's behaviour exactly** (the four mutating builtins). The host opts in to the wider set: `write, edit, shell, verify, web, mcp` — and treats plugin/custom tools as gated too.
 - `MCP`, plugin, and `Options.Tools` handlers currently bypass the gate entirely; they must route through it so the UI can ask.
 
@@ -110,7 +110,7 @@ Today the gate fires only when `tools.IsMutating(name)` is true, and that map ho
 | `bypass` | user opts in explicitly; UI shows a persistent warning |
 
 - **Session allowlist**: the host remembers `(tool, scope)` approvals and short-circuits the callback. In-memory per window; not persisted.
-- **Diff review before apply**: for `write_file` / `edit_file` / `apply_patch` the host has the args *and* the on-disk pre-image, so it can compute the resulting diff and put it in `preview`. `apply_patch` reuses the existing patch implementation in `Source/internal/tools/patch.go`. This is the review-changes flow.
+- **Diff review before apply**: for `write_file` / `edit_file` / `apply_patch` the host has the args *and* the on-disk pre-image, so it can compute the resulting diff and put it in `preview`. `apply_patch` reuses the existing patch implementation in `source/internal/tools/patch.go`. This is the review-changes flow.
 - **Command preview**: `shell`, `run_tests`, `build` are argv arrays (never shell strings) — `preview` is that argv list.
 - The callback must abort cleanly when the run is cancelled while an approval is pending.
 
@@ -133,8 +133,8 @@ Today the gate fires only when `tools.IsMutating(name)` is true, and that map ho
 
 ## Placement
 
-- Extension (TypeScript): repository root **`editors/vscode/`** — mirrors the `app/` precedent from [26](26-mobile-app.md) of keeping non-Go clients outside `Source/`.
-- Host binary: **`Source/cmd/anvil-host/`**; protocol + session registry in **`Source/internal/editorhost/`** (`.go` files stay under `Source/` per `.cursor/rules/source-layout.mdc`).
+- Extension (TypeScript): repository root **`editors/vscode/`** — mirrors the `app/` precedent from [26](26-mobile-app.md) of keeping non-Go clients outside `source/`.
+- Host binary: **`source/cmd/anvil-host/`**; protocol + session registry in **`source/internal/editorhost/`** (`.go` files stay under `source/` per `.cursor/rules/source-layout.mdc`).
 - Working state stays in the workspace: `{cwd}/.anvil/` (already git-ignored).
 
 ## Security
@@ -164,7 +164,7 @@ Today the gate fires only when `tools.IsMutating(name)` is true, and that map ho
 6. Plan mode performs no writes.
 7. Session list shows past agents; resuming continues the conversation.
 8. Untrusted workspace does not start the agent; the key never appears in settings, logs, or the VSIX.
-9. `go test ./...` green in `Source/`; extension unit tests green; one integration test drives a stubbed host end to end.
+9. `go test ./...` green in `source/`; extension unit tests green; one integration test drives a stubbed host end to end.
 
 ## Roadmap mapping
 
