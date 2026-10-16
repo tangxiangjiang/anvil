@@ -18,6 +18,11 @@
  *    without `min-height: 0` grows to fit its content instead, and the panel
  *    scrolls as a whole (or does not scroll at all) rather than the transcript
  *    doing it.
+ *
+ * The floating composer adds a third kind of check, and it is the one a rename
+ * would break silently: the height the script measures and the height the
+ * stylesheet reserves are the same variable, spelled the same way on both
+ * sides. That is checked across the two files at the bottom of this file.
  */
 
 import { strict as assert } from 'node:assert';
@@ -27,6 +32,10 @@ import { test } from 'node:test';
 
 const EXTENSION_ROOT = join(__dirname, '..', '..', '..');
 const CSS = readFileSync(join(EXTENSION_ROOT, 'media', 'chat.css'), 'utf8');
+const JS = readFileSync(join(EXTENSION_ROOT, 'media', 'chat.js'), 'utf8');
+
+/** The stylesheet with its comments dropped, so prose cannot look like a rule. */
+const SOURCE = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
 
 interface Rule {
   selectors: string[];
@@ -38,8 +47,7 @@ interface Rule {
  * split on `}` — `chat.css` has no at-rules, so a rule never contains one.
  */
 function parseRules(): Rule[] {
-  return CSS.replace(/\/\*[\s\S]*?\*\//g, '')
-    .split('}')
+  return SOURCE.split('}')
     .map((block) => {
       const open = block.indexOf('{');
       if (open < 0) return undefined;
@@ -125,4 +133,92 @@ test('the transcript is the scrollable part of the panel', () => {
   assert.match(transcript, /min-height:\s*0/);
   assert.match(transcript, /overflow-y:\s*auto/);
   assert.equal(valueOf('.transcript', 'flex')?.split(/\s+/)[0], '1');
+});
+
+test('the composer is out of the flow, and the transcript still fills the body', () => {
+  // Absolute positioning is what makes the dock not a flex item, which is what
+  // keeps the height chain above intact. Were it in flow, the transcript would
+  // be sized against a body that also contains the composer, and the panel —
+  // not the transcript — would be the thing that overflowed.
+  assert.match(bodiesOf('body').join(';'), /position:\s*relative/);
+  assert.equal(valueOf('.dock', 'position'), 'absolute');
+  assert.equal(valueOf('.dock', 'bottom'), '0');
+
+  // The dock spans the full width at the bottom of the tab, so its own box must
+  // not take clicks: it would swallow the scrollbar drag and any text selection
+  // that ends near the bottom edge. Only the card inside it is interactive.
+  assert.equal(valueOf('.dock', 'pointer-events'), 'none');
+  assert.equal(valueOf('.dock > *', 'pointer-events'), 'auto');
+});
+
+test('the transcript reserves the composer height, and the script measures it', () => {
+  const reserve = valueOf('.transcript', 'padding-bottom');
+  assert.ok(reserve, '.transcript must reserve room for the floating composer');
+  assert.match(reserve, /var\(--anvil-composer-h\)/);
+
+  // A declaration in `:root`, not just the `var()` fallback: the reserve has to
+  // be a real length on the first paint, before the observer has run, and a
+  // variable with no declaration is the kind of thing a rename loses quietly.
+  const declared = valueOf(':root', '--anvil-composer-h');
+  assert.ok(declared, ':root must declare --anvil-composer-h');
+  assert.match(declared, /^\d+(\.\d+)?px$/);
+});
+
+test('the reading column is centred and stops widening', () => {
+  for (const selector of ['.transcript', '.dock']) {
+    const padding = valueOf(selector, 'padding-inline');
+    assert.ok(padding, `${selector} must be inset to the reading column`);
+    // Inside a `max()`, so a narrow window collapses to the gutters rather than
+    // to a negative inset.
+    assert.match(padding, /max\(/);
+    assert.match(padding, /var\(--anvil-read-width\)/);
+  }
+});
+
+test('the composer is a card, and the tab is themed as an editor', () => {
+  assert.ok(valueOf('.composer', 'border-radius'));
+  assert.ok(valueOf('.composer', 'box-shadow'));
+  assert.match(bodiesOf('.composer').join(';'), /background/);
+
+  // A sidebar tint is right for a view and wrong for a tab.
+  const body = bodiesOf('body').join(';');
+  assert.match(body, /--vscode-editor-background/);
+  assert.doesNotMatch(body, /--vscode-sideBar-background/);
+});
+
+test('the textarea grows to fit instead of being dragged', () => {
+  // A manual resize grip on a box whose height the layout reserves would leave
+  // the reservation describing a size the script overwrites on the next
+  // keystroke. The cap lives in CSS, once.
+  assert.notEqual(valueOf('.composer textarea', 'resize'), 'vertical');
+  assert.ok(valueOf('.composer textarea', 'max-height'));
+});
+
+test('every length the script writes is one the stylesheet declares and reads', () => {
+  const written = new Set(
+    [...JS.matchAll(/setProperty\(\s*['"](--[a-z0-9-]+)['"]/gi)].map((match) => match[1]),
+  );
+  const read = new Set([...SOURCE.matchAll(/var\(\s*(--[a-z0-9-]+)/g)].map((match) => match[1]));
+  const declared = new Set(
+    [...SOURCE.matchAll(/(?:^|[;{])\s*(--[a-z0-9-]+)\s*:/g)].map((match) => match[1]),
+  );
+
+  // A variable the script writes but the stylesheet never heard of is the
+  // silent failure this test exists for: the reserve falls back to its declared
+  // default and the last message hides behind the composer card.
+  for (const name of written) {
+    assert.ok(declared.has(name), `${name} is written by chat.js but never declared in chat.css`);
+    assert.ok(read.has(name), `${name} is written by chat.js but never read in chat.css`);
+  }
+
+  // And the other direction: an `--anvil-*` the stylesheet reads has to come
+  // from somewhere — either the script measures it or the stylesheet declares
+  // it. Theme variables are VS Code's and are none of this test's business.
+  for (const name of read) {
+    if (!name.startsWith('--anvil-')) continue;
+    assert.ok(
+      written.has(name) || declared.has(name),
+      `${name} is read in chat.css but nothing writes or declares it`,
+    );
+  }
 });

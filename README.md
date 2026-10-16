@@ -72,9 +72,11 @@ Product is at **0.35 delivered**. Full per-milestone index: [`doc/roadmaps/v1.0/
 
 ### VS Code extension (0.35)
 
-[`editors/vscode/`](editors/vscode/) is the editor surface: a chat panel on the
-activity bar that streams a turn, shows every tool call as a card, and stops for
-approval before anything writes to the workspace. It holds no agent logic — it
+[`editors/vscode/`](editors/vscode/) is the editor surface: the conversation is
+an **editor tab** that streams a turn, shows every tool call as a card, and stops
+for approval before anything writes to the workspace, with a composer that
+floats over the transcript; the **activity bar** lists this workspace's past
+sessions, one click to continue. It holds no agent logic — it
 spawns the **`anvil-host`** sidecar ([`source/cmd/anvil-host`](source/cmd/anvil-host/),
 a stdio JSON-RPC program built from the public SDK) and renders what that process
 reports. The Go side imports the public `anvil` package only, which is enforced
@@ -84,7 +86,7 @@ by `internal/editorhost/independence_test.go`.
 cd editors/vscode
 npm install
 npm run package:vsix          # this platform; --target <id> / --all for the rest
-code --install-extension anvil-vscode-0.35.7-win32-x64.vsix
+code --install-extension anvil-vscode-0.35.8-win32-x64.vsix
 ```
 
 A platform VSIX carries the matching `anvil-host`, cross-compiled with

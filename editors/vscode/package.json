@@ -2,7 +2,7 @@
   "name": "anvil-vscode",
   "displayName": "Anvil",
   "description": "Anvil agent in VS Code: streaming chat, tool cards, per-call approvals.",
-  "version": "0.35.7",
+  "version": "0.35.8",
   "publisher": "anvil-dev",
   "license": "MIT",
   "repository": {
@@ -29,6 +29,9 @@
     }
   },
   "main": "./out/src/extension.js",
+  "activationEvents": [
+    "onWebviewPanel:anvil.chat"
+  ],
   "contributes": {
     "viewsContainers": {
       "activitybar": [
@@ -42,9 +45,8 @@
     "views": {
       "anvil": [
         {
-          "type": "webview",
-          "id": "anvil.chatPanel",
-          "name": "Chat",
+          "id": "anvil.sessions",
+          "name": "Sessions",
           "icon": "media/anvil.svg",
           "contextualTitle": "Anvil"
         }
@@ -54,6 +56,23 @@
       {
         "command": "anvil.openChat",
         "title": "Anvil: Open Chat",
+        "category": "Anvil"
+      },
+      {
+        "command": "anvil.newSession",
+        "title": "Anvil: New Session",
+        "category": "Anvil",
+        "icon": "$(add)"
+      },
+      {
+        "command": "anvil.refreshSessions",
+        "title": "Anvil: Refresh Sessions",
+        "category": "Anvil",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "anvil.openSession",
+        "title": "Anvil: Open Session",
         "category": "Anvil"
       },
       {
@@ -81,9 +100,32 @@
     "menus": {
       "view/title": [
         {
+          "command": "anvil.newSession",
+          "when": "view == anvil.sessions",
+          "group": "navigation@1"
+        },
+        {
+          "command": "anvil.refreshSessions",
+          "when": "view == anvil.sessions",
+          "group": "navigation@2"
+        },
+        {
           "command": "anvil.stop",
-          "when": "view == anvil.chatPanel && anvil.running",
+          "when": "view == anvil.sessions && anvil.busy",
+          "group": "navigation@3"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "anvil.stop",
+          "when": "activeWebviewPanelId == anvil.chat && anvil.busy",
           "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "anvil.openSession",
+          "when": "false"
         }
       ]
     },

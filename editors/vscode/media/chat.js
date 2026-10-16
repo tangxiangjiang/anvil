@@ -24,6 +24,7 @@
   const bypassStrip = document.getElementById('bypass');
   const rulesButton = document.getElementById('rules');
   const palette = document.getElementById('palette');
+  const dock = document.getElementById('composerDock');
 
   /** Run in flight, if any. */
   let running = false;
@@ -76,6 +77,34 @@
     clearEmpty();
     transcript.appendChild(node);
     scrollIfPinned(pinned);
+  }
+
+  /**
+   * Empties the transcript for a different conversation.
+   *
+   * The tab is a singleton pointed at one agent at a time, so adopting another
+   * session has to take the previous one off the screen. The maps matter more
+   * than the nodes: a tool result or an approval answer arriving after the
+   * switch would otherwise be matched by id against a card from a conversation
+   * the user is no longer looking at.
+   */
+  function clearTranscript() {
+    currentText = null;
+    toolCards.clear();
+    approvals.clear();
+    mentions = [];
+    images = [];
+    renderChips();
+    closePalette();
+    statusLine.textContent = '';
+    statusLine.hidden = true;
+    transcript.textContent = '';
+    // The node survives the clear — only the reference to it in the document
+    // does not — so putting it back is what makes a cleared conversation look
+    // like a new one rather than like an empty one.
+    started = false;
+    if (empty) transcript.appendChild(empty);
+    growInput();
   }
 
   // --- messages -------------------------------------------------------------
@@ -527,6 +556,7 @@
     closePalette();
     if (!command) return;
     input.value = '/' + command.name + ' ';
+    growInput();
     input.focus();
   }
 
@@ -649,6 +679,47 @@
     banner.hidden = false;
   }
 
+  // --- composer height ------------------------------------------------------
+
+  /**
+   * Grows the textarea to fit what is in it, up to the cap the stylesheet
+   * declares — one source of truth for the cap, rather than a second copy of it
+   * here in pixels.
+   */
+  function growInput() {
+    input.style.height = 'auto';
+    input.style.height = input.scrollHeight + 'px';
+  }
+
+  /**
+   * Publishes the composer's height, which is what the transcript reserves at
+   * its bottom so the last message is never hidden behind the card. Both the
+   * palette opening and the textarea growing change this box, so measuring the
+   * box covers them without either of them knowing about this.
+   *
+   * The variable goes on the document element, not on the dock: custom
+   * properties inherit downward, and the transcript is the dock's *sibling*, so
+   * a variable set on the dock would never reach the rule that reads it. That
+   * failure is silent — the reserve just falls back to its declared default and
+   * the last message slides under the card — so a test asserts the two files
+   * agree on the name.
+   */
+  function syncComposerHeight() {
+    if (!dock) return;
+    // Read before writing: the reserve is about to change the transcript's
+    // scroll height, and whether the reader was at the bottom has to be decided
+    // against the layout they are looking at, not the one being computed.
+    const pinned = atBottom();
+    document.documentElement.style.setProperty('--anvil-composer-h', dock.offsetHeight + 'px');
+    scrollIfPinned(pinned);
+  }
+
+  if (dock && typeof ResizeObserver === 'function') {
+    // Fires once on observe, which is also how the first paint's placeholder
+    // value is replaced with the real measurement.
+    new ResizeObserver(() => syncComposerHeight()).observe(dock);
+  }
+
   // --- wiring ---------------------------------------------------------------
 
   composer.addEventListener('submit', (event) => {
@@ -660,6 +731,7 @@
     const sentMentions = mentions.slice();
     const sentImages = images.slice();
     input.value = '';
+    growInput();
     mentions = [];
     images = [];
     closePalette();
@@ -709,6 +781,7 @@
    * question, and `key` is "Digit2" on the layouts where "@" needs Shift.
    */
   input.addEventListener('input', () => {
+    growInput();
     if (input.value.endsWith('@')) {
       input.value = input.value.slice(0, -1);
       closePalette();
@@ -824,6 +897,14 @@
       }
       case 'session':
         showSession(msg);
+        return;
+      case 'reset':
+        clearTranscript();
+        return;
+      case 'focus':
+        // The tab became the active editor, so the keyboard belongs here —
+        // unless a turn is running, in which case the textarea is disabled.
+        if (!running) input.focus();
         return;
       case 'done':
         finishRun(msg.done, msg.failure);

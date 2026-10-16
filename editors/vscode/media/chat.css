@@ -7,6 +7,16 @@
 :root {
   --anvil-gap: 10px;
   --anvil-radius: 6px;
+  /* How wide the reading column gets before the transcript stops growing. */
+  --anvil-read-width: 52em;
+  /*
+   * How tall the floating composer is. chat.js overwrites this from the dock's
+   * measured height; the value here is only what the first paint reserves,
+   * before the observer has run. It is declared (rather than left to the
+   * `var()` fallback) so a test can check it, and so the reserve is a real
+   * length even if the script never gets to run.
+   */
+  --anvil-composer-h: 120px;
 }
 
 * {
@@ -21,12 +31,18 @@ body {
 body {
   margin: 0;
   padding: 0;
+  /* The containing block the floating composer is positioned against. */
+  position: relative;
   display: flex;
   flex-direction: column;
   font-family: var(--vscode-font-family);
   font-size: var(--vscode-font-size, 13px);
   color: var(--vscode-foreground);
-  background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+  /*
+   * The editor's background, not the sidebar's: this document is a tab now, and
+   * a sidebar tint in an editor column looks like a rendering mistake.
+   */
+  background: var(--vscode-editor-background);
 }
 
 /* --- banner --------------------------------------------------------------- */
@@ -79,6 +95,23 @@ body {
   overflow-y: auto;
   overflow-x: hidden;
   padding: var(--anvil-gap);
+  /*
+   * A reading column that stops widening with the tab, centred in it. The same
+   * expression is on .dock, so the card lines up with the text it sits under.
+   */
+  padding-inline: max(var(--anvil-gap), calc((100% - var(--anvil-read-width)) / 2));
+  /*
+   * Room for the floating composer, so the last message is never underneath it.
+   * The height is measured rather than assumed: the palette opening and the
+   * textarea growing both change it, and both are covered by this one number.
+   */
+  padding-bottom: calc(var(--anvil-composer-h) + var(--anvil-gap));
+  /*
+   * `both-edges` keeps the scrollbar's width off both sides rather than one, so
+   * the centred column stays centred on the tab and the card above it is not
+   * skewed by half a scrollbar.
+   */
+  scrollbar-gutter: stable both-edges;
   display: flex;
   flex-direction: column;
   gap: var(--anvil-gap);
@@ -357,15 +390,49 @@ button:disabled {
 /* --- status --------------------------------------------------------------- */
 
 .status {
-  padding: 0 var(--anvil-gap) 6px;
+  /* Aligned with the card's own text, not its outer edge. */
+  padding: 0 calc(var(--anvil-gap) + 1px) 6px;
   font-size: 0.88em;
   color: var(--vscode-descriptionForeground);
 }
 
-/* --- composer ------------------------------------------------------------- */
+/* --- the floating composer ------------------------------------------------ */
+
+/*
+ * The dock is the composer's slot, taken out of the layout: `position:
+ * absolute` means it is not a flex item, so `body` keeps its full-height column
+ * chain and the transcript keeps filling what is left. It is the transcript
+ * that reserves room for it, from the measured height.
+ *
+ * The dock spans the full width and sits at the bottom, so its own box must not
+ * take pointer events — the transparent strips beside and above the card would
+ * otherwise swallow the drag on the transcript's scrollbar and the end of a
+ * text selection near the bottom edge. Only the children take clicks.
+ */
+.dock {
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  padding: 0 var(--anvil-gap) var(--anvil-gap);
+  padding-inline: max(var(--anvil-gap), calc((100% - var(--anvil-read-width)) / 2));
+  pointer-events: none;
+}
+
+.dock > * {
+  pointer-events: auto;
+  flex: 0 0 auto;
+}
 
 .composer {
-  border-top: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
+  border-radius: calc(var(--anvil-radius) + 2px);
+  /*
+   * The widget background rather than the editor's: this is a surface floating
+   * over the transcript, and in a high-contrast theme it is the border that
+   * separates the two — the shadow may be absent there.
+   */
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  box-shadow: 0 6px 16px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.36));
   padding: var(--anvil-gap);
   display: flex;
   flex-direction: column;
@@ -374,8 +441,16 @@ button:disabled {
 
 .composer textarea {
   width: 100%;
-  resize: vertical;
+  /*
+   * The height is the content's, capped here and grown by chat.js — a manual
+   * resize grip on a box whose height the layout reserves would leave the
+   * reservation describing a size the user chose once and the script then
+   * overwrote on the next keystroke.
+   */
+  resize: none;
   min-height: 3.6em;
+  max-height: 30vh;
+  overflow-y: auto;
   padding: 6px 8px;
   font-family: inherit;
   font-size: inherit;
@@ -392,8 +467,12 @@ button:disabled {
 
 .composer .actions {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
   gap: 6px;
+}
+
+.composer .actions .spacer {
+  flex: 1;
 }
 
 kbd {
@@ -556,22 +635,15 @@ kbd {
   white-space: nowrap;
 }
 
-/* --- mode toolbar --------------------------------------------------------- */
+/* --- mode select ---------------------------------------------------------- */
 
-.toolbar {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px var(--anvil-gap) 6px;
-}
-
-.toolbar .field {
-  font-size: 0.85em;
-  color: var(--vscode-descriptionForeground);
-}
-
-.toolbar select {
-  flex: 1;
+/*
+ * The mode select lives in the composer's action row now, not on a toolbar of
+ * its own: it is a property of what the next prompt may do, which is the thing
+ * the composer is for.
+ */
+.composer select {
+  max-width: 14em;
   min-width: 0;
   font-family: inherit;
   font-size: inherit;
@@ -582,7 +654,7 @@ kbd {
   border-radius: 4px;
 }
 
-.toolbar select:focus {
+.composer select:focus {
   outline: 1px solid var(--vscode-focusBorder);
   outline-offset: -1px;
 }
@@ -604,8 +676,8 @@ button.ghost:hover:not(:disabled) {
  * without asking is a mode the user must not be able to forget.
  */
 .bypass {
-  margin: 0 var(--anvil-gap) 6px;
-  padding: 4px 8px;
+  margin: 0 0 6px;
+  padding: 4px calc(var(--anvil-gap) + 1px);
   border-radius: 4px;
   font-size: 0.9em;
   border-left: 3px solid var(--vscode-editorWarning-foreground, orange);
@@ -613,16 +685,25 @@ button.ghost:hover:not(:disabled) {
 }
 
 body.bypass-mode .composer {
-  border-top-color: var(--vscode-editorWarning-foreground, orange);
+  border-color: var(--vscode-editorWarning-foreground, orange);
 }
 
 /* --- slash palette -------------------------------------------------------- */
 
+/*
+ * Flattened on purpose. The palette is inside the composer card, and a bordered
+ * rounded box inside a bordered rounded box reads as two frames; a top edge of
+ * nothing and a rule along the bottom makes the card look like it grew upward
+ * to hold the list, which is what happened.
+ */
 .palette {
-  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
-  border-radius: var(--anvil-radius);
-  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
-  max-height: 12em;
+  border: none;
+  border-bottom: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
+  border-radius: 0;
+  background: none;
+  /* Capped against the viewport as well as the card: the dock grows upward
+     from the bottom edge, and a tall panel is not the only short one. */
+  max-height: min(12em, 35vh);
   overflow-y: auto;
   display: flex;
   flex-direction: column;

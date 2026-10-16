@@ -1,8 +1,10 @@
 # Anvil for VS Code
 
-The editor surface for the Anvil agent: a chat panel on the activity bar that
-streams a turn, shows every tool call as a card, and stops for your approval
-before anything writes to the workspace.
+The editor surface for the Anvil agent. The conversation is an **editor tab**
+that streams a turn, shows every tool call as a card, and stops for your
+approval before anything writes to the workspace; the **activity bar** lists
+this workspace's past sessions, one click to continue; and the composer floats
+over the transcript so the conversation scrolls underneath it.
 
 This extension holds no agent logic. It spawns the `anvil-host` sidecar — a
 stdio program built from the Anvil Go SDK — and renders what that process
@@ -15,13 +17,14 @@ reports. The protocol between the two is chapter 35 of the design docs
 Download or build the VSIX for your platform and install it:
 
 ```bash
-code --install-extension anvil-vscode-0.35.7-win32-x64.vsix
+code --install-extension anvil-vscode-0.35.8-win32-x64.vsix
 ```
 
 Nothing else is needed: the `anvil-host` sidecar for that platform travels
 inside the package, so a machine with no Go toolchain runs it. Reload the
-window, open a folder you trust, run **Anvil: Set API Key**, and open the Anvil
-icon in the activity bar.
+window, open a folder you trust, run **Anvil: Set API Key**, and then
+**Anvil: Open Chat** — or click a session in the Anvil view in the activity bar,
+which opens the tab onto it.
 
 ## Running it from source
 
@@ -32,10 +35,9 @@ npm run build:host   # builds source/cmd/anvil-host into bin/
 ```
 
 Then press <kbd>F5</kbd> (or the `Run Extension` launch config) to open a second
-VS Code window with the extension loaded, and open the Anvil icon in the
-activity bar. `Run Extension (trusted workspace, no reload)` opens that window
-straight onto this repository, which is the quicker loop if you are working on
-both sides at once.
+VS Code window with the extension loaded, and run **Anvil: Open Chat**. `Run
+Extension (trusted workspace, no reload)` opens that window straight onto this
+repository, which is the quicker loop if you are working on both sides at once.
 
 The sidecar is found in this order, and the first hit wins:
 
@@ -54,7 +56,7 @@ The sidecar is found in this order, and the first hit wins:
 npm run package:vsix                 # this machine's platform
 npm run package:vsix -- --target linux-x64
 npm run package:all                  # one VSIX per target, in sequence
-npm run smoke:vsix -- --vsix anvil-vscode-0.35.7-win32-x64.vsix
+npm run smoke:vsix -- --vsix anvil-vscode-0.35.8-win32-x64.vsix
 ```
 
 Targets: `win32-x64`, `win32-arm64`, `linux-x64`, `linux-arm64`, `darwin-x64`,
@@ -95,7 +97,9 @@ names both sides and stops rather than failing later inside a tool call.
 | `the bundled Anvil host … does not match the checksum recorded when it was built` | The installed package changed after it was built. Reinstall it, or point `anvil.hostPath` at a binary you built. |
 | `… speaks editor-host protocol N; this extension speaks M` | The sidecar and the extension are from different revisions. Reinstall the extension; if you set `anvil.hostPath`, point it at a matching build. |
 | `Anvil refuses to run in an untrusted workspace.` | Expected. Trust the folder (**Workspaces: Manage Workspace Trust**) — the extension will not start an agent that can edit and execute in a folder you have not trusted. |
-| The panel opens but nothing streams | The provider refused the run; the panel says which and why. Check **Anvil: Set API Key** and `anvil.baseUrl` / `anvil.model`. |
+| The chat tab opens but nothing streams | The provider refused the run; the tab says which and why. Check **Anvil: Set API Key** and `anvil.baseUrl` / `anvil.model`. |
+| The session list says it could not list sessions | The sidebar reports the spawn failure in the row's tooltip. Refresh it after fixing the cause; the list is cached, so a failure is not retried on its own. |
+| A session row shows an agent id and nothing else | That is all the store has: there is no session title, and the extension does not invent one. The tooltip has the workspace, model, timestamps and run count. |
 | Nothing happens in a folder with no files opened | The host's working directory is the workspace folder, so a single-file window has none. Open a folder. |
 
 ## Configuring a model
@@ -131,24 +135,49 @@ a log line.
   p_0.35.5.)
 - **Kills its child.** One host per window, stopped on deactivate, on a folder
   change, and on a settings change (the host reads its configuration at spawn).
-- **Tells you what it read.** The panel reports which rule files this workspace
+- **Tells you what it read.** The tab reports which rule files this workspace
   loaded — `AGENTS.md`, `.anvil/rules/*.md`, and optionally `.cursor/rules/*` —
   and says so plainly when one was skipped or cut short by the size budget.
 - **Keeps the conversation across a mode change.** `ask`, `accept edits`,
   `plan`, and `bypass` are session options in the SDK, so switching one closes
   the session and re-opens it under the same agent: same history, new mode. The
-  mode is remembered per workspace. `bypass` is flagged in the panel, and a
+  mode is remembered per workspace. `bypass` is flagged in the composer, and a
   mode change is refused while a turn is running.
+- **Keeps the conversation when you close the tab.** The tab is a view of a
+  session, not the session itself: closing it leaves the agent and the host
+  running, and reopening it re-announces the session, the mode and any approval
+  still waiting for an answer. Opening a session from the sidebar reuses the one
+  tab and empties it first, so two conversations are never stacked in it.
 - **Ships its own sidecar.** A platform VSIX carries the `anvil-host` binary it
   was built with, verified against the checksum recorded at build time before it
   is run. The API key is not in the package: it is in VS Code's SecretStorage,
   and from there in the child process environment.
 - **Does not have transcript replay or checkpoints yet.** A resumed session
   continues the agent's real context, but the SDK exposes no transcript reader,
-  so the panel marks the resume instead of printing a history it does not have.
+  so the tab marks the resume instead of printing a history it does not have.
   See `doc/roadmaps/v1.0/m_0.35/`.
 
-## Commands and sessions
+## Sessions
+
+The Anvil view in the activity bar is this workspace's session list: one row per
+past session, grouped by when it was last used, newest first, with the model and
+run count beside it. A click opens the chat tab onto that session. The run icon
+in the view's title bar starts a new conversation and the refresh icon re-reads
+the list; **Anvil: Refresh Sessions** does the same from the palette.
+
+The rows are what `session.list` returns and nothing more. There is no session
+title in the protocol, so a row is labelled with the first characters of its
+agent id and the tooltip carries the rest — workspace, model, timestamps, run
+count and tokens. A session that the store has no timestamp for is listed under
+**Undated** rather than being filed under a day it may not belong to, and an
+empty list says which of the three reasons it is: no folder open, an untrusted
+workspace, or a host that could not be started (with the host's own error).
+
+The list is cached and only re-read when something changes — a run starting or
+finishing, a session opening, the host restarting. The view never spawns a host
+just to draw itself.
+
+## Commands
 
 Type `/` in the composer for the catalogue. Built-ins:
 
@@ -180,12 +209,16 @@ without a key or a network. The rest drive the **real** `anvil-host` binary with
 the model call routed at a port nothing listens on, which pins the Go side of the
 wire; they are skipped when the sidecar has not been built.
 
-`src/settings.ts`, `src/hostManager.ts`, `src/chatPanel.ts` and `src/extension.ts`
-import `vscode` and are therefore not covered by these tests — they need an
-extension host. Keep them thin; the behaviour worth testing belongs on this side
-of the `vscode` boundary. `src/commands.ts` and `src/hostBundle.ts` are split
-that way on purpose: they decide what a typed line means and which binary to
-run, and `chatPanel.ts` / `hostManager.ts` only carry those decisions out.
+`src/settings.ts`, `src/hostManager.ts`, `src/chatPanel.ts`, `src/sessionTree.ts`
+and `src/extension.ts` import `vscode` and are therefore not covered by these
+tests — they need an extension host. Keep them thin; the behaviour worth testing
+belongs on this side of the `vscode` boundary. `src/commands.ts`,
+`src/hostBundle.ts` and `src/sessionList.ts` are split that way on purpose: they
+decide what a typed line means, which binary to run, and what the session
+sidebar shows, and the `vscode`-bound modules above only carry those decisions
+out. `test/unit/chatLayout.test.ts` is the third kind of check: it reads
+`media/chat.css` and `media/chat.js` as text and asserts the layout invariants
+those two files have to agree on, since nothing here can render them.
 
 The packaging step has its own check, since it is the part no unit test can
 reach: `npm run smoke:vsix` extracts a built VSIX to a temporary directory,

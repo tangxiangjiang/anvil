@@ -1,11 +1,17 @@
 /**
- * The chat view: a webview on the left rail, fed by one `HostManager`.
+ * The conversation: a webview in an editor tab, fed by one `HostManager`.
  *
  * The webview is a rendering surface only. Everything with a decision in it —
  * spawning, sessions, approvals, context composition, review tabs — happens on
  * this side of the message port, so the untrusted-ish HTML never holds state
  * the host needs and never names a path the host will act on without this side
  * having decided that it should.
+ *
+ * The tab is a document, which sets two rules this class exists to keep. Closing
+ * it is not stopping the turn: the session and the host child outlive the view,
+ * and messages that arrive with no view attached are dropped rather than queued.
+ * And reopening it re-announces everything, because a fresh document knows
+ * nothing — which is what the `ready` path is for, and now its main job.
  */
 
 import { randomBytes } from 'node:crypto';
@@ -32,6 +38,7 @@ import {
   PermissionMode,
   PermissionModes,
   RuleFileInfo,
+  SessionInfo,
   SkillEntry,
 } from './protocol';
 import { RunFailure } from './errors';
@@ -43,11 +50,9 @@ type Inbound =
   | { type: 'send'; text: string; mentions?: string[]; images?: string[] }
   | { type: 'cancel' }
   | { type: 'answer'; requestId: string; decision: Decision; scope?: string }
-  | { type: 'restart' }
   | { type: 'pickMention' }
   | { type: 'commands' }
   | { type: 'mode'; mode: string }
-  | { type: 'resume' }
   | { type: 'review'; requestId: string }
   | { type: 'reviewChange'; path: string };
 
@@ -74,6 +79,15 @@ type Outbound =
   | { type: 'mode'; mode: PermissionMode }
   | { type: 'rules'; files: RuleFileInfo[] }
   | { type: 'session'; agentId: string; started: boolean }
+  /**
+   * Empties the transcript. The tab is a singleton pointed at one conversation
+   * at a time, so adopting another agent has to take the old one off the
+   * screen — otherwise two conversations are stacked in one document, which
+   * reads as corruption rather than as a switch.
+   */
+  | { type: 'reset' }
+  /** The tab became the active editor: the composer takes the keyboard. */
+  | { type: 'focus' }
   | { type: 'notice'; level: 'info' | 'warn' | 'error'; message: string };
 
 /** Where the chosen permission mode is remembered between windows. */
@@ -97,13 +111,19 @@ function readMode(context: vscode.ExtensionContext): PermissionMode {
   return stored !== undefined && isPermissionMode(stored) ? stored : 'ask';
 }
 
-export class ChatPanelProvider implements vscode.WebviewViewProvider, HostListener {
-  public static readonly viewType = 'anvil.chatPanel';
+export class ChatPanel implements HostListener {
+  public static readonly viewType = 'anvil.chat';
 
-  private view: vscode.WebviewView | undefined;
+  private panel: vscode.WebviewPanel | undefined;
+  /** Whether the document in `panel` has asked for its state yet. */
+  private listening = false;
+  /** Messages held until it does. See `post`. */
+  private pending: Outbound[] = [];
   private manager: HostManager | undefined;
   /** Fires when the host comes up or goes away, for the title-bar stop button. */
   private readonly runningChanged = new vscode.EventEmitter<void>();
+  /** Fires when the session list, or the markers on it, could have changed. */
+  private readonly sessionsChanged = new vscode.EventEmitter<void>();
   /** Pre-images for the current turn, so the changed-files list can show diffs. */
   private readonly changes = new ChangesTracker();
   /** The changed files of the last finished turn, by path. */
@@ -128,20 +148,73 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, HostListen
     this.mode = readMode(context);
   }
 
-  resolveWebviewView(view: vscode.WebviewView): void {
-    this.view = view;
-    view.webview.options = {
+  /**
+   * Opens the conversation tab, or reveals the one that is already open.
+   *
+   * `ViewColumn.Active` puts it where the user is looking, which is the least
+   * surprising answer for a command they ran from wherever they were. A reveal
+   * names the panel's own column rather than the active one so that a tab the
+   * user dragged somewhere stays there.
+   */
+  open(): void {
+    if (this.panel) {
+      this.panel.reveal(this.panel.viewColumn, false);
+      return;
+    }
+    const panel = vscode.window.createWebviewPanel(
+      ChatPanel.viewType,
+      'Anvil',
+      vscode.ViewColumn.Active,
+      {
+        enableScripts: true,
+        // Without this, clicking another editor destroys the document and the
+        // transcript with it — and there is no replay to rebuild it from. It is
+        // an optimisation for the panel this side creates, not a guarantee:
+        // VS Code creates the panel a serializer is handed, and that one may
+        // not retain, which is why `ready` is the source of truth either way.
+        retainContextWhenHidden: true,
+        localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, 'media')],
+      },
+    );
+    panel.iconPath = vscode.Uri.joinPath(this.context.extensionUri, 'media', 'anvil.svg');
+    this.adopt(panel);
+  }
+
+  /**
+   * Attaches to a panel that already exists: one this side just created, or one
+   * VS Code restored from a previous window. Both need the same three things —
+   * a document, a message port, and a way to notice the tab going away.
+   */
+  adopt(panel: vscode.WebviewPanel): void {
+    this.panel = panel;
+    // Each document announces itself once; until it does, nothing is listening.
+    this.listening = false;
+    this.pending = [];
+    panel.webview.options = {
       enableScripts: true,
       localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, 'media')],
     };
-    view.webview.html = renderHtml(view.webview, this.context.extensionUri);
-    view.webview.onDidReceiveMessage((msg: Inbound) => void this.onMessage(msg));
-    view.onDidDispose(() => {
-      this.view = undefined;
+    panel.webview.html = renderHtml(panel.webview, this.context.extensionUri);
+    panel.webview.onDidReceiveMessage((msg: Inbound) => void this.onMessage(msg));
+    panel.onDidChangeViewState((event) => {
+      if (event.webviewPanel.active) this.post({ type: 'focus' });
     });
+    panel.onDidDispose(() => {
+      // Guarded: `deactivate` disposes the panel too, and a stale disposal must
+      // not clear a panel that has since replaced it.
+      if (this.panel !== panel) return;
+      this.panel = undefined;
+      this.listening = false;
+      this.pending = [];
+    });
+    this.updateTitle();
   }
 
-  /** Creates the manager lazily: no host work happens until a view exists. */
+  /**
+   * Creates the manager lazily: no host work happens at activation, and the two
+   * things that can ask for a host are both user actions — a prompt in the tab,
+   * or the session view being opened.
+   */
   private ensureManager(): HostManager {
     if (!this.manager) {
       this.manager = new HostManager(this.context, this.log, this);
@@ -155,8 +228,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, HostListen
 
   private async onMessage(msg: Inbound): Promise<void> {
     if (msg.type === 'ready') {
-      // A reloaded webview has lost its transcript, so re-announce everything
-      // it cannot infer: trust, the run in flight, and any open prompt.
+      // Whatever was said before this document started listening, in the order
+      // it was said — which for a tab opened by a session click is the reset,
+      // the session marker and the state, in that order.
+      const queued = this.pending;
+      this.pending = [];
+      this.listening = true;
+      for (const message of queued) this.post(message);
+
+      // A fresh document has lost whatever transcript it might have had, so
+      // re-announce everything it cannot infer: trust, the run in flight, and
+      // any open prompt.
       this.post({ type: 'trust', trusted: vscode.workspace.isTrusted });
       this.post({ type: 'vision', enabled: readSettings().session.vision === true });
       this.post({ type: 'mode', mode: this.mode });
@@ -185,11 +267,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, HostListen
       case 'answer':
         await this.answer(msg.requestId, msg.decision, msg.scope);
         return;
-      case 'restart':
-        await this.ensureManager().restart();
-        this.catalogue = undefined;
-        this.postState();
-        return;
       case 'pickMention':
         // The picker is the editor's, not the webview's: it searches the real
         // workspace and returns paths, and a path is all the protocol carries.
@@ -200,9 +277,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, HostListen
         return;
       case 'mode':
         await this.setMode(msg.mode);
-        return;
-      case 'resume':
-        await this.pickResume();
         return;
       case 'review':
         await this.openReview(msg.requestId);
@@ -324,8 +398,55 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, HostListen
     await this.ensureManager().clearConversation();
     this.changes.begin();
     this.lastChanges = new Map();
+    this.post({ type: 'reset' });
     this.post({ type: 'session', agentId: '', started: false });
     this.postState();
+    this.updateTitle();
+    this.sessionsChanged.fire();
+  }
+
+  // --- the session sidebar's view of this -------------------------------------
+
+  /** The agents this workspace has stored. Starts a host if none is live. */
+  async listSessions(): Promise<SessionInfo[]> {
+    return this.ensureManager().listSessions();
+  }
+
+  /** The agent the tab is showing, whether or not a turn is in flight. */
+  currentAgentId(): string | undefined {
+    return this.manager?.state().agentId;
+  }
+
+  /** The agent with a turn in flight. */
+  runningAgentId(): string | undefined {
+    const state = this.manager?.state();
+    return state?.state === 'running' ? state.agentId : undefined;
+  }
+
+  /** Whether a host child is live, so a redraw need not start one. */
+  isHostUp(): boolean {
+    return this.manager?.running ?? false;
+  }
+
+  /**
+   * Continues a stored agent, from the sidebar. The tab is opened first: the
+   * resume reports its outcome as a message to the panel, and a message with no
+   * document behind it is dropped — the failure would be silent.
+   */
+  async openSession(agentId: string): Promise<void> {
+    this.open();
+    await this.resumeAgent(agentId);
+  }
+
+  /** Starts a fresh conversation, from the sidebar. */
+  async newSession(): Promise<void> {
+    this.open();
+    await this.clearConversation();
+  }
+
+  /** Subscribes to changes in the session list, or in the markers on it. */
+  onSessionsChanged(listener: () => void): vscode.Disposable {
+    return this.sessionsChanged.event(listener);
   }
 
   /** Composes and sends one turn, with whatever context the editor has. */
@@ -423,9 +544,22 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, HostListen
       this.postState();
       return;
     }
+    // Cleared before the marker, never after: the transcript that was on screen
+    // belonged to the agent that was current a moment ago, and the marker is
+    // the first line of the conversation that replaced it.
+    this.post({ type: 'reset' });
     this.post({ type: 'session', agentId, started: true });
     this.postState();
+    this.updateTitle();
+    this.sessionsChanged.fire();
     await this.reportRules();
+  }
+
+  /** Names the tab after the conversation in it, so a tab strip is readable. */
+  private updateTitle(): void {
+    const agentId = this.currentAgentId();
+    const title = agentId ? `Anvil — ${agentId.slice(0, 8)}` : 'Anvil';
+    if (this.panel && this.panel.title !== title) this.panel.title = title;
   }
 
   /** Applies a model to the conversation, from an argument or a picker. */
@@ -596,11 +730,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, HostListen
   onDone = (done: DoneParams, failure: RunFailure): void => {
     this.post({ type: 'done', done, failure });
     void this.reportChanges();
+    // The turn changed the stored record — its run count, its status, its
+    // updated_at — so the sidebar's copy of it is stale from here on.
+    this.sessionsChanged.fire();
   };
 
   onState = (): void => {
     if (this.manager) this.post({ type: 'state', ...this.manager.state() });
     this.runningChanged.fire();
+    this.sessionsChanged.fire();
   };
 
   onNotice = (level: 'info' | 'warn' | 'error', message: string): void =>
@@ -620,8 +758,28 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, HostListen
     }
   }
 
+  /**
+   * Sends to the tab, if there is one. Closing the tab is now routine — it is
+   * how the user puts the conversation away — so a message that arrives with no
+   * document behind it is expected rather than exceptional, and the rejection
+   * `postMessage` returns for a disposed webview is swallowed rather than left
+   * to surface as an unhandled one.
+   */
   private post(message: Outbound): void {
-    void this.view?.webview.postMessage(message);
+    const panel = this.panel;
+    // Closed tabs drop events rather than queueing them for a document that
+    // may never exist: the session carries on, and what was missed is the
+    // transcript, which the `ready` announcement does not pretend to rebuild.
+    if (!panel) return;
+    if (!this.listening) {
+      // A document that has not run its script yet has no listener, and a
+      // message posted into it is delivered to nobody. This is not a corner
+      // case: opening a tab and resuming a session in it is one command, so the
+      // marker for that session would otherwise be the first thing lost.
+      this.pending.push(message);
+      return;
+    }
+    void panel.webview.postMessage(message).then(undefined, () => undefined);
   }
 
   /** Re-announces where the session stands, mode included. */
@@ -645,11 +803,21 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, HostListen
     this.catalogue = undefined;
     this.postState();
     this.runningChanged.fire();
+    this.sessionsChanged.fire();
   }
 
   /** Whether a host child is live right now. */
   get running(): boolean {
     return this.manager?.running ?? false;
+  }
+
+  /**
+   * Whether a turn is in flight. Distinct from `running`, which only means a
+   * session is open: the Stop button hangs off this one, because stopping an
+   * idle conversation is not a thing the user needs a button for.
+   */
+  get busy(): boolean {
+    return this.manager?.state().state === 'running';
   }
 
   /** Subscribes to host up/down transitions. */
@@ -661,6 +829,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider, HostListen
     const manager = this.manager;
     this.manager = undefined;
     this.runningChanged.dispose();
+    this.sessionsChanged.dispose();
     for (const uris of this.reviews.values()) {
       await this.previews.close(uris).catch(() => undefined);
     }
@@ -690,30 +859,36 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
       <p>Ask for a change. Anvil reads, edits, and runs commands in this workspace.</p>
       <p class="hint">Mutating calls stop for your approval. <kbd>Stop</kbd> interrupts a turn.</p>
       <p class="hint"><kbd>/</kbd> lists commands, <kbd>@</kbd> references a file.</p>
+      <p class="hint">Past conversations are in the Anvil view in the activity bar.</p>
     </div>
   </div>
-  <div id="status" class="status" hidden></div>
-  <div id="bypass" class="bypass" hidden>Bypass is on. Tool calls run without asking.</div>
-  <div id="toolbar" class="toolbar">
-    <label class="field" for="mode">Mode</label>
-    <select id="mode" title="What the agent may do without asking">
-      <option value="ask">Ask before changes</option>
-      <option value="accept_edits">Accept edits</option>
-      <option value="plan">Plan only</option>
-      <option value="bypass">Bypass approvals</option>
-    </select>
-    <button id="rules" type="button" class="ghost" title="Which rule files this workspace loaded" hidden>Rules</button>
+  <!--
+    The composer is out of the flow, so the transcript scrolls underneath it and
+    the reading column stays full height. chat.js measures this box into
+    --anvil-composer-h, which is what the transcript reserves at its bottom.
+  -->
+  <div id="composerDock" class="dock">
+    <div id="status" class="status" hidden></div>
+    <div id="bypass" class="bypass" hidden>Bypass is on. Tool calls run without asking.</div>
+    <form id="composer" class="composer">
+      <div id="palette" class="palette" hidden></div>
+      <div id="chips" class="chips" hidden></div>
+      <textarea id="input" rows="1" placeholder="Describe a change…  (@ references a file, / lists commands)" aria-label="Prompt"></textarea>
+      <div class="actions">
+        <select id="mode" aria-label="Permission mode" title="What the agent may do without asking">
+          <option value="ask">Ask before changes</option>
+          <option value="accept_edits">Accept edits</option>
+          <option value="plan">Plan only</option>
+          <option value="bypass">Bypass approvals</option>
+        </select>
+        <button id="rules" type="button" class="ghost" title="Which rule files this workspace loaded" hidden>Rules</button>
+        <span class="spacer"></span>
+        <button id="attach" type="button" class="secondary" title="Reference a file or folder">@</button>
+        <button id="stop" type="button" class="secondary" hidden>Stop</button>
+        <button id="send" type="submit" class="primary">Send</button>
+      </div>
+    </form>
   </div>
-  <form id="composer" class="composer">
-    <div id="palette" class="palette" hidden></div>
-    <div id="chips" class="chips" hidden></div>
-    <textarea id="input" rows="3" placeholder="Describe a change…  (@ references a file, / lists commands)" aria-label="Prompt"></textarea>
-    <div class="actions">
-      <button id="attach" type="button" class="secondary" title="Reference a file or folder">@</button>
-      <button id="stop" type="button" class="secondary" hidden>Stop</button>
-      <button id="send" type="submit" class="primary">Send</button>
-    </div>
-  </form>
   <script nonce="${nonce}" src="${asset('chat.js')}"></script>
 </body>
 </html>`;
