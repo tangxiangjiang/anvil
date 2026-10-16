@@ -135,14 +135,34 @@ window.AiChat = {
         return self._root()?.querySelector("[data-ai-log]");
       },
 
+      _navHtml() {
+        const esc = window.AiChat.esc;
+        return (cfg.citeNav || [])
+          .map((n) => {
+            const kids = Array.isArray(n.children) ? n.children : [];
+            if (!kids.length) {
+              return `<button type="button" class="ghost" data-ai-cite-nav="${esc(n.id)}">${esc(n.label)}</button>`;
+            }
+            const items = kids
+              .map(
+                (c) =>
+                  `<button type="button" class="ghost ai-cite-fold-item" data-ai-cite-nav="${esc(c.id)}">${esc(c.label)}</button>`,
+              )
+              .join("");
+            return `
+            <div class="ai-cite-fold" data-ai-cite-fold>
+              <button type="button" class="ghost ai-cite-fold-toggle" data-ai-cite-fold-toggle aria-expanded="false">
+                ${esc(n.label)} <span class="ai-cite-fold-chevron">▾</span>
+              </button>
+              <div class="ai-cite-fold-menu" hidden>${items}</div>
+            </div>`;
+          })
+          .join("");
+      },
+
       render() {
         const esc = window.AiChat.esc;
-        const nav = cfg.citeNav
-          .map(
-            (n) =>
-              `<button type="button" class="ghost" data-ai-cite-nav="${esc(n.id)}">${esc(n.label)}</button>`,
-          )
-          .join("");
+        const nav = this._navHtml();
         const log = cfg.showLog
           ? `<div class="ai-chat-log" data-ai-log role="log" aria-live="polite">${self._logHtml()}</div>`
           : "";
@@ -170,7 +190,10 @@ window.AiChat = {
 
       _emptyHint() {
         if (cfg.emptyHint) return cfg.emptyHint;
-        const labels = (cfg.citeNav || []).map((n) => n.label).filter(Boolean);
+        const labels = [];
+        for (const n of cfg.citeNav || []) {
+          if (n.label) labels.push(n.label);
+        }
         if (labels.length) {
           return `Conversation appears here. Use ${labels.join(" / ")} to add @ cites, then send.`;
         }
@@ -225,11 +248,52 @@ window.AiChat = {
         self.refreshChips();
         self.refreshLog();
 
+        root.querySelectorAll("[data-ai-cite-fold-toggle]").forEach((btn) => {
+          btn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            const fold = btn.closest("[data-ai-cite-fold]");
+            const menu = fold?.querySelector(".ai-cite-fold-menu");
+            if (!menu) return;
+            const open = menu.hidden;
+            // Close other folds in this chat.
+            root.querySelectorAll(".ai-cite-fold-menu").forEach((m) => {
+              m.hidden = true;
+            });
+            root.querySelectorAll("[data-ai-cite-fold-toggle]").forEach((t) => {
+              t.setAttribute("aria-expanded", "false");
+              t.classList.remove("open");
+            });
+            menu.hidden = !open;
+            btn.setAttribute("aria-expanded", open ? "true" : "false");
+            btn.classList.toggle("open", open);
+          });
+        });
         root.querySelectorAll("[data-ai-cite-nav]").forEach((btn) => {
           btn.addEventListener("click", () => {
+            const fold = btn.closest("[data-ai-cite-fold]");
+            if (fold) {
+              const menu = fold.querySelector(".ai-cite-fold-menu");
+              if (menu) menu.hidden = true;
+              fold.querySelector("[data-ai-cite-fold-toggle]")?.setAttribute("aria-expanded", "false");
+              fold.querySelector("[data-ai-cite-fold-toggle]")?.classList.remove("open");
+            }
             cfg.onCiteNav(btn.getAttribute("data-ai-cite-nav"));
           });
         });
+        // Click outside closes ADR fold menus.
+        if (!root._aiCiteFoldDocBound) {
+          root._aiCiteFoldDocBound = true;
+          document.addEventListener("click", (e) => {
+            if (e.target.closest?.(`[data-ai-chat="${cfg.id}"]`)) return;
+            root.querySelectorAll(".ai-cite-fold-menu").forEach((m) => {
+              m.hidden = true;
+            });
+            root.querySelectorAll("[data-ai-cite-fold-toggle]").forEach((t) => {
+              t.setAttribute("aria-expanded", "false");
+              t.classList.remove("open");
+            });
+          });
+        }
 
         const chips = root.querySelector("[data-ai-chips]");
         if (chips) {
@@ -305,6 +369,15 @@ window.AiChat = {
         if (!cfg.allowDrop || !pageRoot) return self;
         pageRoot.querySelectorAll("[data-cite-key].cite-drag").forEach((el) => {
           el.addEventListener("dragstart", (e) => {
+            // Editing textareas/inputs: never steal selection into a cite drag.
+            if (e.target.closest("textarea, input, select, button, label")) {
+              e.preventDefault();
+              return;
+            }
+            if (el.draggable === false || !el.classList.contains("cite-drag")) {
+              e.preventDefault();
+              return;
+            }
             const key = el.getAttribute("data-cite-key");
             e.dataTransfer.setData(window.AiChat.CITE_MIME, key);
             e.dataTransfer.setData("text/plain", key);
@@ -315,7 +388,7 @@ window.AiChat = {
         });
         pageRoot.querySelectorAll("[data-cite-drag]").forEach((card) => {
           card.addEventListener("dragstart", (e) => {
-            if (e.target.closest("button")) {
+            if (e.target.closest("button, textarea, input, select, label")) {
               e.preventDefault();
               return;
             }

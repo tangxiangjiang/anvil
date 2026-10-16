@@ -202,6 +202,26 @@ func (s *Server) handleDelivery(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if path == "eng-reqs/ensure-project" && r.Method == http.MethodPost {
+		var body struct {
+			ProjectID   string `json:"project_id"`
+			WorkspaceID string `json:"workspace_id"`
+			ProjectKey  string `json:"project_key"`
+			Title       string `json:"title"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+		eng, err := s.delivery.EnsureProjectEng(body.ProjectID, body.WorkspaceID, body.ProjectKey, body.Title)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, http.StatusOK, eng)
+		return
+	}
+
 	if path == "eng-reqs" && r.Method == http.MethodPost {
 		var body struct {
 			WorkerID       string `json:"worker_id"`
@@ -209,6 +229,9 @@ func (s *Server) handleDelivery(w http.ResponseWriter, r *http.Request) {
 			Fleet          string `json:"fleet"`
 			Node           string `json:"node"`
 			ProjectRel     string `json:"project_rel"`
+			ProjectID      string `json:"project_id"`
+			ProjectKey     string `json:"project_key"`
+			WorkspaceID    string `json:"workspace_id"`
 			Title          string `json:"title"`
 			ReqsRel        string `json:"reqs_rel"`
 			Major          *int   `json:"major"`
@@ -233,6 +256,9 @@ func (s *Server) handleDelivery(w http.ResponseWriter, r *http.Request) {
 				ID: body.WorkerID, Label: body.Label, Fleet: body.Fleet,
 				Node: body.Node, ProjectRel: body.ProjectRel,
 			},
+			ProjectID:      body.ProjectID,
+			ProjectKey:     body.ProjectKey,
+			WorkspaceID:    body.WorkspaceID,
 			Title:          body.Title,
 			ReqsRel:        body.ReqsRel,
 			Minor:          body.Minor,
@@ -433,7 +459,7 @@ func (s *Server) handleDelivery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// designs/{id}[/approve]
+	// designs/{id}[/approve|/bootstrap|/versions|/versions/{vid}]
 	if strings.HasPrefix(path, "designs/") {
 		rest := strings.TrimPrefix(path, "designs/")
 		parts := strings.Split(rest, "/")
@@ -447,18 +473,100 @@ func (s *Server) handleDelivery(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, d)
 			return
 		}
+		if len(parts) == 2 && parts[1] == "bootstrap" && r.Method == http.MethodPost {
+			d, err := s.delivery.BootstrapDesignRoadmap(id)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			writeJSON(w, http.StatusOK, d)
+			return
+		}
+		if len(parts) == 2 && parts[1] == "versions" && r.Method == http.MethodPost {
+			var body struct {
+				Title           string `json:"title"`
+				Gate            string `json:"gate"`
+				SubArchitecture string `json:"sub_architecture"`
+				ClassDesign     string `json:"class_design"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil && r.ContentLength != 0 {
+				http.Error(w, "bad json", http.StatusBadRequest)
+				return
+			}
+			v, err := s.delivery.AddDesignVersion(id, delivery.AddDesignVersionInput{
+				Title: body.Title, Gate: body.Gate,
+				SubArchitecture: body.SubArchitecture, ClassDesign: body.ClassDesign,
+			})
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			writeJSON(w, http.StatusCreated, v)
+			return
+		}
+		if len(parts) == 3 && parts[1] == "versions" {
+			vid := parts[2]
+			if r.Method == http.MethodPatch {
+				var body struct {
+					Title           *string `json:"title"`
+					Gate            *string `json:"gate"`
+					SubArchitecture *string `json:"sub_architecture"`
+					ClassDesign     *string `json:"class_design"`
+					SortOrder       *int    `json:"sort_order"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					http.Error(w, "bad json", http.StatusBadRequest)
+					return
+				}
+				v, err := s.delivery.PatchDesignVersion(id, vid, delivery.PatchDesignVersionInput{
+					Title: body.Title, Gate: body.Gate,
+					SubArchitecture: body.SubArchitecture, ClassDesign: body.ClassDesign,
+					SortOrder: body.SortOrder,
+				})
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				writeJSON(w, http.StatusOK, v)
+				return
+			}
+			if r.Method == http.MethodDelete {
+				if err := s.delivery.DeleteDesignVersion(id, vid); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+				return
+			}
+		}
 		if len(parts) == 1 && r.Method == http.MethodPatch {
 			var body struct {
-				ChosenOptionID *string                 `json:"chosen_option_id"`
-				ADR            *string                 `json:"adr"`
-				Options        []delivery.DesignOption `json:"options"`
+				ChosenOptionID  *string                 `json:"chosen_option_id"`
+				ADR             *string                 `json:"adr"`
+				AdrContext      *string                 `json:"adr_context"`
+				AdrDecision     *string                 `json:"adr_decision"`
+				AdrConsequences *string                 `json:"adr_consequences"`
+				AdrSpec         *string                 `json:"adr_spec"`
+				AdrArchitecture *string                 `json:"adr_architecture"`
+				AdrSequence     *string                 `json:"adr_sequence"`
+				AdrSample       *string                 `json:"adr_sample"`
+				Options         []delivery.DesignOption `json:"options"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				http.Error(w, "bad json", http.StatusBadRequest)
 				return
 			}
 			d, err := s.delivery.PatchDesign(id, delivery.PatchDesignInput{
-				ChosenOptionID: body.ChosenOptionID, ADR: body.ADR, Options: body.Options,
+				ChosenOptionID:  body.ChosenOptionID,
+				ADR:             body.ADR,
+				AdrContext:      body.AdrContext,
+				AdrDecision:     body.AdrDecision,
+				AdrConsequences: body.AdrConsequences,
+				AdrSpec:         body.AdrSpec,
+				AdrArchitecture: body.AdrArchitecture,
+				AdrSequence:     body.AdrSequence,
+				AdrSample:       body.AdrSample,
+				Options:         body.Options,
 			})
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
@@ -473,6 +581,33 @@ func (s *Server) handleDelivery(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+			return
+		}
+	}
+
+	// roadmap/milestones/{id} — canvas position
+	if strings.HasPrefix(path, "roadmap/milestones/") {
+		id := strings.TrimPrefix(path, "roadmap/milestones/")
+		id = strings.Trim(id, "/")
+		if id != "" && !strings.Contains(id, "/") && r.Method == http.MethodPatch {
+			var body struct {
+				X *float64 `json:"x"`
+				Y *float64 `json:"y"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, "bad json", http.StatusBadRequest)
+				return
+			}
+			if body.X == nil || body.Y == nil {
+				http.Error(w, "x and y required", http.StatusBadRequest)
+				return
+			}
+			m, err := s.delivery.PatchMilestonePosition(id, *body.X, *body.Y)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			writeJSON(w, http.StatusOK, m)
 			return
 		}
 	}

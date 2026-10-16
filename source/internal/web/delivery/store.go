@@ -42,7 +42,10 @@ CREATE TABLE IF NOT EXISTS delivery_eng_reqs (
   reqs_rel TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'active',
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  project_id TEXT NOT NULL DEFAULT '',
+  project_key TEXT NOT NULL DEFAULT '',
+  workspace_id TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS delivery_req_versions (
   eng_req_id TEXT NOT NULL REFERENCES delivery_eng_reqs(id) ON DELETE CASCADE,
@@ -69,7 +72,14 @@ CREATE TABLE IF NOT EXISTS delivery_designs (
   status TEXT NOT NULL DEFAULT 'draft',
   chosen_option_id TEXT NOT NULL DEFAULT '',
   adr TEXT NOT NULL DEFAULT '',
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  adr_context TEXT NOT NULL DEFAULT '',
+  adr_decision TEXT NOT NULL DEFAULT '',
+  adr_consequences TEXT NOT NULL DEFAULT '',
+  adr_spec TEXT NOT NULL DEFAULT '',
+  adr_architecture TEXT NOT NULL DEFAULT '',
+  adr_sequence TEXT NOT NULL DEFAULT '',
+  adr_sample TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS delivery_design_options (
   id TEXT PRIMARY KEY,
@@ -80,6 +90,17 @@ CREATE TABLE IF NOT EXISTS delivery_design_options (
   risks TEXT NOT NULL DEFAULT '',
   out_of_scope TEXT NOT NULL DEFAULT '',
   sort_order INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS delivery_design_versions (
+  id TEXT PRIMARY KEY,
+  design_id TEXT NOT NULL REFERENCES delivery_designs(id) ON DELETE CASCADE,
+  sort_order INTEGER NOT NULL DEFAULT 1,
+  title TEXT NOT NULL DEFAULT '',
+  gate TEXT NOT NULL DEFAULT '',
+  sub_architecture TEXT NOT NULL DEFAULT '',
+  class_design TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'draft',
+  updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS delivery_milestones (
   id TEXT PRIMARY KEY,
@@ -131,7 +152,33 @@ CREATE TABLE IF NOT EXISTS delivery_trash (
 	if err != nil {
 		return err
 	}
-	return s.ensureDesignOptionOutOfScope()
+	if err := s.ensureDesignOptionOutOfScope(); err != nil {
+		return err
+	}
+	if err := s.ensureEngReqProjectColumns(); err != nil {
+		return err
+	}
+	if err := s.ensureDesignADRColumns(); err != nil {
+		return err
+	}
+	return s.ensureDesignVersionsTable()
+}
+
+// ensureDesignVersionsTable creates delivery_design_versions on older DBs.
+func (s *Store) ensureDesignVersionsTable() error {
+	_, err := s.db.Exec(`
+CREATE TABLE IF NOT EXISTS delivery_design_versions (
+  id TEXT PRIMARY KEY,
+  design_id TEXT NOT NULL REFERENCES delivery_designs(id) ON DELETE CASCADE,
+  sort_order INTEGER NOT NULL DEFAULT 1,
+  title TEXT NOT NULL DEFAULT '',
+  gate TEXT NOT NULL DEFAULT '',
+  sub_architecture TEXT NOT NULL DEFAULT '',
+  class_design TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'draft',
+  updated_at TEXT NOT NULL
+)`)
+	return err
 }
 
 // ensureDesignOptionOutOfScope adds out_of_scope on existing DBs (CREATE IF NOT EXISTS skips alters).
@@ -145,6 +192,45 @@ func (s *Store) ensureDesignOptionOutOfScope() error {
 		return nil
 	}
 	return err
+}
+
+// ensureEngReqProjectColumns adds Project-scoped Delivery fields (0.34+).
+func (s *Store) ensureEngReqProjectColumns() error {
+	for _, col := range []string{
+		`ALTER TABLE delivery_eng_reqs ADD COLUMN project_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE delivery_eng_reqs ADD COLUMN project_key TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE delivery_eng_reqs ADD COLUMN workspace_id TEXT NOT NULL DEFAULT ''`,
+	} {
+		if _, err := s.db.Exec(col); err != nil {
+			msg := strings.ToLower(err.Error())
+			if !strings.Contains(msg, "duplicate column") {
+				return err
+			}
+		}
+	}
+	_, _ = s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_delivery_eng_project ON delivery_eng_reqs(project_id) WHERE project_id != ''`)
+	return nil
+}
+
+// ensureDesignADRColumns adds structured ADR markdown sections on delivery_designs.
+func (s *Store) ensureDesignADRColumns() error {
+	for _, col := range []string{
+		`ALTER TABLE delivery_designs ADD COLUMN adr_context TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE delivery_designs ADD COLUMN adr_decision TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE delivery_designs ADD COLUMN adr_consequences TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE delivery_designs ADD COLUMN adr_spec TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE delivery_designs ADD COLUMN adr_architecture TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE delivery_designs ADD COLUMN adr_sequence TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE delivery_designs ADD COLUMN adr_sample TEXT NOT NULL DEFAULT ''`,
+	} {
+		if _, err := s.db.Exec(col); err != nil {
+			msg := strings.ToLower(err.Error())
+			if !strings.Contains(msg, "duplicate column") {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // Major statuses for generation planning.
@@ -192,17 +278,20 @@ type ReqVersion struct {
 	UpdatedAt   string `json:"updated_at"`
 }
 
-// EngReq is a Worker-bound engineering requirement.
+// EngReq is a Project-bound engineering requirement (Worker optional for execute/path).
 type EngReq struct {
-	ID         string       `json:"id"`
-	WorkerID   string       `json:"worker_id"`
-	Title      string       `json:"title"`
-	ReqsRel    string       `json:"reqs_rel"`
-	Status     string       `json:"status"`
-	Versions   []ReqVersion `json:"versions"`
-	CreatedAt  string       `json:"created_at,omitempty"`
-	UpdatedAt  string       `json:"updated_at,omitempty"`
-	WorkerMeta WorkerRef    `json:"-"`
+	ID          string       `json:"id"`
+	WorkerID    string       `json:"worker_id"`
+	ProjectID   string       `json:"project_id,omitempty"`
+	ProjectKey  string       `json:"project_key,omitempty"`
+	WorkspaceID string       `json:"workspace_id,omitempty"`
+	Title       string       `json:"title"`
+	ReqsRel     string       `json:"reqs_rel"`
+	Status      string       `json:"status"`
+	Versions    []ReqVersion `json:"versions"`
+	CreatedAt   string       `json:"created_at,omitempty"`
+	UpdatedAt   string       `json:"updated_at,omitempty"`
+	WorkerMeta  WorkerRef    `json:"-"`
 }
 
 // DesignOption is one ADR option card.
@@ -215,20 +304,116 @@ type DesignOption struct {
 	OutOfScope string `json:"out_of_scope"`
 }
 
+// DesignVersion is one AI execution boundary under a Design (Gate + Sub-architecture + Class design).
+type DesignVersion struct {
+	ID              string `json:"id"`
+	SortOrder       int    `json:"sort_order"`
+	Title           string `json:"title"`
+	Gate            string `json:"gate"`
+	SubArchitecture string `json:"sub_architecture"`
+	ClassDesign     string `json:"class_design"`
+	Status          string `json:"status"` // draft | ready
+	UpdatedAt       string `json:"updated_at"`
+}
+
+func designVersionReady(v DesignVersion) bool {
+	return strings.TrimSpace(v.Gate) != "" &&
+		strings.TrimSpace(v.SubArchitecture) != "" &&
+		strings.TrimSpace(v.ClassDesign) != ""
+}
+
+func (v *DesignVersion) refreshStatus() {
+	if v == nil {
+		return
+	}
+	if designVersionReady(*v) {
+		v.Status = "ready"
+	} else {
+		v.Status = "draft"
+	}
+}
+
 // Design is bound to an eng-req version.
 type Design struct {
-	ID             string         `json:"id"`
-	EngReqID       string         `json:"eng_req_id"`
-	Version        string         `json:"version"`
-	Major          int            `json:"major"`
-	Minor          int            `json:"minor"`
-	Patch          int            `json:"patch"`
-	Title          string         `json:"title"`
-	Status         string         `json:"status"`
-	ChosenOptionID string         `json:"chosen_option_id"`
-	ADR            string         `json:"adr"`
-	Options        []DesignOption `json:"options"`
-	UpdatedAt      string         `json:"updated_at"`
+	ID              string          `json:"id"`
+	EngReqID        string          `json:"eng_req_id"`
+	Version         string          `json:"version"`
+	Major           int             `json:"major"`
+	Minor           int             `json:"minor"`
+	Patch           int             `json:"patch"`
+	Title           string          `json:"title"`
+	Status          string          `json:"status"`
+	ChosenOptionID  string          `json:"chosen_option_id"` // legacy; unused for Approve
+	ADR             string          `json:"adr"`             // composed export / legacy summary
+	AdrContext      string          `json:"adr_context"`
+	AdrDecision     string          `json:"adr_decision"`
+	AdrConsequences string          `json:"adr_consequences"`
+	AdrSpec         string          `json:"adr_spec"`
+	AdrArchitecture string          `json:"adr_architecture"`
+	AdrSequence     string          `json:"adr_sequence"`
+	AdrSample       string          `json:"adr_sample"`
+	Options         []DesignOption  `json:"options"`  // legacy; no longer required
+	Versions        []DesignVersion `json:"versions"` // ordered execution units
+	UpdatedAt       string          `json:"updated_at"`
+}
+
+func (d *Design) hydrateADRFallback() {
+	if d == nil {
+		return
+	}
+	emptySections := d.AdrContext == "" && d.AdrDecision == "" && d.AdrConsequences == "" &&
+		d.AdrSpec == "" && d.AdrArchitecture == "" && d.AdrSequence == "" && d.AdrSample == ""
+	if emptySections && strings.TrimSpace(d.ADR) != "" {
+		d.AdrDecision = d.ADR
+	}
+}
+
+func composeADR(d Design) string {
+	var b strings.Builder
+	write := func(title, body string) {
+		body = strings.TrimSpace(body)
+		if body == "" {
+			return
+		}
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString("## ")
+		b.WriteString(title)
+		b.WriteString("\n\n")
+		b.WriteString(body)
+	}
+	write("Context", d.AdrContext)
+	write("Decision", d.AdrDecision)
+	write("Consequences", d.AdrConsequences)
+	write("Spec", d.AdrSpec)
+	write("Architecture", d.AdrArchitecture)
+	write("Sequence", d.AdrSequence)
+	write("Sample & capacity", d.AdrSample)
+	if b.Len() == 0 {
+		return strings.TrimSpace(d.ADR)
+	}
+	return b.String()
+}
+
+const designSelectCols = `id, eng_req_id, major, minor, patch, title, status, chosen_option_id, adr, updated_at,
+  adr_context, adr_decision, adr_consequences, adr_spec, adr_architecture, adr_sequence, adr_sample`
+
+func scanDesign(scanner interface {
+	Scan(dest ...any) error
+}, d *Design) error {
+	err := scanner.Scan(
+		&d.ID, &d.EngReqID, &d.Major, &d.Minor, &d.Patch,
+		&d.Title, &d.Status, &d.ChosenOptionID, &d.ADR, &d.UpdatedAt,
+		&d.AdrContext, &d.AdrDecision, &d.AdrConsequences, &d.AdrSpec,
+		&d.AdrArchitecture, &d.AdrSequence, &d.AdrSample,
+	)
+	if err != nil {
+		return err
+	}
+	d.Version = fmt.Sprintf("%d.%d.%d", d.Major, d.Minor, d.Patch)
+	d.hydrateADRFallback()
+	return nil
 }
 
 // Phase is a step under a milestone.
@@ -542,7 +727,8 @@ func workersFromEngs(engs []EngReq) []WorkerRef {
 
 func (s *Store) listEngReqs() ([]EngReq, error) {
 	rows, err := s.db.Query(`
-SELECT id, worker_id, worker_label, fleet, node, project_rel, title, reqs_rel, status, created_at, updated_at
+SELECT id, worker_id, worker_label, fleet, node, project_rel, title, reqs_rel, status, created_at, updated_at,
+       project_id, project_key, workspace_id
 FROM delivery_eng_reqs ORDER BY created_at`)
 	if err != nil {
 		return nil, err
@@ -553,6 +739,7 @@ FROM delivery_eng_reqs ORDER BY created_at`)
 		if err := rows.Scan(
 			&e.ID, &e.WorkerID, &e.WorkerMeta.Label, &e.WorkerMeta.Fleet, &e.WorkerMeta.Node, &e.WorkerMeta.ProjectRel,
 			&e.Title, &e.ReqsRel, &e.Status, &e.CreatedAt, &e.UpdatedAt,
+			&e.ProjectID, &e.ProjectKey, &e.WorkspaceID,
 		); err != nil {
 			_ = rows.Close()
 			return nil, err
@@ -606,10 +793,13 @@ type MilestonePhaseInput struct {
 	Delivery string // short delivery note (stored on version problem)
 }
 
-// CreateEngReqInput creates a Worker-bound eng-req (or attaches a milestone if worker already bound).
+// CreateEngReqInput creates a Project- or Worker-bound eng-req (or attaches a milestone if already bound).
 // Milestone body fields follow doc/roadmaps m_*.md: Goals, Overall acceptance, Non-goals, Linked design, Phase list.
 type CreateEngReqInput struct {
 	Worker         WorkerRef
+	ProjectID      string // preferred bind key (0.34+)
+	ProjectKey     string
+	WorkspaceID    string
 	Title          string
 	ReqsRel        string
 	ID             string // optional
@@ -623,6 +813,7 @@ type CreateEngReqInput struct {
 	Success        string // Completion criteria (capabilities / features to ship)
 	Constraints    string // unused in Requirements UI; kept for store compat
 	Phases         []MilestonePhaseInput // req versions under the milestone (patch 1..N)
+	ShellOnly      bool                  // create eng row without first milestone (Project open)
 }
 
 // NextMilestone returns the next major.minor for engID (patch always starts at 1).
@@ -667,13 +858,90 @@ func (s *Store) EngIDByWorker(workerID string) (id string, ok bool, err error) {
 	return id, true, nil
 }
 
+// EngIDByProject returns the eng-req id bound to projectID, if any.
+func (s *Store) EngIDByProject(projectID string) (id string, ok bool, err error) {
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return "", false, nil
+	}
+	err = s.db.QueryRow(`SELECT id FROM delivery_eng_reqs WHERE project_id=?`, projectID).Scan(&id)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return id, true, nil
+}
+
+// EnsureProjectEng opens or creates a Project-scoped eng-req shell (no milestone yet).
+func (s *Store) EnsureProjectEng(projectID, workspaceID, projectKey, title string) (EngReq, error) {
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return EngReq{}, fmt.Errorf("project_id required")
+	}
+	if id, ok, err := s.EngIDByProject(projectID); err != nil {
+		return EngReq{}, err
+	} else if ok {
+		return s.GetEngReq(id)
+	}
+	title = strings.TrimSpace(title)
+	if title == "" {
+		title = strings.TrimSpace(projectKey)
+	}
+	if title == "" {
+		title = "Untitled project"
+	}
+	return s.CreateEngReq(CreateEngReqInput{
+		ProjectID:   projectID,
+		ProjectKey:  projectKey,
+		WorkspaceID: workspaceID,
+		Title:       title,
+		ReqsRel:     "docs/requirements",
+		ShellOnly:   true,
+		Worker: WorkerRef{
+			ID:    "proj:" + projectID,
+			Label: title,
+		},
+	})
+}
+
+// GetEngReq loads one eng-req with versions.
+func (s *Store) GetEngReq(id string) (EngReq, error) {
+	var e EngReq
+	err := s.db.QueryRow(`
+SELECT id, worker_id, worker_label, fleet, node, project_rel, title, reqs_rel, status, created_at, updated_at,
+       project_id, project_key, workspace_id
+FROM delivery_eng_reqs WHERE id=?`, id).Scan(
+		&e.ID, &e.WorkerID, &e.WorkerMeta.Label, &e.WorkerMeta.Fleet, &e.WorkerMeta.Node, &e.WorkerMeta.ProjectRel,
+		&e.Title, &e.ReqsRel, &e.Status, &e.CreatedAt, &e.UpdatedAt,
+		&e.ProjectID, &e.ProjectKey, &e.WorkspaceID,
+	)
+	if err != nil {
+		return EngReq{}, fmt.Errorf("eng req not found")
+	}
+	e.WorkerMeta.ID = e.WorkerID
+	vers, err := s.listVersions(e.ID)
+	if err != nil {
+		return EngReq{}, err
+	}
+	e.Versions = vers
+	return e, nil
+}
+
 // CreateEngReq inserts eng-req + first milestone version, or adds the next milestone on an existing bind.
 // Milestone id is major.minor (patch=1 for the first phase under that milestone).
 func (s *Store) CreateEngReq(in CreateEngReqInput) (EngReq, error) {
 	w := in.Worker
 	w.ID = strings.TrimSpace(w.ID)
+	projectID := strings.TrimSpace(in.ProjectID)
+	projectKey := strings.TrimSpace(in.ProjectKey)
+	workspaceID := strings.TrimSpace(in.WorkspaceID)
+	if projectID != "" && w.ID == "" {
+		w.ID = "proj:" + projectID
+	}
 	if w.ID == "" {
-		return EngReq{}, fmt.Errorf("worker_id required")
+		return EngReq{}, fmt.Errorf("project_id or worker_id required")
 	}
 	if w.Label == "" {
 		w.Label = w.ID
@@ -690,26 +958,36 @@ func (s *Store) CreateEngReq(in CreateEngReqInput) (EngReq, error) {
 	if reqs == "" {
 		reqs = "docs/requirements"
 	}
-	major := in.Major
-	if in.AutoMajor {
-		d, err := s.DevelopingMajor()
-		if err != nil {
-			return EngReq{}, err
-		}
-		if d < 0 {
-			return EngReq{}, fmt.Errorf("no major is in development — set one to developing in the generation plan")
-		}
-		major = d
-	}
-	if err := s.AssertMajorWritable(major); err != nil {
-		return EngReq{}, err
-	}
 
-	existingID, found, err := s.EngIDByWorker(w.ID)
+	var existingID string
+	var found bool
+	var err error
+	if projectID != "" {
+		existingID, found, err = s.EngIDByProject(projectID)
+	} else {
+		existingID, found, err = s.EngIDByWorker(w.ID)
+	}
 	if err != nil {
 		return EngReq{}, err
 	}
 	if found {
+		if in.ShellOnly {
+			return s.GetEngReq(existingID)
+		}
+		major := in.Major
+		if in.AutoMajor {
+			d, err := s.DevelopingMajor()
+			if err != nil {
+				return EngReq{}, err
+			}
+			if d < 0 {
+				return EngReq{}, fmt.Errorf("no major is in development — set one to developing in the generation plan")
+			}
+			major = d
+		}
+		if err := s.AssertMajorWritable(major); err != nil {
+			return EngReq{}, err
+		}
 		minor := in.Minor
 		if minor <= 0 {
 			_, minor, err = s.NextMilestone(existingID, major)
@@ -721,25 +999,36 @@ func (s *Store) CreateEngReq(in CreateEngReqInput) (EngReq, error) {
 			return EngReq{}, err
 		}
 		ts := nowRFC3339()
-		_, _ = s.db.Exec(`UPDATE delivery_eng_reqs SET title=?, reqs_rel=?, worker_label=?, fleet=?, node=?, project_rel=?, updated_at=? WHERE id=?`,
-			title, reqs, w.Label, w.Fleet, w.Node, w.ProjectRel, ts, existingID)
-		vers, _ := s.listVersions(existingID)
-		return EngReq{
-			ID: existingID, WorkerID: w.ID, Title: title, ReqsRel: reqs, Status: "active",
-			UpdatedAt: ts, WorkerMeta: w, Versions: vers,
-		}, nil
+		_, _ = s.db.Exec(`UPDATE delivery_eng_reqs SET title=?, reqs_rel=?, worker_label=?, fleet=?, node=?, project_rel=?,
+			project_id=CASE WHEN project_id='' THEN ? ELSE project_id END,
+			project_key=CASE WHEN project_key='' THEN ? ELSE project_key END,
+			workspace_id=CASE WHEN workspace_id='' THEN ? ELSE workspace_id END,
+			updated_at=? WHERE id=?`,
+			title, reqs, w.Label, w.Fleet, w.Node, w.ProjectRel, projectID, projectKey, workspaceID, ts, existingID)
+		return s.GetEngReq(existingID)
+	}
+
+	if !in.ShellOnly {
+		major := in.Major
+		if in.AutoMajor {
+			d, err := s.DevelopingMajor()
+			if err != nil {
+				return EngReq{}, err
+			}
+			if d < 0 {
+				return EngReq{}, fmt.Errorf("no major is in development — set one to developing in the generation plan")
+			}
+			major = d
+		}
+		if err := s.AssertMajorWritable(major); err != nil {
+			return EngReq{}, err
+		}
+		_ = major
 	}
 
 	id := strings.TrimSpace(in.ID)
 	if id == "" {
 		id = fmt.Sprintf("eng_%d", time.Now().UnixNano())
-	}
-	minor := in.Minor
-	if minor <= 0 {
-		_, minor, err = s.NextMilestone("", major)
-		if err != nil {
-			return EngReq{}, err
-		}
 	}
 	ts := nowRFC3339()
 	tx, err := s.db.Begin()
@@ -748,23 +1037,39 @@ func (s *Store) CreateEngReq(in CreateEngReqInput) (EngReq, error) {
 	}
 	defer func() { _ = tx.Rollback() }()
 	_, err = tx.Exec(`
-INSERT INTO delivery_eng_reqs(id, worker_id, worker_label, fleet, node, project_rel, title, reqs_rel, status, created_at, updated_at)
-VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
-		id, w.ID, w.Label, w.Fleet, w.Node, w.ProjectRel, title, reqs, "active", ts, ts)
+INSERT INTO delivery_eng_reqs(id, worker_id, worker_label, fleet, node, project_rel, title, reqs_rel, status, created_at, updated_at,
+  project_id, project_key, workspace_id)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		id, w.ID, w.Label, w.Fleet, w.Node, w.ProjectRel, title, reqs, "active", ts, ts,
+		projectID, projectKey, workspaceID)
 	if err != nil {
 		return EngReq{}, fmt.Errorf("create eng req: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return EngReq{}, err
 	}
+	if in.ShellOnly {
+		return s.GetEngReq(id)
+	}
+	major := in.Major
+	if in.AutoMajor {
+		d, err := s.DevelopingMajor()
+		if err != nil {
+			return EngReq{}, err
+		}
+		major = d
+	}
+	minor := in.Minor
+	if minor <= 0 {
+		_, minor, err = s.NextMilestone("", major)
+		if err != nil {
+			return EngReq{}, err
+		}
+	}
 	if err := s.insertMilestoneVersions(id, major, minor, msTitle, in); err != nil {
 		return EngReq{}, err
 	}
-	vers, _ := s.listVersions(id)
-	return EngReq{
-		ID: id, WorkerID: w.ID, Title: title, ReqsRel: reqs, Status: "active",
-		CreatedAt: ts, UpdatedAt: ts, WorkerMeta: w, Versions: vers,
-	}, nil
+	return s.GetEngReq(id)
 }
 
 // Milestone lifecycle statuses (per major.minor). Create always starts at awaiting_design.
@@ -932,6 +1237,9 @@ SELECT id FROM delivery_designs WHERE eng_req_id=? AND major=? AND minor=?`, eng
 	}
 	_ = drows.Close()
 	for _, id := range designIDs {
+		if _, err := tx.Exec(`DELETE FROM delivery_design_versions WHERE design_id=?`, id); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(`DELETE FROM delivery_design_options WHERE design_id=?`, id); err != nil {
 			return err
 		}
@@ -1157,23 +1465,17 @@ VALUES(?,?,?,?,?,?,?,?)`,
 }
 
 func (s *Store) listDesigns() ([]Design, error) {
-	rows, err := s.db.Query(`
-SELECT id, eng_req_id, major, minor, patch, title, status, chosen_option_id, adr, updated_at
-FROM delivery_designs ORDER BY updated_at DESC`)
+	rows, err := s.db.Query(`SELECT ` + designSelectCols + ` FROM delivery_designs ORDER BY updated_at DESC`)
 	if err != nil {
 		return nil, err
 	}
 	var list []Design
 	for rows.Next() {
 		var d Design
-		if err := rows.Scan(
-			&d.ID, &d.EngReqID, &d.Major, &d.Minor, &d.Patch,
-			&d.Title, &d.Status, &d.ChosenOptionID, &d.ADR, &d.UpdatedAt,
-		); err != nil {
+		if err := scanDesign(rows, &d); err != nil {
 			_ = rows.Close()
 			return nil, err
 		}
-		d.Version = fmt.Sprintf("%d.%d.%d", d.Major, d.Minor, d.Patch)
 		list = append(list, d)
 	}
 	if err := rows.Err(); err != nil {
@@ -1189,6 +1491,11 @@ FROM delivery_designs ORDER BY updated_at DESC`)
 			return nil, err
 		}
 		list[i].Options = opts
+		vers, err := s.listDesignVersions(list[i].ID)
+		if err != nil {
+			return nil, err
+		}
+		list[i].Versions = vers
 	}
 	return list, nil
 }
@@ -1214,30 +1521,75 @@ WHERE design_id=? ORDER BY sort_order, id`, designID)
 
 // PatchDesignInput updates design fields and optional option cards.
 type PatchDesignInput struct {
-	ChosenOptionID *string
-	ADR            *string
-	Options        []DesignOption // partial update by id when set
+	ChosenOptionID  *string
+	ADR             *string // legacy single blob; if set alone, maps to AdrDecision
+	AdrContext      *string
+	AdrDecision     *string
+	AdrConsequences *string
+	AdrSpec         *string
+	AdrArchitecture *string
+	AdrSequence     *string
+	AdrSample       *string
+	Options         []DesignOption // partial update by id when set
 }
 
-// PatchDesign updates chosen option, ADR, and/or option card fields.
+// PatchDesign updates chosen option, ADR sections, and/or option card fields.
 func (s *Store) PatchDesign(id string, in PatchDesignInput) (Design, error) {
 	d, err := s.getDesign(id)
 	if err != nil {
 		return Design{}, err
 	}
-	// Approved: options + choice locked; ADR may still be patched (polish notes).
-	if d.Status == "approved" && (len(in.Options) > 0 || in.ChosenOptionID != nil) {
-		return Design{}, fmt.Errorf("approved design is read-only (options / choice locked)")
+	if d.Status == "approved" {
+		return Design{}, fmt.Errorf("approved design is read-only — open View only")
 	}
 	if in.ChosenOptionID != nil {
 		d.ChosenOptionID = *in.ChosenOptionID
 	}
-	if in.ADR != nil {
+	sectionsPatched := false
+	if in.AdrContext != nil {
+		d.AdrContext = *in.AdrContext
+		sectionsPatched = true
+	}
+	if in.AdrDecision != nil {
+		d.AdrDecision = *in.AdrDecision
+		sectionsPatched = true
+	}
+	if in.AdrConsequences != nil {
+		d.AdrConsequences = *in.AdrConsequences
+		sectionsPatched = true
+	}
+	if in.AdrSpec != nil {
+		d.AdrSpec = *in.AdrSpec
+		sectionsPatched = true
+	}
+	if in.AdrArchitecture != nil {
+		d.AdrArchitecture = *in.AdrArchitecture
+		sectionsPatched = true
+	}
+	if in.AdrSequence != nil {
+		d.AdrSequence = *in.AdrSequence
+		sectionsPatched = true
+	}
+	if in.AdrSample != nil {
+		d.AdrSample = *in.AdrSample
+		sectionsPatched = true
+	}
+	if in.ADR != nil && !sectionsPatched {
+		d.AdrDecision = *in.ADR
+		sectionsPatched = true
+	}
+	if sectionsPatched {
+		d.ADR = composeADR(d)
+	} else if in.ADR != nil {
 		d.ADR = *in.ADR
 	}
 	d.UpdatedAt = nowRFC3339()
-	_, err = s.db.Exec(`UPDATE delivery_designs SET chosen_option_id=?, adr=?, updated_at=? WHERE id=?`,
-		d.ChosenOptionID, d.ADR, d.UpdatedAt, id)
+	_, err = s.db.Exec(`UPDATE delivery_designs SET chosen_option_id=?, adr=?, updated_at=?,
+  adr_context=?, adr_decision=?, adr_consequences=?, adr_spec=?, adr_architecture=?, adr_sequence=?, adr_sample=?
+WHERE id=?`,
+		d.ChosenOptionID, d.ADR, d.UpdatedAt,
+		d.AdrContext, d.AdrDecision, d.AdrConsequences, d.AdrSpec, d.AdrArchitecture, d.AdrSequence, d.AdrSample,
+		id)
 	if err != nil {
 		return Design{}, err
 	}
@@ -1258,25 +1610,218 @@ WHERE id=? AND design_id=?`,
 
 func (s *Store) getDesign(id string) (Design, error) {
 	var d Design
-	err := s.db.QueryRow(`
-SELECT id, eng_req_id, major, minor, patch, title, status, chosen_option_id, adr, updated_at
-FROM delivery_designs WHERE id=?`, id).Scan(
-		&d.ID, &d.EngReqID, &d.Major, &d.Minor, &d.Patch,
-		&d.Title, &d.Status, &d.ChosenOptionID, &d.ADR, &d.UpdatedAt,
-	)
+	err := scanDesign(s.db.QueryRow(`SELECT `+designSelectCols+` FROM delivery_designs WHERE id=?`, id), &d)
 	if err != nil {
 		return Design{}, fmt.Errorf("design not found")
 	}
-	d.Version = fmt.Sprintf("%d.%d.%d", d.Major, d.Minor, d.Patch)
 	opts, err := s.listOptions(d.ID)
 	if err != nil {
 		return Design{}, err
 	}
 	d.Options = opts
+	vers, err := s.listDesignVersions(d.ID)
+	if err != nil {
+		return Design{}, err
+	}
+	d.Versions = vers
 	return d, nil
 }
 
-// DeleteDesign removes a design and its option cards.
+func (s *Store) listDesignVersions(designID string) ([]DesignVersion, error) {
+	rows, err := s.db.Query(`
+SELECT id, sort_order, title, gate, sub_architecture, class_design, status, updated_at
+FROM delivery_design_versions WHERE design_id=? ORDER BY sort_order, id`, designID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var list []DesignVersion
+	for rows.Next() {
+		var v DesignVersion
+		if err := rows.Scan(&v.ID, &v.SortOrder, &v.Title, &v.Gate, &v.SubArchitecture, &v.ClassDesign, &v.Status, &v.UpdatedAt); err != nil {
+			return nil, err
+		}
+		v.refreshStatus()
+		list = append(list, v)
+	}
+	if list == nil {
+		list = []DesignVersion{}
+	}
+	return list, rows.Err()
+}
+
+func validateDesignVersionsForApprove(vers []DesignVersion) error {
+	if len(vers) == 0 {
+		return fmt.Errorf("add at least one Version before approve")
+	}
+	for i, v := range vers {
+		if !designVersionReady(v) {
+			label := strings.TrimSpace(v.Title)
+			if label == "" {
+				label = fmt.Sprintf("Version %d", i+1)
+			}
+			return fmt.Errorf("%s needs Gate, Sub-architecture, and Class design", label)
+		}
+	}
+	return nil
+}
+
+// AddDesignVersionInput creates a Version card under a draft design.
+type AddDesignVersionInput struct {
+	Title           string
+	Gate            string
+	SubArchitecture string
+	ClassDesign     string
+}
+
+// AddDesignVersion appends a Version (sort_order = max+1).
+func (s *Store) AddDesignVersion(designID string, in AddDesignVersionInput) (DesignVersion, error) {
+	d, err := s.getDesign(designID)
+	if err != nil {
+		return DesignVersion{}, err
+	}
+	if d.Status == "approved" {
+		return DesignVersion{}, fmt.Errorf("approved design is read-only")
+	}
+	maxOrd := 0
+	for _, v := range d.Versions {
+		if v.SortOrder > maxOrd {
+			maxOrd = v.SortOrder
+		}
+	}
+	ord := maxOrd + 1
+	title := strings.TrimSpace(in.Title)
+	if title == "" {
+		title = fmt.Sprintf("Version %d", ord)
+	}
+	ts := nowRFC3339()
+	v := DesignVersion{
+		ID:              fmt.Sprintf("%s_v%d_%d", designID, ord, time.Now().UnixNano()%1e6),
+		SortOrder:       ord,
+		Title:           title,
+		Gate:            strings.TrimSpace(in.Gate),
+		SubArchitecture: strings.TrimSpace(in.SubArchitecture),
+		ClassDesign:     strings.TrimSpace(in.ClassDesign),
+		UpdatedAt:       ts,
+	}
+	v.refreshStatus()
+	_, err = s.db.Exec(`
+INSERT INTO delivery_design_versions(id, design_id, sort_order, title, gate, sub_architecture, class_design, status, updated_at)
+VALUES(?,?,?,?,?,?,?,?,?)`,
+		v.ID, designID, v.SortOrder, v.Title, v.Gate, v.SubArchitecture, v.ClassDesign, v.Status, v.UpdatedAt)
+	if err != nil {
+		return DesignVersion{}, err
+	}
+	_, _ = s.db.Exec(`UPDATE delivery_designs SET updated_at=? WHERE id=?`, ts, designID)
+	return v, nil
+}
+
+// PatchDesignVersionInput updates Version fields (nil = leave unchanged).
+type PatchDesignVersionInput struct {
+	Title           *string
+	Gate            *string
+	SubArchitecture *string
+	ClassDesign     *string
+	SortOrder       *int
+}
+
+// PatchDesignVersion updates one Version under a draft design.
+func (s *Store) PatchDesignVersion(designID, versionID string, in PatchDesignVersionInput) (DesignVersion, error) {
+	d, err := s.getDesign(designID)
+	if err != nil {
+		return DesignVersion{}, err
+	}
+	if d.Status == "approved" {
+		return DesignVersion{}, fmt.Errorf("approved design is read-only")
+	}
+	var v DesignVersion
+	err = s.db.QueryRow(`
+SELECT id, sort_order, title, gate, sub_architecture, class_design, status, updated_at
+FROM delivery_design_versions WHERE id=? AND design_id=?`, versionID, designID).Scan(
+		&v.ID, &v.SortOrder, &v.Title, &v.Gate, &v.SubArchitecture, &v.ClassDesign, &v.Status, &v.UpdatedAt)
+	if err != nil {
+		return DesignVersion{}, fmt.Errorf("version not found")
+	}
+	if in.Title != nil {
+		v.Title = strings.TrimSpace(*in.Title)
+	}
+	if in.Gate != nil {
+		v.Gate = *in.Gate
+	}
+	if in.SubArchitecture != nil {
+		v.SubArchitecture = *in.SubArchitecture
+	}
+	if in.ClassDesign != nil {
+		v.ClassDesign = *in.ClassDesign
+	}
+	if in.SortOrder != nil && *in.SortOrder > 0 {
+		v.SortOrder = *in.SortOrder
+	}
+	v.refreshStatus()
+	v.UpdatedAt = nowRFC3339()
+	_, err = s.db.Exec(`
+UPDATE delivery_design_versions SET sort_order=?, title=?, gate=?, sub_architecture=?, class_design=?, status=?, updated_at=?
+WHERE id=? AND design_id=?`,
+		v.SortOrder, v.Title, v.Gate, v.SubArchitecture, v.ClassDesign, v.Status, v.UpdatedAt, versionID, designID)
+	if err != nil {
+		return DesignVersion{}, err
+	}
+	_, _ = s.db.Exec(`UPDATE delivery_designs SET updated_at=? WHERE id=?`, v.UpdatedAt, designID)
+	return v, nil
+}
+
+// DeleteDesignVersion removes a Version and renumbers remaining 1..n (draft designs only).
+func (s *Store) DeleteDesignVersion(designID, versionID string) error {
+	d, err := s.getDesign(designID)
+	if err != nil {
+		return err
+	}
+	if d.Status == "approved" {
+		return fmt.Errorf("approved design is read-only")
+	}
+	found := false
+	for _, v := range d.Versions {
+		if v.ID == versionID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("version not found")
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(`DELETE FROM delivery_design_versions WHERE id=? AND design_id=?`, versionID, designID); err != nil {
+		return err
+	}
+	rows, err := tx.Query(`
+SELECT id FROM delivery_design_versions WHERE design_id=? ORDER BY sort_order, id`, designID)
+	if err != nil {
+		return err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		_ = rows.Scan(&id)
+		ids = append(ids, id)
+	}
+	_ = rows.Close()
+	ts := nowRFC3339()
+	for i, id := range ids {
+		if _, err := tx.Exec(`UPDATE delivery_design_versions SET sort_order=?, updated_at=? WHERE id=?`, i+1, ts, id); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(`UPDATE delivery_designs SET updated_at=? WHERE id=?`, ts, designID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// DeleteDesign removes a design and its option/version cards.
 func (s *Store) DeleteDesign(id string) error {
 	if _, err := s.getDesign(id); err != nil {
 		return err
@@ -1286,6 +1831,9 @@ func (s *Store) DeleteDesign(id string) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(`DELETE FROM delivery_design_versions WHERE design_id=?`, id); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(`DELETE FROM delivery_design_options WHERE design_id=?`, id); err != nil {
 		return err
 	}
@@ -1295,7 +1843,7 @@ func (s *Store) DeleteDesign(id string) error {
 	return tx.Commit()
 }
 
-// ApproveDesign marks design approved and advances the bound milestone to awaiting_roadmap.
+// ApproveDesign marks design approved when Versions are complete, advances lifecycle, seeds roadmap.
 func (s *Store) ApproveDesign(id string) (Design, error) {
 	d, err := s.getDesign(id)
 	if err != nil {
@@ -1304,18 +1852,8 @@ func (s *Store) ApproveDesign(id string) (Design, error) {
 	if d.Status == "approved" {
 		return d, nil
 	}
-	if strings.TrimSpace(d.ChosenOptionID) == "" {
-		return Design{}, fmt.Errorf("choose an option before approve")
-	}
-	found := false
-	for _, o := range d.Options {
-		if o.ID == d.ChosenOptionID {
-			found = true
-			break
-		}
-	}
-	if !found {
-		return Design{}, fmt.Errorf("chosen option not found")
+	if err := validateDesignVersionsForApprove(d.Versions); err != nil {
+		return Design{}, err
 	}
 	d.Status = "approved"
 	d.UpdatedAt = nowRFC3339()
@@ -1326,7 +1864,145 @@ func (s *Store) ApproveDesign(id string) (Design, error) {
 	if d.EngReqID != "" {
 		_ = s.SetMilestoneLifecycle(d.EngReqID, d.Major, d.Minor, LifeAwaitingRoadmap)
 	}
+	_ = s.seedRoadmapFromDesign(id)
 	return s.getDesign(id)
+}
+
+// BootstrapDesignRoadmap seeds eng-req patches + canvas phases from Design Versions (idempotent when phases exist).
+func (s *Store) BootstrapDesignRoadmap(id string) (Design, error) {
+	d, err := s.getDesign(id)
+	if err != nil {
+		return Design{}, err
+	}
+	if d.Status != "approved" {
+		return Design{}, fmt.Errorf("approve design before bootstrap")
+	}
+	if err := validateDesignVersionsForApprove(d.Versions); err != nil {
+		return Design{}, err
+	}
+	if err := s.seedRoadmapFromDesign(id); err != nil {
+		return Design{}, err
+	}
+	return s.getDesign(id)
+}
+
+// seedRoadmapFromDesign aligns eng-req patches and canvas phases 1:1 with Design Versions.
+func (s *Store) seedRoadmapFromDesign(designID string) error {
+	d, err := s.getDesign(designID)
+	if err != nil {
+		return err
+	}
+	if len(d.Versions) == 0 {
+		return nil
+	}
+	if err := s.alignEngReqPatchesFromVersions(d); err != nil {
+		return err
+	}
+	return s.ensureCanvasPhasesFromVersions(d)
+}
+
+func (s *Store) alignEngReqPatchesFromVersions(d Design) error {
+	if d.EngReqID == "" {
+		return nil
+	}
+	rows, err := s.db.Query(`
+SELECT patch, title, problem FROM delivery_req_versions
+WHERE eng_req_id=? AND major=? AND minor=? ORDER BY patch`, d.EngReqID, d.Major, d.Minor)
+	if err != nil {
+		return err
+	}
+	type existing struct {
+		patch          int
+		title, problem string
+	}
+	var have []existing
+	for rows.Next() {
+		var e existing
+		if err := rows.Scan(&e.patch, &e.title, &e.problem); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		have = append(have, e)
+	}
+	_ = rows.Close()
+
+	status := LifeAwaitingRoadmap
+	if len(have) > 0 {
+		_ = s.db.QueryRow(`
+SELECT status FROM delivery_req_versions WHERE eng_req_id=? AND major=? AND minor=? AND patch=1`,
+			d.EngReqID, d.Major, d.Minor).Scan(&status)
+	}
+	ts := nowRFC3339()
+	for i, v := range d.Versions {
+		patch := i + 1 // sort_order aligned to 1-based patch index
+		title := strings.TrimSpace(v.Title)
+		if title == "" {
+			title = fmt.Sprintf("Phase %d", patch)
+		}
+		gate := strings.TrimSpace(v.Gate)
+		found := false
+		for _, e := range have {
+			if e.patch == patch {
+				found = true
+				break
+			}
+		}
+		if found {
+			continue
+		}
+		_, err = s.db.Exec(`
+INSERT INTO delivery_req_versions(eng_req_id, major, minor, patch, title, status, problem, goals, non_goals, constraints_text, success, updated_at)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+			d.EngReqID, d.Major, d.Minor, patch, title, status, gate, "", "", "", "", ts)
+		if err != nil {
+			return fmt.Errorf("align patch %d: %w", patch, err)
+		}
+	}
+	_, _ = s.db.Exec(`UPDATE delivery_eng_reqs SET updated_at=? WHERE id=?`, ts, d.EngReqID)
+	return nil
+}
+
+func (s *Store) ensureCanvasPhasesFromVersions(d Design) error {
+	msID := fmt.Sprintf("ms_%s_%d_%d", d.EngReqID, d.Major, d.Minor)
+	var exists string
+	err := s.db.QueryRow(`SELECT id FROM delivery_milestones WHERE id=?`, msID).Scan(&exists)
+	if err != nil {
+		// Create milestone node for this design's major.minor
+		title := d.Title
+		if title == "" {
+			title = fmt.Sprintf("%d.%d", d.Major, d.Minor)
+		}
+		acceptance := strings.TrimSpace(d.Versions[0].Gate)
+		x, y := s.nextMilestoneCanvasSlot()
+		_, err = s.db.Exec(`
+INSERT INTO delivery_milestones(id, title, status, acceptance, x, y, sort_order)
+VALUES(?,?,?,?,?,?,?)`,
+			msID, title, "planned", acceptance, x, y, d.Minor)
+		if err != nil {
+			return err
+		}
+	}
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM delivery_phases WHERE milestone_id=?`, msID).Scan(&n); err != nil {
+		return err
+	}
+	if n > 0 {
+		return nil // already seeded
+	}
+	for i, v := range d.Versions {
+		title := strings.TrimSpace(v.Title)
+		if title == "" {
+			title = fmt.Sprintf("Version %d", i+1)
+		}
+		phID := fmt.Sprintf("%s_ph_%d", msID, i+1)
+		_, err = s.db.Exec(`
+INSERT INTO delivery_phases(id, milestone_id, title, status, sort_order) VALUES(?,?,?,?,?)`,
+			phID, msID, title, "planned", i)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // CreateDesignInput binds a new draft design to a milestone (major.minor).
@@ -1337,7 +2013,7 @@ type CreateDesignInput struct {
 	Title    string
 }
 
-// CreateDesign inserts a draft design with two stub option cards derived from the req.
+// CreateDesign inserts a draft design bound to a milestone (Versions authored separately).
 func (s *Store) CreateDesign(in CreateDesignInput) (Design, error) {
 	engID := strings.TrimSpace(in.EngReqID)
 	if engID == "" {
@@ -1387,49 +2063,12 @@ func (s *Store) CreateDesign(in CreateDesignInput) (Design, error) {
 	}
 	ts := nowRFC3339()
 	id := fmt.Sprintf("des_%s_%d_%d_%d", engID, in.Major, in.Minor, time.Now().UnixNano()%1e6)
-	goals := strings.TrimSpace(head.Goals)
-	if goals == "" {
-		goals = strings.TrimSpace(head.Problem)
-	}
-	opts := []DesignOption{
-		{
-			ID: id + "_a", Title: "A — Primary approach",
-			Summary: "Ship " + title + " with the straightforward path from the requirement.",
-			Tradeoffs: "Faster to execute; fewer moving parts.",
-			Risks:     "May need a follow-up redesign if constraints tighten.",
-			OutOfScope: strings.TrimSpace(head.NonGoals),
-		},
-		{
-			ID: id + "_b", Title: "B — Alternative approach",
-			Summary: "Explore a different cut: " + truncateRunes(goals, 120),
-			Tradeoffs: "More flexibility; more design/ADR surface.",
-			Risks:     "Scope creep if tradeoffs stay vague.",
-			OutOfScope: "Defer non-MVP polish and adjacent systems.",
-		},
-	}
-	tx, err := s.db.Begin()
-	if err != nil {
-		return Design{}, err
-	}
-	defer func() { _ = tx.Rollback() }()
-	_, err = tx.Exec(`
+	_, err = s.db.Exec(`
 INSERT INTO delivery_designs(id, eng_req_id, major, minor, patch, title, status, chosen_option_id, adr, updated_at)
 VALUES(?,?,?,?,?,?,?,?,?,?)`,
 		id, engID, in.Major, in.Minor, head.Patch, title, "draft", "",
-		"Draft from requirement — pick an option, polish ADR, then Approve.", ts)
+		"Draft from requirement — author Versions (Gate / Sub-architecture / Class design), polish ADR, then Approve.", ts)
 	if err != nil {
-		return Design{}, err
-	}
-	for i, o := range opts {
-		_, err = tx.Exec(`
-INSERT INTO delivery_design_options(id, design_id, title, summary, tradeoffs, risks, out_of_scope, sort_order)
-VALUES(?,?,?,?,?,?,?,?)`,
-			o.ID, id, o.Title, o.Summary, o.Tradeoffs, o.Risks, o.OutOfScope, i)
-		if err != nil {
-			return Design{}, err
-		}
-	}
-	if err := tx.Commit(); err != nil {
 		return Design{}, err
 	}
 	return s.getDesign(id)
@@ -1441,6 +2080,56 @@ func truncateRunes(s string, n int) string {
 		return s
 	}
 	return string(r[:n]) + "…"
+}
+
+// PatchMilestonePosition updates canvas card coordinates (persisted).
+func (s *Store) PatchMilestonePosition(id string, x, y float64) (Milestone, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return Milestone{}, fmt.Errorf("milestone id required")
+	}
+	if x < 0 {
+		x = 0
+	}
+	if y < 0 {
+		y = 0
+	}
+	// Cap runaway values from bad clients.
+	if x > 20000 {
+		x = 20000
+	}
+	if y > 20000 {
+		y = 20000
+	}
+	res, err := s.db.Exec(`UPDATE delivery_milestones SET x=?, y=? WHERE id=?`, x, y, id)
+	if err != nil {
+		return Milestone{}, err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return Milestone{}, fmt.Errorf("milestone not found")
+	}
+	var m Milestone
+	err = s.db.QueryRow(`
+SELECT id, title, status, acceptance, x, y FROM delivery_milestones WHERE id=?`, id).Scan(
+		&m.ID, &m.Title, &m.Status, &m.Acceptance, &m.X, &m.Y)
+	if err != nil {
+		return Milestone{}, err
+	}
+	ph, err := s.listPhases(m.ID)
+	if err != nil {
+		return Milestone{}, err
+	}
+	m.Phases = ph
+	return m, nil
+}
+
+func (s *Store) nextMilestoneCanvasSlot() (x, y float64) {
+	var n int
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM delivery_milestones`).Scan(&n)
+	const colW, rowH = 240.0, 120.0
+	cols := 4
+	return 80 + float64(n%cols)*colW, 80 + float64(n/cols)*rowH
 }
 
 func (s *Store) loadRoadmap() (Roadmap, error) {
@@ -1577,6 +2266,7 @@ func (s *Store) Reset() error {
 		`DELETE FROM delivery_edges`,
 		`DELETE FROM delivery_phases`,
 		`DELETE FROM delivery_milestones`,
+		`DELETE FROM delivery_design_versions`,
 		`DELETE FROM delivery_design_options`,
 		`DELETE FROM delivery_designs`,
 		`DELETE FROM delivery_req_versions`,
@@ -1643,22 +2333,27 @@ VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
 	_, err = tx.Exec(`
 INSERT INTO delivery_designs(id, eng_req_id, major, minor, patch, title, status, chosen_option_id, adr, updated_at)
 VALUES(?,?,?,?,?,?,?,?,?,?)`,
-		"des_demo_1", "eng_1", 0, 33, 1, "Delivery tool layer on anvil-web", "approved", "opt_a",
+		"des_demo_1", "eng_1", 0, 33, 1, "Delivery tool layer on anvil-web", "approved", "",
 		"UI-first; reqs bind Worker + version M.m.p; schema in 0.33; md is export.", ts)
 	if err != nil {
 		return err
 	}
-	opts := []struct {
-		id, title, summary, tradeoffs, risks, oos string
-		ord                                       int
+	demoVers := []struct {
+		id, title, gate, arch, class string
+		ord                          int
 	}{
-		{"opt_a", "A — Worker + version tree", "Eng-req on worker; major/minor/patch maps to generation/milestone/phase.", "Clear execution boundaries.", "Nav depth", "Global unbound req inbox", 0},
-		{"opt_b", "B — Flat global req list", "No worker binding.", "Simpler list; weak project isolation.", "Cross-talk between projects", "Per-worker generation plan", 1},
+		{"des_demo_1_v1", "UI shell", "Operator can open Delivery and browse 0.33.",
+			"```mermaid\nflowchart LR\n  Web[anvil-web] --> Del[Delivery UI]\n```",
+			"delivery.js · MdPreview · delivery_api routes", 1},
+		{"des_demo_1_v2", "Schema + API", "SQLite delivery_* survives reload.",
+			"```mermaid\nflowchart LR\n  API --> Store\n  Store --> SQLite\n```",
+			"delivery.Store · delivery_design_versions", 2},
 	}
-	for _, o := range opts {
+	for _, v := range demoVers {
 		_, err = tx.Exec(`
-INSERT INTO delivery_design_options(id, design_id, title, summary, tradeoffs, risks, out_of_scope, sort_order)
-VALUES(?,?,?,?,?,?,?,?)`, o.id, "des_demo_1", o.title, o.summary, o.tradeoffs, o.risks, o.oos, o.ord)
+INSERT INTO delivery_design_versions(id, design_id, sort_order, title, gate, sub_architecture, class_design, status, updated_at)
+VALUES(?,?,?,?,?,?,?,?,?)`,
+			v.id, "des_demo_1", v.ord, v.title, v.gate, v.arch, v.class, "ready", ts)
 		if err != nil {
 			return err
 		}

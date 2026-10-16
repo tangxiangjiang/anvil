@@ -13,7 +13,7 @@ Vision: [`DELIVERY_PIPELINE_VISION.md`](../../../DELIVERY_PIPELINE_VISION.md) §
 
 | Surface | 0.33 |
 |---------|------|
-| anvil-web **Delivery** | Requirements / Designs / Roadmap / Gates |
+| anvil-web **Delivery** | Requirements / Designs / Roadmap |
 | Persistence | SQLite tables in `anvil-web` `db_path` (same file as auth) |
 | HTTP | `/api/v1/delivery/*` (session Bearer) |
 | Markdown export / GraphPatch / agent jobs | **Out** (later milestones) |
@@ -64,8 +64,12 @@ Working-state on the worker project (`.anvil/delivery/`) and markdown export are
 | POST | `/api/v1/delivery/eng-reqs/{id}/versions` | Add version |
 | PATCH | `/api/v1/delivery/eng-reqs/{id}/versions/{M}/{m}/{p}` | Update fields |
 | POST | `/api/v1/delivery/eng-reqs/{id}/versions/{M}/{m}/{p}/approve` | Set approved + gate |
-| PATCH | `/api/v1/delivery/designs/{id}` | Choose option / ADR |
-| POST | `/api/v1/delivery/designs/{id}/approve` | Approve design |
+| PATCH | `/api/v1/delivery/designs/{id}` | ADR sections |
+| POST | `/api/v1/delivery/designs/{id}/versions` | Add Design Version |
+| PATCH | `/api/v1/delivery/designs/{id}/versions/{vid}` | Update Gate / Sub-architecture / Class design |
+| DELETE | `/api/v1/delivery/designs/{id}/versions/{vid}` | Remove Version (draft) |
+| POST | `/api/v1/delivery/designs/{id}/approve` | Approve when Versions complete |
+| POST | `/api/v1/delivery/designs/{id}/bootstrap` | Seed roadmap phases from Versions |
 
 Workers for the create picker: cluster inventory when available; otherwise snapshot may include denormalized workers from existing eng-reqs plus seed helpers.
 
@@ -74,9 +78,15 @@ Workers for the create picker: cluster inventory when available; otherwise snaps
 Sidebar: **Delivery** (collapsible) → children:
 
 1. **Requirements** — rounded card list + `+` create wizard (scheduler → node → worker → project FS pick/create reqs dir; auto `major.minor` milestone) → version browser → detail + Approve  
-2. **Designs** — list + detail + Approve + Bootstrap roadmap (nav stub)  
-3. **Roadmap** — canvas + inspector phase chain  
-4. **Gates** — inbox with deep links  
+2. **Designs** — list + detail (**structured ADR** + ordered **Versions**; no Option cards)  
+
+**Design flow:** **Save** (draft) → **View** (composed Markdown) → **Approve** (after View; Versions complete). After Approve the workspace is **view-only** (no Save / edit / chat); toolbar shows **View** + **Bootstrap roadmap** to publish phases.  
+
+**ADR storage** (`delivery_designs`): `adr_*` section columns; composed `adr` kept for export/legacy. Old rows with only `adr` hydrate into **Decision**.  
+
+**Design Versions** (`delivery_design_versions`): ordered execution units under one Design/ADR — each has **Gate**, **Sub-architecture**, **Class design** (Markdown + mermaid Edit/Preview). Approve requires ≥1 Version with all three fields filled. Approve / Bootstrap seed eng-req patches + canvas phases 1:1 by sort order.  
+
+3. **Roadmap** — canvas + inspector phase chain; milestone cards are **draggable** (`PATCH …/roadmap/milestones/{id}` persists `x`/`y`). No Gates tab — gates live on Design Versions.  
 
 ## Non-goals
 
@@ -89,5 +99,5 @@ Sidebar: **Delivery** (collapsible) → children:
 ## Acceptance
 
 - Logged-in operator: Delivery Requirements backed by SQLite API — create Worker-bound eng-req, browse `M.m.p`, edit and approve a version (survives reload).  
-- Designs / Roadmap / Gates readable from the same store.  
+- Designs / Roadmap readable from the same store.  
 - Design chapter + phases `p_0.33.1` (UI) / `p_0.33.2` (schema) documented.

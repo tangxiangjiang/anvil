@@ -21,8 +21,9 @@ Vision: [`DELIVERY_PIPELINE_VISION.md`](../../../DELIVERY_PIPELINE_VISION.md) §
 | Page | Content |
 |------|---------|
 | Scheduler cards | Config fleets; open → workspaces |
-| Workspace cards | + create (shows token); body → projects; **View** → Project Graph |
-| Workspace detail | Project cards + + slot; Token; Dev Node count; optional Machines tab |
+| Workspace cards | + create (shows token); body / **View** → **Workspace View (Graph)** |
+| Workspace View | Topology: Project nodes + Workers under each; Project `depends_on` edges; Worker deps as secondary; tabs → Projects list / Machines |
+| Workspace Projects | Project cards + + slot; Token; Dev Node count |
 | Project detail | Worker cards + + slot; Start/Shutdown; × Remove + confirm; hover tip |
 | Add Worker | Existing dir / new folder (`git init` + README + AI Chat) / worktree branch; Worker `depends_on`; Project deps on create |
 
@@ -49,8 +50,13 @@ Web BFF:
 - `/api/v1/workspaces/{id}/graph` — projects + edges for View  
 - Existing `/api/v1/clusters…` workers start/shutdown/remove unchanged  
 
+## Delivery entry (follow-up to 0.34)
+
+- Delivery home = **Project picker** (filter by name/key), grouped by Workspace.  
+- eng-req binds `project_id` (+ optional default Worker for execute/path).  
+- Clusters Project page **Open in Delivery** is a convenience deep link, not the primary find path.
+
 ## Out of scope (0.34)
 
-- Delivery rebinding eng-req from `worker_id` → `project_id` (follow-up).  
 - UI to add Dev Nodes; multi-workspace per node.  
 - Incoming “depended-by” editor.

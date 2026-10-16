@@ -147,6 +147,9 @@ window.api = {
     delivery() { return api.req("GET", "/api/v1/delivery"); },
     deliveryReset() { return api.req("POST", "/api/v1/delivery/reset", {}); },
     deliveryCreateEng(body) { return api.req("POST", "/api/v1/delivery/eng-reqs", body); },
+    deliveryEnsureProject(body) {
+      return api.req("POST", "/api/v1/delivery/eng-reqs/ensure-project", body);
+    },
     deliveryNextMilestone(params) {
       const q = new URLSearchParams(params || {}).toString();
       return api.req("GET", "/api/v1/delivery/next-milestone" + (q ? "?" + q : ""));
@@ -221,8 +224,44 @@ window.api = {
     deliveryApproveDesign(id) {
       return api.req("POST", "/api/v1/delivery/designs/" + encodeURIComponent(id) + "/approve", {});
     },
+    deliveryBootstrapDesign(id) {
+      return api.req("POST", "/api/v1/delivery/designs/" + encodeURIComponent(id) + "/bootstrap", {});
+    },
     deliveryDeleteDesign(id) {
       return api.req("DELETE", "/api/v1/delivery/designs/" + encodeURIComponent(id));
+    },
+    deliveryAddDesignVersion(designId, body) {
+      return api.req(
+        "POST",
+        "/api/v1/delivery/designs/" + encodeURIComponent(designId) + "/versions",
+        body || {},
+      );
+    },
+    deliveryPatchDesignVersion(designId, versionId, body) {
+      return api.req(
+        "PATCH",
+        "/api/v1/delivery/designs/" +
+          encodeURIComponent(designId) +
+          "/versions/" +
+          encodeURIComponent(versionId),
+        body,
+      );
+    },
+    deliveryDeleteDesignVersion(designId, versionId) {
+      return api.req(
+        "DELETE",
+        "/api/v1/delivery/designs/" +
+          encodeURIComponent(designId) +
+          "/versions/" +
+          encodeURIComponent(versionId),
+      );
+    },
+    deliveryPatchMilestonePos(id, x, y) {
+      return api.req(
+        "PATCH",
+        "/api/v1/delivery/roadmap/milestones/" + encodeURIComponent(id),
+        { x, y },
+      );
     },
   },
 };

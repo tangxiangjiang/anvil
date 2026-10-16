@@ -201,7 +201,7 @@ window.Features.clusters = {
         const nodes = this.nodesForWorkspace(fleet, w.id);
         return `
       <div class="cl-card cl-ws-card" data-ws-open="${this.esc(w.id)}">
-        <button type="button" class="ghost cl-ws-view" data-ws-view="${this.esc(w.id)}" title="Project graph">View</button>
+        <button type="button" class="ghost cl-ws-view" data-ws-view="${this.esc(w.id)}" title="Workspace graph">Graph</button>
         <div class="cl-card-top">
           <strong>${this.esc(w.name)}</strong>
         </div>
@@ -241,7 +241,8 @@ window.Features.clusters = {
     root.querySelectorAll("[data-ws-open]").forEach((card) => {
       card.addEventListener("click", (ev) => {
         if (ev.target.closest("[data-ws-view]")) return;
-        this.go(`#/clusters/${fleetId}/workspaces/${card.getAttribute("data-ws-open")}`);
+        // Primary entry: Workspace View (Project + Worker topology).
+        this.go(`#/clusters/${fleetId}/workspaces/${card.getAttribute("data-ws-open")}/graph`);
       });
     });
   },
@@ -337,11 +338,11 @@ window.Features.clusters = {
               nodeNames ? ` · ${this.esc(nodeNames)}` : ""
             }</p>
         </div>
-        <a class="ghost" href="#/clusters/${this.esc(fleetId)}/workspaces/${this.esc(wsId)}/graph">View graph</a>
         <button type="button" class="ghost" id="c-refresh">Refresh</button>
       </div>
       ${orphanBanner}
       <div class="del-subtabs">
+        <a class="del-subtab ghost" href="#/clusters/${this.esc(fleetId)}/workspaces/${this.esc(wsId)}/graph">Graph</a>
         <button type="button" class="del-subtab active" id="c-tab-projects">Projects</button>
         <button type="button" class="del-subtab ghost" id="c-tab-machines">Machines</button>
       </div>
@@ -368,7 +369,10 @@ window.Features.clusters = {
         );
       });
     });
-    const showProjects = () => this.render();
+    const showProjects = () => {
+      this._openMachinesOnce = false;
+      this.render();
+    };
     const showMachines = async () => {
       const main = root.querySelector("#c-ws-main");
       const tabP = root.querySelector("#c-tab-projects");
@@ -397,6 +401,10 @@ window.Features.clusters = {
     root.querySelector("#c-tab-machines")?.addEventListener("click", showMachines);
     root.querySelector("#c-goto-machines")?.addEventListener("click", showMachines);
     root.querySelector("#c-tab-projects")?.addEventListener("click", showProjects);
+    if (this._openMachinesOnce) {
+      this._openMachinesOnce = false;
+      showMachines();
+    }
   },
 
   openEditProjectDeps(fleetId, wsId, projId) {
@@ -630,57 +638,168 @@ window.Features.clusters = {
   },
 
   async viewGraph(fleetId, wsId) {
-    let g;
+    const fleet = this.fleet(fleetId);
+    let g, ws;
     try {
-      g = await api.v1.workspaceGraph(wsId);
+      const [gd, wd] = await Promise.all([
+        api.v1.workspaceGraph(wsId),
+        api.v1.listWorkspaces(fleetId),
+      ]);
+      g = gd;
+      ws = (wd.workspaces || []).find((x) => x.id === wsId);
     } catch (e) {
       return `<p class="err">${this.esc(e.message || e)}</p>`;
     }
     const projects = g.projects || [];
     const edges = g.edges || [];
-    const nodes = projects
+    const bindings = g.workers || [];
+    const workerEdges = g.worker_edges || [];
+    const liveById = {};
+    for (const { node, worker } of this.allLiveWorkers(fleet, wsId)) {
+      liveById[worker.id] = { worker, node };
+    }
+
+    const colW = 240;
+    const startX = 48;
+    const projY = 48;
+    const workerH = 56;
+    const workerGap = 10;
+    const projH = 64;
+    let maxBottom = 200;
+    const projPos = {};
+    const workerPos = {};
+
+    const projNodes = projects
       .map((p, i) => {
-        const x = 80 + (i % 3) * 220;
-        const y = 60 + Math.floor(i / 3) * 120;
-        const nw = (g.workers || []).filter((w) => w.project_id === p.id).length;
-        return `<div class="cl-graph-node" data-proj="${this.esc(p.id)}" style="left:${x}px;top:${y}px"
-          data-x="${x}" data-y="${y}">
+        const x = startX + (i % 4) * colW;
+        const y = projY + Math.floor(i / 4) * 280;
+        projPos[p.id] = { x, y, cx: x + 100, cy: y + projH / 2 };
+        const bound = bindings.filter((b) => b.project_id === p.id);
+        const workerHtml = bound
+          .map((b, wi) => {
+            const live = liveById[b.worker_id];
+            const w = live?.worker;
+            const n = live?.node;
+            const wx = x + 12;
+            const wy = y + projH + 12 + wi * (workerH + workerGap);
+            workerPos[b.worker_id] = { x: wx, y: wy, cx: wx + 88, cy: wy + workerH / 2 };
+            maxBottom = Math.max(maxBottom, wy + workerH + 40);
+            const branch = w?.git_branch || "—";
+            const status = w?.status || "offline";
+            const host = n ? this.nodeLabel(n) : b.node_id || "—";
+            return `
+          <div class="cl-graph-worker" data-worker="${this.esc(b.worker_id)}" data-proj="${this.esc(p.id)}"
+            style="left:${wx}px;top:${wy}px" title="${this.esc([w?.project_rel || "", host, b.worker_id].filter(Boolean).join("\n"))}">
+            <div class="cl-graph-worker-top">
+              <strong>${this.esc(w?.name || b.worker_id)}</strong>
+              <span class="badge">${this.esc(status)}</span>
+            </div>
+            <div class="muted cl-graph-worker-meta">
+              <code>${this.esc(branch)}</code> · ${this.esc(host)}
+            </div>
+          </div>`;
+          })
+          .join("");
+        if (!bound.length) {
+          maxBottom = Math.max(maxBottom, y + projH + 48);
+        } else {
+          maxBottom = Math.max(maxBottom, y + projH + 12 + bound.length * (workerH + workerGap) + 24);
+        }
+        return `
+        <div class="cl-graph-node cl-graph-project" data-proj="${this.esc(p.id)}"
+          style="left:${x}px;top:${y}px">
           <div class="del-node-title">${this.esc(p.name)}</div>
-          <div class="muted"><code>${this.esc(p.key)}</code> · ${nw} worker${nw === 1 ? "" : "s"}</div>
-        </div>`;
+          <div class="muted"><code>${this.esc(p.key)}</code> · ${bound.length} worker${bound.length === 1 ? "" : "s"}</div>
+        </div>
+        ${workerHtml}`;
       })
       .join("");
-    const byId = Object.fromEntries(projects.map((p, i) => {
-      const x = 80 + (i % 3) * 220;
-      const y = 60 + Math.floor(i / 3) * 120;
-      return [p.id, { x, y }];
-    }));
-    const lines = edges
+
+    const canvasW = Math.max(900, startX + Math.min(projects.length, 4) * colW + 40);
+    const canvasH = Math.max(420, maxBottom);
+
+    const projLines = edges
       .map((e) => {
-        const a = byId[e.from];
-        const b = byId[e.to];
+        const a = projPos[e.from];
+        const b = projPos[e.to];
         if (!a || !b) return "";
-        return `<line x1="${a.x + 100}" y1="${a.y + 36}" x2="${b.x}" y2="${b.y + 36}" class="del-edge" marker-end="url(#cl-arrow)" />`;
+        return `<line x1="${a.cx}" y1="${a.cy}" x2="${b.x}" y2="${b.cy}" class="cl-edge-project" marker-end="url(#cl-arrow)" />`;
       })
       .join("");
+    const wLines = workerEdges
+      .map((e) => {
+        const a = workerPos[e.from];
+        const b = workerPos[e.to];
+        if (!a || !b) return "";
+        return `<line x1="${a.cx}" y1="${a.cy}" x2="${b.cx}" y2="${b.cy}" class="cl-edge-worker" marker-end="url(#cl-arrow-w)" />`;
+      })
+      .join("");
+
+    const unbound = this.allLiveWorkers(fleet, wsId).filter(
+      ({ worker: w }) => !bindings.some((b) => b.worker_id === w.id),
+    );
+    const orphanNote = unbound.length
+      ? `<p class="cl-orphan-banner"><span class="badge warn">${unbound.length} unbound</span>
+          See <a href="#/clusters/${this.esc(fleetId)}/workspaces/${this.esc(wsId)}">Projects / Machines</a> to bind or remove.</p>`
+      : "";
+
     return `
       <p class="del-crumbs">
-        <a href="#/clusters/${this.esc(fleetId)}/workspaces/${this.esc(wsId)}">← Workspace</a>
+        <a href="#/clusters">Clusters</a>
+        <span class="muted">/</span>
+        <a href="#/clusters/${this.esc(fleetId)}/workspaces">${this.esc(fleet?.name || fleetId)}</a>
+        <span class="muted">/</span>
+        <span>${this.esc(ws?.name || wsId)}</span>
       </p>
-      <h2>Project graph</h2>
-      <p class="muted">depends_on edges (read-only). Edit deps when creating/editing a project.</p>
-      <div class="del-canvas cl-graph-canvas">
-        <svg class="del-edges" width="900" height="400">
-          <defs><marker id="cl-arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
-            <path d="M0,0 L6,3 L0,6 Z" fill="currentColor" /></marker></defs>
-          ${lines}
+      <div class="toolbar">
+        <div style="flex:1">
+          <h2 style="margin:0">Workspace View</h2>
+          <p class="muted" style="margin:0.25rem 0 0">Projects + Workers topology (read-only graph)</p>
+        </div>
+        <button type="button" class="ghost" id="c-refresh">Refresh</button>
+      </div>
+      ${orphanNote}
+      <div class="del-subtabs">
+        <span class="del-subtab active">Graph</span>
+        <a class="del-subtab ghost" href="#/clusters/${this.esc(fleetId)}/workspaces/${this.esc(wsId)}">Projects</a>
+        <a class="del-subtab ghost" href="#/clusters/${this.esc(fleetId)}/workspaces/${this.esc(wsId)}?tab=machines" id="c-graph-machines">Machines</a>
+      </div>
+      <p class="muted cl-graph-legend">
+        <span class="cl-legend-item"><i class="cl-legend-solid"></i> Project depends_on</span>
+        <span class="cl-legend-item"><i class="cl-legend-dash"></i> Worker depends_on</span>
+      </p>
+      <div class="del-canvas cl-graph-canvas" style="min-height:${canvasH}px">
+        <svg class="del-edges" width="${canvasW}" height="${canvasH}">
+          <defs>
+            <marker id="cl-arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+              <path d="M0,0 L6,3 L0,6 Z" fill="currentColor" /></marker>
+            <marker id="cl-arrow-w" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+              <path d="M0,0 L6,3 L0,6 Z" fill="var(--muted)" /></marker>
+          </defs>
+          ${projLines}
+          ${wLines}
         </svg>
-        <div class="del-nodes" style="width:900px;height:400px">${nodes || `<p class="muted">No projects.</p>`}</div>
+        <div class="del-nodes" style="width:${canvasW}px;height:${canvasH}px">
+          ${projNodes || `<p class="muted" style="padding:1rem">No projects yet — open Projects to create one.</p>`}
+        </div>
       </div>`;
   },
 
   bindGraph(root, route) {
-    root.querySelectorAll("[data-proj]").forEach((n) => {
+    root.querySelector("#c-refresh")?.addEventListener("click", () => this.render());
+    root.querySelector("#c-graph-machines")?.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      this._openMachinesOnce = true;
+      this.go(`#/clusters/${route.fleetId}/workspaces/${route.workspaceId}`);
+    });
+    root.querySelectorAll(".cl-graph-project[data-proj]").forEach((n) => {
+      n.addEventListener("click", () => {
+        this.go(
+          `#/clusters/${route.fleetId}/workspaces/${route.workspaceId}/projects/${n.getAttribute("data-proj")}`,
+        );
+      });
+    });
+    root.querySelectorAll(".cl-graph-worker[data-proj]").forEach((n) => {
       n.addEventListener("click", () => {
         this.go(
           `#/clusters/${route.fleetId}/workspaces/${route.workspaceId}/projects/${n.getAttribute("data-proj")}`,
@@ -750,9 +869,9 @@ window.Features.clusters = {
       <div class="toolbar">
         <div style="flex:1">
           <h2 style="margin:0">${this.esc(proj.name)}</h2>
-          <p class="muted" style="margin:0.25rem 0 0"><code>${this.esc(proj.key)}</code>
-            · Delivery bind later</p>
+          <p class="muted" style="margin:0.25rem 0 0"><code>${this.esc(proj.key)}</code></p>
         </div>
+        <a class="ghost" id="c-open-delivery" href="#/delivery/requirements">Open in Delivery</a>
         <button type="button" class="ghost" id="c-proj-edit-deps">Edit deps</button>
         <button type="button" class="ghost" id="c-refresh">Refresh</button>
       </div>
@@ -767,6 +886,22 @@ window.Features.clusters = {
 
   bindProject(root, fleetId, wsId, projId) {
     root.querySelector("#c-refresh")?.addEventListener("click", () => this.render());
+    root.querySelector("#c-open-delivery")?.addEventListener("click", async (ev) => {
+      ev.preventDefault();
+      try {
+        const data = await api.v1.getProject(wsId, projId);
+        const p = data.project;
+        const eng = await api.v1.deliveryEnsureProject({
+          project_id: p.id,
+          workspace_id: wsId,
+          project_key: p.key,
+          title: p.name,
+        });
+        location.hash = "#/delivery/requirements/" + encodeURIComponent(eng.id);
+      } catch (e) {
+        alert(e.message || e);
+      }
+    });
     root.querySelector("#c-proj-edit-deps")?.addEventListener("click", () =>
       this.openEditProjectDeps(fleetId, wsId, projId),
     );

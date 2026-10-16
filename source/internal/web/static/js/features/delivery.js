@@ -56,15 +56,15 @@ window.Features.delivery = {
   sectionMeta: {
     requirements: {
       title: "Requirements",
-      sub: "Workspace → Worker → milestones (major.minor.patch)",
+      sub: "Project → milestones (major.minor.patch)",
     },
     designs: {
       title: "Designs",
-      sub: "Option cards · ADR · Approve unlocks roadmap bootstrap",
+      sub: "Save draft · View Markdown · Approve · then Bootstrap roadmap",
     },
     roadmap: {
       title: "Roadmap",
-      sub: "Graph · Gates (execution constraints) · phase chain",
+      sub: "Milestone graph · phase chain (gates live on Design Versions)",
     },
   },
 
@@ -82,19 +82,22 @@ window.Features.delivery = {
 
   parseRoute() {
     let hash = location.hash || "#/delivery/requirements";
-    // Legacy top-level Gates → under Roadmap
-    if (hash === "#/delivery/gates" || hash.startsWith("#/delivery/gates/")) {
-      hash = "#/delivery/roadmap/gates";
+    // Legacy Gates routes → Roadmap graph (gates now live on Design Versions).
+    if (
+      hash === "#/delivery/gates" ||
+      hash.startsWith("#/delivery/gates/") ||
+      hash === "#/delivery/roadmap/gates" ||
+      hash.startsWith("#/delivery/roadmap/gates/")
+    ) {
+      hash = "#/delivery/roadmap";
       location.hash = hash;
     }
     const parts = hash.replace(/^#\/?/, "").split("/").filter(Boolean);
     // delivery/requirements[/:engId[/:M/:m/:p]]
     // delivery/designs[/:id]
-    // delivery/roadmap[/gates|/msId]
+    // delivery/roadmap[/:msId]
     const section = parts[1] || "requirements";
-    const roadmapTab = section === "roadmap" && parts[2] === "gates" ? "gates" : "graph";
-    const msId =
-      section === "roadmap" && parts[2] && parts[2] !== "gates" ? parts[2] : null;
+    const msId = section === "roadmap" && parts[2] ? parts[2] : null;
     return {
       section,
       engId: parts[2] || null,
@@ -103,7 +106,6 @@ window.Features.delivery = {
       patch: parts[5] != null ? Number(parts[5]) : null,
       desId: section === "designs" ? parts[2] || null : null,
       msId,
-      roadmapTab,
     };
   },
 
@@ -217,16 +219,7 @@ window.Features.delivery = {
     } else if (route.section === "designs") {
       body = route.desId ? this.viewDesDetail(route.desId) : this.viewDesList();
     } else if (route.section === "roadmap") {
-      const tabs = `
-        <div class="del-subtabs">
-          <a class="del-subtab${route.roadmapTab === "graph" ? " active" : ""}" href="#/delivery/roadmap">Graph</a>
-          <a class="del-subtab${route.roadmapTab === "gates" ? " active" : ""}" href="#/delivery/roadmap/gates">Gates</a>
-        </div>`;
-      body =
-        tabs +
-        (route.roadmapTab === "gates"
-          ? this.viewGates()
-          : this.viewRoadmap(route.msId));
+      body = this.viewRoadmap(route.msId);
     } else {
       body = `<p class="muted">Unknown section. Open a Delivery item in the sidebar.</p>`;
     }
@@ -243,15 +236,14 @@ window.Features.delivery = {
         : `<button type="button" class="ghost" id="del-reset">Reset demo data</button>`;
     let metaTitle = meta.title;
     let metaSub = meta.sub;
-    if (route.section === "roadmap" && route.roadmapTab === "gates") {
-      metaTitle = "Roadmap · Gates";
-      metaSub = "Execution constraints · pending human checks";
-    } else if (isWorkspace) {
-      metaTitle = "Workspace";
-      metaSub = "Pick a Worker · requirements stay bound to that project";
+    if (isWorkspace) {
+      metaTitle = "Projects";
+      metaSub = "Pick a Project by name · Delivery binds here (execute picks a Worker later)";
     } else if (workerHome) {
-      metaTitle = wHome ? wHome.label || engHome.worker_id : engHome?.title || "Worker";
-      metaSub = "Generation plan · milestones for this Worker";
+      metaTitle = engHome?.title || engHome?.project_key || wHome?.label || engHome?.worker_id || "Project";
+      metaSub = engHome?.project_key
+        ? `Project · ${engHome.project_key}`
+        : "Generation plan · milestones for this Project";
     }
 
     this.el.innerHTML = `
@@ -342,22 +334,42 @@ window.Features.delivery = {
   bindWorkspaceCards() {
     const el = this.el;
     if (!el) return;
-    el.querySelectorAll("[data-ws-open]").forEach((card) => {
-      const open = () => {
+    el.querySelector("#del-proj-filter")?.addEventListener("input", (ev) => {
+      this._projFilter = ev.target.value || "";
+      const q = String(this._projFilter).trim().toLowerCase();
+      el.querySelectorAll("[data-proj-open]").forEach((card) => {
+        const name = (card.getAttribute("data-project-name") || "").toLowerCase();
+        const key = (card.getAttribute("data-project-key") || "").toLowerCase();
+        card.hidden = !!(q && !name.includes(q) && !key.includes(q));
+      });
+      el.querySelectorAll(".del-ws-fleet").forEach((sec) => {
+        const any = [...sec.querySelectorAll("[data-proj-open]")].some((c) => !c.hidden);
+        sec.hidden = !!(q && !any);
+      });
+    });
+    el.querySelectorAll("[data-proj-open]").forEach((card) => {
+      const open = async () => {
         const engId = card.getAttribute("data-eng-id");
         if (engId) {
           this.goReq(engId);
           return;
         }
-        let fleet = null;
-        let node = null;
-        let worker = null;
+        const projectId = card.getAttribute("data-project-id");
+        const workspaceId = card.getAttribute("data-workspace-id");
+        const projectKey = card.getAttribute("data-project-key") || "";
+        const title = card.getAttribute("data-project-name") || projectKey;
         try {
-          fleet = JSON.parse(card.getAttribute("data-fleet") || "null");
-          node = JSON.parse(card.getAttribute("data-node") || "null");
-          worker = JSON.parse(card.getAttribute("data-worker") || "null");
-        } catch (_) {}
-        if (worker) this.openCreateWizardForInventoryWorker(fleet, node, worker);
+          const eng = await api.v1.deliveryEnsureProject({
+            project_id: projectId,
+            workspace_id: workspaceId,
+            project_key: projectKey,
+            title,
+          });
+          await this.reload();
+          this.goReq(eng.id);
+        } catch (e) {
+          alert(e.message || e);
+        }
       };
       card.addEventListener("click", open);
       card.addEventListener("keydown", (e) => {
@@ -400,9 +412,36 @@ window.Features.delivery = {
       const data = await api.v1.clusters();
       this._clusters = data.clusters || [];
       this._clustersError = "";
+      // Load Workspace → Project inventory for Delivery picker.
+      const catalog = [];
+      for (const f of this._clusters) {
+        let workspaces = [];
+        try {
+          const wd = await api.v1.listWorkspaces(f.id);
+          workspaces = wd.workspaces || [];
+        } catch (_) {
+          continue;
+        }
+        for (const ws of workspaces) {
+          let projects = [];
+          try {
+            const pd = await api.v1.listProjects(ws.id);
+            projects = pd.projects || [];
+          } catch (_) {
+            projects = [];
+          }
+          catalog.push({
+            fleet: f,
+            workspace: ws,
+            projects,
+          });
+        }
+      }
+      this._projectCatalog = catalog;
     } catch (e) {
       this._clustersError = e.message || String(e);
       this._clusters = [];
+      this._projectCatalog = [];
     }
     this._clustersLoaded = true;
     this._wsLoading = false;
@@ -414,6 +453,10 @@ window.Features.delivery = {
 
   findEngByWorker(workerId) {
     return (this.data.eng_reqs || []).find((e) => e.worker_id === workerId) || null;
+  },
+
+  findEngByProject(projectId) {
+    return (this.data.eng_reqs || []).find((e) => e.project_id === projectId) || null;
   },
 
   openCreateWizardForInventoryWorker(fleet, node, worker) {
@@ -675,6 +718,18 @@ window.Features.delivery = {
     m.querySelectorAll("[data-close-ui]").forEach((btn) => {
       btn.addEventListener("click", () => this.closeUiModal());
     });
+  },
+
+  /** In-app notice (no browser alert). */
+  showNotice(message, title = "Notice") {
+    this.showUiModal(`
+      <div class="modal-card">
+        <h3 style="margin-top:0">${this.esc(title)}</h3>
+        <p class="muted" style="white-space:pre-wrap">${this.esc(message || "")}</p>
+        <div class="toolbar" style="margin-top:1rem;justify-content:flex-end">
+          <button type="button" data-close-ui>OK</button>
+        </div>
+      </div>`);
   },
 
   applyMajorChatAssist(msg, titleEl, sumEl, opts = {}) {
@@ -1020,62 +1075,107 @@ window.Features.delivery = {
     if (route.section === "designs" && route.desId) {
       const des = (this.data.designs || []).find((d) => d.id === route.desId);
       if (!des) return;
-      el.querySelectorAll("[data-choose-opt]").forEach((btn) => {
-        btn.addEventListener("click", async () => {
-          try {
-            await api.v1.deliveryPatchDesign(des.id, {
-              chosen_option_id: btn.getAttribute("data-choose-opt"),
-            });
-            await this.reload();
-            this.render();
-          } catch (e) {
-            alert(e.message || e);
-          }
+      const saveDesignDetail = async () => {
+        const adrPatch = this.readAdrFields(el);
+        await api.v1.deliveryPatchDesign(des.id, adrPatch);
+        const cards = [...el.querySelectorAll("[data-ver-id]")];
+        for (const card of cards) {
+          const vid = card.getAttribute("data-ver-id");
+          await api.v1.deliveryPatchDesignVersion(des.id, vid, {
+            title: card.querySelector("[data-ver-title]")?.value ?? "",
+            gate: card.querySelector('textarea[data-ver-field="gate"]')?.value ?? "",
+            sub_architecture:
+              card.querySelector('textarea[data-ver-field="sub_architecture"]')?.value ?? "",
+            class_design:
+              card.querySelector('textarea[data-ver-field="class_design"]')?.value ?? "",
+          });
+        }
+      };
+      el.querySelector("#des-ver-add")?.addEventListener("click", async () => {
+        try {
+          await saveDesignDetail();
+          await api.v1.deliveryAddDesignVersion(des.id, {});
+          await this.reload();
+          this.render();
+        } catch (e) {
+          this.showNotice(e.message || String(e), "Could not add Version");
+        }
+      });
+      el.querySelectorAll("[data-ver-delete]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          this.openDeleteDesignVersionModal(des.id, btn.getAttribute("data-ver-delete"));
         });
       });
       el.querySelector("#des-save")?.addEventListener("click", async () => {
         const err = el.querySelector("#des-err");
         if (err) err.textContent = "";
         try {
-          const options = [...el.querySelectorAll("[data-opt-id]")].map((card) => ({
-            id: card.getAttribute("data-opt-id"),
-            title: card.querySelector("[data-opt-title]")?.value ?? "",
-            summary: card.querySelector("[data-opt-summary]")?.value ?? "",
-            tradeoffs: card.querySelector("[data-opt-tradeoffs]")?.value ?? "",
-            risks: card.querySelector("[data-opt-risks]")?.value ?? "",
-            out_of_scope: card.querySelector("[data-opt-oos]")?.value ?? "",
-          }));
-          const adr = el.querySelector("#des-adr")?.value ?? "";
-          await api.v1.deliveryPatchDesign(des.id, { adr, options });
+          await saveDesignDetail();
           await this.reload();
           this.render();
         } catch (e) {
           if (err) err.textContent = e.message || String(e);
-          else alert(e.message || e);
+          else this.showNotice(e.message || String(e), "Save failed");
         }
       });
+      el.querySelector("#des-view")?.addEventListener("click", () => {
+        this.openDesignViewModal(des.id, {
+          root: des.status === "approved" ? null : el,
+          save: des.status === "approved" ? null : saveDesignDetail,
+        });
+      });
+      if (des.status !== "approved" && window.MdPreview) {
+        window.MdPreview.bindToggle(el, {
+          onMode: (key, mode) => {
+            const pane = [...el.querySelectorAll(".md-pane")].find(
+              (p) => p.getAttribute("data-md-key") === key,
+            );
+            this.setAdrPaneDrag(pane, mode);
+          },
+        });
+        el.querySelectorAll("[data-md-insert]").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const key = btn.getAttribute("data-md-insert");
+            const pane = btn.closest(".md-pane");
+            const ta = pane?.querySelector("textarea");
+            if (!ta || ta.readOnly) return;
+            const tpl = window.MdPreview.templates[key] || "";
+            if (!ta.value.trim()) ta.value = tpl;
+            else ta.value = ta.value.replace(/\s*$/, "\n\n") + tpl;
+            ta.focus();
+          });
+        });
+      }
+      if (des.status === "approved") {
+        this.mountDesignReadOnlyPreviews(el);
+      }
       el.querySelector("#des-approve")?.addEventListener("click", async () => {
+        await this.runDesignApprove(des.id, {
+          root: el,
+          save: saveDesignDetail,
+          errEl: el.querySelector("#des-err"),
+        });
+      });
+      el.querySelector("#des-bootstrap")?.addEventListener("click", async () => {
         try {
-          await api.v1.deliveryApproveDesign(des.id);
+          await api.v1.deliveryBootstrapDesign(des.id);
           await this.reload();
-          this.render();
+          this.go("roadmap", `ms_${des.eng_req_id}_${des.major}_${des.minor}`);
         } catch (e) {
-          alert(e.message || e);
+          this.showNotice(e.message || String(e), "Bootstrap failed");
         }
       });
-      el.querySelector("#des-bootstrap")?.addEventListener("click", () => {
-        this.go("roadmap");
-      });
-      const desChat = this._chats?.[`des:${des.id}`];
-      if (desChat) desChat.mount(el);
+      if (des.status !== "approved") {
+        const desChat = this._chats?.[`des:${des.id}`];
+        if (desChat) {
+          desChat.mount(el);
+          desChat.bindDropSources(el);
+        }
+      }
     }
 
     if (route.section === "roadmap") {
-      el.querySelectorAll("[data-ms]").forEach((node) => {
-        node.addEventListener("click", () => {
-          this.go("roadmap", node.getAttribute("data-ms"));
-        });
-      });
+      this.bindRoadmapCanvas(el);
       el.querySelectorAll("[data-ms-ready]").forEach((btn) => {
         btn.addEventListener("click", async () => {
           const engId = btn.getAttribute("data-eng");
@@ -1091,18 +1191,153 @@ window.Features.delivery = {
             await this.reload();
             this.render();
           } catch (e) {
-            alert(e.message || e);
+            this.showNotice(e.message || String(e), "Mark ready failed");
           }
         });
       });
-      el.querySelectorAll("[data-gate-open]").forEach((a) => {
-        a.addEventListener("click", (e) => {
-          e.preventDefault();
-          const href = a.getAttribute("data-href");
-          if (href) location.hash = href;
-        });
-      });
     }
+  },
+
+  /** Pointer-drag milestone cards; persist x/y; click (no drag) selects. */
+  bindRoadmapCanvas(el) {
+    const canvas = el.querySelector(".del-canvas");
+    const nodesLayer = el.querySelector(".del-nodes");
+    const svg = el.querySelector(".del-edges");
+    if (!canvas || !nodesLayer) return;
+
+    const NODE_W = 216;
+    const NODE_H = 78;
+    const DRAG_THRESH = 5;
+
+    const syncLocalPos = (id, x, y) => {
+      const list = this.data.roadmap?.milestones || [];
+      const m = list.find((n) => n.id === id);
+      if (m) {
+        m.x = x;
+        m.y = y;
+      }
+    };
+
+    const redrawEdges = () => {
+      if (!svg) return;
+      const milestones = this.data.roadmap?.milestones || [];
+      const edgesList = this.data.roadmap?.edges || [];
+      const paths = edgesList
+        .map((e) => {
+          const a = milestones.find((m) => m.id === e.from);
+          const b = milestones.find((m) => m.id === e.to);
+          if (!a || !b) return "";
+          const x1 = (a.x || 0) + NODE_W;
+          const y1 = (a.y || 0) + NODE_H / 2;
+          const x2 = b.x || 0;
+          const y2 = (b.y || 0) + NODE_H / 2;
+          const mx = (x1 + x2) / 2;
+          return `<path d="M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}"
+            class="del-edge" fill="none" marker-end="url(#del-arrow)" />`;
+        })
+        .join("");
+      let maxX = 640;
+      let maxY = 280;
+      for (const m of milestones) {
+        maxX = Math.max(maxX, (m.x || 0) + NODE_W + 48);
+        maxY = Math.max(maxY, (m.y || 0) + NODE_H + 48);
+      }
+      const canvasW = Math.max(640, Math.ceil(maxX));
+      const canvasH = Math.max(300, Math.ceil(maxY));
+      svg.setAttribute("width", String(canvasW));
+      svg.setAttribute("height", String(canvasH));
+      nodesLayer.style.width = canvasW + "px";
+      nodesLayer.style.height = canvasH + "px";
+      const defs = svg.querySelector("defs");
+      svg.innerHTML = "";
+      if (defs) svg.appendChild(defs);
+      else {
+        svg.insertAdjacentHTML(
+          "afterbegin",
+          `<defs>
+            <marker id="del-arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+              <path d="M0,0 L9,3 L0,6 Z" fill="var(--accent)" opacity="0.75" />
+            </marker>
+          </defs>`,
+        );
+      }
+      svg.insertAdjacentHTML("beforeend", paths);
+    };
+
+    el.querySelectorAll(".del-node[data-ms]").forEach((node) => {
+      let dragging = false;
+      let moved = false;
+      let startX = 0;
+      let startY = 0;
+      let origLeft = 0;
+      let origTop = 0;
+      let pointerId = null;
+
+      const onMove = (ev) => {
+        if (!dragging || ev.pointerId !== pointerId) return;
+        const dx = ev.clientX - startX;
+        const dy = ev.clientY - startY;
+        if (!moved && Math.hypot(dx, dy) < DRAG_THRESH) return;
+        moved = true;
+        node.classList.add("dragging");
+        const x = Math.max(0, Math.round(origLeft + dx));
+        const y = Math.max(0, Math.round(origTop + dy));
+        node.style.left = x + "px";
+        node.style.top = y + "px";
+        const id = node.getAttribute("data-ms");
+        syncLocalPos(id, x, y);
+        redrawEdges();
+      };
+
+      const onUp = async (ev) => {
+        if (ev.pointerId !== pointerId) return;
+        dragging = false;
+        pointerId = null;
+        node.releasePointerCapture?.(ev.pointerId);
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        window.removeEventListener("pointercancel", onUp);
+        node.classList.remove("dragging");
+        const id = node.getAttribute("data-ms");
+        if (!moved) {
+          this.go("roadmap", id);
+          return;
+        }
+        const x = parseFloat(node.style.left) || 0;
+        const y = parseFloat(node.style.top) || 0;
+        try {
+          const saved = await api.v1.deliveryPatchMilestonePos(id, x, y);
+          syncLocalPos(id, saved.x, saved.y);
+          node.style.left = saved.x + "px";
+          node.style.top = saved.y + "px";
+          redrawEdges();
+        } catch (e) {
+          this.showNotice(e.message || String(e), "Could not save position");
+          // Revert from server snapshot
+          await this.reload();
+          this.render();
+        }
+      };
+
+      node.addEventListener("pointerdown", (ev) => {
+        if (ev.button !== 0) return;
+        // Allow text selection / links inside if any later — only drag from card.
+        ev.preventDefault();
+        dragging = true;
+        moved = false;
+        pointerId = ev.pointerId;
+        startX = ev.clientX;
+        startY = ev.clientY;
+        origLeft = parseFloat(node.style.left) || 0;
+        origTop = parseFloat(node.style.top) || 0;
+        try {
+          node.setPointerCapture(ev.pointerId);
+        } catch (_) {}
+        window.addEventListener("pointermove", onMove);
+        window.addEventListener("pointerup", onUp);
+        window.addEventListener("pointercancel", onUp);
+      });
+    });
   },
 
   latestMilestone(eng) {
@@ -1223,63 +1458,63 @@ window.Features.delivery = {
       .join("");
   },
 
-  /** Requirements entry: workers grouped by scheduler (fleet). */
+  /** Requirements entry: Projects grouped by Workspace (find by name). */
   viewWorkspace() {
     if (!this._clustersLoaded) {
-      return `<p class="muted">Loading workers from schedulers…</p>
+      return `<p class="muted">Loading projects…</p>
         <div id="del-create-modal" class="modal" hidden></div>`;
     }
     if (this._clustersError) {
       return `<p class="err">${this.esc(this._clustersError)}</p>
-        <p class="muted">Open Clusters to check scheduler connectivity, then refresh.</p>
+        <p class="muted">Open Clusters to check connectivity, then refresh.</p>
         <div id="del-create-modal" class="modal" hidden></div>`;
     }
-    const fleets = this._clusters || [];
-    if (!fleets.length) {
+    const catalog = this._projectCatalog || [];
+    const filter = String(this._projFilter || "").trim().toLowerCase();
+    const filterBox = `
+      <div class="toolbar del-proj-filter-bar">
+        <input id="del-proj-filter" type="search" placeholder="Filter by project name or key…"
+          value="${this.esc(this._projFilter || "")}" style="margin:0;max-width:28rem" />
+      </div>`;
+    if (!catalog.length) {
       return `
+        ${filterBox}
         <div class="card">
-          <p class="muted">No schedulers configured. Add a fleet under Clusters, then return here.</p>
+          <p class="muted">No workspaces yet. Create a Workspace and Project under Clusters, then return here.</p>
         </div>
         <div id="del-create-modal" class="modal" hidden></div>`;
     }
-    const sections = fleets
-      .map((f) => {
-        const workers = [];
-        for (const n of f.nodes || []) {
-          for (const w of n.workers || []) {
-            workers.push({ fleet: f, node: n, worker: w });
-          }
-        }
-        const cards = workers
-          .map(({ fleet, node, worker }) => {
-            const eng = this.findEngByWorker(worker.id);
+    const sections = catalog
+      .map(({ fleet, workspace: ws, projects }) => {
+        const filtered = (projects || []).filter((p) => {
+          if (!filter) return true;
+          const hay = `${p.name || ""} ${p.key || ""} ${p.summary || ""}`.toLowerCase();
+          return hay.includes(filter);
+        });
+        const cards = filtered
+          .map((p) => {
+            const eng = this.findEngByProject(p.id);
             const vers = eng ? eng.versions || [] : [];
             const ms = eng ? this.latestMilestone(eng) : null;
             const msKey = ms ? `${ms.major}.${ms.minor}` : "—";
             const bound = eng
               ? this.badge(eng.status)
-              : `<span class="badge warn">unbound</span>`;
-            const fleetJson = this.esc(JSON.stringify({ id: fleet.id, name: fleet.name }));
-            const nodeJson = this.esc(JSON.stringify({ id: node.id, name: node.name }));
-            const workerJson = this.esc(
-              JSON.stringify({
-                id: worker.id,
-                label: worker.label || worker.id,
-                project_rel: worker.project_rel || "",
-              }),
-            );
+              : `<span class="badge warn">new</span>`;
             return `
-      <div class="del-req-card" role="link" tabindex="0" data-ws-open
+      <div class="del-req-card" role="link" tabindex="0" data-proj-open
         data-eng-id="${eng ? this.esc(eng.id) : ""}"
-        data-fleet="${fleetJson}" data-node="${nodeJson}" data-worker="${workerJson}">
+        data-project-id="${this.esc(p.id)}"
+        data-workspace-id="${this.esc(ws.id)}"
+        data-project-key="${this.esc(p.key || "")}"
+        data-project-name="${this.esc(p.name || "")}">
         <div class="del-req-card-top">
-          <strong class="del-req-card-title">${this.esc(worker.label || worker.id)}</strong>
+          <strong class="del-req-card-title">${this.esc(p.name)}</strong>
           ${bound}
         </div>
         <div class="muted del-req-card-meta">
-          <span>node ${this.esc(node.name || node.id)}</span>
+          <code>${this.esc(p.key || "—")}</code>
           <span>·</span>
-          <code>${this.esc(worker.project_rel || "—")}</code>
+          <span>${this.esc(ws.name || ws.id)}</span>
         </div>
         <div class="del-req-card-foot">
           <code class="del-ms-ver">${this.esc(msKey)}</code>
@@ -1291,26 +1526,28 @@ window.Features.delivery = {
       </div>`;
           })
           .join("");
-        const online = f.online
+        if (filter && !filtered.length) return "";
+        const online = fleet.online
           ? `<span class="badge ok">online</span>`
           : `<span class="badge bad">offline</span>`;
         return `
       <section class="del-ws-fleet">
         <div class="del-ws-fleet-head">
-          <h3 style="margin:0">${this.esc(f.name || f.id)}</h3>
+          <h3 style="margin:0">${this.esc(ws.name || ws.id)}</h3>
           ${online}
-          <span class="muted">${this.esc(f.scheduler_url || f.listen_app || "")}</span>
+          <span class="muted">${this.esc(fleet.name || fleet.id)}</span>
         </div>
         <div class="del-req-grid">
           ${
             cards ||
-            `<p class="muted" style="grid-column:1/-1">No workers on this scheduler. Create workers under Clusters.</p>`
+            `<p class="muted" style="grid-column:1/-1">No projects in this workspace. Create one under Clusters.</p>`
           }
         </div>
       </section>`;
       })
       .join("");
-    return `${sections}<div id="del-create-modal" class="modal" hidden></div>`;
+    return `${filterBox}${sections || `<p class="muted">No projects match “${this.esc(this._projFilter || "")}”.</p>`}
+      <div id="del-create-modal" class="modal" hidden></div>`;
   },
 
   /** Worker home "+ Milestone" — always bound to current eng. */
@@ -2956,13 +3193,45 @@ window.Features.delivery = {
     return out;
   },
 
+  openDeleteDesignVersionModal(designId, versionId) {
+    const d = (this.data.designs || []).find((x) => x.id === designId);
+    const ver = (d?.versions || []).find((v) => v.id === versionId);
+    if (!d || !ver) return;
+    const label = (ver.title || "").trim() || `Version ${ver.sort_order}`;
+    this.showUiModal(`
+      <div class="modal-card">
+        <h3 style="margin-top:0">Delete Version?</h3>
+        <p><strong>${this.esc(label)}</strong>
+          · <span class="muted">v${ver.sort_order}</span></p>
+        <p class="muted">Remaining Versions will renumber 1…n. Gate / Sub-architecture / Class design for this card are discarded.</p>
+        <div class="err" id="des-del-ver-err"></div>
+        <div class="toolbar" style="margin-top:1rem;justify-content:flex-end">
+          <button type="button" class="ghost" data-close-ui>Cancel</button>
+          <button type="button" class="danger" id="des-del-ver-ok">Delete</button>
+        </div>
+      </div>`);
+    const modal = this.uiModal();
+    modal.querySelector("#des-del-ver-ok").onclick = async () => {
+      const errEl = modal.querySelector("#des-del-ver-err");
+      if (errEl) errEl.textContent = "";
+      try {
+        await api.v1.deliveryDeleteDesignVersion(designId, versionId);
+        this.closeUiModal();
+        await this.reload();
+        this.render();
+      } catch (e) {
+        if (errEl) errEl.textContent = e.message || String(e);
+      }
+    };
+  },
+
   openDeleteDesignModal(id) {
     const d = (this.data.designs || []).find((x) => x.id === id);
     if (!d) return;
     const note =
       d.status === "approved"
-        ? "This design is approved. Deleting removes options and ADR; the bound milestone is not changed."
-        : "Removes this design and its option cards.";
+        ? "This design is approved. Deleting removes Versions and ADR; the bound milestone is not changed."
+        : "Removes this design and its Version cards.";
     this.showUiModal(`
       <div class="modal-card">
         <h3 style="margin-top:0">Delete design?</h3>
@@ -2970,6 +3239,7 @@ window.Features.delivery = {
           · <code>${this.esc(`${d.major}.${d.minor}`)}</code>
           ${this.badge(d.status)}</p>
         <p class="muted">${this.esc(note)}</p>
+        <div class="err" id="des-del-err"></div>
         <div class="toolbar" style="margin-top:1rem;justify-content:flex-end">
           <button type="button" class="ghost" data-close-ui>Cancel</button>
           <button type="button" class="danger" id="des-del-ok">Delete</button>
@@ -2977,13 +3247,15 @@ window.Features.delivery = {
       </div>`);
     const modal = this.uiModal();
     modal.querySelector("#des-del-ok").onclick = async () => {
+      const errEl = modal.querySelector("#des-del-err");
+      if (errEl) errEl.textContent = "";
       try {
         await api.v1.deliveryDeleteDesign(id);
         this.closeUiModal();
         await this.reload();
         this.render();
       } catch (e) {
-        alert(e.message || e);
+        if (errEl) errEl.textContent = e.message || String(e);
       }
     };
   },
@@ -3011,7 +3283,7 @@ window.Features.delivery = {
     this.showUiModal(`
       <div class="modal-card">
         <h3 style="margin-top:0">New design</h3>
-        <p class="muted" style="margin-top:0">Bootstrap two option cards from the bound requirement. Polish, choose, then Approve.</p>
+        <p class="muted" style="margin-top:0">Bind a milestone, author ADR + Versions, then Save → View → Approve (Bootstrap only after Approve).</p>
         <label>Milestone</label>
         <select id="des-create-pick">${opts}</select>
         <label>Title (optional)</label>
@@ -3055,8 +3327,9 @@ window.Features.delivery = {
       .map((d) => {
         const eng = this.findEng(d.eng_req_id);
         const w = eng ? this.findWorker(eng.worker_id) : null;
-        const chosen = (d.options || []).find((o) => o.id === d.chosen_option_id);
-        const nOpts = (d.options || []).length;
+        const vers = d.versions || [];
+        const nVer = vers.length;
+        const nReady = vers.filter((v) => (v.status || "") === "ready").length;
         return `
       <div class="del-des-card" role="link" tabindex="0" data-des-open="${this.esc(d.id)}">
         <button type="button" class="ghost del-des-card-x" data-des-delete="${this.esc(d.id)}"
@@ -3070,15 +3343,15 @@ window.Features.delivery = {
           <span>·</span>
           <code>${this.esc(`${d.major}.${d.minor}`)}</code>
           <span>·</span>
-          <span>${nOpts} option${nOpts === 1 ? "" : "s"}</span>
+          <span>${nVer} version${nVer === 1 ? "" : "s"}</span>
         </div>
         <div class="del-des-card-foot muted">
           ${
-            chosen
-              ? `Chosen: <strong>${this.esc(chosen.title)}</strong>`
-              : d.status === "approved"
-                ? "Approved"
-                : "No option chosen yet"
+            d.status === "approved"
+              ? "Approved"
+              : nVer === 0
+                ? "No Versions yet"
+                : `${nReady}/${nVer} ready`
           }
         </div>
       </div>`;
@@ -3104,50 +3377,520 @@ window.Features.delivery = {
       </div>`;
   },
 
+  adrSectionDefs() {
+    return [
+      {
+        key: "adr_context",
+        cite: "ADR.Context",
+        label: "Context",
+        hint: "Why a decision is needed…",
+        preview: false,
+        rows: 3,
+      },
+      {
+        key: "adr_decision",
+        cite: "ADR.Decision",
+        label: "Decision",
+        hint: "What we chose and why it wins…",
+        preview: false,
+        rows: 3,
+      },
+      {
+        key: "adr_consequences",
+        cite: "ADR.Consequences",
+        label: "Consequences",
+        hint: "Follow-on risks, costs, constraints…",
+        preview: false,
+        rows: 3,
+      },
+      {
+        key: "adr_spec",
+        cite: "ADR.Spec",
+        label: "Spec",
+        hint: "Interfaces, contracts, execution notes (Markdown)…",
+        preview: true,
+        rows: 6,
+      },
+      {
+        key: "adr_architecture",
+        cite: "ADR.Architecture",
+        label: "Architecture",
+        hint: "Component topology — use a ```mermaid flowchart fence",
+        preview: true,
+        rows: 8,
+        template: "architecture",
+      },
+      {
+        key: "adr_sequence",
+        cite: "ADR.Sequence",
+        label: "Sequence",
+        hint: "Key flows — use a ```mermaid sequenceDiagram fence",
+        preview: true,
+        rows: 8,
+        template: "sequence",
+      },
+      {
+        key: "adr_sample",
+        cite: "ADR.Sample",
+        label: "Sample & capacity",
+        hint: "Samples, capacity / redundancy notes (Markdown)…",
+        preview: true,
+        rows: 5,
+      },
+    ];
+  },
+
+  readAdrFields(root) {
+    const out = {};
+    for (const s of this.adrSectionDefs()) {
+      const ta = root.querySelector(`textarea[data-adr-field="${s.key}"]`);
+      out[s.key] = ta ? ta.value : "";
+    }
+    return out;
+  },
+
+  adrFieldValue(d, key) {
+    if (!d) return "";
+    const v = d[key];
+    if (v) return v;
+    // Legacy: single adr blob maps to Decision when sections empty.
+    if (
+      key === "adr_decision" &&
+      !d.adr_context &&
+      !d.adr_decision &&
+      !d.adr_consequences &&
+      !d.adr_spec &&
+      !d.adr_architecture &&
+      !d.adr_sequence &&
+      !d.adr_sample
+    ) {
+      return d.adr || "";
+    }
+    return "";
+  },
+
+  renderAdrPane(sec, d, approved) {
+    const val = this.adrFieldValue(d, sec.key);
+    if (approved) {
+      // Approved: preview-only — no Edit / Template / Save surface.
+      return `
+      <div class="md-pane del-cite-field del-pane-ro" data-md-key="${this.esc(sec.key)}"
+        data-cite-key="${this.esc(sec.cite)}" data-cite-drag-ok="0" draggable="false"
+        data-md-ro="1">
+        <div class="md-pane-head">
+          <label>${this.esc(sec.label)}</label>
+          <span class="muted md-ro-tag">read-only</span>
+        </div>
+        <div class="md-preview md-preview-ro" data-md-ro-body>${this.esc(val)}</div>
+        <textarea data-adr-field="${this.esc(sec.key)}" hidden readonly>${this.esc(val)}</textarea>
+      </div>`;
+    }
+    const modeBtns = sec.preview
+      ? `<div class="md-mode-toggle">
+          <button type="button" class="ghost active" data-md-mode="edit">Edit</button>
+          <button type="button" class="ghost" data-md-mode="preview">Preview</button>
+        </div>`
+      : "";
+    const insert = sec.template
+      ? `<button type="button" class="ghost md-insert-tpl" data-md-insert="${this.esc(sec.template)}" title="Insert mermaid stub">Template</button>`
+      : "";
+    return `
+      <div class="md-pane del-cite-field"
+        data-md-key="${this.esc(sec.key)}" data-cite-key="${this.esc(sec.cite)}"
+        data-cite-drag-ok="${sec.preview ? "1" : "0"}" draggable="false">
+        <div class="md-pane-head">
+          <label>${this.esc(sec.label)}</label>
+          ${insert}
+          ${modeBtns}
+        </div>
+        <div class="md-edit">
+          <textarea data-adr-field="${this.esc(sec.key)}" rows="${sec.rows}"
+            placeholder="${this.esc(sec.hint)}">${this.esc(val)}</textarea>
+        </div>
+        ${sec.preview ? `<div class="md-preview" hidden></div>` : ""}
+      </div>`;
+  },
+
+  /** Enable cite-drag only when an ADR pane is in Preview (not Edit). */
+  setAdrPaneDrag(pane, mode) {
+    if (!pane || pane.getAttribute("data-cite-drag-ok") !== "1") return;
+    const allow = mode === "preview";
+    pane.draggable = allow;
+    pane.classList.toggle("cite-drag", allow);
+  },
+
+  versionFieldDefs() {
+    return [
+      {
+        field: "gate",
+        label: "Gate",
+        citeSuffix: "Gate",
+        hint: "Entry/exit criteria, DoD, human check…",
+        rows: 4,
+        template: null,
+      },
+      {
+        field: "sub_architecture",
+        label: "Sub-architecture",
+        citeSuffix: "Arch",
+        hint: "Slice of the system for this Version — mermaid OK",
+        rows: 6,
+        template: "architecture",
+      },
+      {
+        field: "class_design",
+        label: "Class design",
+        citeSuffix: "Class",
+        hint: "Types / interfaces / modules AI may touch…",
+        rows: 6,
+        template: null,
+      },
+    ];
+  },
+
+  versionsReady(vers) {
+    if (!vers || !vers.length) return false;
+    return vers.every(
+      (v) =>
+        String(v.gate || "").trim() &&
+        String(v.sub_architecture || "").trim() &&
+        String(v.class_design || "").trim(),
+    );
+  },
+
+  /** Merge live form fields from Design detail into a snapshot for View/export. */
+  readLiveDesignSnapshot(root, d) {
+    const snap = {
+      ...d,
+      title: d.title,
+      versions: (d.versions || []).map((v) => ({ ...v })),
+    };
+    if (!root) return snap;
+    const adr = this.readAdrFields(root);
+    Object.assign(snap, adr);
+    const cards = [...root.querySelectorAll("[data-ver-id]")];
+    for (const card of cards) {
+      const vid = card.getAttribute("data-ver-id");
+      const ver = snap.versions.find((v) => v.id === vid);
+      if (!ver) continue;
+      ver.title = card.querySelector("[data-ver-title]")?.value ?? ver.title;
+      ver.gate = card.querySelector('textarea[data-ver-field="gate"]')?.value ?? ver.gate;
+      ver.sub_architecture =
+        card.querySelector('textarea[data-ver-field="sub_architecture"]')?.value ??
+        ver.sub_architecture;
+      ver.class_design =
+        card.querySelector('textarea[data-ver-field="class_design"]')?.value ??
+        ver.class_design;
+    }
+    return snap;
+  },
+
+  /** Full Design Markdown document (ADR + Versions) for View / export. */
+  composeDesignMarkdown(d) {
+    const lines = [];
+    const push = (s) => lines.push(s);
+    const section = (title, body) => {
+      const t = String(body ?? "").trim();
+      push(`### ${title}`);
+      push("");
+      push(t || "_(empty)_");
+      push("");
+    };
+    push(`# ${d.title || "Untitled design"}`);
+    push("");
+    push(
+      `> Bound \`${d.major}.${d.minor}\` · status **${d.status || "draft"}**` +
+        (d.version ? ` · req \`${d.version}\`` : ""),
+    );
+    push("");
+    push("## ADR");
+    push("");
+    for (const s of this.adrSectionDefs()) {
+      section(s.label, this.adrFieldValue(d, s.key));
+    }
+    push("## Versions");
+    push("");
+    const vers = d.versions || [];
+    if (!vers.length) {
+      push("_(No Versions yet.)_");
+      push("");
+    } else {
+      vers.forEach((v, i) => {
+        const ord = v.sort_order || i + 1;
+        const name = (v.title || "").trim() || `Version ${ord}`;
+        push(`### v${ord} — ${name}`);
+        push("");
+        section("Gate", v.gate);
+        section("Sub-architecture", v.sub_architecture);
+        section("Class design", v.class_design);
+      });
+    }
+    return lines.join("\n").replace(/\n{3,}/g, "\n\n");
+  },
+
+  markDesignViewed(id) {
+    if (!this._desViewedIds) this._desViewedIds = {};
+    this._desViewedIds[id] = true;
+  },
+
+  /**
+   * Save → validate Versions → Approve → reopen View with Bootstrap.
+   * Always gives feedback (never a silent disabled click).
+   */
+  async runDesignApprove(designId, { root, save, errEl } = {}) {
+    const setErr = (msg) => {
+      if (errEl) errEl.textContent = msg || "";
+      else if (msg) this.showNotice(msg, "Cannot Approve");
+    };
+    setErr("");
+    try {
+      const d0 = (this.data.designs || []).find((x) => x.id === designId);
+      if (!d0) {
+        setErr("Design not found.");
+        return false;
+      }
+      if (d0.status === "approved") {
+        this.openDesignViewModal(designId, { root: null, save: null });
+        return true;
+      }
+      const live = this.readLiveDesignSnapshot(root || this.el, d0);
+      if (!(live.versions || []).length) {
+        setErr("Add at least one Version, then fill Gate / Sub-architecture / Class design.");
+        return false;
+      }
+      if (!this.versionsReady(live.versions)) {
+        setErr("Every Version needs Gate, Sub-architecture, and Class design before Approve.");
+        return false;
+      }
+      if (typeof save === "function") await save();
+      else {
+        // Persist live snapshot when opened without a bound save (e.g. after reload).
+        const adr = {};
+        for (const s of this.adrSectionDefs()) {
+          adr[s.key] = this.adrFieldValue(live, s.key);
+        }
+        await api.v1.deliveryPatchDesign(designId, adr);
+        for (const v of live.versions || []) {
+          await api.v1.deliveryPatchDesignVersion(designId, v.id, {
+            title: v.title || "",
+            gate: v.gate || "",
+            sub_architecture: v.sub_architecture || "",
+            class_design: v.class_design || "",
+          });
+        }
+      }
+      this.markDesignViewed(designId);
+      await api.v1.deliveryApproveDesign(designId);
+      await this.reload();
+      this.render();
+      this.openDesignViewModal(designId, { root: null, save: null });
+      return true;
+    } catch (e) {
+      setErr(e.message || String(e));
+      return false;
+    }
+  },
+
+  openDesignViewModal(designId, { root, save } = {}) {
+    const d = (this.data.designs || []).find((x) => x.id === designId);
+    if (!d) return;
+    const snap = this.readLiveDesignSnapshot(root || this.el, d);
+    const md = this.composeDesignMarkdown(snap);
+    const approved = d.status === "approved";
+    const versOk = this.versionsReady(snap.versions || []);
+    this.markDesignViewed(designId);
+    this.showUiModal(`
+      <div class="modal-card modal-doc">
+        <div class="modal-doc-head">
+          <h3>Design document</h3>
+          ${this.badge(d.status)}
+          <div class="modal-doc-actions">
+            <button type="button" class="ghost active" data-des-doc-mode="preview">Preview</button>
+            <button type="button" class="ghost" data-des-doc-mode="raw">Markdown</button>
+          </div>
+        </div>
+        <div class="modal-doc-body">
+          <div class="md-preview modal-doc-preview" id="des-doc-preview"></div>
+          <textarea class="modal-doc-raw" id="des-doc-raw" readonly hidden></textarea>
+        </div>
+        <div class="modal-doc-foot">
+          <span class="muted" id="des-doc-hint">
+            ${
+              approved
+                ? "Approved — publish phases to Roadmap with Bootstrap, or Close and use the toolbar."
+                : versOk
+                  ? "Review the document, then Approve to lock editing and unlock Bootstrap roadmap."
+                  : "Complete Gate / Sub-architecture / Class design on every Version before Approve."
+            }
+          </span>
+          <button type="button" class="ghost" data-close-ui>Close</button>
+          ${
+            !approved
+              ? `<button type="button" id="des-doc-approve">Approve</button>`
+              : `<button type="button" id="des-doc-bootstrap">Bootstrap roadmap</button>`
+          }
+        </div>
+        <div class="err" id="des-doc-err"></div>
+      </div>`);
+    const modal = this.uiModal();
+    const preview = modal.querySelector("#des-doc-preview");
+    const raw = modal.querySelector("#des-doc-raw");
+    if (raw) raw.value = md;
+    const showMode = async (mode) => {
+      const isPrev = mode === "preview";
+      if (preview) preview.hidden = !isPrev;
+      if (raw) raw.hidden = isPrev;
+      modal.querySelectorAll("[data-des-doc-mode]").forEach((btn) => {
+        btn.classList.toggle("active", btn.getAttribute("data-des-doc-mode") === mode);
+      });
+      if (isPrev && preview && window.MdPreview) {
+        preview.innerHTML = window.MdPreview.render(md);
+        await window.MdPreview.mountPreview(preview);
+      }
+    };
+    modal.querySelectorAll("[data-des-doc-mode]").forEach((btn) => {
+      btn.addEventListener("click", () => showMode(btn.getAttribute("data-des-doc-mode")));
+    });
+    showMode("preview");
+
+    modal.querySelector("#des-doc-approve")?.addEventListener("click", async () => {
+      const errEl = modal.querySelector("#des-doc-err");
+      await this.runDesignApprove(designId, { root, save, errEl });
+    });
+    modal.querySelector("#des-doc-bootstrap")?.addEventListener("click", async () => {
+      const errEl = modal.querySelector("#des-doc-err");
+      if (errEl) errEl.textContent = "";
+      try {
+        await api.v1.deliveryBootstrapDesign(designId);
+        this.closeUiModal();
+        await this.reload();
+        const fresh = (this.data.designs || []).find((x) => x.id === designId) || d;
+        this.go("roadmap", `ms_${fresh.eng_req_id}_${fresh.major}_${fresh.minor}`);
+      } catch (e) {
+        if (errEl) errEl.textContent = e.message || String(e);
+        else this.showNotice(e.message || String(e), "Bootstrap failed");
+      }
+    });
+  },
+
+  renderVersionFieldPane(ver, def, approved) {
+    const cite = `V${ver.sort_order}.${def.citeSuffix}`;
+    const mdKey = `ver:${ver.id}:${def.field}`;
+    const val =
+      def.field === "gate"
+        ? ver.gate || ""
+        : def.field === "sub_architecture"
+          ? ver.sub_architecture || ""
+          : ver.class_design || "";
+    if (approved) {
+      return `
+      <div class="md-pane del-cite-field del-pane-ro" data-md-key="${this.esc(mdKey)}"
+        data-cite-key="${this.esc(cite)}" data-cite-drag-ok="0" draggable="false" data-md-ro="1">
+        <div class="md-pane-head">
+          <label>${this.esc(def.label)}</label>
+          <span class="muted md-ro-tag">read-only</span>
+        </div>
+        <div class="md-preview md-preview-ro" data-md-ro-body>${this.esc(val)}</div>
+        <textarea data-ver-field="${this.esc(def.field)}" hidden readonly>${this.esc(val)}</textarea>
+      </div>`;
+    }
+    const insert = def.template
+      ? `<button type="button" class="ghost md-insert-tpl" data-md-insert="${this.esc(def.template)}" title="Insert mermaid stub">Template</button>`
+      : "";
+    return `
+      <div class="md-pane del-cite-field" data-md-key="${this.esc(mdKey)}"
+        data-cite-key="${this.esc(cite)}" data-cite-drag-ok="1" draggable="false">
+        <div class="md-pane-head">
+          <label>${this.esc(def.label)}</label>
+          ${insert}
+          <div class="md-mode-toggle">
+            <button type="button" class="ghost active" data-md-mode="edit">Edit</button>
+            <button type="button" class="ghost" data-md-mode="preview">Preview</button>
+          </div>
+        </div>
+        <div class="md-edit">
+          <textarea data-ver-field="${this.esc(def.field)}" rows="${def.rows}"
+            placeholder="${this.esc(def.hint)}">${this.esc(val)}</textarea>
+        </div>
+        <div class="md-preview" hidden></div>
+      </div>`;
+  },
+
+  renderVersionCard(ver, approved) {
+    const fields = this.versionFieldDefs()
+      .map((def) => this.renderVersionFieldPane(ver, def, approved))
+      .join("");
+    const ready = (ver.status || "") === "ready" || this.versionsReady([ver]);
+    if (approved) {
+      return `
+      <div class="card del-ver del-ver-ro" data-ver-id="${this.esc(ver.id)}" id="des-ver-${this.esc(ver.id)}">
+        <div class="toolbar del-ver-head">
+          <span class="muted del-ver-ord">v${ver.sort_order}</span>
+          <strong class="del-ver-title-ro">${this.esc(ver.title || `Version ${ver.sort_order}`)}</strong>
+          <span class="badge ok">Locked</span>
+        </div>
+        ${fields}
+      </div>`;
+    }
+    return `
+      <div class="card del-ver" data-ver-id="${this.esc(ver.id)}" id="des-ver-${this.esc(ver.id)}">
+        <div class="toolbar del-ver-head">
+          <span class="muted del-ver-ord">v${ver.sort_order}</span>
+          <input class="del-ver-title-input" data-ver-title value="${this.esc(ver.title || "")}"
+            placeholder="Version title" />
+          ${ready ? `<span class="badge ok">Ready</span>` : `<span class="badge">Draft</span>`}
+          <button type="button" class="ghost" data-ver-delete="${this.esc(ver.id)}" title="Remove Version">×</button>
+        </div>
+        ${fields}
+      </div>`;
+  },
+
+  /** Mount Markdown preview into approved read-only panes. */
+  mountDesignReadOnlyPreviews(root) {
+    if (!root || !window.MdPreview) return;
+    root.querySelectorAll("[data-md-ro='1']").forEach(async (pane) => {
+      const body = pane.querySelector("[data-md-ro-body]");
+      const ta = pane.querySelector("textarea");
+      if (!body) return;
+      const md = ta ? ta.value : body.textContent || "";
+      body.innerHTML = window.MdPreview.render(md);
+      await window.MdPreview.mountPreview(body);
+    });
+  },
+
   viewDesDetail(id) {
     const d = this.data.designs.find((x) => x.id === id);
     if (!d) return `<p class="err">Design not found.</p>`;
     const eng = this.findEng(d.eng_req_id);
     const w = eng ? this.findWorker(eng.worker_id) : null;
     const approved = d.status === "approved";
-    const ro = approved ? "readonly" : "";
-    const hasChoice = !!(d.chosen_option_id || "").trim();
+    const vers = d.versions || [];
     const msKey = `${d.major}.${d.minor}`;
     const reqHref = `#/delivery/requirements/${this.esc(d.eng_req_id)}/${d.major}/${d.minor}`;
-    const opts = (d.options || [])
-      .map((o) => {
-        const chosen = o.id === d.chosen_option_id;
-        return `
-        <div class="card del-opt${chosen ? " del-opt-chosen" : ""}" data-opt-id="${this.esc(o.id)}"
-          data-cite-key="${this.esc(o.title)}">
-          <div class="toolbar del-opt-head">
-            <input class="del-opt-title-input" data-opt-title value="${this.esc(o.title)}" ${ro}
-              placeholder="Option title" />
-            ${
-              chosen
-                ? `<span class="badge ok">Chosen</span>`
-                : approved
-                  ? ""
-                  : `<button type="button" class="ghost" data-choose-opt="${this.esc(o.id)}">Choose</button>`
-            }
-          </div>
-          <label>Summary</label>
-          <textarea data-opt-summary rows="2" ${ro} placeholder="What this option proposes…">${this.esc(o.summary || "")}</textarea>
-          <label>Tradeoffs</label>
-          <textarea data-opt-tradeoffs rows="2" ${ro} placeholder="Pros / cons…">${this.esc(o.tradeoffs || "")}</textarea>
-          <label>Risks</label>
-          <textarea data-opt-risks rows="2" ${ro} placeholder="What could go wrong…">${this.esc(o.risks || "")}</textarea>
-          <label>Out of scope</label>
-          <textarea data-opt-oos rows="2" ${ro} placeholder="Explicitly not in this option…">${this.esc(o.out_of_scope || "")}</textarea>
-        </div>`;
-      })
-      .join("");
+    const verCards = vers.map((v) => this.renderVersionCard(v, approved)).join("");
+    const adrSections = this.adrSectionDefs();
+    const adrHtml = adrSections.map((s) => this.renderAdrPane(s, d, approved)).join("");
+    const fieldDefs = this.versionFieldDefs();
     const citeNav = [
-      { id: "adr", label: "ADR" },
-      ...(d.options || []).map((o, i) => ({
-        id: "opt:" + o.id,
-        label: o.title || `Option ${i + 1}`,
-      })),
+      {
+        id: "adr",
+        label: "ADR",
+        children: adrSections.map((s) => ({
+          id: "adr:" + s.key,
+          label: s.label,
+        })),
+      },
+      {
+        id: "versions",
+        label: "Versions",
+        children: vers.flatMap((v) => {
+          const base = v.title || `Version ${v.sort_order}`;
+          return fieldDefs.map((f) => ({
+            id: `verfield:${v.id}:${f.field}`,
+            label: `${base} · ${f.label}`,
+          }));
+        }),
+      },
     ];
     const chat = this.polishChat(`des:${d.id}`, {
       id: "ai-chat-des",
@@ -3157,77 +3900,103 @@ window.Features.delivery = {
       rows: 3,
       allowDrop: !approved,
       citeNav,
-      emptyHint: "Cite ADR / an Option, then send a polish request.",
+      emptyHint: "Open ADR ▾ or Versions ▾, cite a field, then send.",
       onCiteNav: (navId, c) => {
-        if (navId === "adr") c.addCite("ADR");
-        else if (navId.startsWith("opt:")) {
-          const oid = navId.slice(4);
-          const opt = (d.options || []).find((x) => x.id === oid);
-          if (opt) c.addCite(opt.title || oid);
+        if (navId.startsWith("adr:")) {
+          const key = navId.slice(4);
+          const sec = adrSections.find((x) => x.key === key);
+          if (sec) c.addCite(sec.cite);
+        } else if (navId.startsWith("verfield:")) {
+          const rest = navId.slice("verfield:".length);
+          const i = rest.indexOf(":");
+          if (i < 0) return;
+          const vid = rest.slice(0, i);
+          const field = rest.slice(i + 1);
+          const ver = vers.find((x) => x.id === vid);
+          const def = fieldDefs.find((x) => x.field === field);
+          if (ver && def) c.addCite(`V${ver.sort_order}.${def.citeSuffix}`);
+        } else if (navId.startsWith("ver:")) {
+          const vid = navId.slice(4);
+          const ver = vers.find((x) => x.id === vid);
+          if (ver) c.addCite(ver.title || `Version ${ver.sort_order}`);
         }
       },
       onScrollCite: (key) => {
         const root = this.el;
-        if (key === "ADR") {
-          const field = root?.querySelector("#des-adr");
-          if (field) {
-            field.scrollIntoView({ behavior: "smooth", block: "center" });
-            field.focus?.();
-            window.AiChat.flash(field);
-          }
-          return;
-        }
-        const card = [...(root?.querySelectorAll("[data-opt-id]") || [])].find(
+        const pane = [...(root?.querySelectorAll("[data-cite-key]") || [])].find(
           (el) => el.getAttribute("data-cite-key") === key,
         );
+        if (pane) {
+          pane.scrollIntoView({ behavior: "smooth", block: "center" });
+          const field = pane.querySelector("textarea");
+          field?.focus?.();
+          window.AiChat.flash(pane);
+          return;
+        }
+        const card = [...(root?.querySelectorAll("[data-ver-id]") || [])].find((el) => {
+          const vid = el.getAttribute("data-ver-id");
+          const ver = vers.find((x) => x.id === vid);
+          return ver && (ver.title === key || `Version ${ver.sort_order}` === key);
+        });
         if (card) {
           card.scrollIntoView({ behavior: "smooth", block: "center" });
           window.AiChat.flash(card);
         }
       },
       onSend: async ({ composed }, c) => {
-        if (approved) {
-          c.appendMessage("ai", "(mock) Design is approved — ADR note only.");
-        } else {
-          c.appendMessage(
-            "ai",
-            "(mock) Noted. Suggested polish applied to ADR (and first cited option summary when present).",
-          );
-        }
+        if (approved) return;
+        c.appendMessage(
+          "ai",
+          "(mock) Noted. Suggested polish applied to ADR.Decision (and cited Version Gate when present).",
+        );
         const line = "· (AI mock) " + composed.slice(0, 160);
-        const adr = (d.adr || "").trim() ? d.adr.trim() + "\n" + line : line;
-        const patch = { adr };
-        if (!approved) {
-          const citeOpt = (d.options || []).find((o) =>
-            composed.includes("@" + (o.title || "")),
-          );
-          if (citeOpt) {
-            patch.options = [
-              {
-                ...citeOpt,
-                summary:
-                  (citeOpt.summary || "").trim() +
-                  (citeOpt.summary ? "\n" : "") +
-                  line,
-              },
-            ];
-          }
+        const decision = (this.adrFieldValue(d, "adr_decision") || "").trim();
+        await api.v1.deliveryPatchDesign(d.id, {
+          adr_decision: decision ? decision + "\n" + line : line,
+        });
+        const citeVer = vers.find(
+          (v) =>
+            composed.includes("@" + (v.title || "")) ||
+            composed.includes(`@V${v.sort_order}.Gate`),
+        );
+        if (citeVer) {
+          await api.v1.deliveryPatchDesignVersion(d.id, citeVer.id, {
+            gate: ((citeVer.gate || "").trim() ? citeVer.gate + "\n" : "") + line,
+          });
         }
-        await api.v1.deliveryPatchDesign(d.id, patch);
         await this.reload();
         this.render();
       },
     });
     const actions = [];
     if (!approved) {
-      actions.push(`<button type="button" class="ghost" id="des-save">Save</button>`);
       actions.push(
-        `<button type="button" id="des-approve"${hasChoice ? "" : " disabled title=\"Choose an option first\""}>Approve</button>`,
+        `<button type="button" class="ghost" id="des-save" title="Save temporary draft">Save</button>`,
+      );
+      actions.push(
+        `<button type="button" class="ghost" id="des-view" title="Preview full Design Markdown">View</button>`,
+      );
+      actions.push(
+        `<button type="button" id="des-approve" title="Save, validate Versions, then Approve">Approve</button>`,
+      );
+    } else {
+      // Approved: editing locked — View document + Bootstrap to publish roadmap.
+      actions.push(
+        `<button type="button" class="ghost" id="des-view" title="Open approved Design Markdown">View</button>`,
+      );
+      actions.push(
+        `<button type="button" id="des-bootstrap" title="Seed roadmap phases from Versions">Bootstrap roadmap</button>`,
       );
     }
-    actions.push(
-      `<button type="button" class="ghost" id="des-bootstrap"${approved ? "" : " disabled title=\"Approve design first\""}>Bootstrap roadmap</button>`,
-    );
+    const addVerBtn = approved
+      ? ""
+      : `<button type="button" class="ghost" id="des-ver-add">+ Version</button>`;
+    const flowHint = approved
+      ? "Approved — editing locked. Bootstrap roadmap to publish Versions as phases."
+      : "Flow: Save (draft) → View (full Markdown) → Approve → Bootstrap roadmap.";
+    const chatHtml = approved
+      ? ""
+      : chat.render();
     return `
       <p class="del-crumbs">
         <a href="#/delivery/designs">Designs</a>
@@ -3236,175 +4005,264 @@ window.Features.delivery = {
         <span class="muted">/</span>
         <a href="${reqHref}"><code>${this.esc(msKey)}</code></a>
       </p>
-      <div class="del-split del-split-chatwide">
+      <div class="del-split${approved ? "" : " del-split-chatwide"}">
         <div class="del-main">
-          <div class="card">
+          <div class="card${approved ? " del-des-locked" : ""}">
             <div class="toolbar">
               <div style="flex:1;min-width:0">
                 <div class="muted">Bound req <code>${this.esc(d.version || msKey)}</code>
-                  · ${approved ? "read-only options" : "draft — choose, polish, Approve"}</div>
+                  · ${approved ? "approved · view only" : "draft workspace"}</div>
                 <h3 style="margin:0.25rem 0 0">${this.esc(d.title)}</h3>
+                <p class="del-flow-hint">${this.esc(flowHint)}</p>
               </div>
               ${this.badge(d.status)}
               ${actions.join("")}
             </div>
             <div class="err" id="des-err"></div>
-            <div class="del-cite-field${approved ? "" : " cite-drag"}" data-cite-key="ADR"
-              ${approved ? "" : 'draggable="true"'}>
-              <label>ADR / decision notes</label>
-              <textarea id="des-adr" rows="4" ${ro}
-                placeholder="Why this option wins, constraints, follow-ups…">${this.esc(d.adr || "")}</textarea>
+            <div class="del-adr-block">
+              <div class="del-adr-head">
+                <h4>ADR</h4>
+                <span class="muted">${approved ? "Locked after Approve" : "Context · Decision · Consequences · Spec · Architecture · Sequence · Sample"}</span>
+              </div>
+              ${adrHtml}
             </div>
           </div>
-          <div class="toolbar del-des-opt-head">
-            <h4 style="margin:0;flex:1">Options</h4>
-            <span class="muted">${(d.options || []).length} card${(d.options || []).length === 1 ? "" : "s"}</span>
+          <div class="toolbar del-des-ver-head">
+            <h4 style="margin:0;flex:1">Versions</h4>
+            <span class="muted">${vers.length} card${vers.length === 1 ? "" : "s"}${approved ? " · locked" : ""}</span>
+            ${addVerBtn}
           </div>
-          <div class="del-des-opt-list">${opts || `<p class="muted">No options.</p>`}</div>
+          <div class="del-des-ver-list">${verCards || `<p class="muted">No Versions yet — add one to define AI execution boundaries.</p>`}</div>
         </div>
-        ${chat.render()}
+        ${chatHtml}
       </div>`;
   },
 
+  /** Parse bootstrap milestone id `ms_{engId}_{major}_{minor}` when present. */
+  parseRoadmapMsBind(msId) {
+    const id = String(msId || "");
+    if (!id.startsWith("ms_")) return null;
+    const rest = id.slice(3);
+    const m = rest.match(/^(.*)_(\d+)_(\d+)$/);
+    if (!m) return null;
+    return { engId: m[1], major: Number(m[2]), minor: Number(m[3]) };
+  },
+
+  findDesignForMilestone(ms) {
+    if (!ms) return null;
+    const bind = this.parseRoadmapMsBind(ms.id);
+    const designs = this.data.designs || [];
+    if (bind) {
+      return (
+        designs.find(
+          (d) =>
+            d.eng_req_id === bind.engId &&
+            d.major === bind.major &&
+            d.minor === bind.minor,
+        ) || null
+      );
+    }
+    return designs.find((d) => d.title === ms.title) || null;
+  },
+
   viewRoadmap(selectedId) {
+    const NODE_W = 216;
+    const NODE_H = 78;
     const g = this.data.roadmap || { milestones: [], edges: [] };
     const milestones = g.milestones || [];
     const edgesList = g.edges || [];
     const selected =
       milestones.find((m) => m.id === selectedId) || milestones[0] || null;
+
+    let maxX = 640;
+    let maxY = 280;
+    for (const m of milestones) {
+      maxX = Math.max(maxX, (m.x || 0) + NODE_W + 48);
+      maxY = Math.max(maxY, (m.y || 0) + NODE_H + 48);
+    }
+    const canvasW = Math.max(640, Math.ceil(maxX));
+    const canvasH = Math.max(300, Math.ceil(maxY));
+
     const nodes = milestones
       .map((m) => {
         const sel = selected && m.id === selected.id ? " selected" : "";
-        return `<div class="del-node${sel}" data-ms="${this.esc(m.id)}"
-          style="left:${m.x}px;top:${m.y}px">
-          <div class="del-node-title">${this.esc(m.title)}</div>
-          ${this.badge(m.status)}
+        const nPh = (m.phases || []).length;
+        const st = (m.status || "planned").toLowerCase();
+        return `<div class="del-node del-node-${this.esc(st)}${sel}" role="button" tabindex="0"
+          data-ms="${this.esc(m.id)}" style="left:${m.x || 0}px;top:${m.y || 0}px;width:${NODE_W}px"
+          title="Drag to reposition · click to inspect">
+          <span class="del-node-accent" aria-hidden="true"></span>
+          <span class="del-node-grip" aria-hidden="true"></span>
+          <span class="del-node-title">${this.esc(m.title)}</span>
+          <span class="del-node-meta">
+            ${this.badge(m.status)}
+            <span class="muted">${nPh} phase${nPh === 1 ? "" : "s"}</span>
+          </span>
         </div>`;
       })
       .join("");
+
     const edges = edgesList
       .map((e) => {
         const a = milestones.find((m) => m.id === e.from);
         const b = milestones.find((m) => m.id === e.to);
         if (!a || !b) return "";
-        return `<line x1="${a.x + 110}" y1="${a.y + 36}" x2="${b.x}" y2="${b.y + 36}" class="del-edge" marker-end="url(#del-arrow)" />`;
+        const x1 = (a.x || 0) + NODE_W;
+        const y1 = (a.y || 0) + NODE_H / 2;
+        const x2 = b.x || 0;
+        const y2 = (b.y || 0) + NODE_H / 2;
+        const mx = (x1 + x2) / 2;
+        return `<path d="M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}"
+          class="del-edge" fill="none" marker-end="url(#del-arrow)" />`;
       })
       .join("");
-    const phases = selected
-      ? (selected.phases || [])
+
+    const phases = selected?.phases || [];
+    const phaseList = phases.length
+      ? phases
           .map(
-            (p, i) =>
-              `<li><span class="muted">${i + 1}.</span> ${this.esc(p.title)} ${this.badge(p.status)}</li>`,
+            (p, i) => `
+        <li class="del-phase-item">
+          <span class="del-phase-ord">${i + 1}</span>
+          <span class="del-phase-title">${this.esc(p.title)}</span>
+          ${this.badge(p.status)}
+        </li>`,
           )
           .join("")
-      : "";
+      : `<li class="del-phase-empty muted">No phases yet — Approve a Design and Bootstrap to seed from Versions.</li>`;
+
+    const boundDes = this.findDesignForMilestone(selected);
+    const bind = selected ? this.parseRoadmapMsBind(selected.id) : null;
+    const eng = bind ? this.findEng(bind.engId) : null;
+    const reqHref =
+      bind &&
+      `#/delivery/requirements/${this.esc(bind.engId)}/${bind.major}/${bind.minor}`;
+    const desHref = boundDes ? `#/delivery/designs/${this.esc(boundDes.id)}` : "";
+
     const readyRows = [];
     const seen = new Set();
-    for (const eng of this.data.eng_reqs || []) {
-      for (const v of eng.versions || []) {
+    for (const e of this.data.eng_reqs || []) {
+      for (const v of e.versions || []) {
         if (v.status !== "awaiting_roadmap") continue;
-        const key = `${eng.id}:${v.major}.${v.minor}`;
+        const key = `${e.id}:${v.major}.${v.minor}`;
         if (seen.has(key)) continue;
         seen.add(key);
+        const msMatch = milestones.find(
+          (m) => m.id === `ms_${e.id}_${v.major}_${v.minor}`,
+        );
         readyRows.push({
-          engId: eng.id,
+          engId: e.id,
           major: v.major,
           minor: v.minor,
-          title: `${eng.title} · ${v.major}.${v.minor}`,
+          title: `${e.title} · ${v.major}.${v.minor}`,
+          msId: msMatch?.id || "",
         });
       }
     }
-    const readyBlock = readyRows.length
-      ? `<h4>Ready for development</h4>
-         <p class="muted">Milestones in <em>Awaiting roadmap</em> — mark ready to unlock the app develop stage.</p>
-         ${readyRows
-           .map(
-             (r) => `
-           <div class="toolbar" style="margin-bottom:0.4rem">
-             <span style="flex:1">${this.esc(r.title)}</span>
-             <button type="button" data-ms-ready data-eng="${this.esc(r.engId)}"
-               data-major="${r.major}" data-minor="${r.minor}">Mark ready</button>
-           </div>`,
-           )
-           .join("")}`
-      : `<p class="muted">No eng-req milestones in Awaiting roadmap.</p>`;
-    return `
-      <div class="del-roadmap">
-        <div class="del-canvas card">
-          <svg class="del-edges" width="900" height="320">
+
+    const readyBlock = `
+      <div class="del-ready-block">
+        <div class="del-inspector-sec-head">
+          <h4>Awaiting roadmap</h4>
+          <span class="muted">${readyRows.length}</span>
+        </div>
+        ${
+          readyRows.length
+            ? `<p class="muted del-ready-hint">Mark ready to unlock app development.</p>
+               <ul class="del-ready-list">
+               ${readyRows
+                 .map(
+                   (r) => `
+                 <li class="del-ready-row">
+                   <div class="del-ready-main">
+                     <span class="del-ready-title">${this.esc(r.title)}</span>
+                     ${
+                       r.msId
+                         ? `<a class="muted" href="#/delivery/roadmap/${this.esc(r.msId)}">Show on graph</a>`
+                         : `<span class="muted">No canvas node yet</span>`
+                     }
+                   </div>
+                   <button type="button" data-ms-ready data-eng="${this.esc(r.engId)}"
+                     data-major="${r.major}" data-minor="${r.minor}">Mark ready</button>
+                 </li>`,
+                 )
+                 .join("")}
+               </ul>`
+            : `<p class="muted del-ready-hint">No milestones waiting — approve a Design (or none pending).</p>`
+        }
+      </div>`;
+
+    const canvasBody = milestones.length
+      ? `<svg class="del-edges" width="${canvasW}" height="${canvasH}" aria-hidden="true">
             <defs>
-              <marker id="del-arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
-                <path d="M0,0 L6,3 L0,6 Z" fill="var(--muted)" />
+              <marker id="del-arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+                <path d="M0,0 L9,3 L0,6 Z" fill="var(--accent)" opacity="0.75" />
               </marker>
             </defs>
             ${edges}
           </svg>
-          <div class="del-nodes">${nodes}</div>
-        </div>
-        <aside class="card del-inspector">
-          <h3>Inspector</h3>
-          ${
-            selected
-              ? `<p><strong>${this.esc(selected.title)}</strong> ${this.badge(selected.status)}</p>
-                 <p class="muted">${this.esc(selected.acceptance)}</p>
-                 <h4>Phase chain <span class="muted">(= patch under a minor)</span></h4>
-                 <ol class="del-phases">${phases}</ol>
-                 ${readyBlock}`
-              : `<p class="muted">Select a milestone node.</p>${readyBlock}`
-          }
-        </aside>
-      </div>`;
-  },
+          <div class="del-nodes" style="width:${canvasW}px;height:${canvasH}px">${nodes}</div>`
+      : `<div class="del-canvas-empty">
+           <strong>No milestones on the canvas</strong>
+           <p class="muted">Approve a Design, then <em>Bootstrap roadmap</em> to seed phases from Versions — or reset demo data for sample nodes.</p>
+           <a class="ghost" href="#/delivery/designs">Open Designs</a>
+         </div>`;
 
-  viewGates() {
-    const pending = [];
-    for (const g of this.data.gates || []) {
-      pending.push({
-        title: g.title,
-        href: g.href || "#/delivery",
-        meta: g.kind || "execution constraint",
-      });
-    }
-    for (const eng of this.data.eng_reqs || []) {
-      for (const v of eng.versions || []) {
-        if (v.status === "awaiting_design") {
-          const href = `#/delivery/requirements/${eng.id}/${v.major}/${v.minor}/${v.patch}`;
-          if (pending.some((p) => p.href === href)) continue;
-          pending.push({
-            title: `${eng.title} · ${v.major}.${v.minor} ${v.title}`,
-            href,
-            meta: "awaiting design",
-          });
-        }
-      }
-    }
-    for (const d of this.data.designs || []) {
-      if (d.status !== "approved") {
-        const href = `#/delivery/designs/${d.id}`;
-        if (pending.some((p) => p.href === href)) continue;
-        pending.push({ title: d.title, href, meta: "design approval" });
-      }
-    }
-    const items = pending
-      .map(
-        (g) => `
-      <div class="card">
-        <div class="toolbar">
-          <div style="flex:1">
-            <div>${this.esc(g.title)}</div>
-            <div class="muted">${this.esc(g.meta)}</div>
-          </div>
-          ${this.badge("pending")}
-          <a href="#" data-gate-open data-href="${this.esc(g.href)}">Open</a>
+    const inspector = selected
+      ? `
+        <div class="del-inspector-head">
+          <div class="del-inspector-kicker muted">Milestone</div>
+          <h3 class="del-inspector-title">${this.esc(selected.title)}</h3>
+          <div class="del-inspector-badges">${this.badge(selected.status)}</div>
         </div>
-      </div>`,
-      )
-      .join("");
+        ${
+          selected.acceptance
+            ? `<p class="del-inspector-accept">${this.esc(selected.acceptance)}</p>`
+            : `<p class="muted del-inspector-accept">No acceptance text on this node.</p>`
+        }
+        <div class="del-inspector-links">
+          ${
+            desHref
+              ? `<a href="${desHref}">Open design</a>`
+              : `<span class="muted">No bound design</span>`
+          }
+          ${
+            reqHref
+              ? `<a href="${reqHref}">Req ${bind.major}.${bind.minor}</a>`
+              : eng
+                ? ""
+                : ""
+          }
+        </div>
+        <div class="del-inspector-sec">
+          <div class="del-inspector-sec-head">
+            <h4>Phase chain</h4>
+            <span class="muted">${phases.length} · = patch</span>
+          </div>
+          <ol class="del-phases">${phaseList}</ol>
+        </div>
+        ${readyBlock}`
+      : `
+        <div class="del-inspector-head">
+          <h3 class="del-inspector-title">Inspector</h3>
+          <p class="muted">Select a milestone on the graph.</p>
+        </div>
+        ${readyBlock}`;
+
     return `
-      <p class="muted">
-        Execution constraints and pending human checks for the delivery pipeline.
-        Full gate automation lands with execute/test (0.37+).
-      </p>
-      ${items || `<div class="card muted">No open constraints.</div>`}`;
+      <div class="del-roadmap-wrap">
+        <div class="toolbar del-roadmap-bar">
+          <span class="muted">${milestones.length} milestone${milestones.length === 1 ? "" : "s"}</span>
+          <span class="muted">·</span>
+          <span class="muted">${edgesList.length} edge${edgesList.length === 1 ? "" : "s"}</span>
+          <span class="muted" style="flex:1;text-align:right;font-size:0.85rem">
+            Drag cards to arrange (position saved) · click to inspect · Bootstrap from Designs seeds phases
+          </span>
+        </div>
+        <div class="del-roadmap">
+          <div class="del-canvas card">${canvasBody}</div>
+          <aside class="card del-inspector">${inspector}</aside>
+        </div>
+      </div>`;
   },
 };

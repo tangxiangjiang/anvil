@@ -11,7 +11,7 @@
 Turn Anvil from “agent runtime + fleet jobs” into a **human + AI delivery system**:
 
 ```
-Requirement → Design → Roadmap (+ Gates) → Develop (app) → Test → Complete
+Requirement → Design → Roadmap → Develop (app) → Test → Complete
                                          └─ test fail → Buglist → Roadmap (bugfix) ─┘
 ```
 
@@ -66,7 +66,7 @@ Full execute / test runner / buglist entity automation lands in **0.37+**. Early
 ┌─────────────┐            ┌─────────────┐            ┌──────────────────────────┐
 │ Requirement │ ──────────►│   Design    │ ──────────►│ Roadmap                  │
 │  (spec)     │            │ (options +  │            │  · Graph (milestones)    │
-│             │            │  ADR pick)  │            │  · Gates (exec constraints)│
+│             │            │  + Versions)│            │  · phases from Versions   │
 └─────────────┘            └─────────────┘            └────────────┬─────────────┘
                                                                    │ ready
                                                                    ▼
@@ -77,7 +77,7 @@ Full execute / test runner / buglist entity automation lands in **0.37+**. Early
                                                           pass / fail (buglist)
 ```
 
-**Gates** constrain execution (pending human checks, ready-for-main, etc.). They are a **Roadmap sub-surface**, not a peer Delivery tab.
+**Gates** constrain execution (entry/exit, DoD, human check). They are authored on each **Design Version**, then carried into roadmap phases — not a separate Roadmap tab.
 
 Agents do not skip gates.
 
@@ -138,6 +138,7 @@ Cite chips stay above the textarea (not inlined). View mode may drag `data-cite-
 Clusters
 └── Scheduler
       └── Workspace          # Token; Dev Nodes join here
+            ├── Workspace View (Graph)  # Projects + Workers topology
             └── Project      # logical eng unit; Delivery binds here
                   └── Worker # checkout (path + branch) on a Dev Node
 ```
@@ -146,13 +147,13 @@ Clusters
 
 ```
 Delivery
-├── Requirements          # per Project (today still worker-bound until migrate)
-│     └── generation → milestone → versions + Polish chat
-├── Designs               # list → detail (options + ADR)
-└── Roadmap
-      ├── Graph           # milestone topology + phase chains
-      └── Gates           # execution constraints / pending human checks
+├── Projects (home)       # picker by project name · Workspace groups
+├── Requirements          # per Project → generation → milestone → versions
+├── Designs               # list → detail (ADR + Versions: Gate / Sub-architecture / Class design)
+└── Roadmap               # milestone topology + phase chains (gates live on Design Versions)
 ```
+
+Primary entry: **Delivery → pick Project by name**. Clusters “Open in Delivery” is optional deep link.
 
 Cross-links: Project ↔ Req versions ↔ Design ↔ Milestone/Phase; Worker is the execute checkout. Export on Design / Roadmap toolbars.
 
@@ -196,16 +197,19 @@ Empty state: “Bind Worker & set reqs folder” before any version exists.
 | Surface | Purpose |
 |---------|---------|
 | **Design list** | Filter by req, status |
-| **Design detail** | Bound `req_id`; **Options** (A/B/…) as cards; **Chosen option** + ADR notes; links to roadmap |
-| **Option editor** | Per-option: summary, tradeoffs, risks, out-of-scope — structured sections |
-| **Design chat dock** | Same pattern as req: patch options / ADR; AI may propose new option card |
-| **Approve gate** | Requires req already approved; sets design `approved` + chosen option id |
+| **Design detail** | Bound `req_id` + `major.minor`; **structured ADR** + ordered **Versions** (execution units); links to roadmap |
+| **ADR** | Context · Decision · Consequences · Spec · Architecture (mermaid) · Sequence (mermaid) · Sample & capacity — Markdown Edit/Preview |
+| **Version cards** | Per Version: title + **Gate** + **Sub-architecture** + **Class design** (Markdown Edit/Preview; mermaid OK on Sub-architecture) |
+| **Design chat dock** | Cite ADR sections or Version fields; mock polish appends to Decision / Gate |
+| **View** | Compose full Design Markdown (ADR + Versions) for review (Preview / raw) |
+| **Approve gate** | After View; ≥1 Version with Gate / Sub-architecture / Class design; sets `approved` |
+| **Bootstrap** | **Approved only** → seeds eng-req patches + roadmap phases from Versions (idempotent) |
 
-Toolbar: **Bootstrap roadmap** (enabled when design approved) → opens Roadmap with AI-generated initial graph (human applies).
+Toolbar flow: **Save** (draft) → **View** → **Approve** → **Bootstrap roadmap**.
 
-### 4.3 Roadmap UI (graph + gates)
+### 4.3 Roadmap UI
 
-Primary planning canvas — see §5 interactions below (graph chat, per-node chat, export). Sub-nav: **Graph** | **Gates**.
+Primary planning canvas — see §5 interactions below (graph chat, per-node chat, export).
 
 | Chrome | Behavior |
 |--------|----------|
@@ -215,21 +219,12 @@ Primary planning canvas — see §5 interactions below (graph chat, per-node cha
 | **Graph chat** | Floating/docked: whole-graph polish → `GraphPatch` preview → Apply / Discard |
 | **Node chat** | From inspector: context = node + neighbors + design/req slices → local patch |
 | **Export** | Preview markdown tabs (`m_*.md`, `p_*.md`) → write to configured export root |
-| **Gates** | Execution-constraint inbox: pending checks that block or gate running work |
+
+**Gates** for execute are authored on each **Design Version** (`Gate` field: entry/exit, DoD, human check) — not a Roadmap sub-tab.
 
 Human always confirms Apply on AI patches (no silent overwrite).
 
-### 4.4 Gates (under Roadmap)
-
-| Surface | Purpose |
-|---------|---------|
-| **Inbox** | Execution constraints waiting on human (e.g. ready-for-main, blocked checks) |
-| **Item** | Diff/summary + Approve / Reject + comment |
-| **Deep link** | Opens Req / Design / Roadmap node |
-
-Gates are **not** a top-level Delivery peer; they live at `#/delivery/roadmap/gates`.
-
-### 4.5 What App UI will consume later (not built here)
+### 4.4 What App UI will consume later (not built here)
 
 | App surface | Needs from Delivery UI IDs |
 |-------------|----------------------------|
@@ -239,7 +234,7 @@ Gates are **not** a top-level Delivery peer; they live at `#/delivery/roadmap/ga
 
 Defining these deep links now keeps web field names stable when schema lands.
 
-### 4.6 UI → data abstraction order
+### 4.5 UI → data abstraction order
 
 1. Freeze §4 screens + primary actions (this section).  
 2. Derive **entities / statuses / patch ops** from visible controls.  
@@ -421,6 +416,6 @@ Promote into versioned docs under `doc/design/v1.0/` (and matching roadmaps), **
 | Text docs | **Export** from tool layer |
 | App | Develop when `awaiting_development` / `in_development` |
 | Runtime | Reuse scheduler / workers / SSE |
-| Gates IA | Sub-item of **Roadmap**, not Delivery peer |}
+| Gates IA | On **Design Version** (`Gate` field), not a Roadmap tab |}
 
 This document is the rolled-up product vision from planning discussions; implementation should follow Anvil’s normal design-chapter → roadmap-phase → code path once adopted.

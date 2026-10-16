@@ -48,6 +48,9 @@ func TestWorkspaceProjectGraphAndBindings(t *testing.T) {
 		t.Fatalf("deps=%v", b.DependsOn)
 	}
 
+	if err := wsStore.BindWorker("w0", a.ID, "local", "node-1"); err != nil {
+		t.Fatal(err)
+	}
 	if err := wsStore.BindWorker("w1", b.ID, "local", "node-1"); err != nil {
 		t.Fatal(err)
 	}
@@ -63,11 +66,14 @@ func TestWorkspaceProjectGraphAndBindings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(g.Projects) != 2 || len(g.Edges) != 1 || len(g.Workers) != 1 {
+	if len(g.Projects) != 2 || len(g.Edges) != 1 || len(g.Workers) != 2 {
 		t.Fatalf("graph %+v", g)
 	}
 	if g.Edges[0].From != b.ID || g.Edges[0].To != a.ID {
 		t.Fatalf("edge %+v", g.Edges[0])
+	}
+	if len(g.WorkerEdges) != 1 || g.WorkerEdges[0].From != "w1" || g.WorkerEdges[0].To != "w0" {
+		t.Fatalf("worker_edges %+v", g.WorkerEdges)
 	}
 }
 

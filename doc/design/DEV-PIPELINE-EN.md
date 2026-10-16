@@ -296,6 +296,8 @@ Upstream deliverables must be **structured** so the system can extract relations
 - **Dependencies**: Version↔Version, ADR↔ADR ordering
 - **State**: current flow state per node
 
+**Delivery Design UI** authors Version boundaries for AI execute: under each structured ADR, ordered **Design Versions** carry **Gate** + **Sub-architecture** + **Class design**. Approve / Bootstrap roadmap seeds phases 1:1 from those Versions (same IDs later for execute).
+
 ### Why editing is disallowed
 
 - Graph vs data diverge — which is truth?
