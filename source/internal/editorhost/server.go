@@ -777,17 +777,9 @@ func (s *Server) buildOptions(p SessionParams, sess *session) (anvil.Options, *R
 		// goes with it is a prompt prefix; see handlePrompt.
 		opts.DisallowedTools = append(append([]string(nil), opts.DisallowedTools...), planDisallowedTools...)
 	}
-	if sess.mode == ModeBypass {
-		// Bypass skips the asking, not the policy. Installing a callback that
-		// approves without being shown anything is what makes a rule that asks
-		// mean "run it" here, while a rule that denies still denies — the deny is
-		// decided in the registry, before this callback is reached.
-		opts.Permission = func(context.Context, anvil.PermissionRequest) (anvil.PermissionDecision, error) {
-			return anvil.PermissionDecision{Allow: true}, nil
-		}
-	} else {
-		opts.Permission = s.permissionHook(sess, approvalTimeout(p.ApprovalTimeoutMS))
-	}
+	// Which callback a mode installs is decided with which calls it gates; see
+	// permissionHookForMode and groupsForMode.
+	opts.Permission = s.permissionHookForMode(sess.mode, sess, approvalTimeout(p.ApprovalTimeoutMS))
 	return opts, nil
 }
 
@@ -817,10 +809,28 @@ func permissionMode(raw string) (string, *RPCError) {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "":
 		return ModeAsk, nil
-	case ModeAsk, ModeAcceptEdits, ModePlan, ModeBypass:
+	case ModeAsk, ModeAcceptEdits, ModePlan, ModeBypass, ModeDontAsk:
 		return strings.ToLower(strings.TrimSpace(raw)), nil
 	default:
 		return "", errInvalidParams("unknown permission_mode: " + raw)
+	}
+}
+
+// permissionHookForMode is the callback a mode installs, and it sits beside
+// groupsForMode on purpose. A mode answers two questions — what to gate, and who
+// answers when something is gated — and a mode added to one of those lists and
+// forgotten in the other would quietly behave like ModeAsk. The default branch is
+// the ordinary hook rather than a panic because that is also the honest reading of
+// "this mode asks"; TestEveryModeResolvesToAHook is what keeps the two lists
+// agreed.
+func (s *Server) permissionHookForMode(mode string, sess *session, timeout time.Duration) anvil.PermissionFunc {
+	switch mode {
+	case ModeBypass:
+		return s.bypassHook(sess, timeout)
+	case ModeDontAsk:
+		return s.dontAskHook(sess)
+	default:
+		return s.permissionHook(sess, timeout)
 	}
 }
 
@@ -920,6 +930,60 @@ func (s *Server) permissionHook(sess *session, timeout time.Duration) anvil.Perm
 			return anvil.PermissionDecision{Allow: false, Message: msg}, nil
 		}
 	}
+}
+
+// bypassHook answers yes to the mode's gate without showing anybody, and opens the
+// card for a rule that asked for one.
+//
+// The two statements are not the same kind of thing. The mode is about everything
+// a session might do; a rule is a written statement about one tool, and its "ask"
+// effect has no other meaning than to interrupt. A blanket "do not ask me" is
+// therefore no answer to `git push:*` in particular, so the narrower statement
+// wins — which is also how Claude Code resolves it, and this feature is meant to
+// behave like the tool people already know.
+func (s *Server) bypassHook(sess *session, timeout time.Duration) anvil.PermissionFunc {
+	ask := s.permissionHook(sess, timeout)
+	return func(ctx context.Context, req anvil.PermissionRequest) (anvil.PermissionDecision, error) {
+		if req.Rule != nil && req.Rule.Effect == anvil.PermissionEffectAsk {
+			return ask(ctx, req)
+		}
+		return anvil.PermissionDecision{Allow: true}, nil
+	}
+}
+
+// dontAskHook is what ModeDontAsk installs: the session has a channel to ask
+// through, and its answer is always no.
+//
+// A callback that always refuses, rather than no callback at all, because
+// Registry.Execute is explicit about what no callback means: *groups alone open no
+// gate; with no PermissionFunc installed there is nobody to ask, and Execute keeps
+// running every tool.* Absence is not refusal — it is bypass. Anything the
+// workspace's rules allow never reaches this function at all, because a rule
+// decides in the registry, before the callback, so what arrives here is exactly
+// what nobody has pre-approved.
+func (s *Server) dontAskHook(sess *session) anvil.PermissionFunc {
+	return func(_ context.Context, req anvil.PermissionRequest) (anvil.PermissionDecision, error) {
+		// "Always allow for this session" is a pre-approval a person gave, and a
+		// mode is not allowed to overrule an answer somebody already made.
+		if s.approvals.sessionAllowed(sess.id, req.ToolName, approvalScope(req.Preview)) {
+			return anvil.PermissionDecision{Allow: true}, nil
+		}
+		return anvil.PermissionDecision{Allow: false, Message: dontAskMessage(req)}, nil
+	}
+}
+
+// dontAskMessage tells the model what refused the call and what would change it.
+//
+// The model cannot see the mode, so a refusal that only said "denied" would leave
+// it retrying the same call; and when a rule is what wanted a person, the message
+// quotes the rule in the words the SDK uses everywhere else, so a refusal, a card
+// and a rule listing all cite a rule the same way.
+func dontAskMessage(req anvil.PermissionRequest) string {
+	if req.Rule != nil {
+		return req.ToolName + " denied: " + req.Rule.Describe() +
+			" asks for confirmation and this session runs in dont-ask mode"
+	}
+	return req.ToolName + " denied: this session runs in dont-ask mode, and only calls the workspace's rules allow may run"
 }
 
 // approvalScope is what a session-wide approval is keyed on. The client sees it

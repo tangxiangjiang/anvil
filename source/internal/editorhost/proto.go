@@ -328,8 +328,15 @@ const (
 	// The client is expected to say so loudly; the host deliberately does not
 	// soften it. What bypass does *not* skip is the workspace's written policy:
 	// a deny rule is still decided in the registry, where no callback can reach
-	// it, and a rule that asks is simply answered yes.
+	// it, and a rule of effect "ask" still opens the card — a statement about one
+	// tool is narrower than a mode that speaks about everything.
 	ModeBypass = "bypass"
+	// ModeDontAsk installs a callback that refuses every call without showing it:
+	// the mirror of ModeBypass. Anything the workspace's rules allow is decided
+	// before any callback is reached, so what arrives here is exactly what nobody
+	// pre-approved — which is what a run with nobody watching needs, and the one
+	// thing no other mode can say.
+	ModeDontAsk = "dont_ask"
 )
 
 // DefaultPermissionGroups is what ModeAsk and ModeAcceptEdits gate when the

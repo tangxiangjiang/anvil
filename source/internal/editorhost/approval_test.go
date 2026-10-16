@@ -4,6 +4,7 @@
 package editorhost
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -490,6 +491,304 @@ func TestBypassApprovesWithoutAsking(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "a.txt")); err != nil {
 		t.Fatalf("bypass must let the write through: %v", err)
+	}
+}
+
+// --- dont_ask, and an ask rule that outranks bypass ---------------------------
+//
+// The tests below read a .anvil/permissions.json that writePolicy — further down,
+// beside the other policy tests — drops into the workspace.
+
+// The mirror of bypass: a callback whose answer is always no. It has to be a
+// callback rather than no callback, because no callback is what bypass is — with
+// nobody to ask, Execute runs everything.
+func TestDontAskRefusesAGatedCall(t *testing.T) {
+	llm := newStubLLM(t,
+		toolTurn("call_1", "write_file", `{"path":"a.txt","content":"one"}`),
+		textTurn("done"),
+	)
+	h, dir := initHost(t, llm.baseURL())
+	sessionID := startSession(t, h, SessionParams{PermissionMode: ModeDontAsk})
+
+	asks := 0
+	out := promptRun(t, h, sessionID, "write it", func(map[string]any) map[string]any {
+		asks++
+		return map[string]any{"decision": DecisionAllow}
+	})
+
+	if asks != 0 || len(out.approvals) != 0 {
+		t.Fatalf("dont_ask must not show a card, got %d asks / %d cards", asks, len(out.approvals))
+	}
+	results := toolResultsOf(t, out.events)
+	if len(results) != 1 || results[0]["is_error"] != true {
+		t.Fatalf("the call should have been refused, got %v", results)
+	}
+	content, _ := results[0]["content"].(string)
+	if !strings.Contains(content, "dont-ask") {
+		t.Errorf("the refusal %q does not name the mode, so the model cannot say what to change", content)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "a.txt")); !os.IsNotExist(err) {
+		t.Fatal("dont_ask must not write")
+	}
+}
+
+// What makes the mode useful rather than merely restrictive: an allow rule is
+// decided in the registry, before any callback, so it runs untouched — and every
+// call the rules do not cover is still refused.
+func TestDontAskRunsWhatARuleAllows(t *testing.T) {
+	llm := newStubLLM(t,
+		toolTurn("call_1", "shell", `{"command":"ls"}`),
+		toolTurn("call_2", "shell", `{"command":"rm -rf build"}`),
+		textTurn("done"),
+	)
+	h, dir := initHost(t, llm.baseURL())
+	writePolicy(t, dir, `{"version":1,"rules":[
+		{"effect":"allow","tool":"shell","pattern":"readonly","reason":"read-only commands"}
+	]}`)
+	if err := os.MkdirAll(filepath.Join(dir, "build"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sessionID := startSession(t, h, SessionParams{PermissionMode: ModeDontAsk})
+
+	asks := 0
+	out := promptRun(t, h, sessionID, "look then clean", func(map[string]any) map[string]any {
+		asks++
+		return map[string]any{"decision": DecisionAllow}
+	})
+
+	if asks != 0 || len(out.approvals) != 0 {
+		t.Fatalf("dont_ask must never prompt, got %d asks / %d cards", asks, len(out.approvals))
+	}
+	results := toolResultsOf(t, out.events)
+	if len(results) != 2 {
+		t.Fatalf("want two tool results, got %v", results)
+	}
+	if results[0]["is_error"] == true {
+		t.Fatalf("the allowed command must run: %v", results[0])
+	}
+	if results[1]["is_error"] != true {
+		t.Fatalf("the uncovered command must be refused: %v", results[1])
+	}
+	if _, err := os.Stat(filepath.Join(dir, "build")); err != nil {
+		t.Fatalf("the uncovered command must not have run: %v", err)
+	}
+}
+
+// A deny is decided in the registry too, so dont_ask neither weakens it nor
+// rewrites its words — the refusal still points at the file and the reason.
+func TestDontAskReportsADenyRule(t *testing.T) {
+	llm := newStubLLM(t,
+		toolTurn("call_1", "shell", `{"command":"rm -rf build"}`),
+		textTurn("done"),
+	)
+	h, dir := initHost(t, llm.baseURL())
+	writePolicy(t, dir, `{"version":1,"rules":[
+		{"effect":"deny","tool":"shell","pattern":"rm -rf:*","reason":"no destructive commands"}
+	]}`)
+	if err := os.MkdirAll(filepath.Join(dir, "build"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sessionID := startSession(t, h, SessionParams{PermissionMode: ModeDontAsk})
+
+	asks := 0
+	out := promptRun(t, h, sessionID, "clean up", func(map[string]any) map[string]any {
+		asks++
+		return map[string]any{"decision": DecisionAllow}
+	})
+
+	if asks != 0 || len(out.approvals) != 0 {
+		t.Fatalf("a deny must not fall through to a prompt, got %d asks", asks)
+	}
+	results := toolResultsOf(t, out.events)
+	if len(results) != 1 || results[0]["is_error"] != true {
+		t.Fatalf("the deny must reach the model as a tool error, got %v", results)
+	}
+	content, _ := results[0]["content"].(string)
+	for _, want := range []string{"permissions.json", "no destructive commands"} {
+		if !strings.Contains(content, want) {
+			t.Errorf("the refusal %q does not mention %q", content, want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "build")); err != nil {
+		t.Fatalf("a denied command must not have run: %v", err)
+	}
+}
+
+// When a rule is what wanted a person and the mode says there is nobody to ask,
+// the refusal has to say which rule — otherwise the model sees "denied" with no
+// way to tell the user what to relax.
+func TestDontAskQuotesTheRuleThatAsked(t *testing.T) {
+	llm := newStubLLM(t,
+		toolTurn("call_1", "shell", `{"command":"echo hi"}`),
+		textTurn("done"),
+	)
+	h, dir := initHost(t, llm.baseURL())
+	writePolicy(t, dir, `{"version":1,"rules":[
+		{"effect":"ask","tool":"shell","pattern":"echo hi","reason":"this one always gets a look"}
+	]}`)
+	sessionID := startSession(t, h, SessionParams{PermissionMode: ModeDontAsk})
+
+	out := promptRun(t, h, sessionID, "say hi", autoApprove)
+
+	if len(out.approvals) != 0 {
+		t.Fatalf("dont_ask must not open a card even for an ask rule, got %d", len(out.approvals))
+	}
+	results := toolResultsOf(t, out.events)
+	if len(results) != 1 || results[0]["is_error"] != true {
+		t.Fatalf("the asked call should have been refused, got %v", results)
+	}
+	content, _ := results[0]["content"].(string)
+	for _, want := range []string{
+		".anvil/permissions.json rule 1",
+		`ask shell "echo hi"`,
+		"this one always gets a look",
+		"dont-ask",
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("the refusal %q does not mention %q", content, want)
+		}
+	}
+}
+
+// Bypass skips the asking. It does not overrule a rule whose only effect is to
+// interrupt: a written statement about one tool is narrower than a mode that
+// speaks about everything, so the card appears — in a mode whose banner says it
+// would not — and both answers are honoured.
+func TestBypassAsksWhenARuleAsks(t *testing.T) {
+	for _, tc := range []struct {
+		decision string
+		wantErr  bool
+	}{
+		{DecisionAllow, false},
+		{DecisionDeny, true},
+	} {
+		t.Run(tc.decision, func(t *testing.T) {
+			llm := newStubLLM(t,
+				toolTurn("call_1", "shell", `{"command":"echo hi"}`),
+				textTurn("done"),
+			)
+			h, dir := initHost(t, llm.baseURL())
+			writePolicy(t, dir, `{"version":1,"rules":[
+				{"effect":"ask","tool":"shell","pattern":"echo hi","reason":"this one always gets a look"}
+			]}`)
+			sessionID := startSession(t, h, SessionParams{PermissionMode: ModeBypass})
+
+			var cards []map[string]any
+			out := promptRun(t, h, sessionID, "say hi", func(req map[string]any) map[string]any {
+				cards = append(cards, req)
+				return map[string]any{"decision": tc.decision}
+			})
+
+			if len(cards) != 1 {
+				t.Fatalf("the ask rule must open the card under bypass, got %d", len(cards))
+			}
+			rule, _ := cards[0]["rule"].(map[string]any)
+			describe, _ := rule["describe"].(string)
+			for _, want := range []string{
+				".anvil/permissions.json rule 1",
+				`ask shell "echo hi"`,
+				"this one always gets a look",
+			} {
+				if !strings.Contains(describe, want) {
+					t.Errorf("the card's rule %q does not mention %q, so the card cannot say why it appeared", describe, want)
+				}
+			}
+
+			results := toolResultsOf(t, out.events)
+			if len(results) != 1 {
+				t.Fatalf("want one tool result, got %v", results)
+			}
+			content, _ := results[0]["content"].(string)
+			if isErr, _ := results[0]["is_error"].(bool); isErr != tc.wantErr {
+				t.Fatalf("%s should give is_error=%v, got %v: %q", tc.decision, tc.wantErr, results[0]["is_error"], content)
+			}
+			if !tc.wantErr && !strings.Contains(content, "hi") {
+				t.Errorf("the allowed command should have run, got %q", content)
+			}
+		})
+	}
+}
+
+// The other half of the same rule: the card appears for the tool the rule names,
+// not for everything the session does afterwards.
+func TestBypassDoesNotAskWhenNoRuleDoes(t *testing.T) {
+	llm := newStubLLM(t,
+		toolTurn("call_1", "shell", `{"command":"ls"}`),
+		textTurn("done"),
+	)
+	h, dir := initHost(t, llm.baseURL())
+	writePolicy(t, dir, `{"version":1,"rules":[
+		{"effect":"ask","tool":"shell","pattern":"echo hi","reason":"this one always gets a look"}
+	]}`)
+	sessionID := startSession(t, h, SessionParams{PermissionMode: ModeBypass})
+
+	out := promptRun(t, h, sessionID, "look around", autoApprove)
+
+	if len(out.approvals) != 0 {
+		t.Fatalf("a call no rule mentions must not ask under bypass, got %d", len(out.approvals))
+	}
+	results := toolResultsOf(t, out.events)
+	if len(results) != 1 || results[0]["is_error"] == true {
+		t.Fatalf("the call should have run, got %v", results)
+	}
+}
+
+// A mode does not overrule an answer a person already gave, so the callback
+// consults the session allowlist before it refuses.
+//
+// Nothing in the protocol can reach this state today: a mode is fixed when the
+// session opens, and the allowlist's only writer is the ordinary approval hook,
+// which dont_ask does not install. The hook is therefore exercised directly —
+// the invariant is worth holding before the path that would need it exists.
+func TestDontAskHonoursASessionAllowance(t *testing.T) {
+	s := &Server{approvals: newApprovalBroker()}
+	sess := newSession("sess-allow", t.TempDir(), ModeDontAsk, false)
+	hook := s.dontAskHook(sess)
+	req := anvil.PermissionRequest{
+		ToolName: "write_file",
+		Args:     json.RawMessage(`{"path":"a.txt","content":"one"}`),
+	}
+
+	dec, err := hook(context.Background(), req)
+	if err != nil {
+		t.Fatalf("the hook must not error: %v", err)
+	}
+	if dec.Allow {
+		t.Fatal("with no allowance dont_ask must refuse")
+	}
+
+	s.approvals.allowSession(sess.id, req.ToolName, approvalScope(req.Preview))
+	dec, err = hook(context.Background(), req)
+	if err != nil {
+		t.Fatalf("the hook must not error: %v", err)
+	}
+	if !dec.Allow {
+		t.Fatal("an approval a person gave must outrank the mode")
+	}
+}
+
+// A mode answers two questions — what to gate, and who answers — and the answers
+// live in two switches. This is what keeps a mode from being added to one of them
+// and forgotten in the other, where it would quietly behave like ask.
+func TestEveryModeResolvesToAHook(t *testing.T) {
+	accepted := []string{ModeAsk, ModeAcceptEdits, ModePlan, ModeBypass, ModeDontAsk}
+	for _, mode := range accepted {
+		canonical, rpcErr := permissionMode(mode)
+		if rpcErr != nil {
+			t.Fatalf("%s must be an accepted mode: %v", mode, rpcErr.Message)
+		}
+		if canonical != mode {
+			t.Fatalf("permissionMode(%q) = %q", mode, canonical)
+		}
+		// Constructing a hook does not touch the session or the server, so the zero
+		// values are enough to ask the one question this test is about.
+		s := &Server{}
+		if hook := s.permissionHookForMode(mode, nil, time.Second); hook == nil {
+			t.Errorf("%s resolves to no callback, so its gate would run every call", mode)
+		}
+		if groups := groupsForMode(mode, nil); mode != ModeBypass && len(groups) == 0 {
+			t.Errorf("%s gates nothing, so its callback would never be asked", mode)
+		}
 	}
 }
 
