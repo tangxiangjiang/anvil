@@ -327,6 +327,7 @@ func (s *Server) handleSessionList(ctx context.Context, params json.RawMessage) 
 			CWD:        in.CWD,
 			Provider:   in.Provider,
 			Model:      in.Model,
+			Title:      in.Title,
 			LastStatus: in.LastStatus,
 			LastRunID:  in.LastRunID,
 			Runs:       in.Runs,
@@ -483,8 +484,15 @@ func (s *Server) drain(sess *session, run *anvil.Run) {
 		}
 	}
 	res, err := run.Wait(context.Background())
-	sess.endRun(run)
+	// The terminal done is queued *before* the run is released, and the order is
+	// load-bearing: endRun is what wakes waitRun, and the two callers that wait
+	// (session.close, and Serve's teardown on shutdown) go straight from that
+	// wake-up to closing the agent and, on the shutdown path, to flush — which
+	// stops accepting messages and drops anything pushed after it. Released
+	// first, a shutdown-cancelled run could therefore lose the very `done` the
+	// client is waiting for. push never blocks, so there is nothing to deadlock.
 	s.notify(NotifyDone, projectDone(sess.id, runID, res, err))
+	sess.endRun(run)
 }
 
 // ---------------------------------------------------------------------------
