@@ -60,12 +60,14 @@ Messages marked ← are server→client **notifications** (no `id`); → are cli
 | → | `session.new` \| `session.resume` \| `session.list` \| `session.close` | session == one agent id. `session.resume` takes every `session.new` param plus `agent_id`, so the same conversation re-opens under new options. `session.list` answers `SessionInfo[]` with `runs`, `last_status` and the cumulative `usage` of the stored runs. |
 | → | `prompt` | `session_id`, `message`, `attachments[]{path\|data, mime}`, `context{mentions[]{path}, selection{path, range, text}, diagnostics[]{path, line, severity, message}}` |
 | ← | `event` | `run_id` + **`JobEventBody`** (below) |
-| ← | **`approval.request`** | `request_id`, `session_id`, `run_id`, `tool`, `args`, `preview{kind, path, diff, before?, after?, command[], summary, truncated?}`, `decisions[]`, `timeout_ms` |
+| ← | **`approval.request`** | `request_id`, `session_id`, `run_id`, `tool`, `args`, `preview{kind, path, diff, before?, after?, command[], summary, truncated?}`, `decisions[]`, `rule?`, `remember[]`, `timeout_ms` |
 | → | **`approval.response`** | `request_id`, `decision: allow\|deny\|allow_session`, `scope?`, `args?`, `message?` |
 | → | `cancel` | `session_id` |
 | → | `models.list` | → `ModelInfo[]` for the picker |
 | → | **`skills.list`** | `scan_user?`, `skill_dirs?` → `skills[]{id, name, description, path, always}` |
 | → | **`rules.list`** | `load_project?`, `load_cursor_rules?` → `files[]{path, bytes, included, truncated}` |
+| → | **`permissions.get`** | → `path`, `exists`, `rules[]{index, effect, tool, pattern, reason, describe}`, `problem?{message, line?, column?}` — the workspace rule file, or why it will not compile |
+| → | **`permissions.add`** | `rule{effect?, tool, pattern?, reason?}`, `request_id?` → `path`, `index`, `rules[]`, `decided_by?`, `approved?` — append one rule, and settle the pending call when the file now decides it |
 
 ### Event payload comes from the public SDK types
 
@@ -147,6 +149,7 @@ The client sets these per session, on `session.new` / `session.resume`:
 | `approval_timeout_ms` | per-session wait for an answer; `0` = default 5m, negative = until the run ends |
 | `test_command` / `build_command` | argv for `run_tests` / `build`. Without them the host registers neither tool, so those calls cannot reach an approval at all |
 | `vision` | opt in to image attachments; off by default, and a prompt carrying one without it is refused |
+| `load_permissions` / `load_hooks` | read `.anvil/permissions.json` / `.anvil/hooks.json` for this session. Absent means **on**: the workspace policy files a user wrote apply when their editor opens the workspace. `load_permissions: false` also means the approval card has no rule to offer — a rule written into a file the session does not read would not be in force, so the host refuses (`-32600`) rather than writing one |
 
 - **Session allowlist**: the host remembers `(session, tool, scope)` approvals and short-circuits the callback. In-memory per session; not persisted. `scope` is opaque to the host — it compares it verbatim and takes it from `preview.path`, so a client can offer "always allow shell" (no scope) and "always allow edits to this file" (that path) through one field. A **rule set** above this layer (milestone **0.36**, [36](36-tool-permissions.md)) resolves before the callback, so a rule decides without consulting this list — and a rule `allow` is why the shell/write/edit hook denies moved to the unconditional `preExec` stage.
 - **Diff review before apply**: for `write_file` / `edit_file` / `apply_patch` the SDK computes the resulting diff at gate time and puts it on `preview`. `apply_patch` is dry-run through the existing patch implementation, so the files it reports are the files it would touch — and the dry run must not mutate anything. This is the review-changes flow.
@@ -162,6 +165,9 @@ The client sets these per session, on `session.new` / `session.resume`:
 | Chat in an editor tab (webview), streaming assistant + collapsible tool cards | Claude Code-class layout; the sidebar is session management, not a second chat |
 | Interrupt | `cancel` → `Run.Cancel`; also cancels a pending approval |
 | Approve / deny / allow-for-session | from the approval prompt |
+| Remember a pattern, not a tool | the card's "always allow" is the host's proven rule shapes — this command, this prefix, read-only, this file — written into `.anvil/permissions.json` (0.36) |
+| Say why a call ran | a tool card that ran unprompted names the rule that allowed it; a refused one shows the rule's `reason` (0.36) |
+| Author the rule file | **Anvil: Open Permission Rules** opens or creates `.anvil/permissions.json`, reporting a malformed one where it is edited (0.36) |
 | Diff review | pre-apply preview; afterwards a changed-files list opening native diffs |
 | `@` file / folder mentions | `context.mentions` |
 | Selection + diagnostics injection | `context.selection`, `context.diagnostics` |
@@ -248,6 +254,59 @@ The transcript rendered assistant prose as escaped text in a `pre-wrap` box and 
 - **Tool cards label their sections.** `IN` is the arguments, `OUT` is the result, and the "show all" button targets the OUT pane specifically rather than the card's only pane. The IN section is still omitted when the call carried no arguments, because `undefined` would otherwise render as the string `undefined`.
 - **The thinking UI is honest about being provider-dependent.** A session whose provider sends no reasoning shows no block, not an empty one. Anthropic is the case that matters: its extended thinking is neither requested nor carried (see [05](05-llm-provider.md)), so a Claude-provider session will not show thinking in this release.
 
+### Permission rules on the card as built (p_0.36.2)
+
+The SDK's rule table and shell analyzer (p_0.36.1, [36](36-tool-permissions.md)) decide; this
+phase gives them a surface. The card gains the choices, the transcript gains the explanation,
+and the workspace gains a command that opens the file all of it is about.
+
+- **The buttons are the host's, the words are the card's.** An approval arrives with
+  `remember[]`, each entry a `kind` and the rule it would write, and every entry was evaluated
+  against the very call being shown. The card maps `kind` to a label (`exact`, `prefix`,
+  `readonly`, `path`, `tool`) and prints the pattern verbatim underneath, because the pattern
+  is what will be in the file. It never infers a label from a pattern: that would be the
+  pattern grammar implemented a second time in the one place tests cannot reach. The pairing is
+  pinned by `test/unit/permissionKinds.test.ts`, which reads `media/chat.js`,
+  `src/protocol.ts`, `source/permissionrules.go` and `proto.go` as text and fails if a kind has
+  no label, if a field the card reads is renamed on the Go side, or if a method name is spelled
+  two ways. All three are silent at runtime — an unlabelled button, an `undefined`, a `-32601`.
+- **Choosing one is a request, not a verdict.** The card posts the rule and the `request_id`
+  to the extension, which calls `permissions.add`; the host writes the rule and — only if the
+  file now decides the call — answers the approval itself. The card therefore has three
+  endings to render, and does: approved (the card resolves, nothing else was sent); written
+  but outranked (the remember buttons are removed, since no new rule can outrank what decided,
+  and the sentence names `decided_by`); and failed (buttons re-enabled, nothing claimed, with
+  the host's own message). A click that claimed a verdict would be the client deciding a policy
+  question it is not party to.
+- **No proven option still leaves a way out.** When `remember` is empty — a compound command,
+  a session with the file switched off — the card falls back to one session-scoped
+  "always allow for this session" button, and marks it as session-only in its tooltip. It is
+  offered only in that case, so it never competes with a rule button.
+- **The malformed-file path is the editor's own machinery.** `permissions.get` answers a file
+  that will not compile as a *result* with a place, so **Anvil: Open Permission Rules** opens
+  the document, writes a zero-width `Diagnostic` at the position through a collection created
+  on first use, selects and reveals it, and prints `path:4:12: message` as a warning. Opening
+  a workspace with no file asks before creating one, and says so when `anvil.permissions` is
+  off — a file this session does not read is a file whose rules are not in force, which is
+  exactly the confusion the setting exists to prevent. The one-based → zero-based conversion
+  and the file's skeleton live in `src/rulesFile.ts`, which imports no `vscode` and is
+  unit-tested, including the assertion that the version it writes is the version
+  `internal/permissions/rule.go` reads.
+- **A tool card says why it ran.** `event.rule` on a tool result is rendered as
+  `allowed by <rule>` above the output pane, or `refused by <rule>` when the result is an
+  error. It is the answer to "why did that not ask me", which is otherwise invisible: the
+  only evidence before this was the absence of a prompt.
+- **The addition is a capability, not a revision.** `initialized` announces `permissions`;
+  every field added to an existing message is optional and every new one is a new method, so
+  `ProtocolVersion` stays 1. The panel does not gate the Permissions button on the capability:
+  the bundled host is version-verified and a hand-built older one answers `-32601`, which
+  surfaces as a panel notice, while a card that arrives without `remember` already degrades to
+  the session-scoped button.
+- **`anvil.permissions` is the switch, and it is honest about what off means.** Off means the
+  session ignores the file: the setting's description says so, the panel warns when the file is
+  opened in that state, and the host refuses a rule written for a call in a session that would
+  not read it.
+
 ## Placement
 
 - Extension (TypeScript): repository root **`editors/vscode/`** — mirrors the `app/` precedent from [26](26-mobile-app.md) of keeping non-Go clients outside `source/`. `bin/` inside it holds the built sidecar; it is git-ignored, and the packaged extension carries it.
@@ -271,7 +330,11 @@ The transcript rendered assistant prose as escaped text in a `pre-wrap` box and 
 - Becoming a language server / DAP debugger; LSP stays **agent tools** ([16](16-lsp.md)).
 - Any scheduler / `agentd` / cluster path from the extension. This protocol deliberately has none; adding one would be a new, separately-decided capability rather than an extension of it.
 - Notebook cell editing, multi-root in one panel, sub-agent graph UI, checkpoints/rewind.
-- Persisting per-hunk approval policy to disk, or a settings-sync story. (A rule set and a shell analyzer are not an extension concern; they are milestone **0.36**, [36](36-tool-permissions.md).)
+- Persisting per-hunk approval policy to disk, or a settings-sync story. (A *rule* the card
+  writes is a rule the user can read — milestone **0.36** appends it to
+  `.anvil/permissions.json`, [36](36-tool-permissions.md); a per-hunk policy, or one kept
+  somewhere the user cannot read, is still out of scope, and so is syncing rules between
+  machines.)
 - Public marketplace publishing as a milestone acceptance item.
 
 ## Acceptance (milestone)

@@ -61,8 +61,9 @@ defeats every allow, wherever it sits in the file. Within one effect, **first ma
 order wins**. "Most specific wins" is deliberately rejected: specificity is not written in
 the file, so a reader would have to recompute a metric nobody agrees on (`readonly` versus
 `mcp_*`; `git status:*` versus a later `git *`). File order can be read top to bottom, and
-the residual footgun — a broad rule shadowing an earlier specific one — is a documentation
-problem the client can surface in p_0.36.2.
+the residual footgun — a broad rule shadowing an earlier specific one — is a reading problem
+in a file the user wrote: the file is what a client displays, in order, numbered, and 0.36
+does not attempt to analyse shadowing for them.
 
 ## The rule file
 
@@ -102,7 +103,9 @@ pattern on such a call therefore matches nothing, and the call is asked about: `
 carries no path fact, so `{"effect":"ask","tool":"read_file","pattern":"**/*.md"}` never
 fires, while `{"effect":"ask","tool":"read_file"}` fires on every read. Letting a rule match
 a read by path means widening the card first, so that a pattern still only ever matches
-something the user was shown — that is p_0.36.2's job, not a silent widening here.
+something the user was shown; 0.36 ships the boundary as it stands rather than widening it in
+a phase about the client. The error is in the safe direction: a path-shaped rule on a call
+with no path fact matches nothing, and a call no rule matches is one that gets asked about.
 
 **An omission is not a wildcard in the dangerous direction.** An empty `pattern` matches by
 tool name alone, and an empty path list — a call whose paths could not be determined — never
@@ -181,6 +184,93 @@ keeping `deny` alive in that mode without a second decision path; before, the wh
 skipped for want of a callback, which is exactly the hole this chapter closes. The preview is
 built in memory from a file already being read, and `bypass` is not a default mode.
 
+## Writing a rule from the card
+
+The rule file is the interface, so a client does not edit it with a text cursor alone: the
+approval card's "always allow" appends to it. That is the one place where the product's answer
+to "who decides" gets *written down*, and it is where an explanation can most easily drift
+from the decision it explains. Three rules keep them together.
+
+**The host offers, the client labels.** `PermissionRuleOptions(tool, args)` builds the
+candidate shapes — this exact command line, the leading token run as a prefix, `readonly`, one
+path, the whole tool — and keeps a candidate only if **evaluating it against this very call**
+matches (`decisionFor(set, facts).Matched`, the same function a real decision runs). What
+comes back on the approval is therefore a set of buttons that all work, each with the rule it
+would write. The button's text is chosen from the option's **`kind`**, never derived from the
+pattern: a client that parsed `git status:*` to decide whether to call it a prefix would be
+implementing the pattern grammar a second time, in the language least able to test it. The
+pattern is displayed verbatim, because the pattern is what lands in the file.
+
+The filter is what makes the boundary visible rather than surprising. A compound line offers
+nothing: no exact rule covers `git status && rm -rf /`, no single token prefix does, and the
+analyzer will not prove a two-command line read-only. A call that carries no command and no
+paths — an MCP tool's — is offered "allow every call to this tool" only when it is not a
+mutating built-in, because for `shell` that button *is* the all-or-nothing memory this rule
+table exists to replace.
+
+**The host answers, the client reports.** `permissions.add` takes the rule and, when the
+client names the approval it was written for, a `request_id`. It appends the rule, re-reads
+the file, and evaluates the call again against what the file now says. Only when the deciding
+effect is **allow** does the host answer the approval itself and say `approved: true`. When
+something else decides it — an earlier `deny`, an `ask` — the rule is *still written* (the
+user asked for it, and it is a file they own) and the answer carries `decided_by` naming what
+did decide. When *no* rule decides the call — it was gated by the mode alone, and the new rule
+is of a shape that cannot cover it — `decided_by` is absent, which says the file changed and
+this call did not. A client that assumed its own button had settled the call would be showing
+an approval that is still waiting.
+
+That leaves the card three honest endings, and it renders all three: **approved and
+remembered**; **written, but this call is decided by `<decided_by>`** — with the remember
+buttons removed, since no new rule can outrank what decided; and **not written**, with the
+error, buttons re-enabled, and nothing claimed.
+
+**No option is not a dead end.** When `remember` is empty the card offers the session-scoped
+allowlist entry instead — the `(session, tool, scope)` memory from before this milestone. It
+is offered *only* in that case, so it never competes with a rule button, and the all-or-nothing
+memory is not silently lost where no rule can be written at all. Without it, "no rule can
+describe this call" would mean "there is no way to stop being asked".
+
+Composing the file is the SDK's job, not the client's: `LoadPermissionRules` reads it,
+`AddPermissionRule` appends to it. The append parses the new text with the same parser the
+loader uses *before* anything is written (a rule the UI produces is a rule the next session
+accepts), writes a temporary file in the same directory and renames over the target (an
+interruption leaves the old policy, not half of a new one), and **refuses to write at all**
+when the existing file cannot be read — replacing policy it cannot parse is the failure the
+whole design is arranged around.
+
+## Reading the file while a session runs
+
+The rule set a session decides by is not captured at `Create`. `permissions.Source` re-reads
+`.anvil/permissions.json` and appends the caller's own `Options.PermissionRules` after it, per
+call, and `Registry.SetPermissionRulesSource` is what the agent installs when
+`LocalOptions.LoadPermissions` is on.
+
+The reason is the promise the card makes. "Always allow this prefix" is answered by a rule
+that must be in force for the *next* call of the same session, and the file can also be edited
+by hand while the session is open — with a set captured once, a user watching a file change
+would be governed by a policy the file no longer states, and there would be no way to tell.
+Per call, the file decides and the `reason` a rule carries is the reason in force.
+
+The price is a read per tool call, and one deliberate asymmetry: a file that has become
+**unreadable mid-session** — mistyped, half-saved, deleted — falls back to the last set that
+read cleanly rather than failing the call. A session already has a policy, and it is the one
+the file stated a moment ago; refusing every call because somebody is halfway through editing
+a file punishes the wrong person. A malformed file **at session start** stays a hard error
+(above), because that is a policy the user asked to be governed by and there is no earlier
+policy to fall back to.
+
+Two more things the card can reach:
+
+- `permissions.get` reports a file that will not compile as a **result** carrying the place
+  (line, column, message), not as an error. "Half-edited" is a state of a file somebody is
+  working in, and the client's job with it is to open the file there and put a squiggle on it
+  — which is why `path` is absolute and the position is the parser's own.
+- `permissions.add` **refuses** for that same file with `CodeHostError` naming
+  `path:line:col`, and for a `request_id` that no longer names a pending approval with
+  `CodeNoApproval`, and for a session created with `load_permissions: false` with
+  `CodeInvalidRequest`: a rule written into a file that session does not read would not be in
+  force, and saying so is better than writing a rule that does nothing.
+
 ## Failure modes
 
 | Situation | Behaviour | Why |
@@ -192,6 +282,10 @@ built in memory from a file already being read, and `bypass` is not a default mo
 | `ask` rule in `bypass` | Allowed (the mode's always-allow callback answers it) | `bypass` is the user pre-answering yes |
 | Rule `allow` meeting a hook deny | Denied | Order 1 > 3 |
 | Rule `allow` meeting a session allowlist entry | Both allow; the rule resolves first and no prompt is raised | Order 3 > 4 |
+| A rule written from the card that something else outranks | Written, reported as not deciding; `decided_by` names what does | The file is the user's; an append is not a verdict |
+| `permissions.add` naming a call nobody is waiting on | `-32004`, and **nothing is written** | A rule for a call that has gone is a rule nobody asked for |
+| The file becomes unreadable while a session runs | The session keeps the last set that read cleanly | A policy under edit is not a reason to refuse every call |
+| A call no rule shape can describe (a compound line) | No "always allow" rule button; the session-scoped entry remains | Offering a button that writes a rule which does nothing teaches that rules do not work |
 
 A denied call surfaces as a **tool error** the model can read and react to, which is the
 existing deny contract from [35](35-vscode-extension.md) — the model is told why and can
@@ -215,6 +309,16 @@ the CLI does the same. A malformed file therefore fails session creation with th
 
 - Additive: `Options.PermissionRules`, `LocalOptions.LoadHooks`, `LocalOptions.LoadPermissions`,
   `ToolPreview.Paths`. Nothing changes unless one is set.
+- Additive, and how a client implements against the file: `PermissionRulesPath`,
+  `LoadPermissionRules`, `AddPermissionRule`, `EvaluatePermissionRules`,
+  `DescribePermissionRules`, `PermissionRuleOptions` and `PermissionRuleError` — public
+  wrappers over the same evaluation, so a client that *explains* a decision runs the decision's
+  own code. `Event.Rule` and `PermissionRequest.Rule` carry the deciding rule outwards, set
+  where the decision is made.
+- Semantic, only with `LoadPermissions` on: the rule set is composed **per call** from the
+  file as it now stands plus the caller's own rules (see *Reading the file while a session
+  runs*). A session therefore sees a hand edit, and a rule written from the card, without being
+  rebuilt.
 - Semantic, opt-in: with a rule set and an `ask` rule, a callback-less agent now **denies**
   instead of running. This is the point of the feature and it is why the switches default off
   in the library.
@@ -229,10 +333,14 @@ the CLI does the same. A malformed file therefore fails session creation with th
 - OS-level isolation: containers, seccomp, filesystems — [32](32-sandbox-code-review.md).
 - Rule inheritance (user level, enterprise managed settings) and rule distribution.
 - Path rules on reads (`read_file`, `grep`, `glob`): those calls carry no path fact, so a rule
-  on one matches by tool name. Widening them means widening the card in the same move —
-  p_0.36.2.
+  on one matches by tool name. Widening them means widening the card in the same move, which
+  0.36 does not do.
 - A complete shell grammar; anything unproven is `cannot-prove`.
-- Per-hunk approval policy and persisting approvals across sessions.
+- Per-hunk approval policy, and remembering an approval as anything other than a rule in a
+  file the user can read: the card writes `.anvil/permissions.json`, and there is no second,
+  hidden place a decision is kept.
+- A rule editor beyond appending one well-formed entry — no graphical builder, no reordering,
+  no sync, no user-level or managed rule sources.
 
 ## Roadmap mapping
 

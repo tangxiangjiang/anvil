@@ -102,3 +102,34 @@ and true nowhere.
 | A token prefix is the only safe prefix | `git status:*` must not admit `git status && rm -rf /` nor `git statusx`, and `strings.HasPrefix` admits both. Split, lex, compare argv — and require a single segment, so a compound line can never match a prefix rule |
 
 See also: [m_0.36/p_0.36.1.md](m_0.36/p_0.36.1.md), [36-tool-permissions.md](../../design/v1.0/36-tool-permissions.md).
+
+## 2026-10-16 — the button that writes the rule
+
+**Setup:** p_0.36.2 puts the rule table on the approval card: "always allow" becomes the rule
+shapes that would decide the call in front of the user, written into
+`.anvil/permissions.json` through two new methods.
+
+**What happened:** the interesting failures were not in the decision — p_0.36.1 had already
+made that deterministic — but in the conversation around it. A rule the card writes is a
+*claim about the future*, so the client must not be the one making it: the options come from
+the host, each already evaluated against the very call being shown, and the host answers the
+approval itself only after re-reading the file and finding that an allow rule now decides it.
+The card's job shrank to rendering three endings. The other half was that two languages share
+one vocabulary with no generator between them: a renamed field in Go is an `undefined` in
+TypeScript, a `kind` the host invents is a button with no label, and both are silent — which
+is why the check is a test that reads both sides as text, not a comment asking for care.
+
+**Takeaways for later phases**
+
+| Lesson | Implication |
+|--------|-------------|
+| A button that writes a rule which does nothing teaches that rules do not work | Every option offered was evaluated against the call it is offered for; a shape that would not decide it is not offered at all. One bad button is worse than no button, and this is the case users would conclude the whole feature is broken from |
+| "Always allow" is a promise about the *next* call, and it can only be kept by reading again | The rule set is composed per call from the file as it now stands, not captured at session start. Same reason a hand edit takes effect under a running session — and the reason a rule from the card needs no session rebuild |
+| An interface with three outcomes must render three outcomes | Approved / written-but-outranked / not written. The middle one is the one a client gets wrong by assuming: `decided_by` is what says the file changed and the call did not |
+| A label derived from a pattern is the pattern grammar implemented a second time | In the least testable place available (a webview). The host sends `kind`; the card maps it to words; `test/unit/permissionKinds.test.ts` reads both files and fails if they drift |
+| Two languages, one vocabulary, no generator | A renamed field is a silent `undefined`. A test that reads both sides as text is cheap, and this repository has been bitten by exactly this before |
+| A file under edit is a state, not a failure | `permissions.get` reports a malformed file as a result with a place (so the editor can put a squiggle on it), while a malformed file *at session start* stays a hard error. Different question — "what does my file say" vs "what policy am I governed by" — so different answer |
+| A new public method can be the cheaper fix | The host may import the public `anvil` package only, so the client-side glue became public wrappers (`LoadPermissionRules`, `AddPermissionRule`, `EvaluatePermissionRules`) over the same evaluation. The alternative — a second evaluator in the host — is how an explanation starts disagreeing with the decision it explains |
+| The extension version and the host banner move together | The drift check compares *minor* lines, so bumping `package.json` alone would warn on every spawn. Two version strings, one release line: bump them in the same commit |
+
+See also: [m_0.36/p_0.36.2.md](m_0.36/p_0.36.2.md), [36-tool-permissions.md](../../design/v1.0/36-tool-permissions.md), [35-vscode-extension.md](../../design/v1.0/35-vscode-extension.md).

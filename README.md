@@ -61,7 +61,7 @@ func main() {
 
 ## Status
 
-Product is at **0.35 delivered**, with **0.36 in progress** (tool permissions: a workspace rule file, a shell analyzer, and a `deny` that holds with nobody to ask). Full per-milestone index: [`doc/roadmaps/v1.0/README.md`](doc/roadmaps/v1.0/README.md).
+Product is at **0.36 delivered** (tool permissions: a workspace rule file, a shell analyzer, and a `deny` that holds with nobody to ask — SDK, editor host and VS Code extension). Full per-milestone index: [`doc/roadmaps/v1.0/README.md`](doc/roadmaps/v1.0/README.md).
 
 | Era | Milestones | What |
 |-----|-----------|------|
@@ -69,7 +69,7 @@ Product is at **0.35 delivered**, with **0.36 in progress** (tool permissions: a
 | Agent capabilities | 0.11 – 0.22 | worker daemon, model gateway, retrieval, hooks & skills, web search, LSP, git tools, test & build, vision, plugins, dev memory, project search |
 | Automated coding tool-chain | 0.23 – 0.34 | YAML ops config, scheduler hub, web fleet console, mobile app, app fleets, clusters/workers, sandbox workers, loop guard, job event stream, sandbox code review, delivery UI, workspace domain |
 | Editor client | 0.35 | VS Code extension + `anvil-host` sidecar, packaged as per-platform VSIX — [design 35](doc/design/v1.0/35-vscode-extension.md) |
-| Tool permissions | 0.36 (in progress) | `.anvil/permissions.json` rule set, a shell analyzer that proves read-only, and the loading switch that makes `.anvil/hooks.json` real — [design 36](doc/design/v1.0/36-tool-permissions.md) |
+| Tool permissions | 0.36 | `.anvil/permissions.json` rule set, a shell analyzer that proves read-only, the loading switch that makes `.anvil/hooks.json` real, and an approval card that remembers the pattern rather than the tool — [design 36](doc/design/v1.0/36-tool-permissions.md) |
 
 ### VS Code extension (0.35)
 
@@ -87,7 +87,7 @@ by `internal/editorhost/independence_test.go`.
 cd editors/vscode
 npm install
 npm run package:vsix          # this platform; --target <id> / --all for the rest
-code --install-extension anvil-vscode-0.35.9-win32-x64.vsix
+code --install-extension anvil-vscode-0.36.0-win32-x64.vsix
 ```
 
 A platform VSIX carries the matching `anvil-host`, cross-compiled with
@@ -151,6 +151,14 @@ command or a `prefix:*` compared token by token (so `git status:*` does not admi
 `git status && rm -rf /`), and on a call that touches files it is a path glob that has to
 cover **every** path the call touches. A missing file means no rules; a malformed one fails
 session creation, naming the line.
+
+In the editor, the approval card offers the rule shapes that would decide **this** call — the
+exact command, the leading tokens, anything read-only, the one file — and writes the choice
+into the same file; the call then runs without a second prompt, because the host re-reads the
+file and answers it. A tool card that ran unprompted says `allowed by rule 2: shell
+"git status:*"`. **Anvil: Open Permission Rules** opens or creates the file, and a file that
+will not compile is reported where it is edited — with a diagnostic on the line — instead of
+taking the session down. `anvil.permissions` turns the whole thing off for a workspace.
 
 The library and the CLI read the files only when asked to, and the editor host and CLI
 default both switches on:

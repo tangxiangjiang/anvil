@@ -44,7 +44,7 @@ This tree is the **design cutoff** for 0.1–0.36 delivery. Later product lines 
 | 33 | [33-delivery-ui.md](33-delivery-ui.md) | Delivery UI + SQLite schema → **0.33** |
 | 34 | [34-workspace-domain.md](34-workspace-domain.md) | Workspace → Project → Workers (Clusters) → **0.34** |
 | 35 | [35-vscode-extension.md](35-vscode-extension.md) | VS Code extension + editor host → **0.35** |
-| 36 | [36-tool-permissions.md](36-tool-permissions.md) | Rule set + shell analyzer → **0.36** |
+| 36 | [36-tool-permissions.md](36-tool-permissions.md) | Rule set + shell analyzer, and the rule shapes the approval card remembers → **0.36** |
 
 Parent index: [`doc/design/README.md`](../README.md).
 

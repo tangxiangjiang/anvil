@@ -51,7 +51,16 @@ Confinement above says what is *reachable*; policy says what happens *without as
   is a convenience layer, not a boundary: the path sandbox and the shell gate above still
   apply to every call it admits.
 - A malformed rules file fails `Create` naming the path. Ignoring a policy silently is the
-  worse failure.
+  worse failure. Mid-session the same file is re-read per call, and a read that fails falls
+  back to the last set that read cleanly — a session keeps the policy the file stated a moment
+  ago rather than refusing every call because somebody is halfway through editing it.
+- **Remembering an approval writes into that same file and nowhere else.** The card's "always
+  allow" appends a rule the user can read (`.anvil/permissions.json`); there is no second,
+  hidden store of decisions, and the appended text is parsed by the loader's own parser before
+  it reaches the disk. A rule that would not be in force — appended to a file this session
+  does not read, or to a file that will not compile — is refused with the reason, not written.
+- Matching facts still come from the arguments, never from the preview the card displayed, and
+  the append never overwrites a file it cannot read.
 
 ## Supply chain
 
