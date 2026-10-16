@@ -4,8 +4,6 @@
 package anvil
 
 import (
-	"strings"
-
 	"github.com/anvil-dev/anvil/internal/tools"
 )
 
@@ -37,63 +35,13 @@ func applyBuiltinToolFilters(reg *tools.Registry, opts Options) {
 	}
 }
 
+// expandToolSelectors resolves group names and literal tool names. The table
+// lives in internal/tools so that Options.BuiltinTools, Options.DisallowedTools,
+// and Options.PermissionGroups share one definition.
 func expandToolSelectors(selectors []string) map[string]bool {
-	out := map[string]bool{}
-	for _, s := range selectors {
-		s = strings.TrimSpace(strings.ToLower(s))
-		if s == "" {
-			continue
-		}
-		switch s {
-		case "shell":
-			out["shell"] = true
-		case "read":
-			out["read_file"] = true
-		case "write":
-			out["write_file"] = true
-		case "edit":
-			out["edit_file"] = true
-			out["apply_patch"] = true
-		case "search":
-			out["grep"] = true
-			out["glob"] = true
-			out["semantic_search"] = true
-		case "skills":
-			out["list_skills"] = true
-			out["read_skill"] = true
-		case "web":
-			out["web_search"] = true
-			out["fetch_url"] = true
-		case "lsp":
-			out["diagnostics"] = true
-			out["definition"] = true
-			out["references"] = true
-			out["hover"] = true
-			out["rename_symbol"] = true
-		case "git":
-			out["git_status"] = true
-			out["git_diff"] = true
-			out["git_log"] = true
-		case "verify", "test":
-			out["run_tests"] = true
-			out["build"] = true
-		case "vision":
-			out["read_image"] = true
-		case "mcp":
-			out["__mcp__"] = true
-		default:
-			out[s] = true
-		}
-	}
-	return out
+	return tools.ExpandToolSelectors(selectors)
 }
 
 func toolAllowed(name string, set map[string]bool) bool {
-	if set[name] {
-		return true
-	}
-	if set["__mcp__"] && strings.HasPrefix(name, "mcp_") {
-		return true
-	}
-	return false
+	return tools.SelectorSetMatches(name, set)
 }

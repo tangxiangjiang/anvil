@@ -60,8 +60,8 @@ Messages marked ← are server→client **notifications** (no `id`); → are cli
 | → | `session.new` \| `session.resume` \| `session.list` \| `session.close` | session == one agent id |
 | → | `prompt` | `session_id`, `text`, `attachments[]`, `context{active_file, selection, diagnostics, mentions[]}` |
 | ← | `event` | `run_id` + **`JobEventBody`** (below) |
-| ← | **`approval.request`** | `request_id`, `tool`, `args`, `preview`, `options[]` |
-| → | **`approval.response`** | `request_id`, `decision: allow\|deny\|allow_session`, `args?`, `message?` |
+| ← | **`approval.request`** | `request_id`, `session_id`, `run_id`, `tool`, `args`, `preview{kind, path, diff, command[], summary}`, `decisions[]`, `timeout_ms` |
+| → | **`approval.response`** | `request_id`, `decision: allow\|deny\|allow_session`, `scope?`, `args?`, `message?` |
 | → | `cancel` | `session_id` |
 | → | `models.list` | → `ModelInfo[]` for the picker |
 
@@ -84,35 +84,55 @@ The SDK already exposes a **blocking** approval hook — `Options.Permission` (`
 
 ```go
 type PermissionFunc func(ctx, PermissionRequest) (PermissionDecision, error)
-type PermissionRequest  struct { ToolName string; Args json.RawMessage }
+type PermissionRequest  struct { ToolName string; Args json.RawMessage; Preview ToolPreview }
 type PermissionDecision struct { Allow bool; Args json.RawMessage; Message string }  // Args rewrites the call
 ```
 
-The host installs a callback that emits `approval.request` and blocks until `approval.response` arrives. No SDK change is needed for the round trip.
+The host installs a callback that emits `approval.request` and blocks until `approval.response` arrives. The round trip needs no SDK change; the **preview** does — see below.
 
 ### Gap: the gate is too narrow
 
-Today the gate fires only when `tools.IsMutating(name)` is true, and that map holds exactly four names: `write_file`, `edit_file`, `apply_patch`, `shell`. **`run_tests` and `build` execute arbitrary argv, `web_search`/`fetch_url` egress, and MCP / plugin / custom tools are all ungated.** For an editor that must ask before acting, this is the blocking gap.
+The pre-0.35 gate fired only when `tools.IsMutating(name)` was true, and that map held exactly four names: `write_file`, `edit_file`, `apply_patch`, `shell`. **`run_tests` and `build` execute arbitrary argv, `web_search`/`fetch_url` egress, and MCP / plugin / custom tools were all ungated.** For an editor that must ask before acting, this is the blocking gap.
 
-0.35 closes it **additively**:
+It was closed **additively** (shipped in p_0.35.3):
 
-- Gate by **tool group** (the group table already exists in `source/toolfilter.go`: `shell, read, write, edit, search, skills, web, lsp, git, verify, vision, mcp`).
-- New option `Options.PermissionGroups []string`; **empty keeps today's behaviour exactly** (the four mutating builtins). The host opts in to the wider set: `write, edit, shell, verify, web, mcp` — and treats plugin/custom tools as gated too.
-- `MCP`, plugin, and `Options.Tools` handlers currently bypass the gate entirely; they must route through it so the UI can ask.
+- Gating is by **tool group**, and the table now lives in `source/internal/tools/groups.go` as the single source of truth — `source/toolfilter.go` delegates to it, so the SDK gate and the tool filter cannot drift apart.
+- New option `Options.PermissionGroups []string`; **empty keeps the old behaviour exactly** (the four mutating builtins). The host opts in to the wider set: `write, edit, shell, verify, web, mcp`.
+- `MCP`, plugin, and `Options.Tools` handlers were routed through the gate. They belong to no group — recognised by type, since every external tool is a `*tools.FuncTool` — so they are gated **unconditionally once `PermissionGroups` is non-empty**, and stay ungated when it is empty.
+- `Options.PermissionGroups` is the only change that alters what the SDK does. `PermissionRequest.Preview` is additive: every existing caller compiles and behaves identically.
+
+### Previews are computed in the SDK
+
+The preview cannot be computed in the host. The host imports the **public `anvil` package only** (see the package doc in `source/internal/editorhost/proto.go`), so it may not reach into `source/internal/tools/patch.go` for the `apply_patch` dry run. The SDK therefore builds the preview at gate time and hands it over on `PermissionRequest.Preview`; the host projects it field for field and stays import-clean.
+
+The host does not have to be trusted with the pre-image either: a preview is best-effort by contract, and an empty `Kind` means "nothing could be shown", never "this call is safe".
 
 ### Modes (Claude Code-class)
 
 | Mode | Implementation |
 |------|----------------|
 | `ask` (default) | every gated call round-trips to the UI |
-| `acceptEdits` | in-workspace `write`/`edit` auto-allowed; `shell`/`verify` still ask |
-| `plan` | `DisallowedTools: ["write","edit","shell","verify"]` + system-prompt addendum to produce a plan and stop. Pure SDK composition — no new code. |
+| `accept_edits` | the `write` / `edit` selectors are dropped from the gated set, so in-workspace edits apply without asking; `shell` / `verify` still do |
+| `plan` | `DisallowedTools: ["write","edit","shell","verify"]` + a directive to produce a plan and stop. Pure SDK composition — no new code. |
 | `bypass` | user opts in explicitly; UI shows a persistent warning |
 
-- **Session allowlist**: the host remembers `(tool, scope)` approvals and short-circuits the callback. In-memory per window; not persisted.
-- **Diff review before apply**: for `write_file` / `edit_file` / `apply_patch` the host has the args *and* the on-disk pre-image, so it can compute the resulting diff and put it in `preview`. `apply_patch` reuses the existing patch implementation in `source/internal/tools/patch.go`. This is the review-changes flow.
-- **Command preview**: `shell`, `run_tests`, `build` are argv arrays (never shell strings) — `preview` is that argv list.
-- The callback must abort cleanly when the run is cancelled while an approval is pending.
+Each mode is a **composition of public SDK options**, not a special case inside the callback: `accept_edits` works by narrowing the group set it passes as `Options.PermissionGroups`, and `plan` by adding `Options.DisallowedTools`. The sandbox already confines path-taking tools to the workspace, so "in workspace" needs no extra check.
+
+The client sets these per session, on `session.new` / `session.resume`:
+
+| Param | Meaning |
+|-------|---------|
+| `permission_mode` | `ask` (default) / `accept_edits` / `plan` / `bypass` |
+| `permission_groups` | overrides the default gated set (`write, edit, shell, verify, web, mcp`); ignored in `bypass` |
+| `approval_timeout_ms` | per-session wait for an answer; `0` = default 5m, negative = until the run ends |
+| `test_command` / `build_command` | argv for `run_tests` / `build`. Without them the host registers neither tool, so those calls cannot reach an approval at all |
+
+- **Session allowlist**: the host remembers `(session, tool, scope)` approvals and short-circuits the callback. In-memory per session; not persisted. `scope` is opaque to the host — it compares it verbatim and takes it from `preview.path`, so a client can offer "always allow shell" (no scope) and "always allow edits to this file" (that path) through one field.
+- **Diff review before apply**: for `write_file` / `edit_file` / `apply_patch` the SDK computes the resulting diff at gate time and puts it on `preview`. `apply_patch` is dry-run through the existing patch implementation, so the files it reports are the files it would touch — and the dry run must not mutate anything. This is the review-changes flow.
+- **Command preview**: for `run_tests` and `build` — argv arrays fixed by `Options`, never shell strings — `preview` is that argv. `shell` is the exception: it runs one command string, so `preview.command` carries that string as its single element.
+- **Plan mode's directive is a prompt prefix, not a system-prompt addition.** `Options.SystemPrompt` *replaces* Anvil's default system text, and the host cannot read text it did not write, so it cannot append to it. The host prefixes the plan directive to the user's message instead.
+- **Nothing may hang.** A pending approval is released by the answer, by the run ending, by `cancel`, by `session.close`, by host shutdown, and by a timeout that defaults to deny. Whatever the path, the request is deregistered, so a late `approval.response` is refused with `-32004` instead of silently vanishing — the client learns its answer did not land. A *malformed* answer (an unknown `decision`) is `-32602`, because that is the client's bug and "too late" would send it looking in the wrong place.
+- Aborting mid-approval must leave the client with a reason: the model sees a tool error carrying it, and the run still reaches a terminal `done`.
 
 ## Extension surface (VS Code)
 
@@ -158,7 +178,7 @@ Today the gate fires only when `tools.IsMutating(name)` is true, and that map ho
 
 1. Installing the platform VSIX and opening a trusted workspace starts the host; the panel streams assistant text and tool cards.
 2. Mutating tools prompt; deny returns a tool error to the model; allow-for-session stops re-prompting for that tool.
-3. A `shell` command, a `run_tests`, and an MCP tool call each prompt (the gate gap is closed).
+3. A `shell` command, a `run_tests`, and an MCP tool call each prompt (the gate gap is closed). The gate is closed as of p_0.35.3; the last two need the host to be able to *configure* those tools first, which the settings work brings.
 4. Diff review shows the result of an edit before it is applied.
 5. `@`-mentioned file content and the current selection reach the model.
 6. Plan mode performs no writes.

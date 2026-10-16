@@ -18,18 +18,44 @@ const closeRunTimeout = 5 * time.Second
 // active run. At most one run per session is allowed, matching the SDK rule in
 // doc/design/v1.0/01-architecture.md.
 type session struct {
-	id    string
-	agent *anvil.Agent
-	cwd   string
+	id  string
+	cwd string
+	// mode is the permission mode the session was created with, after defaults.
+	mode string
 
 	mu      sync.Mutex
+	agent   *anvil.Agent
 	run     *anvil.Run
 	runID   string
 	runDone chan struct{}
 }
 
-func newSession(id string, agent *anvil.Agent, cwd string) *session {
-	return &session{id: id, agent: agent, cwd: cwd}
+// newSession reserves an id before the agent exists. The permission callback
+// needs the session's identity at option-build time, and the SDK needs the
+// options before it can hand back an agent, so the agent is attached afterwards.
+func newSession(id, cwd, mode string) *session {
+	return &session{id: id, cwd: cwd, mode: mode}
+}
+
+func (s *session) attach(agent *anvil.Agent) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.agent = agent
+}
+
+// sdk returns the live agent, or nil when attach has not run or the session was
+// closed.
+func (s *session) sdk() *anvil.Agent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.agent
+}
+
+// activeRunID reports the in-flight run's id, for correlating an approval.
+func (s *session) activeRunID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.runID
 }
 
 // beginRun claims the session for a run. It reports the previous run's id when

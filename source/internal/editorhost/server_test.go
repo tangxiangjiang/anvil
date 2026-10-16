@@ -59,7 +59,8 @@ func TestPromptStreamsEventsToDone(t *testing.T) {
 		t.Fatalf("prompt returned no run id: %v", ack)
 	}
 
-	events, done := h.collectRun(15 * time.Second)
+	out := h.collectRunOK(15 * time.Second)
+	events, done := out.events, out.done
 
 	types := eventTypes(events)
 	for _, want := range []string{"progress", "tool_call", "tool_result", "assistant"} {
@@ -151,7 +152,7 @@ func TestCancelEndsRunWithCancelledStatus(t *testing.T) {
 
 	h.callOK(MethodCancel, CancelParams{SessionID: sessionID, RunID: runID})
 
-	_, done := h.collectRun(15 * time.Second)
+	done := h.collectRunOK(15 * time.Second).done
 	dp := paramsOf(t, done)
 	if dp["status"] != "cancelled" {
 		t.Fatalf("done status=%v want cancelled (%v)", dp["status"], dp)
@@ -185,7 +186,7 @@ func TestResumeContinuesAPersistedSession(t *testing.T) {
 	agentID, _ := sess["agent_id"].(string)
 
 	h.callOK(MethodPrompt, PromptParams{SessionID: sessionID, Message: "hello"})
-	_, done := h.collectRun(15 * time.Second)
+	done := h.collectRunOK(15 * time.Second).done
 	if paramsOf(t, done)["status"] != "finished" {
 		t.Fatalf("first run did not finish: %v", done)
 	}
@@ -215,7 +216,7 @@ func TestResumeContinuesAPersistedSession(t *testing.T) {
 	}
 
 	h.callOK(MethodPrompt, PromptParams{SessionID: resumedSession, Message: "again"})
-	_, done2 := h.collectRun(15 * time.Second)
+	done2 := h.collectRunOK(15 * time.Second).done
 	dp := paramsOf(t, done2)
 	if dp["status"] != "finished" || dp["result"] != "second" {
 		t.Fatalf("resumed run did not produce the second scripted answer: %v", dp)

@@ -60,6 +60,7 @@ type Registry struct {
 	maxOutput  int
 	tools      map[string]Tool
 	permission PermissionFunc
+	permGroups map[string]bool
 	preExec    PreExecFunc
 	postExec   PostExecFunc
 	indexEmbed IndexEmbed
@@ -156,13 +157,32 @@ func (r *Registry) Names() []string {
 	return out
 }
 
-// SetPermission installs a mutating-tool gate. nil clears the gate.
+// SetPermission installs a tool gate. nil clears the gate.
 func (r *Registry) SetPermission(fn PermissionFunc) {
 	r.permission = fn
 }
 
-// PermissionFunc decides allow/deny/rewrite for mutating tools.
-type PermissionFunc func(ctx context.Context, name string, args json.RawMessage) (json.RawMessage, error)
+// SetPermissionGroups widens the gate beyond the mutating built-ins.
+//
+// Empty leaves the historical behaviour untouched: only write_file, edit_file,
+// apply_patch, and shell are gated. Non-empty gates the built-in tools covered
+// by the selectors (group names or literal tool names) plus every external tool
+// — MCP servers, plugins, and caller-registered Options.Tools — because those
+// belong to no group and would otherwise run unattended.
+//
+// Groups alone open no gate: with no PermissionFunc installed there is nobody
+// to ask, and Execute keeps running every tool. A caller that wants an approval
+// prompt must install both.
+func (r *Registry) SetPermissionGroups(selectors []string) {
+	if r == nil {
+		return
+	}
+	r.permGroups = ExpandToolSelectors(selectors)
+}
+
+// PermissionFunc decides allow/deny/rewrite for a gated tool call, given the
+// call's preview.
+type PermissionFunc func(ctx context.Context, name string, args json.RawMessage, preview Preview) (json.RawMessage, error)
 
 var mutatingTools = map[string]bool{
 	"write_file":  true,
@@ -174,6 +194,17 @@ var mutatingTools = map[string]bool{
 // IsMutating reports whether a built-in tool changes the workspace or runs commands.
 func IsMutating(name string) bool {
 	return mutatingTools[name]
+}
+
+// gated reports whether the permission hook applies to this call.
+func (r *Registry) gated(name string, t Tool) bool {
+	if len(r.permGroups) == 0 {
+		return IsMutating(name)
+	}
+	if IsExternalTool(t) {
+		return true
+	}
+	return SelectorSetMatches(name, r.permGroups)
 }
 
 // Defs returns tool schemas for the LLM.
@@ -202,8 +233,10 @@ func (r *Registry) Execute(ctx context.Context, name string, args json.RawMessag
 			return Result{Content: err.Error(), IsError: true}
 		}
 	}
-	if r.permission != nil && IsMutating(name) {
-		next, err := r.permission(ctx, name, args)
+	if r.permission != nil && r.gated(name, t) {
+		// A denied call is reported to the model as a tool error rather than
+		// aborting the run, so the model can adapt instead of dying.
+		next, err := r.permission(ctx, name, args, r.PreviewFor(name, args))
 		if err != nil {
 			return Result{Content: err.Error(), IsError: true}
 		}

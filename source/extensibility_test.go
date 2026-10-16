@@ -71,11 +71,11 @@ func TestCustomToolAndCollision(t *testing.T) {
 func TestPermissionDenyWrite(t *testing.T) {
 	dir := t.TempDir()
 	reg := tools.NewRegistry(dir, false)
-	reg.SetPermission(func(ctx context.Context, name string, args json.RawMessage) (json.RawMessage, error) {
+	reg.SetPermission(func(ctx context.Context, name string, args json.RawMessage, _ tools.Preview) (json.RawMessage, error) {
 		return nil, context.Canceled // any error denies
 	})
 	// replace with proper deny message style via anvil hook path
-	reg.SetPermission(func(ctx context.Context, name string, args json.RawMessage) (json.RawMessage, error) {
+	reg.SetPermission(func(ctx context.Context, name string, args json.RawMessage, _ tools.Preview) (json.RawMessage, error) {
 		return nil, errDeny("no writes")
 	})
 	res := reg.Execute(context.Background(), "write_file", json.RawMessage(`{"path":"a.txt","content":"x"}`))

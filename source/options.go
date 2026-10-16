@@ -47,8 +47,23 @@ type Options struct {
 	// When SettingSources load file MCP, inline entries override same-named file servers.
 	MCPServers map[string]MCPServerConfig
 
-	// Permission is invoked before mutating built-ins (write_file, edit_file, shell).
+	// Permission is invoked before a gated tool call. Which calls that covers is
+	// set by PermissionGroups; with no groups it is the historical set of
+	// mutating built-ins (write_file, edit_file, apply_patch, shell).
+	// Passing Preview through lets a UI show the change before answering.
 	Permission PermissionFunc
+
+	// PermissionGroups widens Permission beyond the mutating built-ins (0.35+).
+	//
+	// Empty keeps today's behaviour exactly: only write_file, edit_file,
+	// apply_patch, and shell are gated. Non-empty gates the built-in tools in
+	// the listed groups (write, edit, shell, verify, web, mcp, …) or by literal
+	// tool name, plus every external tool — MCP servers, plugins, and
+	// Options.Tools entries — because those belong to no group and would
+	// otherwise run without ever asking.
+	//
+	// Has no effect unless Permission is also set, since there is nobody to ask.
+	PermissionGroups []string
 
 	// HistoryMaxChars enables context compression when history exceeds this size (0 = off).
 	HistoryMaxChars int
@@ -261,14 +276,41 @@ type MCPServerConfig struct {
 	Headers map[string]string
 }
 
-// PermissionFunc decides whether a mutating tool may run.
+// PermissionFunc decides whether a gated tool may run.
 type PermissionFunc func(ctx context.Context, req PermissionRequest) (PermissionDecision, error)
 
-// PermissionRequest describes a pending mutating tool call.
+// PermissionRequest describes a pending gated tool call.
 type PermissionRequest struct {
 	ToolName string
 	Args     json.RawMessage
+	// Preview is what the call would do, computed without doing it (0.35+).
+	// It is best-effort: an empty Kind means the tool's effect could not be
+	// previewed, not that the call is harmless.
+	Preview ToolPreview
 }
+
+// ToolPreview is a description of a pending tool call's effect.
+type ToolPreview struct {
+	// Kind is "diff", "command", "summary", or "" when there is nothing to show.
+	Kind string
+	// Path is the target of a diff preview; for apply_patch it lists every file
+	// the patch touches, comma-separated.
+	Path string
+	// Diff is a unified diff of the projected change, for Kind == "diff".
+	Diff string
+	// Command is the argv that would run, for Kind == "command". shell is the
+	// one exception: its argv is the single command string it hands to a shell.
+	Command []string
+	// Summary is a one-line description for Kind == "summary".
+	Summary string
+}
+
+// Preview kinds, mirroring the values ToolPreview.Kind takes.
+const (
+	PreviewDiff    = "diff"
+	PreviewCommand = "command"
+	PreviewSummary = "summary"
+)
 
 // PermissionDecision is the hook outcome.
 type PermissionDecision struct {

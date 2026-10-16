@@ -46,6 +46,9 @@ type stubLLM struct {
 	mu    sync.Mutex
 	turns []turn
 	calls int
+	// lastBody is the raw body of the most recent request, so a test can assert
+	// on what actually reached the model (system text, prompt prefixes).
+	lastBody string
 	// blockUntilCancel makes every request hang until the client goes away,
 	// which is how the cancel path is exercised.
 	blockUntilCancel bool
@@ -67,17 +70,30 @@ func (s *stubLLM) callCount() int {
 	return s.calls
 }
 
+func (s *stubLLM) lastRequestBody(t *testing.T) string {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.calls == 0 {
+		t.Fatal("the stub has not been called yet")
+	}
+	return s.lastBody
+}
+
 func (s *stubLLM) serve(w http.ResponseWriter, r *http.Request) {
 	if s.blockUntilCancel {
 		<-r.Context().Done()
 		return
 	}
+	body, _ := io.ReadAll(r.Body)
+
 	s.mu.Lock()
 	var current turn
 	if s.calls < len(s.turns) {
 		current = s.turns[s.calls]
 	}
 	s.calls++
+	s.lastBody = string(body)
 	s.mu.Unlock()
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -242,21 +258,57 @@ func (h *harness) next(timeout time.Duration) map[string]any {
 	return nil
 }
 
-// collectRun drains notifications until the terminal done.
-func (h *harness) collectRun(timeout time.Duration) (events []map[string]any, done map[string]any) {
+// runOutcome is one run driven to its terminal done notification.
+type runOutcome struct {
+	events    []map[string]any
+	approvals []map[string]any
+	done      map[string]any
+}
+
+// autoApprove answers every approval.request with DecisionAllow.
+func autoApprove(map[string]any) map[string]any {
+	return map[string]any{"decision": DecisionAllow}
+}
+
+// collectRun drains notifications until the terminal done, answering approvals
+// with the given policy. Return nil from answer to leave a request pending —
+// which is how the timeout and cancel paths are exercised.
+func (h *harness) collectRun(timeout time.Duration, answer func(req map[string]any) map[string]any) runOutcome {
 	h.t.Helper()
+	var out runOutcome
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		m := h.next(time.Until(deadline))
 		switch m["method"] {
 		case NotifyEvent:
-			events = append(events, m)
+			out.events = append(out.events, m)
+		case NotifyApprovalRequest:
+			out.approvals = append(out.approvals, m)
+			if answer == nil {
+				continue
+			}
+			resp := answer(paramsOf(h.t, m))
+			if resp == nil {
+				continue
+			}
+			params := map[string]any{"request_id": paramsOf(h.t, m)["request_id"]}
+			for k, v := range resp {
+				params[k] = v
+			}
+			h.callOK(MethodApprovalResponse, params)
 		case NotifyDone:
-			return events, m
+			out.done = m
+			return out
 		}
 	}
 	h.t.Fatal("run never reached done")
-	return nil, nil
+	return out
+}
+
+// collectRunOK is collectRun with every approval allowed.
+func (h *harness) collectRunOK(timeout time.Duration) runOutcome {
+	h.t.Helper()
+	return h.collectRun(timeout, autoApprove)
 }
 
 func rpcErrorOf(m map[string]any) (*RPCError, bool) {

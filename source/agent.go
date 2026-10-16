@@ -376,10 +376,15 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 		AllowCommands: opts.AllowHookCommands,
 		CWD:           cwd,
 	}
+	reg.SetPermissionGroups(opts.PermissionGroups)
 	perm := composePermission(opts.Permission, hookFile, hookOpts)
 	if perm != nil {
-		reg.SetPermission(func(ctx context.Context, name string, args json.RawMessage) (json.RawMessage, error) {
-			dec, err := perm(ctx, PermissionRequest{ToolName: name, Args: args})
+		reg.SetPermission(func(ctx context.Context, name string, args json.RawMessage, preview tools.Preview) (json.RawMessage, error) {
+			dec, err := perm(ctx, PermissionRequest{
+				ToolName: name,
+				Args:     args,
+				Preview:  toToolPreview(preview),
+			})
 			if err != nil {
 				return nil, err
 			}
@@ -644,6 +649,17 @@ func configureWebTools(reg *tools.Registry, opts Options) error {
 		AllowPrivateURLs: ws.AllowPrivateURLs,
 	})
 	return nil
+}
+
+// toToolPreview lifts the runtime's preview into the public type.
+func toToolPreview(p tools.Preview) ToolPreview {
+	return ToolPreview{
+		Kind:    p.Kind,
+		Path:    p.Path,
+		Diff:    p.Diff,
+		Command: p.Command,
+		Summary: p.Summary,
+	}
 }
 
 func composePermission(user PermissionFunc, hookFile *hooks.File, hookOpts hooks.CheckOpts) PermissionFunc {

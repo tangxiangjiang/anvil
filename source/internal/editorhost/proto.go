@@ -13,7 +13,10 @@
 // be written to stdout; diagnostics go to stderr.
 package editorhost
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"time"
+)
 
 // ProtocolVersion is the editor host protocol revision. A breaking change to a
 // method name, param, or result shape bumps it (same rule as the agentd
@@ -35,13 +38,18 @@ const (
 	MethodCancel        = "cancel"
 	MethodModelsList    = "models.list"
 	MethodShutdown      = "shutdown"
+
+	// MethodApprovalResponse answers a pending approval.request. It is the only
+	// client request that resolves a notification the host sent earlier.
+	MethodApprovalResponse = "approval.response"
 )
 
 // Host to client notification methods.
 const (
-	NotifyEvent = "event"
-	NotifyDone  = "done"
-	NotifyLog   = "log"
+	NotifyEvent           = "event"
+	NotifyDone            = "done"
+	NotifyLog             = "log"
+	NotifyApprovalRequest = "approval.request"
 )
 
 // JSON-RPC 2.0 standard error codes.
@@ -63,6 +71,9 @@ const (
 	CodeNoRun = -32002
 	// CodeRunInProgress reports a prompt while the session is already running.
 	CodeRunInProgress = -32003
+	// CodeNoApproval reports an approval.response naming a request that is not
+	// pending — already answered, timed out, or aborted by a cancel.
+	CodeNoApproval = -32004
 )
 
 // Request is one inbound JSON-RPC call or notification. A nil ID marks a
@@ -149,6 +160,21 @@ type SessionParams struct {
 	DisallowedTools []string `json:"disallowed_tools,omitempty"`
 	Skills          []string `json:"skills,omitempty"`
 	Plugins         []string `json:"plugins,omitempty"`
+
+	// PermissionMode selects the approval policy. Empty means ModeAsk.
+	PermissionMode string `json:"permission_mode,omitempty"`
+	// PermissionGroups narrows or widens what ModeAsk / ModeAcceptEdits gate.
+	// Empty means DefaultPermissionGroups; ModeBypass ignores it.
+	PermissionGroups []string `json:"permission_groups,omitempty"`
+	// ApprovalTimeoutMS bounds how long a gated call waits for the client.
+	// Zero means DefaultApprovalTimeout; negative means wait until the run ends.
+	ApprovalTimeoutMS int `json:"approval_timeout_ms,omitempty"`
+
+	// TestCommand and BuildCommand register the run_tests and build tools. They
+	// are argv arrays and never shell strings, so the client decides exactly
+	// which process runs; the workspace settings supply the defaults.
+	TestCommand  []string `json:"test_command,omitempty"`
+	BuildCommand []string `json:"build_command,omitempty"`
 }
 
 // SessionResult is the identity of a live session.
@@ -158,6 +184,96 @@ type SessionResult struct {
 	CWD       string `json:"cwd"`
 	Provider  string `json:"provider"`
 	Model     string `json:"model"`
+	// PermissionMode is the mode the session was actually created with, after
+	// defaults were applied.
+	PermissionMode string `json:"permission_mode"`
+}
+
+// ---------------------------------------------------------------------------
+// approval.request / approval.response
+// ---------------------------------------------------------------------------
+
+// Permission modes, Claude Code-class. They compose public SDK options only.
+const (
+	// ModeAsk round-trips every gated call to the client.
+	ModeAsk = "ask"
+	// ModeAcceptEdits auto-allows in-workspace writes and edits; shell, verify,
+	// egress, and external tools still ask. The SDK sandbox already guarantees
+	// that path-taking tools stay inside the workspace, so "in workspace" needs
+	// no extra check here.
+	ModeAcceptEdits = "accept_edits"
+	// ModePlan removes the tools that can change the workspace, so the model
+	// produces a plan and stops.
+	ModePlan = "plan"
+	// ModeBypass installs no gate at all. The client is expected to say so
+	// loudly; the host deliberately does not soften it.
+	ModeBypass = "bypass"
+)
+
+// DefaultPermissionGroups is what ModeAsk and ModeAcceptEdits gate when the
+// client names no groups. It closes the historical gap: before 0.35 only
+// write_file, edit_file, apply_patch, and shell were gated, leaving run_tests,
+// build, egress, MCP, plugin, and custom tools able to run unattended.
+var DefaultPermissionGroups = []string{"write", "edit", "shell", "verify", "web", "mcp"}
+
+// DefaultApprovalTimeout bounds an unanswered approval. On expiry the call is
+// denied, so a run can never hang forever on a closed editor window.
+const DefaultApprovalTimeout = 5 * time.Minute
+
+// Approval decisions.
+const (
+	// DecisionAllow runs this call only.
+	DecisionAllow = "allow"
+	// DecisionAllowSession runs it and stops asking for the same tool and scope
+	// for the rest of the session.
+	DecisionAllowSession = "allow_session"
+	// DecisionDeny refuses it. The model sees a tool error and can adapt.
+	DecisionDeny = "deny"
+)
+
+// ApprovalPreview is what a gated call would do, projected from the SDK's
+// public anvil.ToolPreview.
+type ApprovalPreview struct {
+	// Kind is "diff", "command", "summary", or empty when nothing could be
+	// previewed — which is not a statement that the call is harmless.
+	Kind string `json:"kind,omitempty"`
+	Path string `json:"path,omitempty"`
+	Diff string `json:"diff,omitempty"`
+	// Command is a display-ready argv. shell carries its one command string.
+	Command []string `json:"command,omitempty"`
+	Summary string   `json:"summary,omitempty"`
+}
+
+// ApprovalRequestParams asks the client to allow or deny one tool call. It is a
+// notification: the client answers with an approval.response request carrying
+// the same request_id.
+type ApprovalRequestParams struct {
+	RequestID string          `json:"request_id"`
+	SessionID string          `json:"session_id"`
+	RunID     string          `json:"run_id"`
+	Tool      string          `json:"tool"`
+	Args      json.RawMessage `json:"args,omitempty"`
+	Preview   ApprovalPreview `json:"preview"`
+	// Decisions lists the answers this host accepts, so a client can render
+	// buttons from the protocol rather than hard-coding them.
+	Decisions []string `json:"decisions"`
+	// TimeoutMS is how long the host will wait, for a UI countdown.
+	TimeoutMS int `json:"timeout_ms,omitempty"`
+}
+
+// ApprovalResponseParams answers an approval.request.
+type ApprovalResponseParams struct {
+	RequestID string `json:"request_id"`
+	Decision  string `json:"decision"`
+	// Scope, with DecisionAllowSession, narrows what is remembered. The host
+	// does not interpret it, it only compares it verbatim, so a client can
+	// allow one path by sending it and allow the whole tool by omitting it.
+	Scope string `json:"scope,omitempty"`
+	// Args, when set, replaces the call's arguments. It is the client's way to
+	// approve an edited version of what the model proposed.
+	Args json.RawMessage `json:"args,omitempty"`
+	// Message is shown to the model when the decision is deny.
+	Message string `json:"message,omitempty"`
 }
 
 // ---------------------------------------------------------------------------

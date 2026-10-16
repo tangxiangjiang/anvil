@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/anvil-dev/anvil"
 )
@@ -44,6 +45,8 @@ type Server struct {
 	in  io.Reader
 	out *outbound
 
+	approvals *approvalBroker
+
 	mu        sync.Mutex
 	cfg       Config
 	cwd       string
@@ -61,11 +64,12 @@ func New(cfg Config, in io.Reader, out io.Writer) *Server {
 		}
 	}
 	return &Server{
-		in:       in,
-		out:      newOutbound(out),
-		cfg:      cfg,
-		cwd:      cfg.CWD,
-		sessions: map[string]*session{},
+		in:        in,
+		out:       newOutbound(out),
+		approvals: newApprovalBroker(),
+		cfg:       cfg,
+		cwd:       cfg.CWD,
+		sessions:  map[string]*session{},
 	}
 }
 
@@ -165,6 +169,8 @@ func (s *Server) dispatch(ctx context.Context, req *Request) (any, *RPCError) {
 		return s.handleCancel(ctx, req.Params)
 	case MethodModelsList:
 		return s.handleModelsList(ctx, req.Params)
+	case MethodApprovalResponse:
+		return s.handleApprovalResponse(req.Params)
 	default:
 		return nil, errCode(CodeMethodNotFound, "unknown method: "+req.Method)
 	}
@@ -218,8 +224,7 @@ func (s *Server) handleInitialize(params json.RawMessage) (any, *RPCError) {
 }
 
 func capabilities() []string {
-	// "approval" joins this list in p_0.35.3.
-	return []string{"streaming", "sessions", "resume", "cancel", "models"}
+	return []string{"streaming", "sessions", "resume", "cancel", "models", "approval"}
 }
 
 // ---------------------------------------------------------------------------
@@ -231,7 +236,16 @@ func (s *Server) handleSessionNew(ctx context.Context, params json.RawMessage) (
 	if err != nil {
 		return nil, errInvalidParams("session.new: " + err.Error())
 	}
-	opts, rpcErr := s.buildOptions(p)
+	// The session is reserved before the agent exists: the permission callback
+	// needs its identity, and the SDK needs the options before it can hand back
+	// an agent.
+	sessID := "sess-" + newID()
+	mode, rpcErr := permissionMode(p.PermissionMode)
+	if rpcErr != nil {
+		return nil, rpcErr
+	}
+	sess := newSession(sessID, s.cwdPath(), mode)
+	opts, rpcErr := s.buildOptions(p, sess)
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
@@ -239,9 +253,9 @@ func (s *Server) handleSessionNew(ctx context.Context, params json.RawMessage) (
 	if err != nil {
 		return nil, errHost(err)
 	}
-	sess := newSession("sess-"+newID(), agent, opts.Local.CWD)
+	sess.attach(agent)
 	s.addSession(sess)
-	s.logf("session.new id=%s agent=%s model=%s", sess.id, agent.AgentID(), opts.Model.ID)
+	s.logf("session.new id=%s agent=%s model=%s mode=%s", sess.id, agent.AgentID(), opts.Model.ID, mode)
 	return sessionResult(sess, opts), nil
 }
 
@@ -253,7 +267,13 @@ func (s *Server) handleSessionResume(ctx context.Context, params json.RawMessage
 	if strings.TrimSpace(p.AgentID) == "" {
 		return nil, errInvalidParams("session.resume: agent_id is required")
 	}
-	opts, rpcErr := s.buildOptions(p)
+	sessID := "sess-" + newID()
+	mode, rpcErr := permissionMode(p.PermissionMode)
+	if rpcErr != nil {
+		return nil, rpcErr
+	}
+	sess := newSession(sessID, s.cwdPath(), mode)
+	opts, rpcErr := s.buildOptions(p, sess)
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
@@ -261,9 +281,9 @@ func (s *Server) handleSessionResume(ctx context.Context, params json.RawMessage
 	if err != nil {
 		return nil, errHost(err)
 	}
-	sess := newSession("sess-"+newID(), agent, opts.Local.CWD)
+	sess.attach(agent)
 	s.addSession(sess)
-	s.logf("session.resume id=%s agent=%s", sess.id, agent.AgentID())
+	s.logf("session.resume id=%s agent=%s mode=%s", sess.id, agent.AgentID(), mode)
 	return sessionResult(sess, opts), nil
 }
 
@@ -312,13 +332,18 @@ func (s *Server) handleSessionClose(params json.RawMessage) (any, *RPCError) {
 	if !ok {
 		return nil, errCode(CodeNoSession, "unknown session: "+p.SessionID)
 	}
+	// Release anything blocked on an approval before the agent goes, so the
+	// tool call unwinds with a reason instead of by context cancellation alone.
+	s.approvals.abortSession(sess.id, "the session was closed")
 	if run, _ := sess.activeRun(); run != nil {
 		_ = run.Cancel(context.Background())
 		// Let the drain goroutine emit the terminal done before the agent goes.
 		sess.waitRun(closeRunTimeout)
 	}
-	if err := sess.agent.Close(); err != nil {
-		return nil, errHost(err)
+	if agent := sess.sdk(); agent != nil {
+		if err := agent.Close(); err != nil {
+			return nil, errHost(err)
+		}
 	}
 	s.logf("session.close id=%s", sess.id)
 	return map[string]any{}, nil
@@ -343,7 +368,15 @@ func (s *Server) handlePrompt(ctx context.Context, params json.RawMessage) (any,
 	if _, runID := sess.activeRun(); runID != "" {
 		return nil, errCode(CodeRunInProgress, "session already has an active run: "+runID)
 	}
-	run, err := sess.agent.Send(ctx, p.Message)
+	agent := sess.sdk()
+	if agent == nil {
+		return nil, errCode(CodeNoSession, "session is not open: "+p.SessionID)
+	}
+	message := p.Message
+	if sess.mode == ModePlan {
+		message = planPromptPrefix + "\n\n" + message
+	}
+	run, err := agent.Send(ctx, message)
 	if err != nil {
 		return nil, errHost(err)
 	}
@@ -355,7 +388,7 @@ func (s *Server) handlePrompt(ctx context.Context, params json.RawMessage) (any,
 	return PromptResult{
 		SessionID: sess.id,
 		RunID:     run.ID(),
-		AgentID:   sess.agent.AgentID(),
+		AgentID:   agent.AgentID(),
 	}, nil
 }
 
@@ -375,6 +408,10 @@ func (s *Server) handleCancel(ctx context.Context, params json.RawMessage) (any,
 	if p.RunID != "" && p.RunID != runID {
 		return nil, errCode(CodeNoRun, "session is running "+runID+", not "+p.RunID)
 	}
+	// Answer any approval still waiting on this run first: the tool call is
+	// blocked inside the run, and a cancel that left it waiting would keep the
+	// user staring at a prompt for a run that is already gone.
+	s.approvals.abortRun(runID, "the run was cancelled")
 	if err := run.Cancel(ctx); err != nil {
 		return nil, errHost(err)
 	}
@@ -438,22 +475,30 @@ func (s *Server) handleModelsList(ctx context.Context, params json.RawMessage) (
 // APIKey is intentionally never set here: the SDK reads ANVIL_API_KEY from the
 // process environment, which the client populates from SecretStorage. The key
 // does not cross the protocol.
-func (s *Server) buildOptions(p SessionParams) (anvil.Options, *RPCError) {
+func (s *Server) buildOptions(p SessionParams, sess *session) (anvil.Options, *RPCError) {
+	groups := groupsForMode(sess.mode, p.PermissionGroups)
 	opts := anvil.Options{
-		Provider:        anvil.Provider(firstNonEmpty(p.Provider, s.cfg.Provider, os.Getenv("ANVIL_PROVIDER"))),
-		BaseURL:         firstNonEmpty(p.BaseURL, s.cfg.BaseURL, os.Getenv("ANVIL_BASE_URL")),
-		SystemPrompt:    p.SystemPrompt,
-		MaxSteps:        p.MaxSteps,
-		BuiltinTools:    p.BuiltinTools,
-		DisallowedTools: p.DisallowedTools,
-		Skills:          p.Skills,
-		Plugins:         p.Plugins,
+		PermissionGroups: groups,
+		Provider:         anvil.Provider(firstNonEmpty(p.Provider, s.cfg.Provider, os.Getenv("ANVIL_PROVIDER"))),
+		BaseURL:          firstNonEmpty(p.BaseURL, s.cfg.BaseURL, os.Getenv("ANVIL_BASE_URL")),
+		SystemPrompt:     p.SystemPrompt,
+		MaxSteps:         p.MaxSteps,
+		BuiltinTools:     p.BuiltinTools,
+		DisallowedTools:  p.DisallowedTools,
+		Skills:           p.Skills,
+		Plugins:          p.Plugins,
 		Local: anvil.LocalOptions{
 			CWD:             s.cwdPath(),
 			LoadRules:       p.LoadRules,
 			LoadCursorRules: p.LoadCursorRules,
 			Store:           p.Store,
 		},
+	}
+	if len(p.TestCommand) > 0 {
+		opts.Test = anvil.TestOptions{Command: p.TestCommand}
+	}
+	if len(p.BuildCommand) > 0 {
+		opts.Build = anvil.BuildOptions{Command: p.BuildCommand}
 	}
 	if opts.Provider == "" {
 		opts.Provider = anvil.ProviderOpenAI
@@ -473,16 +518,180 @@ func (s *Server) buildOptions(p SessionParams) (anvil.Options, *RPCError) {
 			return opts, errInvalidParams("unknown setting source: " + src)
 		}
 	}
+	if sess.mode == ModePlan {
+		// Plan mode removes the tools that can change the workspace, so the
+		// model produces a plan instead of acting on it. The instruction that
+		// goes with it is a prompt prefix; see handlePrompt.
+		opts.DisallowedTools = append(append([]string(nil), opts.DisallowedTools...), planDisallowedTools...)
+	}
+	if sess.mode != ModeBypass {
+		opts.Permission = s.permissionHook(sess, approvalTimeout(p.ApprovalTimeoutMS))
+	}
 	return opts, nil
+}
+
+// planDisallowedTools is what plan mode withholds. Everything else stays
+// available, and anything gated still round-trips to the client.
+var planDisallowedTools = []string{"write", "edit", "shell", "verify"}
+
+// planPromptPrefix is prepended to the user's message in plan mode. It is a
+// prompt prefix rather than Options.SystemPrompt because that field *replaces*
+// Anvil's default system text, and the host has no way to append to text it
+// cannot read.
+const planPromptPrefix = "Plan mode is on. Research the task and reply with a concrete, ordered " +
+	"plan of the changes you would make — files, functions, and the shape of each edit. " +
+	"Do not make changes: the editing, shell, and verification tools are unavailable in this mode."
+
+// permissionMode validates a requested mode and applies the default.
+func permissionMode(raw string) (string, *RPCError) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "":
+		return ModeAsk, nil
+	case ModeAsk, ModeAcceptEdits, ModePlan, ModeBypass:
+		return strings.ToLower(strings.TrimSpace(raw)), nil
+	default:
+		return "", errInvalidParams("unknown permission_mode: " + raw)
+	}
+}
+
+// groupsForMode resolves the effective gated group set.
+//
+// The mode picks the base set; an explicit permission_groups overrides it.
+// accept_edits then drops the write and edit selectors, which is how it stops
+// asking about in-workspace edits — a composition of public SDK options rather
+// than a special case inside the callback.
+func groupsForMode(mode string, requested []string) []string {
+	if mode == ModeBypass {
+		return nil
+	}
+	groups := requested
+	if len(groups) == 0 {
+		groups = DefaultPermissionGroups
+	}
+	if mode != ModeAcceptEdits {
+		return append([]string(nil), groups...)
+	}
+	out := make([]string, 0, len(groups))
+	for _, g := range groups {
+		if editSelectors[strings.ToLower(strings.TrimSpace(g))] {
+			continue
+		}
+		out = append(out, g)
+	}
+	return out
+}
+
+// editSelectors are the selectors accept_edits withholds from the gate: the two
+// groups that only change workspace files, plus the tool names they expand to,
+// in case a client named a tool directly.
+var editSelectors = map[string]bool{
+	"write": true, "edit": true,
+	"write_file": true, "edit_file": true, "apply_patch": true,
+}
+
+// approvalTimeout resolves the per-session wait. Zero means the default;
+// negative means wait until the run ends, however long that is.
+func approvalTimeout(ms int) time.Duration {
+	switch {
+	case ms == 0:
+		return DefaultApprovalTimeout
+	case ms < 0:
+		return 0
+	default:
+		return time.Duration(ms) * time.Millisecond
+	}
+}
+
+// ---------------------------------------------------------------------------
+// approval
+// ---------------------------------------------------------------------------
+
+// permissionHook is the SDK permission callback for one session. It runs on the
+// run's goroutine and blocks until the client answers, the run is cancelled, or
+// the timeout expires — a denied call then reaches the model as a tool error.
+func (s *Server) permissionHook(sess *session, timeout time.Duration) anvil.PermissionFunc {
+	return func(ctx context.Context, req anvil.PermissionRequest) (anvil.PermissionDecision, error) {
+		scope := approvalScope(req.Preview)
+		if s.approvals.sessionAllowed(sess.id, req.ToolName, scope) {
+			return anvil.PermissionDecision{Allow: true}, nil
+		}
+
+		requestID := "appr-" + newID()
+		runID := sess.activeRunID()
+		p := s.approvals.begin(sess.id, runID, requestID, timeout)
+		s.notify(NotifyApprovalRequest, ApprovalRequestParams{
+			RequestID: requestID,
+			SessionID: sess.id,
+			RunID:     runID,
+			Tool:      req.ToolName,
+			Args:      req.Args,
+			Preview:   approvalPreview(req.Preview),
+			Decisions: []string{DecisionAllow, DecisionAllowSession, DecisionDeny},
+			TimeoutMS: int(timeout / time.Millisecond),
+		})
+
+		resp := s.approvals.wait(ctx, requestID, p)
+		switch resp.Decision {
+		case DecisionAllow:
+			return anvil.PermissionDecision{Allow: true, Args: resp.Args}, nil
+		case DecisionAllowSession:
+			s.approvals.allowSession(sess.id, req.ToolName, resp.Scope)
+			return anvil.PermissionDecision{Allow: true, Args: resp.Args}, nil
+		default:
+			msg := resp.Message
+			if msg == "" {
+				msg = "the user denied this " + req.ToolName + " call"
+			}
+			return anvil.PermissionDecision{Allow: false, Message: msg}, nil
+		}
+	}
+}
+
+// approvalScope is what a session-wide approval is keyed on. The client sees it
+// as preview.path and may echo it back narrowed; the host never interprets it.
+func approvalScope(p anvil.ToolPreview) string {
+	return p.Path
+}
+
+func approvalPreview(p anvil.ToolPreview) ApprovalPreview {
+	return ApprovalPreview{
+		Kind:    p.Kind,
+		Path:    p.Path,
+		Diff:    p.Diff,
+		Command: p.Command,
+		Summary: p.Summary,
+	}
+}
+
+func (s *Server) handleApprovalResponse(params json.RawMessage) (any, *RPCError) {
+	p, err := decode[ApprovalResponseParams](params)
+	if err != nil {
+		return nil, errInvalidParams("approval.response: " + err.Error())
+	}
+	if strings.TrimSpace(p.RequestID) == "" {
+		return nil, errInvalidParams("approval.response: request_id is required")
+	}
+	switch p.Decision {
+	case DecisionAllow, DecisionAllowSession, DecisionDeny:
+	default:
+		// A malformed answer is the client's bug, not a stale request id, so it
+		// must not be reported as CodeNoApproval — that would read as "too late".
+		return nil, errInvalidParams("approval.response: unknown decision: " + p.Decision)
+	}
+	if err := s.approvals.answer(p); err != nil {
+		return nil, errCode(CodeNoApproval, err.Error())
+	}
+	return map[string]any{}, nil
 }
 
 func sessionResult(sess *session, opts anvil.Options) SessionResult {
 	return SessionResult{
-		SessionID: sess.id,
-		AgentID:   sess.agent.AgentID(),
-		CWD:       opts.Local.CWD,
-		Provider:  string(opts.Provider),
-		Model:     opts.Model.ID,
+		SessionID:      sess.id,
+		AgentID:        sess.sdk().AgentID(),
+		CWD:            opts.Local.CWD,
+		Provider:       string(opts.Provider),
+		Model:          opts.Model.ID,
+		PermissionMode: sess.mode,
 	}
 }
 
@@ -535,13 +744,19 @@ func (s *Server) closeAll() {
 	s.sessionID = nil
 	s.mu.Unlock()
 
+	// Nothing may be left waiting on an approval the host will never deliver.
+	s.approvals.abortAll("the host is shutting down")
+
 	for _, sess := range all {
-		if run, _ := sess.activeRun(); run != nil {
+		if run, runID := sess.activeRun(); run != nil {
+			s.approvals.abortRun(runID, "the host is shutting down")
 			_ = run.Cancel(context.Background())
 			sess.waitRun(closeRunTimeout)
 		}
-		if err := sess.agent.Close(); err != nil {
-			s.logf("close session %s: %v", sess.id, err)
+		if agent := sess.sdk(); agent != nil {
+			if err := agent.Close(); err != nil {
+				s.logf("close session %s: %v", sess.id, err)
+			}
 		}
 	}
 }
