@@ -84,6 +84,24 @@ body {
   gap: var(--anvil-gap);
 }
 
+/*
+ * The transcript is a column flex container, and flex items shrink by default.
+ * An item shrinks no further than its automatic minimum size — which is its
+ * content height only while its overflow is `visible`. A tool card sets
+ * `overflow: hidden`, so its minimum is 0 and it compressed to a sliver instead
+ * of the transcript overflowing and scrolling. The gap between items is not
+ * compressible, which is what made a long run of tool calls look like evenly
+ * spaced rules with a coloured dot at the start of each.
+ *
+ * `flex: 0 0 auto` restores normal block behaviour: an item is as tall as its
+ * content, however many there are, and the transcript scrolls. The palette is
+ * the other scroll container here, so it gets the same rule.
+ */
+.transcript > *,
+.palette > * {
+  flex: 0 0 auto;
+}
+
 .empty {
   color: var(--vscode-descriptionForeground);
   margin: auto;
