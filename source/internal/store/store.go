@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // Record kinds.
@@ -183,6 +184,7 @@ type Summary struct {
 	CWD        string
 	Provider   string
 	Model      string
+	Title      string
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
 	LastStatus string
@@ -249,6 +251,13 @@ func Summarize(records []Record) Summary {
 			if sum.Model == "" {
 				sum.Model = rec.Model
 			}
+		case TypeMessage:
+			// The first thing a person typed is what the session is about. A
+			// later message is a follow-up, not a better name, and a session
+			// nobody prompted simply has no title.
+			if sum.Title == "" && rec.Role == "user" {
+				sum.Title = titleOf(rec.Content)
+			}
 		case TypeRunEnd:
 			sum.Runs++
 			sum.LastStatus = rec.Status
@@ -266,6 +275,42 @@ func Summarize(records []Record) Summary {
 		sum.Usage = &u
 	}
 	return sum
+}
+
+// titleLimit is how much of a first message becomes a session's title. It is
+// applied here rather than in a client because this is the one place every
+// consumer reads a title from, and a prompt can be hundreds of kilobytes while
+// a listing carries every session in the workspace.
+const titleLimit = 80
+
+// titleOf turns a prompt into a title: one line, no control characters, cut at
+// titleLimit runes. Runes and not bytes, because a byte cut splits a multi-byte
+// character — and it does so first for the people who write the fewest Latin
+// characters, which is the worst possible way to get it wrong.
+func titleOf(content string) string {
+	out := make([]rune, 0, titleLimit)
+	pendingSpace := false
+	for _, r := range content {
+		switch {
+		case unicode.IsSpace(r):
+			// Held rather than written, so a run of spaces and newlines — and a
+			// trailing one — collapse to nothing instead of to a gap.
+			pendingSpace = len(out) > 0
+		case unicode.IsControl(r):
+			// Dropped, not folded: a control character is not a break in the
+			// text, it is a byte no sidebar can render.
+		default:
+			if pendingSpace {
+				out = append(out, ' ')
+				pendingSpace = false
+			}
+			if len(out) == titleLimit {
+				return string(out) + "…"
+			}
+			out = append(out, r)
+		}
+	}
+	return string(out)
 }
 
 func safeID(agentID string) error {

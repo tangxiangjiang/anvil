@@ -101,7 +101,7 @@ names both sides and stops rather than failing later inside a tool call.
 | `Anvil refuses to run in an untrusted workspace.` | Expected. Trust the folder (**Workspaces: Manage Workspace Trust**) — the extension will not start an agent that can edit and execute in a folder you have not trusted. |
 | The chat tab opens but nothing streams | The provider refused the run; the tab says which and why. Check **Anvil: Set API Key** and `anvil.baseUrl` / `anvil.model`. |
 | The session list says it could not list sessions | The sidebar reports the spawn failure in the row's tooltip. Refresh it after fixing the cause; the list is cached, so a failure is not retried on its own. |
-| A session row shows an agent id and nothing else | That is all the store has: there is no session title, and the extension does not invent one. The tooltip has the workspace, model, timestamps and run count. |
+| A session row shows an agent id instead of a title | The session was never prompted, so there is no first message to name it by. The extension falls back to the id rather than inventing a title; the tooltip has the workspace, model, timestamps and run count either way. |
 | Nothing happens in a folder with no files opened | The host's working directory is the workspace folder, so a single-file window has none. Open a folder. |
 
 ## Configuring a model
@@ -204,13 +204,15 @@ run count beside it. A click opens the chat tab onto that session. The run icon
 in the view's title bar starts a new conversation and the refresh icon re-reads
 the list; **Anvil: Refresh Sessions** does the same from the palette.
 
-The rows are what `session.list` returns and nothing more. There is no session
-title in the protocol, so a row is labelled with the first characters of its
-agent id and the tooltip carries the rest — workspace, model, timestamps, run
-count and tokens. A session that the store has no timestamp for is listed under
-**Undated** rather than being filed under a day it may not belong to, and an
-empty list says which of the three reasons it is: no folder open, an untrusted
-workspace, or a host that could not be started (with the host's own error).
+The rows are what `session.list` returns and nothing more. A row is labelled with
+the session's title — the first thing you typed in it, one line and truncated —
+and the tooltip carries the whole agent id along with the workspace, model,
+timestamps, run count and tokens. A session nobody prompted has no first message,
+so it falls back to the shortened id rather than to a title the extension made
+up. A session that the store has no timestamp for is listed under **Undated**
+rather than being filed under a day it may not belong to, and an empty list says
+which of the three reasons it is: no folder open, an untrusted workspace, or a
+host that could not be started (with the host's own error).
 
 The list is cached and only re-read when something changes — a run starting or
 finishing, a session opening, the host restarting. The view never spawns a host

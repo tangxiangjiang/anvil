@@ -479,10 +479,14 @@ type SessionListResult struct {
 
 // SessionInfo mirrors anvil.AgentInfo in host vocabulary.
 type SessionInfo struct {
-	AgentID    string `json:"agent_id"`
-	CWD        string `json:"cwd"`
-	Provider   string `json:"provider"`
-	Model      string `json:"model"`
+	AgentID  string `json:"agent_id"`
+	CWD      string `json:"cwd"`
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+	// Title is the session's first user message, one line and truncated by the
+	// store. Absent when the session was never prompted: a client falls back to
+	// the agent id rather than showing a title nobody wrote.
+	Title      string `json:"title,omitempty"`
 	CreatedAt  string `json:"created_at,omitempty"`
 	UpdatedAt  string `json:"updated_at,omitempty"`
 	LastStatus string `json:"last_status,omitempty"`

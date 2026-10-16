@@ -1,6 +1,6 @@
 # Roadmaps v1.0 (cutoff)
 
-Versioned delivery for Anvil through product **0.37**. Design cutoff: [`doc/design/v1.0/`](../../design/v1.0/).
+Versioned delivery for Anvil through product **0.38**. Design cutoff: [`doc/design/v1.0/`](../../design/v1.0/).
 
 ## Version index
 
@@ -43,6 +43,7 @@ Versioned delivery for Anvil through product **0.37**. Design cutoff: [`doc/desi
 | 0.35 | VS Code extension + editor host | done | [m_0.35_vscode_extension.md](m_0.35_vscode_extension.md) | [35](../../design/v1.0/35-vscode-extension.md) |
 | 0.36 | Tool permissions (rules + analyzer) | done | [m_0.36_tool_permissions.md](m_0.36_tool_permissions.md) | [36](../../design/v1.0/36-tool-permissions.md) |
 | 0.37 | Permission modes (a complete ladder) | done | [m_0.37_permission_modes.md](m_0.37_permission_modes.md) | [37](../../design/v1.0/37-permission-modes.md) |
+| 0.38 | Session identity & transcript replay | in_progress | [m_0.38_session_identity.md](m_0.38_session_identity.md) | [38](../../design/v1.0/38-session-identity-and-replay.md) |
 
 ## Naming
 

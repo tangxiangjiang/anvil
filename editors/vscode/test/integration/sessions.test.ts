@@ -31,10 +31,18 @@ interface Fixture {
 }
 
 /** A scripted host on its own scratch directory, recording what it is asked. */
-async function host(t: TestContext, config: SessionConfig = {}): Promise<Fixture> {
+async function host(
+  t: TestContext,
+  config: SessionConfig = {},
+  env: Record<string, string> = {},
+): Promise<Fixture> {
   const dir = mkdtempSync(path.join(tmpdir(), 'anvil-sessions-'));
   const echo = path.join(dir, 'echo.jsonl');
-  const harness = await startFakeHost('chat', { cwd: dir, env: { FAKE_HOST_ECHO: echo }, config });
+  const harness = await startFakeHost('chat', {
+    cwd: dir,
+    env: { FAKE_HOST_ECHO: echo, ...env },
+    config,
+  });
   t.after(async () => {
     await harness.stop();
     rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
@@ -94,7 +102,13 @@ test('the session listing carries what the picker shows', async (t) => {
   await waitFor(() => harness.dones.length === 1, 'the run to finish');
 
   const listing = await harness.client.request<{
-    sessions: Array<{ agent_id: string; runs: number; last_status?: string; usage?: { total_tokens: number } }>;
+    sessions: Array<{
+      agent_id: string;
+      title?: string;
+      runs: number;
+      last_status?: string;
+      usage?: { total_tokens: number };
+    }>;
   }>(Method.SessionList, {});
 
   assert.ok(listing.sessions.length >= 1);
@@ -105,6 +119,22 @@ test('the session listing carries what the picker shows', async (t) => {
   // Cumulative usage is what makes the listing worth showing at all: a row that
   // could not say what a past session cost would be a row nobody picks.
   assert.ok((row.usage?.total_tokens ?? 0) > 0);
+  // A session nobody prompted carries no title *key*, which is what the sidebar
+  // falls back to the agent id on.
+  assert.equal(row.title, undefined);
+});
+
+test('a prompted session is listed under the first thing that was typed', async (t) => {
+  const { harness } = await host(t, {}, { FAKE_HOST_TITLE: '看一下这是个什么工程' });
+  await harness.session.send('anything');
+  await waitFor(() => harness.dones.length === 1, 'the run to finish');
+
+  const listing = await harness.client.request<{ sessions: Array<{ title?: string }> }>(
+    Method.SessionList,
+    {},
+  );
+  const row = listing.sessions[listing.sessions.length - 1];
+  assert.equal(row.title, '看一下这是个什么工程');
 });
 
 test('skills.list turns into commands the composer can honour', async (t) => {

@@ -18,6 +18,7 @@ type AgentInfo struct {
 	CWD        string
 	Provider   string
 	Model      string
+	Title      string // the first user message, one line and truncated; empty when there is none
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
 	LastStatus string
@@ -109,6 +110,7 @@ func loadInfo(st store.Backend, agentID string) (AgentInfo, error) {
 		CWD:        sum.CWD,
 		Provider:   sum.Provider,
 		Model:      sum.Model,
+		Title:      sum.Title,
 		CreatedAt:  sum.CreatedAt,
 		UpdatedAt:  sum.UpdatedAt,
 		LastStatus: sum.LastStatus,

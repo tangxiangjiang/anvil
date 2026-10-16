@@ -4,7 +4,7 @@
  * The model is the half of the sidebar with no `vscode` in it, which is why it
  * is the half that can be tested at all — the provider above it only turns these
  * nodes into `TreeItem`s. What is pinned here is mostly what the model refuses
- * to do: invent a title the store does not have, guess a status it does not
+ * to do: invent a title the store did not report, guess a status it does not
  * recognise, or fold an undated session into a bucket it does not belong in.
  */
 
@@ -119,7 +119,9 @@ test('an unparseable timestamp is treated as absent, not as the epoch', () => {
   assert.equal((nodes[0] as SessionRow).agentId, 'odd');
 });
 
-test('a long agent id is shortened as a label and whole in the tooltip', () => {
+test('a session with no title is labelled with its shortened id, whole in the tooltip', () => {
+  // The fallback, and the reason the id never leaves the tooltip: a title is a
+  // label, and a label is not what `resume` takes.
   const agentId = 'agent-0123456789abcdef';
   const nodes = buildSessionView([session({ agent_id: agentId, updated_at: at(2026, 9, 16, 8) })], {
     now: NOW,
@@ -128,6 +130,26 @@ test('a long agent id is shortened as a label and whole in the tooltip', () => {
   assert.equal(row.label, agentId.slice(0, 12));
   assert.equal(row.id, agentId);
   assert.match(row.tooltip, new RegExp(agentId));
+});
+
+test('a session is labelled with its title, and still names its agent id in the tooltip', () => {
+  const agentId = 'agent-0123456789abcdef';
+  const nodes = buildSessionView(
+    [session({ agent_id: agentId, updated_at: at(2026, 9, 16, 8), title: '看一下这是个什么工程' })],
+    { now: NOW },
+  );
+  const row = rowFor(nodes, agentId);
+  assert.equal(row.label, '看一下这是个什么工程');
+  assert.equal(row.id, agentId);
+  assert.match(row.tooltip, new RegExp(agentId));
+});
+
+test('a title of only whitespace falls back to the agent id', () => {
+  const nodes = buildSessionView(
+    [session({ agent_id: 'blank', updated_at: at(2026, 9, 16, 8), title: '   \n ' })],
+    { now: NOW },
+  );
+  assert.equal(rowFor(nodes, 'blank').label, 'blank');
 });
 
 test('the description carries the model and the run count, and pluralises it', () => {
@@ -224,6 +246,7 @@ test('the tooltip reports only what the store actually returned', () => {
         agent_id: 'a',
         updated_at: at(2026, 9, 16, 8),
         created_at: at(2026, 9, 16, 7),
+        title: 'Fix the flaky test',
         runs: 4,
         last_status: 'finished',
         usage: { input_tokens: 10, output_tokens: 20, total_tokens: 30 },
@@ -232,10 +255,14 @@ test('the tooltip reports only what the store actually returned', () => {
     { now: NOW },
   );
   const tooltip = rowFor(nodes, 'a').tooltip;
+  assert.match(tooltip, /Agent a/);
   assert.match(tooltip, /Workspace E:\\ws/);
   assert.match(tooltip, /Model openai\/gpt-5\.2/);
   assert.match(tooltip, /Runs 4/);
   assert.match(tooltip, /Tokens 30/);
+  // The title is the label; it is not repeated in the tooltip, which is where
+  // the id a command takes lives.
+  assert.doesNotMatch(tooltip, /Fix the flaky test/);
 
   // A session with no usage line does not gain one.
   const bare = buildSessionView([session({ agent_id: 'b', updated_at: at(2026, 9, 16, 8) })], {

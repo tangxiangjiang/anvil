@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/anvil-dev/anvil/internal/store"
 )
@@ -127,5 +128,80 @@ func TestFileLivesUnderDotAnvil(t *testing.T) {
 	}
 	if !st.Exists(id) {
 		t.Fatal("expected exists")
+	}
+}
+
+func TestSummarizeTitlesASessionFromItsFirstUserMessage(t *testing.T) {
+	recs := []store.Record{
+		{Type: store.TypeMeta, AgentID: "agent-a"},
+		{Type: store.TypeMessage, Role: "user", Content: "Fix the flaky test"},
+		{Type: store.TypeMessage, Role: "assistant", Content: "Looking at it."},
+		{Type: store.TypeMessage, Role: "user", Content: "and check the timeout too"},
+	}
+	// The first one is what the session is about; the second is a follow-up.
+	if got := store.Summarize(recs).Title; got != "Fix the flaky test" {
+		t.Fatalf("title=%q", got)
+	}
+}
+
+func TestSummarizeMakesATitleOneLine(t *testing.T) {
+	recs := []store.Record{
+		{Type: store.TypeMessage, Role: "user", Content: "Fix the\n\tflaky  test \x07now\n"},
+	}
+	if got := store.Summarize(recs).Title; got != "Fix the flaky test now" {
+		t.Fatalf("title=%q", got)
+	}
+}
+
+func TestSummarizeTruncatesATitleAtEightyRunes(t *testing.T) {
+	// Runes, not bytes. A byte cut splits a three-byte character, so the title
+	// ends in mojibake — for exactly the people who write the least Latin text.
+	recs := []store.Record{
+		{Type: store.TypeMessage, Role: "user", Content: strings.Repeat("测", 100)},
+	}
+	title := store.Summarize(recs).Title
+	if title != strings.Repeat("测", 80)+"…" {
+		t.Fatalf("title=%q (%d runes)", title, len([]rune(title)))
+	}
+	if !utf8.ValidString(title) {
+		t.Fatal("title is not valid UTF-8")
+	}
+}
+
+func TestSummarizeDoesNotMarkATitleThatFits(t *testing.T) {
+	// An ellipsis on a title that lost nothing claims something was dropped.
+	exactly := strings.Repeat("测", 80)
+	recs := []store.Record{{Type: store.TypeMessage, Role: "user", Content: exactly}}
+	if got := store.Summarize(recs).Title; got != exactly {
+		t.Fatalf("title=%q", got)
+	}
+}
+
+func TestSummarizeHasNoTitleWithoutAUserMessage(t *testing.T) {
+	recs := []store.Record{
+		{Type: store.TypeMeta, AgentID: "agent-a"},
+		{Type: store.TypeRunEnd, Status: "finished"},
+	}
+	if got := store.Summarize(recs).Title; got != "" {
+		t.Fatalf("title=%q", got)
+	}
+}
+
+func TestSummarizeHasNoTitleForAWhitespaceOnlyPrompt(t *testing.T) {
+	recs := []store.Record{{Type: store.TypeMessage, Role: "user", Content: "  \n\t "}}
+	if got := store.Summarize(recs).Title; got != "" {
+		t.Fatalf("title=%q", got)
+	}
+}
+
+func TestSummarizeDoesNotTitleASessionFromToolOutput(t *testing.T) {
+	// A tool result carries file contents; a session named after one would name
+	// the session after whatever the agent happened to read first.
+	recs := []store.Record{
+		{Type: store.TypeMessage, Role: "tool", Name: "read_file", Content: "package main"},
+		{Type: store.TypeMessage, Role: "assistant", Content: "I looked."},
+	}
+	if got := store.Summarize(recs).Title; got != "" {
+		t.Fatalf("title=%q", got)
 	}
 }

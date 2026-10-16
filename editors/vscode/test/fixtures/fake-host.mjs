@@ -139,7 +139,10 @@ function newSession(params) {
     permission_mode_source: resolved.source,
     permission_mode_refused: resolved.refused,
     // What the real host keeps for a stored agent, so the extension's session
-    // list and its /resume picker have something to render.
+    // list and its /resume picker have something to render. The title is the
+    // first user message, and a run with no title is a session nobody prompted
+    // — the shape a client falls back to the agent id for.
+    title: process.env.FAKE_HOST_TITLE,
     created_at: '2026-01-02T03:04:05Z',
     updated_at: '2026-01-02T03:05:06Z',
     last_status: 'finished',

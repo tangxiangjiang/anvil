@@ -5,10 +5,11 @@
  * tested: the provider above it only turns these nodes into `TreeItem`s. The
  * split is the same one `commands.ts` and `hostBundle.ts` sit on.
  *
- * The rule it follows is that nothing is invented to fill a column. A stored
- * session has an id, a model, a run count and some timestamps — no title, no
- * first message — so that is what a row shows, and a field the host did not
- * report is absent rather than guessed.
+ * The rule it follows is that nothing is invented to fill a column. A session
+ * is listed under the first thing the person typed — the title the store
+ * derived — and a session nobody prompted falls back to its shortened id
+ * rather than to a placeholder. A field the host did not report is absent
+ * rather than guessed.
  */
 
 import { SessionInfo } from './protocol';
@@ -213,6 +214,17 @@ function shortId(agentId: string): string {
   return agentId.length > LABEL_LIMIT ? agentId.slice(0, LABEL_LIMIT) : agentId;
 }
 
+/**
+ * The title is what a person recognises; the id is what a command takes, and
+ * it stays in the tooltip either way. A title the store could not derive — a
+ * session nobody prompted, or one whose first message was only whitespace —
+ * falls back to the id rather than to a placeholder.
+ */
+function sessionLabel(session: SessionInfo): string {
+  const title = session.title?.trim();
+  return title ? title : shortId(session.agent_id);
+}
+
 function runs(count: number): string {
   return `${count} run${count === 1 ? '' : 's'}`;
 }
@@ -236,7 +248,7 @@ function sessionRow(session: SessionInfo, options: SessionViewOptions): SessionR
   return {
     kind: 'session',
     id: agentId,
-    label: shortId(agentId),
+    label: sessionLabel(session),
     description: parts.join(' · '),
     tooltip: tooltipFor(session, { running, current }),
     icon: running ? 'sync~spin' : STATUS_ICONS[session.last_status ?? ''] ?? 'history',

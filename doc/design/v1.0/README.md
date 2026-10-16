@@ -1,8 +1,8 @@
 # Design v1.0 (cutoff)
 
-Anvil **local-only** Go Agent SDK design through product milestone **0.37** (permission modes). Read chapters in order before implementing the matching roadmap phase.
+Anvil **local-only** Go Agent SDK design through product milestone **0.38** (session identity and replay). Read chapters in order before implementing the matching roadmap phase.
 
-This tree is the **design cutoff** for 0.1–0.37 delivery. Later product lines get a new `doc/design/v…/` directory.
+This tree is the **design cutoff** for 0.1–0.38 delivery. Later product lines get a new `doc/design/v…/` directory.
 
 ## Read order
 
@@ -46,6 +46,7 @@ This tree is the **design cutoff** for 0.1–0.37 delivery. Later product lines 
 | 35 | [35-vscode-extension.md](35-vscode-extension.md) | VS Code extension + editor host → **0.35** |
 | 36 | [36-tool-permissions.md](36-tool-permissions.md) | Rule set + shell analyzer, and the rule shapes the approval card remembers → **0.36** |
 | 37 | [37-permission-modes.md](37-permission-modes.md) | The complete mode ladder, and where a session's starting mode comes from → **0.37** |
+| 38 | [38-session-identity-and-replay.md](38-session-identity-and-replay.md) | A session's title, a reviewable change on every tool card, and a transcript that survives a reload → **0.38** |
 
 Parent index: [`doc/design/README.md`](../README.md).
 
@@ -53,4 +54,4 @@ Parent index: [`doc/design/README.md`](../README.md).
 
 - Design describes **what** and **why** for this cutoff.
 - [`doc/roadmaps/v1.0/`](../../roadmaps/v1.0/) describes **when**.
-- Chapters 11–37 map to [m_0.11](../../roadmaps/v1.0/m_0.11_worker_daemon.md) … [m_0.37](../../roadmaps/v1.0/m_0.37_permission_modes.md).
+- Chapters 11–38 map to [m_0.11](../../roadmaps/v1.0/m_0.11_worker_daemon.md) … [m_0.38](../../roadmaps/v1.0/m_0.38_session_identity.md).

@@ -414,6 +414,12 @@ export interface SessionInfo {
   cwd: string;
   provider: string;
   model: string;
+  /**
+   * The session's first user message, one line and truncated by the store.
+   * Absent when the session was never prompted — a row falls back to the agent
+   * id rather than showing a title nobody wrote.
+   */
+  title?: string;
   created_at?: string;
   updated_at?: string;
   last_status?: string;

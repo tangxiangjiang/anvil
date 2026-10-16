@@ -226,6 +226,50 @@ func TestResumeContinuesAPersistedSession(t *testing.T) {
 	}
 }
 
+// TestSessionListCarriesTheTitle pins the one field the sidebar needs to be
+// readable: a session is listed under the first thing the person typed.
+func TestSessionListCarriesTheTitle(t *testing.T) {
+	llm := newStubLLM(t, textTurn("ok"))
+	h, _ := initHost(t, llm.baseURL())
+
+	sess := resultOf(t, h.callOK(MethodSessionNew, SessionParams{}))
+	sessionID, _ := sess["session_id"].(string)
+
+	h.callOK(MethodPrompt, PromptParams{SessionID: sessionID, Message: "看一下这是个什么工程"})
+	if done := h.collectRunOK(15 * time.Second).done; paramsOf(t, done)["status"] != "finished" {
+		t.Fatalf("run did not finish: %v", done)
+	}
+
+	listing := resultOf(t, h.callOK(MethodSessionList, SessionListParams{}))
+	sessions, _ := listing["sessions"].([]any)
+	if len(sessions) != 1 {
+		t.Fatalf("session.list returned %d rows want 1: %v", len(sessions), listing)
+	}
+	row, _ := sessions[0].(map[string]any)
+	if row["title"] != "看一下这是个什么工程" {
+		t.Fatalf("listed title=%v want the first prompt", row["title"])
+	}
+}
+
+// TestSessionListOmitsAnAbsentTitle pins the wire shape a client decides on:
+// no title means no key, rather than an empty string to tell apart from a title
+// the store really did derive.
+func TestSessionListOmitsAnAbsentTitle(t *testing.T) {
+	llm := newStubLLM(t, textTurn("ok"))
+	h, _ := initHost(t, llm.baseURL())
+	h.callOK(MethodSessionNew, SessionParams{})
+
+	listing := resultOf(t, h.callOK(MethodSessionList, SessionListParams{}))
+	sessions, _ := listing["sessions"].([]any)
+	if len(sessions) != 1 {
+		t.Fatalf("session.list returned %d rows want 1: %v", len(sessions), listing)
+	}
+	row, _ := sessions[0].(map[string]any)
+	if title, present := row["title"]; present {
+		t.Fatalf("an unprompted session listed a title: %q", title)
+	}
+}
+
 // TestInitializeMustComeFirst gates every other method.
 func TestInitializeMustComeFirst(t *testing.T) {
 	llm := newStubLLM(t, textTurn("ok"))

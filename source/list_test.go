@@ -88,6 +88,30 @@ func TestUsageAggregationFromStore(t *testing.T) {
 	}
 }
 
+func TestListCarriesTheTitle(t *testing.T) {
+	dir := t.TempDir()
+	a, err := Create(context.Background(), Options{
+		APIKey: "k", Model: Model{ID: "m"}, Local: LocalOptions{CWD: dir},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	id := a.AgentID()
+	_ = a.store.Append(id, store.Record{
+		Type: store.TypeMessage, Role: "user", Content: "看一下这是个什么工程",
+		Time: time.Now().UTC(),
+	})
+
+	list, err := List(context.Background(), ListOptions{Local: LocalOptions{CWD: dir}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || list[0].Title != "看一下这是个什么工程" {
+		t.Fatalf("%+v", list)
+	}
+}
+
 func TestRunResultUsageFromMock(t *testing.T) {
 	dir := t.TempDir()
 	a, err := Create(context.Background(), Options{
