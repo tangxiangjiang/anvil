@@ -9,9 +9,20 @@
 
 import * as vscode from 'vscode';
 import { HostClient, LogFn } from './hostClient';
-import { ChatSession, SendOptions, SessionState } from './session';
+import { ChatSession, SendOptions, SessionConfig, SessionState } from './session';
 import { childEnv, readApiKey, readSettings, resolveHostPath } from './settings';
-import { ApprovalRequest, Decision, DoneParams, HostEvent } from './protocol';
+import {
+  ApprovalRequest,
+  Decision,
+  DoneParams,
+  HostEvent,
+  Method,
+  ModelEntry,
+  PermissionMode,
+  RuleFileInfo,
+  SessionInfo,
+  SkillEntry,
+} from './protocol';
 import { RunFailure } from './errors';
 
 /** What the panel needs to hear about. */
@@ -28,9 +39,17 @@ export class HostManager {
   private client: HostClient | undefined;
   private session: ChatSession | undefined;
   private starting: Promise<ChatSession> | undefined;
+  private startingClient: Promise<HostClient> | undefined;
+  private cwd: string | undefined;
   private disposed = false;
   /** Set once a crash has been reported, so the panel is told only once. */
   private crashed = false;
+  /**
+   * Session options the user has changed since the host came up — the mode, the
+   * model, the skills. They are layered over the settings at every session this
+   * manager opens, so they survive a host restart as well as a re-open.
+   */
+  private overrides: Partial<SessionConfig> = {};
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -49,6 +68,47 @@ export class HostManager {
   }
 
   private async start(): Promise<ChatSession> {
+    const client = await this.startClient();
+    if (this.session) return this.session;
+    const settings = readSettings();
+    // The session needs the client to exist, and the client needs the session's
+    // router: the handler goes on after both are built.
+    const session = new ChatSession(
+      client,
+      this.cwd ?? '',
+      { ...settings.session, ...this.overrides },
+      {
+        onEvent: this.listener.onEvent,
+        onApproval: this.listener.onApproval,
+        onApprovalWithdrawn: this.listener.onApprovalWithdrawn,
+        onDone: this.listener.onDone,
+        onState: this.listener.onState,
+        onLog: this.log,
+      },
+    );
+    client.setNotificationHandler((method, params) => session.handle(method, params));
+    this.session = session;
+    this.crashed = false;
+    return session;
+  }
+
+  /**
+   * Spawns the child and completes the handshake, without opening a session.
+   *
+   * The catalogue calls — `session.list`, `skills.list`, `rules.list`,
+   * `models.list` — need a live host but not a conversation, and asking for a
+   * picker's contents should not open an agent.
+   */
+  private async startClient(): Promise<HostClient> {
+    if (this.client) return this.client;
+    if (this.startingClient) return this.startingClient;
+    this.startingClient = this.spawn().finally(() => {
+      this.startingClient = undefined;
+    });
+    return this.startingClient;
+  }
+
+  private async spawn(): Promise<HostClient> {
     if (this.disposed) throw new Error('the Anvil host manager is disposed');
     // The gate lives here as well as in the panel's message handler: this is
     // the only path that spawns a process, and a UI check is not an enforcement
@@ -60,6 +120,7 @@ export class HostManager {
     const folder = vscode.workspace.workspaceFolders?.[0];
     if (!folder) throw new Error('open a folder to use Anvil');
     const cwd = folder.uri.fsPath;
+    this.cwd = cwd;
 
     const client = new HostClient({
       command: resolveHostPath(settings.hostPath),
@@ -68,17 +129,6 @@ export class HostManager {
       log: this.log,
       onExit: (info) => this.onHostExit(info),
     });
-    // The session needs the client to exist, and the client needs the session's
-    // router: the handler goes on after both are built.
-    const session = new ChatSession(client, cwd, settings.session, {
-      onEvent: this.listener.onEvent,
-      onApproval: this.listener.onApproval,
-      onApprovalWithdrawn: this.listener.onApprovalWithdrawn,
-      onDone: this.listener.onDone,
-      onState: this.listener.onState,
-      onLog: this.log,
-    });
-    client.setNotificationHandler((method, params) => session.handle(method, params));
 
     try {
       await client.start();
@@ -100,9 +150,7 @@ export class HostManager {
     }
 
     this.client = client;
-    this.session = session;
-    this.crashed = false;
-    return session;
+    return client;
   }
 
   private onHostExit(info: { code: number | null; signal: NodeJS.Signals | null; unexpected: boolean }): void {
@@ -176,15 +224,108 @@ export class HostManager {
     return this.session !== undefined;
   }
 
-  /** The panel's whole view of where things stand, without reaching inside. */
-  state(): { state: SessionState; runId?: string; sessionId?: string; agentId?: string } {
+  // --- catalogue --------------------------------------------------------------
+
+  /**
+   * Applies session options the user chose. When a session is already live the
+   * conversation is re-opened under them — same agent, so the history stays.
+   * When none is, the change waits for the first prompt rather than creating a
+   * session to hold it.
+   */
+  async applyOptions(changes: Partial<SessionConfig>): Promise<boolean> {
+    const previous = this.overrides;
+    this.overrides = { ...this.overrides, ...changes };
     const session = this.session;
-    if (!session) return { state: 'idle' };
+    if (!session) return false;
+    try {
+      await session.reopen(changes);
+      return true;
+    } catch (err) {
+      // Put the change back: a refusal has to be a refusal everywhere, or the
+      // next session would quietly open with an option the user was told had
+      // not been applied.
+      this.overrides = previous;
+      this.listener.onNotice?.('error', (err as Error).message);
+      return false;
+    }
+  }
+
+  /** Adds a skill to the conversation, keeping the ones already selected. */
+  async useSkill(id: string): Promise<boolean> {
+    const session = this.session;
+    const existing = session?.settings.skills ?? this.overrides.skills ?? [];
+    if (existing.includes(id)) {
+      this.listener.onNotice?.('info', `The ${id} skill is already on for this conversation.`);
+      return false;
+    }
+    return this.applyOptions({ skills: [...existing, id] });
+  }
+
+  /** The skill packages this workspace offers. */
+  async skills(): Promise<SkillEntry[]> {
+    const client = await this.startClient();
+    const result = await client.request<{ skills: SkillEntry[] }>(Method.SkillsList, {});
+    return result.skills ?? [];
+  }
+
+  /**
+   * The rule files that apply to this workspace, reported for the layers the
+   * session was configured with. "Why is the model ignoring my AGENTS.md" is
+   * otherwise invisible from the client side.
+   */
+  async rules(): Promise<RuleFileInfo[]> {
+    const client = await this.startClient();
+    const result = await client.request<{ files: RuleFileInfo[] }>(Method.RulesList, readSettings().rules);
+    return result.files ?? [];
+  }
+
+  /** Past agents stored under the workspace root. */
+  async listSessions(): Promise<SessionInfo[]> {
+    const client = await this.startClient();
+    const result = await client.request<{ sessions: SessionInfo[] }>(Method.SessionList, {});
+    return result.sessions ?? [];
+  }
+
+  /** The provider's model catalogue, for the /model picker. */
+  async listModels(): Promise<ModelEntry[]> {
+    const client = await this.startClient();
+    const settings = readSettings();
+    const result = await client.request<{ models: ModelEntry[] }>(Method.ModelsList, {
+      provider: this.overrides.provider ?? settings.session.provider,
+      base_url: this.overrides.base_url ?? settings.session.base_url,
+    });
+    return result.models ?? [];
+  }
+
+  /** Continues a stored agent as the current conversation. */
+  async resumeSession(agentId: string): Promise<void> {
+    const session = await this.ensure();
+    await session.continueWith(agentId);
+  }
+
+  /** Ends the current conversation; the next prompt starts a new agent. */
+  async clearConversation(): Promise<void> {
+    const session = this.session;
+    if (session) await session.reset();
+  }
+
+  /** The panel's whole view of where things stand, without reaching inside. */
+  state(): {
+    state: SessionState;
+    runId?: string;
+    sessionId?: string;
+    agentId?: string;
+    mode: PermissionMode;
+  } {
+    const session = this.session;
+    const mode = this.overrides.permission_mode ?? 'ask';
+    if (!session) return { state: 'idle', mode };
     return {
       state: session.currentState,
       runId: session.activeRun,
       sessionId: session.id,
       agentId: session.agent,
+      mode,
     };
   }
 

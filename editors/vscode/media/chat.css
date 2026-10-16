@@ -537,3 +537,174 @@ kbd {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* --- mode toolbar --------------------------------------------------------- */
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px var(--anvil-gap) 6px;
+}
+
+.toolbar .field {
+  font-size: 0.85em;
+  color: var(--vscode-descriptionForeground);
+}
+
+.toolbar select {
+  flex: 1;
+  min-width: 0;
+  font-family: inherit;
+  font-size: inherit;
+  padding: 2px 4px;
+  color: var(--vscode-dropdown-foreground, var(--vscode-foreground));
+  background: var(--vscode-dropdown-background, var(--vscode-input-background));
+  border: 1px solid var(--vscode-dropdown-border, var(--vscode-input-border, transparent));
+  border-radius: 4px;
+}
+
+.toolbar select:focus {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+button.ghost {
+  background: none;
+  color: var(--vscode-descriptionForeground);
+  border-color: var(--vscode-panel-border, rgba(128, 128, 128, 0.4));
+  padding: 2px 8px;
+}
+
+button.ghost:hover:not(:disabled) {
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15));
+}
+
+/*
+ * Bypass is the one mode that removes a safeguard, so it is the one mode that
+ * changes the panel's appearance. A mode that quietly runs every tool call
+ * without asking is a mode the user must not be able to forget.
+ */
+.bypass {
+  margin: 0 var(--anvil-gap) 6px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 0.9em;
+  border-left: 3px solid var(--vscode-editorWarning-foreground, orange);
+  background: var(--vscode-inputValidation-warningBackground, rgba(255, 165, 0, 0.12));
+}
+
+body.bypass-mode .composer {
+  border-top-color: var(--vscode-editorWarning-foreground, orange);
+}
+
+/* --- slash palette -------------------------------------------------------- */
+
+.palette {
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
+  border-radius: var(--anvil-radius);
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  max-height: 12em;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.palette-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  text-align: left;
+  width: 100%;
+  padding: 3px 8px;
+  border: none;
+  border-radius: 0;
+  background: none;
+  color: var(--vscode-foreground);
+}
+
+.palette-row.current {
+  background: var(--vscode-list-activeSelectionBackground, rgba(128, 128, 128, 0.25));
+  color: var(--vscode-list-activeSelectionForeground, var(--vscode-foreground));
+}
+
+.palette-name {
+  flex: none;
+  font-family: var(--vscode-editor-font-family, monospace);
+}
+
+.palette-desc {
+  flex: 1;
+  font-size: 0.88em;
+  color: var(--vscode-descriptionForeground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.palette-row.current .palette-desc {
+  color: inherit;
+}
+
+.palette-tag,
+.command .tag {
+  flex: none;
+  font-size: 0.78em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--vscode-descriptionForeground);
+}
+
+/* --- command and rule cards ----------------------------------------------- */
+
+.commands {
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
+  border-radius: var(--anvil-radius);
+  background: var(--vscode-editorWidget-background, transparent);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.commands .head {
+  font-size: 0.8em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--vscode-descriptionForeground);
+}
+
+.command {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 1px 0;
+}
+
+.command .cmd {
+  flex: none;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.92em;
+}
+
+.command .desc {
+  flex: 1;
+  font-size: 0.88em;
+  color: var(--vscode-descriptionForeground);
+}
+
+.command.muted .cmd,
+.command.muted .desc {
+  opacity: 0.65;
+  text-decoration: line-through;
+}
+
+/* --- session marker ------------------------------------------------------- */
+
+.msg.session .body {
+  font-size: 0.9em;
+  color: var(--vscode-descriptionForeground);
+  text-align: center;
+  border-top: 1px dashed var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
+  padding-top: 6px;
+}

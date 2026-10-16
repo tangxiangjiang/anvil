@@ -65,11 +65,18 @@ export class ChatSession {
   private readonly approvals = new Map<string, ApprovalRequest>();
   /** Serialises session.new so two prompts at once cannot both create one. */
   private opening: Promise<SessionResult> | undefined;
+  /**
+   * The agent this conversation belongs to. It outlives the live session on
+   * purpose: closing releases the process-side session, and the next open
+   * *resumes* this agent rather than starting a new one, which is what makes a
+   * settings change (a mode, a model, a skill) keep the conversation.
+   */
+  private conversation: string | undefined;
 
   constructor(
     private readonly client: Transport,
     private readonly cwd: string,
-    private readonly config: SessionConfig,
+    private config: SessionConfig,
     private readonly handlers: ChatSessionHandlers = {},
   ) {}
 
@@ -78,7 +85,12 @@ export class ChatSession {
   }
 
   get agent(): string | undefined {
-    return this.result?.agent_id;
+    return this.result?.agent_id ?? this.conversation;
+  }
+
+  /** The options this session would open with next, for a caller that extends them. */
+  get settings(): SessionConfig {
+    return { ...this.config };
   }
 
   get activeRun(): string | undefined {
@@ -136,14 +148,26 @@ export class ChatSession {
     return !sessionId || sessionId === this.result.session_id;
   }
 
-  /** Creates the session, or returns the one already open. */
+  /**
+   * Opens the conversation, or returns the one already open.
+   *
+   * Which method it uses is the difference the whole resume story turns on:
+   * with an agent already behind this session, the same conversation is
+   * re-opened under the current options (`session.resume`), so the history and
+   * the agent id survive a mode, model, or skill change.
+   */
   async open(): Promise<SessionResult> {
     if (this.result) return this.result;
     if (this.opening) return this.opening;
+    const params: Record<string, unknown> = this.conversation
+      ? { agent_id: this.conversation, ...this.config }
+      : { ...this.config };
+    const method = this.conversation ? Method.SessionResume : Method.SessionNew;
     this.opening = this.client
-      .request<SessionResult>(Method.SessionNew, { ...this.config })
+      .request<SessionResult>(method, params)
       .then((res) => {
         this.result = res;
+        this.conversation = res.agent_id;
         this.opening = undefined;
         this.handlers.onLog?.(
           `session ${res.session_id} in ${this.cwd} (${res.provider}/${res.model}, ${res.permission_mode})`,
@@ -155,6 +179,48 @@ export class ChatSession {
         throw err;
       });
     return this.opening;
+  }
+
+  /**
+   * Applies new options to this conversation.
+   *
+   * A mode, a model, or a skill is fixed when the SDK builds its options, so
+   * changing one means re-opening the session — under the same agent, which is
+   * why the history comes with it. Nothing is opened when nothing is live yet:
+   * a change made before the first prompt is simply the config the first
+   * `open` will use, and creating a session to apply it would spawn work the
+   * user has not asked for.
+   */
+  async reopen(changes: Partial<SessionConfig>): Promise<SessionResult | undefined> {
+    if (this.state === 'running') {
+      throw new Error('the session cannot change while a turn is running');
+    }
+    this.config = { ...this.config, ...changes };
+    if (!this.result) return undefined;
+    const conversation = this.conversation;
+    await this.close();
+    this.conversation = conversation;
+    return this.open();
+  }
+
+  /**
+   * Adopts a stored agent as this conversation. The previous session is closed
+   * first, so nothing is left running on the host for a conversation that has
+   * moved on.
+   */
+  async continueWith(agentId: string): Promise<SessionResult> {
+    if (this.state === 'running') {
+      throw new Error('a turn is running; stop it before opening another session');
+    }
+    await this.close();
+    this.conversation = agentId;
+    return this.open();
+  }
+
+  /** Drops the conversation, so the next open starts a new agent. */
+  async reset(): Promise<void> {
+    await this.close();
+    this.conversation = undefined;
   }
 
   /** Opens a session if needed, then sends one turn. */
@@ -217,12 +283,19 @@ export class ChatSession {
     return [...this.approvals.values()];
   }
 
-  /** Closes the session on the host. The client stays up for the next one. */
+  /**
+   * Closes the live session on the host. The client stays up for the next one,
+   * and `conversation` is deliberately kept: the next open resumes this agent,
+   * so closing to change an option does not throw the conversation away.
+   */
   async close(): Promise<void> {
     const id = this.result?.session_id;
     this.result = undefined;
     this.runId = undefined;
-    this.approvals.clear();
+    for (const requestId of [...this.approvals.keys()]) {
+      this.approvals.delete(requestId);
+      this.handlers.onApprovalWithdrawn?.(requestId);
+    }
     this.setState('idle');
     if (!id) return;
     try {

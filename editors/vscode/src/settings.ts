@@ -19,6 +19,13 @@ export interface ResolvedSettings {
   hostPath: string;
   /** Everything `session.new` needs, minus the session id. */
   session: SessionConfig;
+  /**
+   * The rule layers the session was configured with. Kept beside the session
+   * config so `rules.list` can be asked about *this* session's layers rather
+   * than a generic set: a list that does not describe the session that is
+   * running is worse than no list.
+   */
+  rules: { load_project: boolean; load_cursor_rules: boolean };
 }
 
 /** Reads the workspace configuration into a session config. */
@@ -26,6 +33,8 @@ export function readSettings(): ResolvedSettings {
   const cfg = vscode.workspace.getConfiguration(SECTION);
   const maxSteps = cfg.get<number>('maxSteps', 0) ?? 0;
   const store = (cfg.get<string>('store', '') ?? '').trim();
+  const loadProject = cfg.get<boolean>('rules', true) ?? true;
+  const loadCursor = cfg.get<boolean>('cursorRules', true) ?? true;
   const session: SessionConfig = {
     provider: emptyToUndefined(cfg.get<string>('provider', '')),
     model: emptyToUndefined(cfg.get<string>('model', '')),
@@ -39,11 +48,12 @@ export function readSettings(): ResolvedSettings {
   session.vision = cfg.get<boolean>('vision', false) ?? false;
   // The workspace, not the process, decides where sessions land: an editor
   // session belongs to the folder the user opened.
-  session.load_rules = true;
-  session.load_cursor_rules = true;
+  session.load_rules = loadProject;
+  session.load_cursor_rules = loadCursor;
   return {
     hostPath: (cfg.get<string>('hostPath', 'anvil-host') ?? '').trim() || 'anvil-host',
     session,
+    rules: { load_project: loadProject, load_cursor_rules: loadCursor },
   };
 }
 

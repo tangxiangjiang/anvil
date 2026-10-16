@@ -59,6 +59,12 @@ interface Built {
 function build(config: Record<string, unknown> = {}): Built {
   const transport = new FakeTransport()
     .answer('session.new', () => SESSION_RESULT)
+    .answer('session.resume', (params) => {
+      const asked = params as { agent_id?: string };
+      // A resume answers with the agent that was asked for, under a new session
+      // id: the session is new, the conversation is not.
+      return { ...SESSION_RESULT, session_id: 's2', agent_id: asked.agent_id ?? 'a1' };
+    })
     .answer('prompt', () => ({ session_id: 's1', run_id: 'r1', agent_id: 'a1' }))
     .answer('cancel', () => ({ cancelled: true }))
     .answer('session.close', () => ({ closed: true }));
@@ -294,3 +300,81 @@ test('fail() presents a dead transport as a finished, failed run', async () => {
   assert.equal(built.dones[0].status, 'error');
   assert.match(built.dones[0].err ?? '', /host exited/);
 });
+
+test('reopen() re-opens the same agent under the new options', async () => {
+  const built = build({ permission_mode: 'ask', model: 'small' });
+  await built.session.send('go');
+  built.session.handle(Notify.Done, { session_id: 's1', run_id: 'r1', status: 'finished' });
+
+  const reopened = await built.session.reopen({ permission_mode: 'plan' });
+  assert.deepEqual(built.transport.methods(), [
+    'session.new',
+    'prompt',
+    'session.close',
+    'session.resume',
+  ]);
+  // The agent id is the whole point: the options are new, the conversation is
+  // the one the user was already having.
+  assert.deepEqual(built.transport.calls[3].params, {
+    agent_id: 'a1',
+    permission_mode: 'plan',
+    model: 'small',
+  });
+  assert.equal(reopened?.agent_id, 'a1');
+  assert.equal(built.session.agent, 'a1');
+  assert.equal(built.session.currentState, 'idle');
+});
+
+test('reopen() before the first prompt only changes what will be sent', async () => {
+  const built = build();
+  const result = await built.session.reopen({ permission_mode: 'plan' });
+
+  // Nothing is opened to hold an option: opening a session is a process-side
+  // act, and the user has not asked for one yet.
+  assert.equal(result, undefined);
+  assert.deepEqual(built.transport.methods(), []);
+
+  await built.session.open();
+  assert.deepEqual(built.transport.calls[0].params, { permission_mode: 'plan' });
+});
+
+test('reopen() is refused while a turn is running, and changes nothing', async () => {
+  const built = build({ permission_mode: 'ask' });
+  await built.session.send('go');
+
+  await assert.rejects(() => built.session.reopen({ permission_mode: 'bypass' }), /running/);
+  assert.deepEqual(built.transport.methods(), ['session.new', 'prompt']);
+  // The refused option is not left behind for the next open to pick up.
+  assert.equal(built.session.settings.permission_mode, 'ask');
+});
+
+test('continueWith() closes what was open and adopts the stored agent', async () => {
+  const built = build();
+  await built.session.open();
+  await built.session.continueWith('a7');
+
+  assert.deepEqual(built.transport.methods(), ['session.new', 'session.close', 'session.resume']);
+  assert.deepEqual(built.transport.calls[2].params, { agent_id: 'a7' });
+  assert.equal(built.session.agent, 'a7');
+  assert.equal(built.session.id, 's2');
+});
+
+test('continueWith() refuses to move a conversation with a turn in flight', async () => {
+  const built = build();
+  await built.session.send('go');
+  await assert.rejects(() => built.session.continueWith('a7'), /running/);
+  assert.equal(built.transport.methods().includes('session.resume'), false);
+});
+
+test('reset() forgets the agent, so the next open starts a new one', async () => {
+  const built = build();
+  await built.session.send('go');
+  built.session.handle(Notify.Done, { session_id: 's1', run_id: 'r1', status: 'finished' });
+  await built.session.reset();
+
+  assert.equal(built.session.agent, undefined);
+  assert.equal(built.session.id, undefined);
+  await built.session.open();
+  assert.deepEqual(built.transport.methods().slice(-2), ['session.close', 'session.new']);
+});
+

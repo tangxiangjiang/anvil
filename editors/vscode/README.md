@@ -36,6 +36,9 @@ the quicker loop if you are working on both sides at once.
 | `anvil.baseUrl` | OpenAI-compatible base URL; empty uses the provider default |
 | `anvil.maxSteps` | Step limit per turn; `0` uses the host's default |
 | `anvil.store` | `jsonl`, `sqlite`, or empty for the host's default |
+| `anvil.vision` | Accept pasted images; off by default |
+| `anvil.rules` | Load `AGENTS.md` and `.anvil/rules/*.md`; on by default |
+| `anvil.cursorRules` | Also load `.cursor/rules/*.md|.mdc`; on by default |
 | `anvil.hostPath` | The sidecar to spawn |
 
 The API key is **not** a setting. Run **Anvil: Set API Key**; it goes into VS
@@ -57,9 +60,34 @@ a log line.
   p_0.35.5.)
 - **Kills its child.** One host per window, stopped on deactivate, on a folder
   change, and on a settings change (the host reads its configuration at spawn).
-- **Has no `@` context, image paste, diff review, session history, plan mode,
-  slash commands, or packaging yet.** Those are later phases; see
-  `doc/roadmaps/v1.0/m_0.35/`.
+- **Tells you what it read.** The panel reports which rule files this workspace
+  loaded — `AGENTS.md`, `.anvil/rules/*.md`, and optionally `.cursor/rules/*` —
+  and says so plainly when one was skipped or cut short by the size budget.
+- **Keeps the conversation across a mode change.** `ask`, `accept edits`,
+  `plan`, and `bypass` are session options in the SDK, so switching one closes
+  the session and re-opens it under the same agent: same history, new mode. The
+  mode is remembered per workspace. `bypass` is flagged in the panel, and a
+  mode change is refused while a turn is running.
+- **Does not have packaging, transcript replay, or checkpoints yet.** A resumed
+  session continues the agent's real context, but the SDK exposes no transcript
+  reader, so the panel marks the resume instead of printing a history it does
+  not have. Packaging is p_0.35.7; see `doc/roadmaps/v1.0/m_0.35/`.
+
+## Commands and sessions
+
+Type `/` in the composer for the catalogue. Built-ins:
+
+| Command | What it does |
+| --- | --- |
+| `/plan [request]` | Switch to plan mode; anything after it is sent as the request |
+| `/model [id]` | Choose the model this conversation uses |
+| `/resume [agent id]` | Continue a past session in this workspace |
+| `/clear` | Start a new conversation |
+| `/help` | List the commands |
+
+Skills in the workspace (`.anvil/skills/<id>/SKILL.md`) are listed as commands
+of their own: running one turns that skill on for the conversation. `@`
+references a file or folder for the next prompt.
 
 ## Tests
 
@@ -79,4 +107,6 @@ wire; they are skipped when the sidecar has not been built.
 `src/settings.ts`, `src/hostManager.ts`, `src/chatPanel.ts` and `src/extension.ts`
 import `vscode` and are therefore not covered by these tests — they need an
 extension host. Keep them thin; the behaviour worth testing belongs on this side
-of the `vscode` boundary.
+of the `vscode` boundary. `src/commands.ts` is split that way on purpose: it
+decides what a typed line means, and `chatPanel.ts` only carries that decision
+out.

@@ -16,9 +16,9 @@
  *   silent     accepts the prompt and never answers (for timeout paths)
  *
  * Environment:
- *   FAKE_HOST_ECHO=<path>  append every session.new / prompt this host receives
- *                          to that file as one JSON line each, so a test can
- *                          assert what the client actually sent
+ *   FAKE_HOST_ECHO=<path>  append every session.new / session.resume / prompt
+ *                          this host receives to that file as one JSON line
+ *                          each, so a test can assert what the client sent
  */
 
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
@@ -65,11 +65,19 @@ function newSession(params) {
   const id = `s${sessionSeq}`;
   const session = {
     session_id: id,
-    agent_id: `a${sessionSeq}`,
+    agent_id: params.agent_id || `a${sessionSeq}`,
     cwd: process.env.FAKE_HOST_CWD || process.cwd(),
     provider: params.provider || 'openai',
     model: params.model || 'fake-model',
     permission_mode: params.permission_mode || 'ask',
+    // What the real host keeps for a stored agent, so the extension's session
+    // list and its /resume picker have something to render.
+    created_at: '2026-01-02T03:04:05Z',
+    updated_at: '2026-01-02T03:05:06Z',
+    last_status: 'finished',
+    last_run_id: 'r1',
+    runs: 1,
+    usage: { input_tokens: 120, output_tokens: 18, total_tokens: 138 },
   };
   sessions.set(id, session);
   return session;
@@ -271,11 +279,51 @@ async function handle(msg) {
       ok(msg.id, newSession(msg.params || {}));
       return;
     case 'session.resume':
+      echo('session.resume', msg.params || {});
       ok(msg.id, newSession(msg.params || {}));
       return;
     case 'session.list':
       ok(msg.id, { sessions: [...sessions.values()] });
       return;
+    case 'skills.list':
+      // Two packages on purpose: one selected by hand, one always-on, which is
+      // the pair the extension's catalogue has to render differently.
+      ok(msg.id, {
+        skills: [
+          {
+            id: 'commit-style',
+            name: 'Commit style',
+            description: 'Write commit messages the way this repository does',
+            path: '.anvil/skills/commit-style/SKILL.md',
+            always: false,
+          },
+          {
+            id: 'house-rules',
+            name: 'House rules',
+            description: '',
+            path: '.anvil/skills/house-rules/SKILL.md',
+            always: true,
+          },
+        ],
+      });
+      return;
+    case 'rules.list': {
+      // Answers *what was asked for*: the layers are the session's own, so a
+      // result that ignored them would be worse than no list at all. The last
+      // entry is one the budget never reached, which is the one state the
+      // extension has to show plainly.
+      const params = msg.params || {};
+      const files = [];
+      if (params.load_project !== false) {
+        files.push({ path: 'AGENTS.md', bytes: 42, included: true, truncated: false });
+      }
+      if (params.load_cursor_rules === true) {
+        files.push({ path: '.cursor/rules/style.mdc', bytes: 7, included: true, truncated: true });
+        files.push({ path: '.cursor/rules/huge.mdc', bytes: 40960, included: false, truncated: false });
+      }
+      ok(msg.id, { files });
+      return;
+    }
     case 'session.close': {
       const id = msg.params && msg.params.session_id;
       if (!sessions.has(id)) {

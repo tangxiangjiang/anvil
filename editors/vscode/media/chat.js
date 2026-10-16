@@ -20,6 +20,10 @@
   const banner = document.getElementById('banner');
   const chipsBar = document.getElementById('chips');
   const attachButton = document.getElementById('attach');
+  const modeSelect = document.getElementById('mode');
+  const bypassStrip = document.getElementById('bypass');
+  const rulesButton = document.getElementById('rules');
+  const palette = document.getElementById('palette');
 
   /** Run in flight, if any. */
   let running = false;
@@ -37,6 +41,13 @@
   let images = [];
   /** Whether the session was created with vision on. Images need it. */
   let vision = false;
+  /** The slash catalogue, once the extension has sent it. */
+  let catalogue = null;
+  /** Rule files the last session reported, kept so the card can be reopened. */
+  let rules = [];
+  /** The palette rows currently shown, and which one is highlighted. */
+  let paletteRows = [];
+  let paletteIndex = 0;
 
   function el(tag, className, text) {
     const node = document.createElement(tag);
@@ -424,7 +435,164 @@
     currentText = null;
   }
 
-  // --- run state ------------------------------------------------------------
+  // --- mode -----------------------------------------------------------------
+
+  /**
+   * Reflects the permission mode the extension is actually using. The select is
+   * driven from there, never from what was clicked: the extension can refuse a
+   * change (a turn is running, the host said no), and a select that kept the
+   * refused value would be lying about what the next tool call will do.
+   */
+  function showMode(mode) {
+    if (!modeSelect) return;
+    modeSelect.value = mode;
+    const bypass = mode === 'bypass';
+    bypassStrip.hidden = !bypass;
+    document.body.classList.toggle('bypass-mode', bypass);
+  }
+
+  // --- slash palette --------------------------------------------------------
+
+  /**
+   * The query the palette is open for: text starting with `/` and nothing else.
+   * Once there is whitespace the command is settled and what follows is its
+   * argument, so the palette gets out of the way.
+   */
+  function paletteQuery() {
+    const trimmed = input.value.trim();
+    if (trimmed.charAt(0) !== '/') return null;
+    const body = trimmed.slice(1);
+    if (body === '' || /\s/.test(body)) return null;
+    return body;
+  }
+
+  /** Prefix match first, then anything whose description mentions the query. */
+  function paletteMatches(commands, query) {
+    const needle = query.toLowerCase();
+    const byName = commands.filter((command) => command.name.toLowerCase().indexOf(needle) === 0);
+    if (byName.length) return byName.slice(0, 8);
+    return commands
+      .filter((command) => String(command.description || '').toLowerCase().indexOf(needle) !== -1)
+      .slice(0, 8);
+  }
+
+  function closePalette() {
+    paletteRows = [];
+    paletteIndex = 0;
+    palette.hidden = true;
+    palette.textContent = '';
+  }
+
+  function paintPalette() {
+    palette.textContent = '';
+    for (let index = 0; index < paletteRows.length; index++) {
+      const command = paletteRows[index];
+      const row = el('button', 'palette-row' + (index === paletteIndex ? ' current' : ''));
+      row.type = 'button';
+      row.appendChild(el('span', 'palette-name', '/' + command.name));
+      row.appendChild(el('span', 'palette-desc', command.description || ''));
+      if (command.source === 'skill') row.appendChild(el('span', 'palette-tag', 'skill'));
+      row.addEventListener('mousedown', (event) => {
+        // mousedown, not click: the textarea would blur first and the palette
+        // would be gone before the click ever landed.
+        event.preventDefault();
+        acceptPalette(index);
+      });
+      palette.appendChild(row);
+    }
+    palette.hidden = paletteRows.length === 0;
+  }
+
+  function updatePalette() {
+    const query = paletteQuery();
+    if (query === null) {
+      closePalette();
+      return;
+    }
+    // Asking for the catalogue is what a `/` means: it is fetched once and then
+    // served from memory, so typing after the first keystroke costs nothing.
+    if (catalogue === null) {
+      vscode.postMessage({ type: 'commands' });
+      palette.hidden = true;
+      return;
+    }
+    paletteRows = paletteMatches(catalogue, query);
+    if (paletteIndex >= paletteRows.length) paletteIndex = 0;
+    paintPalette();
+  }
+
+  /** Puts the command name in the composer; what follows is its arguments. */
+  function acceptPalette(index) {
+    const command = paletteRows[index];
+    closePalette();
+    if (!command) return;
+    input.value = '/' + command.name + ' ';
+    input.focus();
+  }
+
+  function movePalette(delta) {
+    if (paletteRows.length === 0) return;
+    paletteIndex = (paletteIndex + delta + paletteRows.length) % paletteRows.length;
+    paintPalette();
+  }
+
+  // --- command cards --------------------------------------------------------
+
+  function commandCard(title, commands) {
+    const card = el('div', 'commands');
+    card.appendChild(el('div', 'head', title));
+    for (const command of commands) {
+      const row = el('div', 'command');
+      row.appendChild(el('span', 'cmd', '/' + command.name));
+      row.appendChild(el('span', 'desc', command.description || ''));
+      if (command.source === 'skill') row.appendChild(el('span', 'tag', 'skill'));
+      card.appendChild(row);
+    }
+    return card;
+  }
+
+  function showHelp(commands) {
+    const builtins = commands.filter((command) => command.source === 'builtin');
+    const skills = commands.filter((command) => command.source !== 'builtin');
+    append(commandCard('Commands', builtins));
+    if (skills.length) append(commandCard('Skills in this workspace', skills));
+    currentText = null;
+  }
+
+  /**
+   * Lists the rule files the session loaded, and says plainly which of them
+   * reached the prompt: "why is the model ignoring my AGENTS.md" is otherwise
+   * unanswerable from the outside.
+   */
+  function showRules(files) {
+    const card = el('div', 'commands rules');
+    card.appendChild(el('div', 'head', files.length ? 'Rule files loaded' : 'No rule files found'));
+    for (const file of files) {
+      const row = el('div', 'command');
+      row.appendChild(el('span', 'cmd', file.path));
+      const skipped = file.included !== true;
+      const state = skipped ? 'past the budget, skipped' : file.truncated ? 'truncated' : 'in the prompt';
+      row.appendChild(el('span', 'desc', file.bytes ? state + ' · ' + file.bytes + ' bytes' : state));
+      if (skipped) row.classList.add('muted');
+      card.appendChild(row);
+    }
+    if (files.length === 0) {
+      card.appendChild(el('div', 'command muted', 'AGENTS.md and .anvil/rules/*.md were not found in this workspace.'));
+    }
+    append(card);
+    currentText = null;
+  }
+
+  function showSession(msg) {
+    const line = el('div', 'msg session');
+    const label = msg.started !== true
+      ? 'New conversation. The next message starts a fresh session.'
+      : 'Continuing session ' + msg.agentId + '.';
+    line.appendChild(el('div', 'body', label));
+    append(line);
+    currentText = null;
+  }
+
 
   function setRunning(next) {
     running = next;
@@ -432,7 +600,16 @@
     sendButton.disabled = running;
     input.disabled = running;
     attachButton.disabled = running;
+    // The mode is a session option, so the extension refuses a change mid-turn
+    // rather than applying it half way. Saying so by disabling is honest about
+    // that; the extension's own check is what enforces it.
+    if (modeSelect) modeSelect.disabled = running;
     if (!running) input.focus();
+  }
+
+  function count(value) {
+    if (typeof value !== 'number' || !isFinite(value) || value <= 0) return '';
+    return value >= 1000 ? (value / 1000).toFixed(value >= 10000 ? 0 : 1) + 'k' : String(value);
   }
 
   function finishRun(done, failure) {
@@ -441,7 +618,16 @@
     const parts = [];
     const steps = done && typeof done.steps === 'number' ? `${done.steps} step${done.steps === 1 ? '' : 's'}` : '';
     if (steps) parts.push(steps);
-    if (done && done.usage && done.usage.total_tokens) parts.push(`${done.usage.total_tokens} tokens`);
+    const usage = (done && done.usage) || null;
+    if (usage) {
+      const total = count(usage.total_tokens);
+      if (total) {
+        const split = count(usage.input_tokens) && count(usage.output_tokens)
+          ? ` (${count(usage.input_tokens)} in / ${count(usage.output_tokens)} out)`
+          : '';
+        parts.push(`${total} tokens${split}`);
+      }
+    }
     statusLine.textContent = parts.join(' · ');
     statusLine.hidden = parts.length === 0;
     // "Stopped." is not a failure, but it is still something the user asked
@@ -476,6 +662,7 @@
     input.value = '';
     mentions = [];
     images = [];
+    closePalette();
     renderChips();
     addUser(text, sentMentions, sentImages);
     // Optimistic: the host's `state` notification confirms it a moment later,
@@ -486,6 +673,30 @@
   });
 
   input.addEventListener('keydown', (event) => {
+    // The palette owns the arrow keys and Enter while it is open: without this
+    // Enter would submit the half-typed command instead of completing it.
+    if (!palette.hidden && paletteRows.length > 0) {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        movePalette(1);
+        return;
+      }
+      if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        movePalette(-1);
+        return;
+      }
+      if (event.key === 'Enter' || event.key === 'Tab') {
+        event.preventDefault();
+        acceptPalette(paletteIndex);
+        return;
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closePalette();
+        return;
+      }
+    }
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
       composer.dispatchEvent(new Event('submit', { cancelable: true }));
@@ -498,10 +709,29 @@
    * question, and `key` is "Digit2" on the layouts where "@" needs Shift.
    */
   input.addEventListener('input', () => {
-    if (!input.value.endsWith('@')) return;
-    input.value = input.value.slice(0, -1);
-    askForMentions();
+    if (input.value.endsWith('@')) {
+      input.value = input.value.slice(0, -1);
+      closePalette();
+      askForMentions();
+      return;
+    }
+    updatePalette();
   });
+
+  input.addEventListener('blur', () => closePalette());
+
+  if (modeSelect) {
+    modeSelect.addEventListener('change', () => {
+      // The echo is optimistic only in that it is immediate: the extension
+      // answers with a `mode` message, and that is what the select ends up
+      // showing, so a refusal corrects this instead of sticking.
+      vscode.postMessage({ type: 'mode', mode: modeSelect.value });
+    });
+  }
+
+  if (rulesButton) {
+    rulesButton.addEventListener('click', () => showRules(rules));
+  }
 
   // A paste is only ours when it carries an image; text pastes stay the
   // textarea's, which is why the default is left alone unless one is found.
@@ -566,6 +796,34 @@
         return;
       case 'changes':
         showChanges(msg.files);
+        return;
+      case 'commands':
+        catalogue = Array.isArray(msg.commands) ? msg.commands : [];
+        // The palette was opened for a `/` that arrived before the catalogue
+        // did, so what was typed has to be matched again now that it is here.
+        updatePalette();
+        return;
+      case 'help':
+        showHelp(Array.isArray(msg.commands) ? msg.commands : []);
+        return;
+      case 'mode':
+        showMode(msg.mode);
+        return;
+      case 'rules': {
+        rules = Array.isArray(msg.files) ? msg.files : [];
+        if (rulesButton) {
+          rulesButton.hidden = rules.length === 0;
+          rulesButton.textContent = 'Rules (' + rules.length + ')';
+        }
+        // Only what the user cannot see for themselves is shown unbidden. A
+        // rule file that was skipped or cut short is a silent failure of
+        // something they wrote, which is exactly when to speak up; the rest
+        // waits behind the button.
+        if (rules.some((file) => file.included !== true || file.truncated === true)) showRules(rules);
+        return;
+      }
+      case 'session':
+        showSession(msg);
         return;
       case 'done':
         finishRun(msg.done, msg.failure);

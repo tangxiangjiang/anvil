@@ -169,6 +169,10 @@ func (s *Server) dispatch(ctx context.Context, req *Request) (any, *RPCError) {
 		return s.handleCancel(ctx, req.Params)
 	case MethodModelsList:
 		return s.handleModelsList(ctx, req.Params)
+	case MethodSkillsList:
+		return s.handleSkillsList(ctx, req.Params)
+	case MethodRulesList:
+		return s.handleRulesList(ctx, req.Params)
 	case MethodApprovalResponse:
 		return s.handleApprovalResponse(req.Params)
 	default:
@@ -224,7 +228,7 @@ func (s *Server) handleInitialize(params json.RawMessage) (any, *RPCError) {
 }
 
 func capabilities() []string {
-	return []string{"streaming", "sessions", "resume", "cancel", "models", "approval", "context", "vision"}
+	return []string{"streaming", "sessions", "resume", "cancel", "models", "approval", "context", "vision", "plan", "skills", "rules"}
 }
 
 // ---------------------------------------------------------------------------
@@ -314,6 +318,13 @@ func (s *Server) handleSessionList(ctx context.Context, params json.RawMessage) 
 		}
 		if !in.UpdatedAt.IsZero() {
 			entry.UpdatedAt = in.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z")
+		}
+		if in.Usage != nil {
+			entry.Usage = &Usage{
+				InputTokens:  in.Usage.InputTokens,
+				OutputTokens: in.Usage.OutputTokens,
+				TotalTokens:  in.Usage.TotalTokens,
+			}
 		}
 		out.Sessions = append(out.Sessions, entry)
 	}
@@ -486,6 +497,70 @@ func (s *Server) handleModelsList(ctx context.Context, params json.RawMessage) (
 			Provider:      m.Provider,
 			UpstreamModel: m.UpstreamModel,
 			Vision:        m.Vision,
+		})
+	}
+	return out, nil
+}
+
+// ---------------------------------------------------------------------------
+// skills / rules
+// ---------------------------------------------------------------------------
+
+// handleSkillsList reports the skill packages the workspace offers.
+//
+// The listing is wider than any one session's selection on purpose: an editor
+// has to show what is available before a session exists. What a session
+// actually injects is still only what it named, plus whatever .anvil/skills.json
+// marks always-on.
+func (s *Server) handleSkillsList(ctx context.Context, params json.RawMessage) (any, *RPCError) {
+	p, err := decode[SkillsParams](params)
+	if err != nil {
+		return nil, errInvalidParams("skills.list: " + err.Error())
+	}
+	found, err := anvil.ListSkills(ctx, anvil.SkillListOptions{
+		CWD:       s.cwdPath(),
+		SkillDirs: p.SkillDirs,
+		ScanUser:  p.ScanUser,
+	})
+	if err != nil {
+		return nil, errHost(err)
+	}
+	out := SkillsResult{Skills: make([]SkillEntry, 0, len(found))}
+	for _, sk := range found {
+		out.Skills = append(out.Skills, SkillEntry{
+			ID:          sk.ID,
+			Name:        sk.Name,
+			Description: sk.Description,
+			Path:        sk.Path,
+			Always:      sk.Always,
+		})
+	}
+	return out, nil
+}
+
+// handleRulesList reports which rule files apply, and how much of each one
+// reached the prompt. It is the answer to "why is the model ignoring my
+// AGENTS.md", which is otherwise invisible from the client side.
+func (s *Server) handleRulesList(ctx context.Context, params json.RawMessage) (any, *RPCError) {
+	p, err := decode[RulesParams](params)
+	if err != nil {
+		return nil, errInvalidParams("rules.list: " + err.Error())
+	}
+	found, err := anvil.ListRuleFiles(ctx, anvil.RuleListOptions{
+		CWD:         s.cwdPath(),
+		LoadProject: p.LoadProject,
+		LoadCursor:  p.LoadCursor,
+	})
+	if err != nil {
+		return nil, errHost(err)
+	}
+	out := RulesResult{Files: make([]RuleFileInfo, 0, len(found))}
+	for _, f := range found {
+		out.Files = append(out.Files, RuleFileInfo{
+			Path:      f.Path,
+			Bytes:     f.Bytes,
+			Included:  f.Included,
+			Truncated: f.Truncated,
 		})
 	}
 	return out, nil

@@ -37,6 +37,8 @@ const (
 	MethodPrompt        = "prompt"
 	MethodCancel        = "cancel"
 	MethodModelsList    = "models.list"
+	MethodSkillsList    = "skills.list"
+	MethodRulesList     = "rules.list"
 	MethodShutdown      = "shutdown"
 
 	// MethodApprovalResponse answers a pending approval.request. It is the only
@@ -316,6 +318,66 @@ type SessionInfo struct {
 	LastStatus string `json:"last_status,omitempty"`
 	LastRunID  string `json:"last_run_id,omitempty"`
 	Runs       int    `json:"runs"`
+	// Usage is cumulative across the stored runs, when the provider reported
+	// any. The store is the only place a past session's tokens exist: the
+	// terminal `done` of a run that has already ended is gone.
+	Usage *Usage `json:"usage,omitempty"`
+}
+
+// ---------------------------------------------------------------------------
+// skills.list / rules.list
+// ---------------------------------------------------------------------------
+
+// SkillEntry is one discoverable skill package. It is the catalogue, not the
+// session's selection: a session uses a skill only when it names its id on
+// session.new / session.resume, or when .anvil/skills.json marks it always-on.
+type SkillEntry struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	// Path is the SKILL.md, workspace-relative. Empty for a skill outside the
+	// workspace root, which the client has no way to name.
+	Path string `json:"path,omitempty"`
+	// Always reports that this skill is injected into every session.
+	Always bool `json:"always,omitempty"`
+}
+
+// SkillsParams selects the roots to scan.
+type SkillsParams struct {
+	// ScanUser includes ~/.anvil/skills. Off by default: the host walks outside
+	// the workspace only when the client asks.
+	ScanUser  bool     `json:"scan_user,omitempty"`
+	SkillDirs []string `json:"skill_dirs,omitempty"`
+}
+
+// SkillsResult is the skill catalogue under the workspace root.
+type SkillsResult struct {
+	Skills []SkillEntry `json:"skills"`
+}
+
+// RuleFileInfo is one rule file as the system prompt sees it.
+type RuleFileInfo struct {
+	// Path is workspace-relative, and is the heading the prompt writes above
+	// the body.
+	Path string `json:"path"`
+	// Bytes is the body's size after trimming.
+	Bytes int `json:"bytes,omitempty"`
+	// Included reports whether the body reached the system prompt.
+	Included bool `json:"included"`
+	// Truncated reports that the body was cut short by the character budget.
+	Truncated bool `json:"truncated,omitempty"`
+}
+
+// RulesParams selects which rule layers to report. The values the client passes
+// are the ones it put on the session, so the list describes that session.
+type RulesParams struct {
+	LoadProject bool `json:"load_project,omitempty"`
+	LoadCursor  bool `json:"load_cursor_rules,omitempty"`
+}
+
+// RulesResult is the rule files that apply to the workspace.
+type RulesResult struct {
+	Files []RuleFileInfo `json:"files"`
 }
 
 // ---------------------------------------------------------------------------

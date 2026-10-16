@@ -23,6 +23,8 @@ export const Method = {
   Prompt: 'prompt',
   Cancel: 'cancel',
   ModelsList: 'models.list',
+  SkillsList: 'skills.list',
+  RulesList: 'rules.list',
   Shutdown: 'shutdown',
   ApprovalResponse: 'approval.response',
 } as const;
@@ -260,6 +262,55 @@ export interface SessionInfo {
   last_status?: string;
   last_run_id?: string;
   runs: number;
+  /** Cumulative across the stored runs, when the provider reported any. */
+  usage?: Usage;
+}
+
+// --- skills.list / rules.list ------------------------------------------------
+
+/**
+ * One discoverable skill package. This is the catalogue, not the session's
+ * selection: a session uses a skill only when it names the id on
+ * `session.new` / `session.resume`, or when `.anvil/skills.json` marks it
+ * always-on.
+ */
+export interface SkillEntry {
+  id: string;
+  name: string;
+  description?: string;
+  /** The SKILL.md, workspace-relative. Empty for a skill outside the root. */
+  path?: string;
+  /** Injected into every session without being selected. */
+  always?: boolean;
+}
+
+export interface SkillsParams {
+  scan_user?: boolean;
+  skill_dirs?: string[];
+}
+
+export interface SkillsResult {
+  skills: SkillEntry[];
+}
+
+/** One rule file, as the system prompt sees it. */
+export interface RuleFileInfo {
+  /** Workspace-relative, and the heading the prompt writes above the body. */
+  path: string;
+  bytes?: number;
+  /** Whether the body reached the system prompt at all. */
+  included: boolean;
+  /** Whether the body was cut short by the character budget. */
+  truncated?: boolean;
+}
+
+export interface RulesParams {
+  load_project?: boolean;
+  load_cursor_rules?: boolean;
+}
+
+export interface RulesResult {
+  files: RuleFileInfo[];
 }
 
 // --- models.list -------------------------------------------------------------

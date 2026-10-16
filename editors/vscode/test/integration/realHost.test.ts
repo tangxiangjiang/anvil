@@ -53,7 +53,7 @@ test('the real host handshakes and reports what it can do', { skip: missing }, a
   const client = realClient();
   try {
     await client.start();
-    const info = await client.initialize(process.cwd(), { name: 'anvil-vscode', version: '0.35.5' });
+    const info = await client.initialize(process.cwd(), { name: 'anvil-vscode', version: '0.35.6' });
 
     // `initialize()` only resolves after it has checked the protocol revision,
     // so reaching this line is the assertion that the two sides agree.
@@ -61,9 +61,24 @@ test('the real host handshakes and reports what it can do', { skip: missing }, a
     assert.ok(info.cwd.length > 0);
     assert.ok(info.capabilities.includes('sessions'));
     assert.ok(info.capabilities.includes('approval'), 'the extension renders prompts, so the host must offer them');
+    // The panel's command catalogue and its rule card are drawn from these two,
+    // and both were added to the public SDK for the extension's sake: a host
+    // built without them would answer -32601 to a click.
+    assert.ok(info.capabilities.includes('skills'), 'the composer lists skills as commands');
+    assert.ok(info.capabilities.includes('rules'), 'the panel reports which rule files were loaded');
 
     const listed = await client.request<{ sessions: unknown[] }>('session.list', {});
     assert.ok(Array.isArray(listed.sessions));
+
+    // The two catalogue calls end to end, against the real host: a method the
+    // SDK does not expose would fail here rather than in the window.
+    const skills = await client.request<{ skills: unknown[] }>('skills.list', {});
+    assert.ok(Array.isArray(skills.skills));
+    const rules = await client.request<{ files: unknown[] }>('rules.list', {
+      load_project: true,
+      load_cursor_rules: false,
+    });
+    assert.ok(Array.isArray(rules.files));
   } finally {
     await client.stop();
   }
@@ -82,7 +97,7 @@ test('a run the provider refuses ends as a done with its own code', { skip: miss
 
   try {
     await client.start();
-    await client.initialize(process.cwd(), { name: 'anvil-vscode', version: '0.35.5' });
+    await client.initialize(process.cwd(), { name: 'anvil-vscode', version: '0.35.6' });
     const opened = await session.open();
     assert.equal(opened.model, UNREACHABLE.model);
     assert.equal(opened.provider, 'openai');
