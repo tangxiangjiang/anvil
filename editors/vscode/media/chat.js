@@ -1591,7 +1591,28 @@
     vscode.postMessage({ type: 'send', text, mentions: sentMentions, images: sentImages });
   });
 
+  // True while an IME composition is open, and for the Enter that closes it.
+  // That Enter commits the candidate into the box. It is not a send, even when
+  // the keydown arrives after compositionend with isComposing already false.
+  let composing = false;
+  let confirmEnter = false;
+  input.addEventListener('compositionstart', () => {
+    composing = true;
+  });
+  input.addEventListener('compositionend', () => {
+    composing = false;
+    confirmEnter = true;
+    setTimeout(() => {
+      confirmEnter = false;
+    }, 0);
+  });
+
   input.addEventListener('keydown', (event) => {
+    if (event.isComposing || event.keyCode === 229 || composing) return;
+    if (confirmEnter) {
+      confirmEnter = false;
+      return;
+    }
     // The palette owns the arrow keys and Enter while it is open: without this
     // Enter would submit the half-typed command instead of completing it.
     if (!palette.hidden && paletteRows.length > 0) {
