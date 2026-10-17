@@ -45,6 +45,23 @@ function methodOf(source: string, signature: string): string {
   return rest.slice(0, next);
 }
 
+test('an edit card opens onto a short comparison, and the button stays under it', () => {
+  const call = bodyOf(CHAT_JS, 'addToolCall');
+  assert.match(call, /event\.name === 'edit_file'/);
+  assert.match(call, /card\.open = true/);
+  assert.match(call, /renderEditDiff\(edit\)/);
+  // The comparison is drawn as text, like every other line in the transcript.
+  const diff = bodyOf(CHAT_JS, 'renderEditDiff');
+  assert.match(diff, /el\('div', cls, row\.text\)/);
+  assert.doesNotMatch(diff, /innerHTML/);
+  // Under the comparison, not above the pane: the card is already open, and
+  // the click is still the same reviewCall the other cards send.
+  const button = bodyOf(CHAT_JS, 'addReviewButton');
+  assert.match(button, /querySelector\('\.edit-diff'\)/);
+  assert.match(button, /card\.appendChild\(open\)/);
+  assert.match(button, /type: 'reviewCall'/);
+});
+
 test('the button is a sibling of the summary, never inside it', () => {
   // `<details>` toggles from its summary. A button inside it would collapse the
   // card on the same click that opens the diff, which is the bug this pins.

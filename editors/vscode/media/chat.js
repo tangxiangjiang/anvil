@@ -644,9 +644,15 @@
     card.appendChild(summary);
 
     const pane = el('div', 'pane');
-    // Omitted rather than shown empty: `undefined` would otherwise be rendered
-    // as the string "undefined" and read as arguments the model never sent.
-    if (event.args !== undefined) {
+    // An edit already carries both sides of the change, so the card shows that
+    // comparison instead of the raw arguments, and opens onto it. Every other
+    // call keeps the labelled IN block. Omitted rather than shown empty:
+    // `undefined` would otherwise be rendered as the string "undefined".
+    const edit = event.name === 'edit_file' ? editPair(event.args) : undefined;
+    if (edit) {
+      card.open = true;
+      pane.appendChild(renderEditDiff(edit));
+    } else if (event.args !== undefined) {
       pane.appendChild(section('in', 'IN', safeJson(event.args)));
     }
     card.appendChild(pane);
@@ -691,7 +697,95 @@
         args: facts.args,
       }),
     );
-    card.insertBefore(open, card.querySelector('.pane'));
+    // An edit card is already open on its diff, so the button sits under that
+    // comparison. Every other card keeps it above the pane, where it stays
+    // reachable while the card is collapsed.
+    if (card.querySelector('.edit-diff')) card.appendChild(open);
+    else card.insertBefore(open, card.querySelector('.pane'));
+  }
+
+  /** The two sides of an edit_file call, or undefined when the arguments are not one. */
+  function editPair(args) {
+    if (!args || typeof args !== 'object') return undefined;
+    if (typeof args.old_string !== 'string' || typeof args.new_string !== 'string') return undefined;
+    return {
+      path: typeof args.path === 'string' ? args.path : '',
+      before: args.old_string,
+      after: args.new_string,
+    };
+  }
+
+  /**
+   * A short comparison of the two sides, capped so a large replacement does not
+   * become the whole transcript. The lines are text nodes: the strings are
+   * model output.
+   */
+  function renderEditDiff(change) {
+    const box = el('div', 'edit-diff');
+    if (change.path) box.appendChild(el('div', 'path', change.path));
+    const rows = lineDiffRows(change.before, change.after);
+    const cap = 24;
+    const pre = el('pre', 'diff');
+    for (const row of rows.slice(0, cap)) {
+      const cls = row.kind === 'add' ? 'add' : row.kind === 'del' ? 'del' : 'ctx';
+      pre.appendChild(el('div', cls, row.text));
+    }
+    box.appendChild(pre);
+    if (rows.length > cap) {
+      box.appendChild(el('div', 'more-note', 'Showing the first ' + cap + ' lines of this change.'));
+    }
+    return box;
+  }
+
+  /** Line comparison of the two sides. A huge pair is clipped rather than diffed. */
+  function lineDiffRows(before, after) {
+    const a = splitLines(before);
+    const b = splitLines(after);
+    if (a.length * b.length > 4000) {
+      const rows = [];
+      for (const line of a.slice(0, 12)) rows.push({ kind: 'del', text: '-' + line });
+      for (const line of b.slice(0, 12)) rows.push({ kind: 'add', text: '+' + line });
+      return rows;
+    }
+    const n = a.length;
+    const m = b.length;
+    const dp = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+    for (let i = n - 1; i >= 0; i -= 1) {
+      for (let j = m - 1; j >= 0; j -= 1) {
+        dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+      }
+    }
+    const rows = [];
+    let i = 0;
+    let j = 0;
+    while (i < n && j < m) {
+      if (a[i] === b[j]) {
+        rows.push({ kind: 'ctx', text: ' ' + a[i] });
+        i += 1;
+        j += 1;
+      } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+        rows.push({ kind: 'del', text: '-' + a[i] });
+        i += 1;
+      } else {
+        rows.push({ kind: 'add', text: '+' + b[j] });
+        j += 1;
+      }
+    }
+    while (i < n) {
+      rows.push({ kind: 'del', text: '-' + a[i] });
+      i += 1;
+    }
+    while (j < m) {
+      rows.push({ kind: 'add', text: '+' + b[j] });
+      j += 1;
+    }
+    return rows;
+  }
+
+  function splitLines(text) {
+    const lines = text.split('\n');
+    if (lines.length > 0 && lines[lines.length - 1] === '' && text.endsWith('\n')) lines.pop();
+    return lines;
   }
 
   function addToolResult(event) {
