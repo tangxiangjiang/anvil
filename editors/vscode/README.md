@@ -119,10 +119,13 @@ names both sides and stops rather than failing later inside a tool call.
 | `anvil.permissions` | Read the workspace's `.anvil/permissions.json`; on by default. Off means the session ignores the file — the rules **and** the `defaultMode` it may declare — and an approval card has nothing to offer under "always allow", because a rule written into a file this session does not read would not be in force |
 | `anvil.hostPath` | The sidecar to spawn; empty uses the bundled one, then `PATH` |
 
-The API key is **not** a setting. Run **Anvil: Set API Key**; it goes into VS
-Code's `SecretStorage` and from there into the child process environment
-(`ANVIL_API_KEY`). It is never written to a settings file, an output channel, or
-a log line.
+The API key is **not** a setting. If the VS Code process already has
+`ANVIL_API_KEY`, that is enough and **Anvil: Set API Key** is unnecessary. A
+key saved with that command overrides the variable and is kept for later
+launches (VS Code's secret storage, and a local copy in the extension's own
+state when that store comes back empty). It is never written to a settings
+file, an output channel, or a log line. **Anvil: Clear API Key** removes both
+copies and falls back to `ANVIL_API_KEY` when the process has one.
 
 ## What it will and will not do
 
