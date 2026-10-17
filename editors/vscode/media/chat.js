@@ -22,7 +22,6 @@
   const composer = document.getElementById('composer');
   const input = document.getElementById('input');
   const sendButton = document.getElementById('send');
-  const stopButton = document.getElementById('stop');
   const statusLine = document.getElementById('status');
   const banner = document.getElementById('banner');
   const chipsBar = document.getElementById('chips');
@@ -634,7 +633,7 @@
     return wrap;
   }
 
-  function addToolCall(event, reviewable) {
+  function addToolCall(event, reviewable, anchor) {
     endRound();
     const card = el('details', 'tool');
     const summary = el('summary');
@@ -651,7 +650,7 @@
     const edit = event.name === 'edit_file' ? editPair(event.args) : undefined;
     if (edit) {
       card.open = true;
-      pane.appendChild(renderEditDiff(edit));
+      pane.appendChild(renderEditDiff(edit, anchor));
     } else if (event.args !== undefined) {
       pane.appendChild(section('in', 'IN', safeJson(event.args)));
     }
@@ -720,15 +719,47 @@
    * become the whole transcript. The lines are text nodes: the strings are
    * model output.
    */
-  function renderEditDiff(change) {
+  function renderEditDiff(change, anchor) {
     const box = el('div', 'edit-diff');
     if (change.path) box.appendChild(el('div', 'path', change.path));
-    const rows = lineDiffRows(change.before, change.after);
+    const numbered = anchor && typeof anchor.startLine === 'number';
+    const rows = [];
+    if (numbered && Array.isArray(anchor.before)) {
+      const start = anchor.startLine - anchor.before.length;
+      for (let i = 0; i < anchor.before.length; i += 1) {
+        rows.push({ kind: 'ctx', line: start + i, text: anchor.before[i] });
+      }
+    }
+    let oldNo = numbered ? anchor.startLine : 0;
+    let newNo = numbered ? anchor.startLine : 0;
+    for (const row of lineDiffRows(change.before, change.after)) {
+      const text = row.text.slice(1);
+      if (row.kind === 'add') {
+        rows.push({ kind: 'add', line: numbered ? newNo : undefined, text });
+        newNo += 1;
+      } else if (row.kind === 'del') {
+        rows.push({ kind: 'del', line: numbered ? oldNo : undefined, text });
+        oldNo += 1;
+      } else {
+        rows.push({ kind: 'ctx', line: numbered ? oldNo : undefined, text });
+        oldNo += 1;
+        newNo += 1;
+      }
+    }
+    if (numbered && Array.isArray(anchor.after)) {
+      for (let i = 0; i < anchor.after.length; i += 1) {
+        rows.push({ kind: 'ctx', line: newNo + i, text: anchor.after[i] });
+      }
+    }
     const cap = 24;
-    const pre = el('pre', 'diff');
+    const pre = el('pre', numbered ? 'diff numbered' : 'diff');
     for (const row of rows.slice(0, cap)) {
       const cls = row.kind === 'add' ? 'add' : row.kind === 'del' ? 'del' : 'ctx';
-      pre.appendChild(el('div', cls, row.text));
+      const sign = row.kind === 'add' ? '+' : row.kind === 'del' ? '-' : ' ';
+      const node = el('div', cls);
+      if (numbered) node.appendChild(el('span', 'ln', String(row.line)));
+      node.appendChild(el('span', 'code', sign + ' ' + row.text));
+      pre.appendChild(node);
     }
     box.appendChild(pre);
     if (rows.length > cap) {
@@ -1418,8 +1449,12 @@
 
   function setRunning(next) {
     running = next;
-    stopButton.hidden = !running;
-    sendButton.disabled = running;
+    // One button: a paper plane sends, and the same control stops a turn that
+    // is already running. It stays enabled either way — disabling it while a
+    // turn runs would take the stop away.
+    sendButton.classList.toggle('running', running);
+    sendButton.setAttribute('aria-label', running ? 'Stop' : 'Send');
+    sendButton.title = running ? 'Stop' : 'Send';
     input.disabled = running;
     attachButton.disabled = running;
     // The mode is a session option, so the extension refuses a change mid-turn
@@ -1698,9 +1733,13 @@
 
   attachButton.addEventListener('click', askForMentions);
 
-  stopButton.addEventListener('click', () => {
-    stopButton.disabled = true;
-    vscode.postMessage({ type: 'cancel' });
+  sendButton.addEventListener('click', () => {
+    if (running) {
+      sendButton.disabled = true;
+      vscode.postMessage({ type: 'cancel' });
+      return;
+    }
+    composer.dispatchEvent(new Event('submit', { cancelable: true }));
   });
 
   window.addEventListener('message', (event) => {
@@ -1715,14 +1754,14 @@
         }
         return;
       case 'state':
-        stopButton.disabled = false;
+        sendButton.disabled = false;
         setRunning(msg.state === 'running');
         return;
       case 'event': {
         const e = msg.event;
         if (e.type === 'assistant') addAssistantChunk(e.text || '');
         else if (e.type === 'reasoning') addReasoning(e.text || '');
-        else if (e.type === 'tool_call') addToolCall(e, msg.reviewable === true);
+        else if (e.type === 'tool_call') addToolCall(e, msg.reviewable === true, msg.edit);
         else if (e.type === 'tool_result') addToolResult(e);
         else if (e.type === 'error') addNotice(e.text || 'The run reported an error.');
         else if (e.type === 'progress' && e.text) {

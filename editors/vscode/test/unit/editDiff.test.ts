@@ -12,7 +12,7 @@
 
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
-import { PreImage, planReview, reviewOf } from '../../src/editDiff';
+import { PreImage, locateEdit, planReview, reviewOf } from '../../src/editDiff';
 
 test('an edit_file carries both sides of the replacement', () => {
   const review = reviewOf('edit_file', {
@@ -164,6 +164,28 @@ test('a patch over several files is named for the patch, not for one of them', (
   assert.ok(unreadable);
   const fallback = planReview(unreadable);
   assert.equal(fallback.kind === 'text' ? fallback.label : '', 'patch.diff');
+});
+
+test('an edit is located by the text it replaced, with a few lines around it', () => {
+  const file = ['one', 'two', 'three', 'four', 'five', 'six', 'seven'].join('\n');
+  assert.deepEqual(locateEdit(file, 'four'), {
+    startLine: 4,
+    before: ['one', 'two', 'three'],
+    after: ['five', 'six', 'seven'],
+  });
+  // A multi-line replacement starts on its first line and does not count itself as context.
+  assert.deepEqual(locateEdit(file, 'three\nfour', 1), {
+    startLine: 3,
+    before: ['two'],
+    after: ['five'],
+  });
+});
+
+test('a needle that is missing or repeated has no line number', () => {
+  const file = 'alpha\nalpha\n';
+  assert.equal(locateEdit(file, 'alpha'), undefined);
+  assert.equal(locateEdit(file, 'missing'), undefined);
+  assert.equal(locateEdit(file, ''), undefined);
 });
 
 test('the same call always produces the same plan', () => {

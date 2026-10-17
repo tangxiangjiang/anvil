@@ -79,6 +79,25 @@ export class ChangesTracker {
   }
 
   /**
+   * The pre-image recorded for a path this turn, when one was taken. Undefined
+   * when this turn has not snapshotted that path.
+   */
+  preImage(relPath: string): string | undefined {
+    return this.snapshots.get(relPath)?.text;
+  }
+
+  /** The file as it is now, without recording it. A replay has no pre-image. */
+  async read(relPath: string): Promise<string | undefined> {
+    const uri = this.uriFor(relPath);
+    if (!uri) return undefined;
+    try {
+      return decode(await vscode.workspace.fs.readFile(uri));
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
    * Reads everything back after a turn and keeps what actually changed. A file
    * the model read but did not write, or wrote identically, is not a change.
    */

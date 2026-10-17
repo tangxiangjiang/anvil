@@ -546,6 +546,15 @@ body {
   white-space: pre;
 }
 
+.tool .diff.numbered .ln {
+  display: inline-block;
+  width: 3.2em;
+  margin-right: 0.75em;
+  text-align: right;
+  color: var(--vscode-editorLineNumber-foreground, var(--vscode-descriptionForeground));
+  user-select: none;
+}
+
 .tool .edit-diff .more-note {
   margin-top: 4px;
   color: var(--vscode-descriptionForeground);
@@ -746,6 +755,29 @@ button:disabled {
 
 .composer .actions .spacer {
   flex: 1;
+}
+
+.composer button.icon {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.composer button.icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.composer button.icon .icon-stop,
+.composer button.icon.running .icon-send {
+  display: none;
+}
+
+.composer button.icon.running .icon-stop {
+  display: block;
 }
 
 kbd {
