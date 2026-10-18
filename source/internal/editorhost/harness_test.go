@@ -174,9 +174,11 @@ func startHarness(t *testing.T, cfg Config) *harness {
 	srv := New(cfg, inR, outW)
 
 	h := &harness{t: t, srv: srv, in: inW, out: make(chan map[string]any, 512)}
+	serveDone := make(chan struct{})
 	go func() {
 		_ = srv.Serve(context.Background())
 		_ = outW.Close()
+		close(serveDone)
 	}()
 	go func() {
 		sc := bufio.NewScanner(outR)
@@ -190,7 +192,32 @@ func startHarness(t *testing.T, cfg Config) *harness {
 		}
 		close(h.out)
 	}()
-	t.Cleanup(func() { _ = inW.Close(); _ = outR.Close() })
+	// Closing the pipe only asks Serve to stop. It then cancels the in-flight
+	// run and closes the agent, which is what finishes writing .anvil/agents.
+	// TempDir is removed by an earlier cleanup, so this one has to wait —
+	// otherwise RemoveAll races a file the run is still creating.
+	t.Cleanup(func() {
+		_ = inW.Close()
+		timer := time.NewTimer(closeRunTimeout + 2*time.Second)
+		defer timer.Stop()
+		out := h.out
+		for {
+			select {
+			case <-serveDone:
+				_ = outR.Close()
+				return
+			case _, ok := <-out:
+				// Keep the host's writer from blocking on a full pipe. A closed
+				// channel stays readable, so drop it or this spins.
+				if !ok {
+					out = nil
+				}
+			case <-timer.C:
+				_ = outR.Close()
+				return
+			}
+		}
+	})
 	return h
 }
 
