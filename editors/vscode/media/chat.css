@@ -1130,6 +1130,13 @@ body.dont-ask-mode .composer {
   text-decoration: line-through;
 }
 
+/* A config file that will not parse is the one failure this card reports as
+ * an error rather than an absence: the user can fix it, and only if told. */
+.commands .command.failed {
+  color: var(--vscode-errorForeground, #f85149);
+  font-size: 0.9em;
+}
+
 /* --- session marker ------------------------------------------------------- */
 
 .msg.session .body {

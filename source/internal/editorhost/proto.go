@@ -60,6 +60,11 @@ const (
 	MethodModelsList        = "models.list"
 	MethodSkillsList        = "skills.list"
 	MethodRulesList         = "rules.list"
+	// MethodMCPList reports the MCP servers the selected file layers declare,
+	// and which of those files exist. It is configuration, not connection: the
+	// SDK exposes no state for a server that failed to start. Additive: a host
+	// without it answers -32601, which a client reads as "no listing here".
+	MethodMCPList = "mcp.list"
 	// MethodPermissionsGet reads the workspace rule file — the effective policy
 	// for this workspace, and the place to put a squiggle when it will not
 	// compile.
@@ -725,6 +730,37 @@ type RulesParams struct {
 // RulesResult is the rule files that apply to the workspace.
 type RulesResult struct {
 	Files []RuleFileInfo `json:"files"`
+}
+
+// MCPListParams names the file layers to report. An empty list is an empty
+// listing: the client sends exactly the sources it turned on, so nothing is
+// read that the session would not read.
+type MCPListParams struct {
+	SettingSources []string `json:"setting_sources,omitempty"`
+}
+
+// MCPServerInfo is one declared MCP server. There is deliberately no connected
+// or status field: the SDK does not expose connection state, and a field filled
+// from "the file mentioned it" would be a false green light.
+type MCPServerInfo struct {
+	Name      string `json:"name"`
+	Transport string `json:"transport,omitempty"`
+	// Source is the config file that declared this server.
+	Source string `json:"source"`
+}
+
+// MCPSourceInfo is one config file the listing looked at.
+type MCPSourceInfo struct {
+	Source string `json:"source"` // project | user
+	Path   string `json:"path"`
+	// Exists is false when the file is not there. That is a note, not an error.
+	Exists bool `json:"exists"`
+}
+
+// MCPListResult is what the selected layers declare.
+type MCPListResult struct {
+	Servers []MCPServerInfo `json:"servers"`
+	Sources []MCPSourceInfo `json:"sources"`
 }
 
 // ---------------------------------------------------------------------------

@@ -201,6 +201,14 @@ What the panel lists is what will be loaded — name, transport and source file.
 that means "the file mentioned it" would be a lie about the only thing a person cares about. Calls
 through MCP stay behind the `mcp` permission group from 0.36.
 
+The listing is an additive method, `mcp.list`, that takes the same `setting_sources` the session
+was given and answers the servers those files declare, plus whether each file exists. It carries
+no connection field, and that absence is the contract: the wire cannot say "running" because the
+host cannot observe it. A malformed file fails the call rather than yielding an empty list — an
+empty list would say "nothing is configured" about a file that says something. A layer that is
+enabled with no file is reported as such, because "off" and "on with nothing there" are different
+answers and only the second is worth explaining in the panel.
+
 ## Web tools
 
 0.15 implemented `web_search` and `fetch_url` behind `Options.WebSearch`; 0.36 gave them the `web`

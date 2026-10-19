@@ -35,6 +35,7 @@ import { HostListener, HostManager, ResolvedMode } from './hostManager';
 import { ChatSession, SessionConfig, SessionState } from './session';
 import { PreviewDocuments } from './review';
 import { dedupeMentions } from './mentions';
+import { mcpEnabled, missingMcpSources, settingSourcesFor } from './mcp';
 import { shouldReattach } from './reattach';
 import { replayOf } from './transcript';
 import { CommandAction, SlashCommand, parseSlash, route } from './commands';
@@ -43,6 +44,7 @@ import {
   Decision,
   DoneParams,
   HostEvent,
+  McpServerInfo,
   PermissionMode,
   PermissionModeSource,
   PermissionModes,
@@ -165,6 +167,12 @@ type Outbound =
   | { type: 'help'; commands: SlashCommand[] }
   | { type: 'mode'; mode: PermissionMode | ''; resolved: PermissionMode; source: PermissionModeSource }
   | { type: 'rules'; files: RuleFileInfo[] }
+  /**
+   * What the enabled MCP layers declare, and which of their files are missing.
+   * Configuration only: there is no connected field, because the host cannot
+   * observe one.
+   */
+  | { type: 'mcp'; servers: McpServerInfo[]; notes: string[]; error?: string }
   | { type: 'session'; agentId: string; started: boolean }
   /**
    * The agent this tab is showing, for the document to remember across a
@@ -558,7 +566,13 @@ export class ChatPanel implements HostListener {
       // does either. Coming back to the session is the last thing done here,
       // because it is the only part that can take a moment — everything above
       // is already on the wire by the time the host is asked anything.
-      void this.reattach();
+      //
+      // The MCP card follows it rather than racing it: a restored tab should
+      // show its conversation first, and the card is about the workspace, not
+      // about any one turn in it.
+      void this.reattach()
+        .catch(() => undefined)
+        .then(() => this.reportMcp());
       return;
     }
 
@@ -1091,6 +1105,33 @@ export class ChatPanel implements HostListener {
       this.post({ type: 'rules', files });
     } catch (err) {
       this.log(`could not list rule files: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * Reports the MCP servers this workspace's enabled files declare.
+   *
+   * Asked once per document: the layers are session config, so a tab in this
+   * workspace loads the same set until the window reloads, and the settings are
+   * where a different set is chosen. Nothing is posted when both layers are
+   * off — a card on every conversation saying MCP is off is noise, and the
+   * setting is already the answer.
+   */
+  private async reportMcp(): Promise<void> {
+    const { mcp } = readSettings();
+    if (!mcpEnabled(mcp)) return;
+    try {
+      const listing = await this.hub.mcpServers(settingSourcesFor(mcp));
+      this.post({
+        type: 'mcp',
+        servers: listing.servers ?? [],
+        notes: missingMcpSources(listing.sources ?? []),
+      });
+    } catch (err) {
+      // A malformed file is the interesting failure, and an empty card would
+      // hide the one thing the user can fix. The hosts that predate the method
+      // fail too, and saying so once is honest: there is no listing to show.
+      this.post({ type: 'mcp', servers: [], notes: [], error: (err as Error).message });
     }
   }
 

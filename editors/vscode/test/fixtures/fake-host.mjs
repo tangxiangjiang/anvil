@@ -43,6 +43,12 @@
  *                          checkpoint.list answers for the agent and
  *                          checkpoint.restore writes each path back, so the
  *                          extension's undo route is exercised without the SDK
+ *   FAKE_HOST_MCP=<name:transport,…>  servers the workspace's project file is
+ *                          said to declare. mcp.list reports them for the
+ *                          project layer and nothing else, because the file is
+ *                          what the real host reads
+ *   FAKE_HOST_MCP_BROKEN=1  answer mcp.list with the parse error a malformed
+ *                          `.cursor/mcp.json` produces
  *
  * One thing here is not scripted: the mode a new session starts in. It is
  * resolved from what the client asked for and from the workspace's
@@ -52,6 +58,7 @@
  */
 
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 
@@ -91,6 +98,21 @@ const checkpointPaths = (process.env.FAKE_HOST_CHECKPOINT || '')
   .filter((path) => path !== '');
 /** Checkpointed runs by agent id, newest first. */
 const checkpoints = new Map();
+/** The workspace root the session claims, which is where the MCP file lives. */
+const workspaceCWD = process.env.FAKE_HOST_CWD || process.cwd();
+/** The project MCP file, as the host would resolve it. */
+const projectMCPPath = join(workspaceCWD, '.cursor', 'mcp.json');
+/** Servers the project file is said to declare, name and transport. */
+const mcpServers = (process.env.FAKE_HOST_MCP || '')
+  .split(',')
+  .map((entry) => entry.trim())
+  .filter((entry) => entry !== '')
+  .map((entry) => {
+    const [name, transport = 'stdio'] = entry.split(':');
+    return { name: name.trim(), transport: transport.trim() };
+  });
+/** Whether the project file is reported as one that will not parse. */
+const mcpBroken = process.env.FAKE_HOST_MCP_BROKEN === '1';
 /**
  * The runs each agent finished, oldest first. A fork copies through one of
  * them, so this is what `session.fork` validates a run id against.
@@ -573,7 +595,7 @@ async function handle(msg) {
         protocol,
         host: 'anvil-host (fake)',
         cwd: process.env.FAKE_HOST_CWD || process.cwd(),
-        capabilities: ['approval', 'sessions', 'store'],
+        capabilities: ['approval', 'sessions', 'store', 'mcp'],
       });
       return;
     case 'session.new':
@@ -652,6 +674,39 @@ async function handle(msg) {
         files.push({ path: '.cursor/rules/huge.mdc', bytes: 40960, included: false, truncated: false });
       }
       ok(msg.id, { files });
+      return;
+    }
+    case 'mcp.list': {
+      // Configuration, not connection: the listing names what a file says, and
+      // carries no field for whether a server started. The layers are exactly
+      // the ones asked for, as the real host reads only what the session reads.
+      echo('mcp.list', msg.params || {});
+      const params = msg.params || {};
+      const wanted = Array.isArray(params.setting_sources) ? params.setting_sources : [];
+      const unknown = wanted.find((source) => source !== 'project' && source !== 'user');
+      if (unknown !== undefined) {
+        fail(msg.id, -32602, `unknown setting source: ${unknown}`);
+        return;
+      }
+      if (mcpBroken) {
+        fail(msg.id, -32000, `load project mcp.json: parse ${projectMCPPath}: unexpected end of JSON input`);
+        return;
+      }
+      const sources = [];
+      if (wanted.includes('user')) {
+        sources.push({ source: 'user', path: join(homedir(), '.cursor', 'mcp.json'), exists: false });
+      }
+      if (wanted.includes('project')) {
+        sources.push({ source: 'project', path: projectMCPPath, exists: mcpServers.length > 0 });
+      }
+      const servers = wanted.includes('project')
+        ? mcpServers.map((server) => ({
+            name: server.name,
+            transport: server.transport,
+            source: projectMCPPath,
+          }))
+        : [];
+      ok(msg.id, { servers, sources });
       return;
     }
     case 'session.rename': {

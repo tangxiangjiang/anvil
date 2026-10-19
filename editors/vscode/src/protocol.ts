@@ -56,6 +56,12 @@ export const Method = {
   ModelsList: 'models.list',
   SkillsList: 'skills.list',
   RulesList: 'rules.list',
+  /**
+   * The MCP servers the enabled file layers declare. Additive: a host that
+   * predates it answers `-32601`, and the panel then shows no card rather than
+   * an error.
+   */
+  McpList: 'mcp.list',
   PermissionsGet: 'permissions.get',
   PermissionsAdd: 'permissions.add',
   Shutdown: 'shutdown',
@@ -641,6 +647,38 @@ export interface RulesParams {
 
 export interface RulesResult {
   files: RuleFileInfo[];
+}
+
+// --- mcp.list ----------------------------------------------------------------
+
+/**
+ * One server a config file declares. It says what would be launched, not
+ * whether it launched: the host reports no connection state, so there is no
+ * field here to mistake for one.
+ */
+export interface McpServerInfo {
+  name: string;
+  /** stdio | http | sse. Empty for an entry naming neither command nor URL. */
+  transport?: string;
+  /** The config file that declared it. */
+  source: string;
+}
+
+/** One config file the listing looked at. */
+export interface McpSourceInfo {
+  source: string;
+  path: string;
+  /** False when the file is not there; a note, not an error. */
+  exists: boolean;
+}
+
+export interface McpListParams {
+  setting_sources?: string[];
+}
+
+export interface McpListResult {
+  servers: McpServerInfo[];
+  sources: McpSourceInfo[];
 }
 
 // --- models.list -------------------------------------------------------------

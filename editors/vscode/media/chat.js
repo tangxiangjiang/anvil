@@ -1476,6 +1476,48 @@
     endRound();
   }
 
+  // --- mcp ------------------------------------------------------------------
+
+  /**
+   * What the enabled MCP layers will load, and from which file.
+   *
+   * It deliberately says nothing about whether a server connected: the host
+   * reports configuration only, so a green dot here would mean "the file
+   * mentioned it" — which is not the thing a person cares about.
+   */
+  function showMcp(msg) {
+    const card = el('div', 'commands mcp');
+    card.appendChild(el('div', 'head', 'MCP servers'));
+    const error = typeof msg.error === 'string' ? msg.error : '';
+    if (error !== '') {
+      card.appendChild(el('div', 'command failed', 'Could not read the MCP configuration: ' + error));
+      append(card);
+      endRound();
+      return;
+    }
+    const servers = Array.isArray(msg.servers) ? msg.servers : [];
+    for (const server of servers) {
+      const row = el('div', 'command');
+      row.appendChild(el('span', 'cmd', typeof server.name === 'string' ? server.name : ''));
+      row.appendChild(el('span', 'desc', typeof server.source === 'string' ? server.source : ''));
+      if (typeof server.transport === 'string' && server.transport !== '') {
+        row.appendChild(el('span', 'tag', server.transport));
+      }
+      card.appendChild(row);
+    }
+    if (servers.length === 0) {
+      card.appendChild(el('div', 'command muted', 'No MCP servers are configured.'));
+    }
+    // Layers that are enabled but have no file. The path is the one the host
+    // resolved, so it can be opened or created as printed.
+    const notes = Array.isArray(msg.notes) ? msg.notes : [];
+    for (const note of notes) {
+      if (typeof note === 'string' && note !== '') card.appendChild(el('div', 'command muted', note));
+    }
+    append(card);
+    endRound();
+  }
+
   function showSession(msg) {
     const line = el('div', 'msg session');
     const label = msg.started !== true
@@ -1838,6 +1880,9 @@
         if (rules.some((file) => file.included !== true || file.truncated === true)) showRules(rules);
         return;
       }
+      case 'mcp':
+        showMcp(msg);
+        return;
       case 'session':
         showSession(msg);
         return;

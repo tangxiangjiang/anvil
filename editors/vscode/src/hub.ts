@@ -21,6 +21,7 @@ import { HostManager } from './hostManager';
 import {
   CheckpointRestoreResult,
   CheckpointRun,
+  McpListResult,
   ModelEntry,
   PermissionsAddResult,
   PermissionsResult,
@@ -324,6 +325,18 @@ export class Hub {
     if (this.rulesCache) return this.rulesCache;
     this.rulesCache = await this.manager.rules();
     return this.rulesCache;
+  }
+
+  /**
+   * The MCP servers the given layers declare.
+   *
+   * Not cached, unlike the rules: the layers are the caller's, and a malformed
+   * file is an answer the caller has to be able to see on every ask, not just
+   * the first. The call reads two small files, so repeating it per tab costs
+   * less than a cache that could answer for a different layer set.
+   */
+  mcpServers(settingSources: string[]): Promise<McpListResult> {
+    return this.manager.mcpServers(settingSources);
   }
 
   /** The provider's model catalogue, for a tab's /model picker. */

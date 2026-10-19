@@ -185,6 +185,8 @@ func (s *Server) dispatch(ctx context.Context, req *Request) (any, *RPCError) {
 		return s.handleSkillsList(ctx, req.Params)
 	case MethodRulesList:
 		return s.handleRulesList(ctx, req.Params)
+	case MethodMCPList:
+		return s.handleMCPList(ctx, req.Params)
 	case MethodPermissionsGet:
 		return s.handlePermissionsGet(ctx, req.Params)
 	case MethodPermissionsAdd:
@@ -244,7 +246,7 @@ func (s *Server) handleInitialize(params json.RawMessage) (any, *RPCError) {
 }
 
 func capabilities() []string {
-	return []string{"streaming", "sessions", "resume", "cancel", "models", "approval", "context", "vision", "plan", "skills", "rules", "permissions"}
+	return []string{"streaming", "sessions", "resume", "cancel", "models", "approval", "context", "vision", "plan", "skills", "rules", "permissions", "mcp"}
 }
 
 // ---------------------------------------------------------------------------
@@ -796,6 +798,50 @@ func (s *Server) handleRulesList(ctx context.Context, params json.RawMessage) (a
 	return out, nil
 }
 
+// handleMCPList reports what the selected file layers declare.
+//
+// It is configuration, not connection: nothing here says a server started. The
+// listing exists so a person can see which file would launch what before a turn
+// runs, and so a file that will not parse fails loudly here rather than as MCP
+// tools that silently do not exist.
+//
+// The response carries no status field on purpose. The SDK has no introspection
+// for a connected server, and a state inferred from "the file listed it" would
+// claim the one thing a green dot is supposed to mean.
+func (s *Server) handleMCPList(_ context.Context, params json.RawMessage) (any, *RPCError) {
+	p, err := decode[MCPListParams](params)
+	if err != nil {
+		return nil, errInvalidParams("mcp.list: " + err.Error())
+	}
+	sources, rpcErr := settingSourcesFrom(p.SettingSources)
+	if rpcErr != nil {
+		return nil, errInvalidParams("mcp.list: " + rpcErr.Message)
+	}
+	listed, err := anvil.ListMCPServers(s.cwdPath(), sources)
+	if err != nil {
+		return nil, errHost(err)
+	}
+	out := MCPListResult{
+		Servers: make([]MCPServerInfo, 0, len(listed.Servers)),
+		Sources: make([]MCPSourceInfo, 0, len(listed.Sources)),
+	}
+	for _, server := range listed.Servers {
+		out.Servers = append(out.Servers, MCPServerInfo{
+			Name:      server.Name,
+			Transport: server.Transport,
+			Source:    server.Source,
+		})
+	}
+	for _, source := range listed.Sources {
+		out.Sources = append(out.Sources, MCPSourceInfo{
+			Source: string(source.Source),
+			Path:   source.Path,
+			Exists: source.Exists,
+		})
+	}
+	return out, nil
+}
+
 // ---------------------------------------------------------------------------
 // permissions
 // ---------------------------------------------------------------------------
@@ -1004,16 +1050,11 @@ func (s *Server) buildOptions(p SessionParams, sess *session) (anvil.Options, *R
 		return opts, errInvalidParams("model is required (session model, host config, or ANVIL_MODEL)")
 	}
 	opts.Model = anvil.Model{ID: model}
-	for _, src := range p.SettingSources {
-		clean := strings.ToLower(strings.TrimSpace(src))
-		switch clean {
-		case string(anvil.SettingSourceProject), string(anvil.SettingSourceUser):
-			opts.Local.SettingSources = append(opts.Local.SettingSources, anvil.SettingSource(clean))
-		case "":
-		default:
-			return opts, errInvalidParams("unknown setting source: " + src)
-		}
+	sources, rpcErr := settingSourcesFrom(p.SettingSources)
+	if rpcErr != nil {
+		return opts, rpcErr
 	}
+	opts.Local.SettingSources = sources
 	if sess.mode == ModePlan {
 		// Plan mode removes the tools that can change the workspace, so the
 		// model produces a plan instead of acting on it. The instruction that
@@ -1024,6 +1065,26 @@ func (s *Server) buildOptions(p SessionParams, sess *session) (anvil.Options, *R
 	// permissionHookForMode and groupsForMode.
 	opts.Permission = s.permissionHookForMode(sess.mode, sess, approvalTimeout(p.ApprovalTimeoutMS))
 	return opts, nil
+}
+
+// settingSourcesFrom validates the wire's string list against the enum.
+//
+// buildOptions and mcp.list read the same client field, so they have to accept
+// the same values: a source that a session would load but the listing refuses
+// would make the card disagree with the conversation it describes.
+func settingSourcesFrom(values []string) ([]anvil.SettingSource, *RPCError) {
+	out := make([]anvil.SettingSource, 0, len(values))
+	for _, src := range values {
+		clean := strings.ToLower(strings.TrimSpace(src))
+		switch clean {
+		case string(anvil.SettingSourceProject), string(anvil.SettingSourceUser):
+			out = append(out, anvil.SettingSource(clean))
+		case "":
+		default:
+			return nil, errInvalidParams("unknown setting source: " + src)
+		}
+	}
+	return out, nil
 }
 
 // boolOr reads a tri-state request field: absent means the default the host

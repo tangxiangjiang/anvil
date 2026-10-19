@@ -269,6 +269,16 @@
           "type": "boolean",
           "default": true,
           "markdownDescription": "Read this workspace's `.anvil/permissions.json`: the rules that let a tool call run, stop to ask about it, or refuse it outright. Off means the session ignores the file, and an approval card has nothing to offer under \"always allow\" — a rule written into a file this session does not read would not be in force."
+        },
+        "anvil.mcp.project": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Read `.cursor/mcp.json` in the workspace and load the MCP servers it declares. The file can start processes, which is why it is read only from this workspace, and why the extension refuses untrusted workspaces. Tool calls through MCP stay behind the `mcp` permission group."
+        },
+        "anvil.mcp.user": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Also read `~/.cursor/mcp.json` and load the servers it declares. Off by default: a home-directory file is shared by every project, so turning it on is a wider act than reading the workspace's own file. Project entries win over user entries with the same name."
         }
       }
     }

@@ -21,6 +21,7 @@ import {
   CheckpointRestoreResult,
   DoneParams,
   HostEvent,
+  McpListResult,
   Method,
   ModelEntry,
   PermissionMode,
@@ -285,6 +286,19 @@ export class HostManager {
     const client = await this.startClient();
     const result = await client.request<{ files: RuleFileInfo[] }>(Method.RulesList, readSettings().rules);
     return result.files ?? [];
+  }
+
+  /**
+   * The MCP servers the enabled file layers declare.
+   *
+   * Configuration, not connection: the host reports which files were read and
+   * what they name, and carries no state for a server that failed to start.
+   * The sources are the caller's — the panel passes the same list it put on the
+   * session, so the card cannot describe a layer the conversation does not load.
+   */
+  async mcpServers(settingSources: string[]): Promise<McpListResult> {
+    const client = await this.startClient();
+    return client.request<McpListResult>(Method.McpList, { setting_sources: settingSources });
   }
 
   /** Past agents stored under the workspace root. */

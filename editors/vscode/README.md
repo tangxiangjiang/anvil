@@ -117,6 +117,8 @@ names both sides and stops rather than failing later inside a tool call.
 | `anvil.rules` | Load `AGENTS.md` and `.anvil/rules/*.md`; on by default |
 | `anvil.cursorRules` | Also load `.cursor/rules/*.md|.mdc`; on by default |
 | `anvil.permissions` | Read the workspace's `.anvil/permissions.json`; on by default. Off means the session ignores the file — the rules **and** the `defaultMode` it may declare — and an approval card has nothing to offer under "always allow", because a rule written into a file this session does not read would not be in force |
+| `anvil.mcp.project` | Load `.cursor/mcp.json` from the workspace; on by default. The file can start processes, which is why it is read only from a folder you trust |
+| `anvil.mcp.user` | Also load `~/.cursor/mcp.json`; off by default. It is shared by every project, so reading it is opted into; project entries win over user entries with the same name |
 | `anvil.hostPath` | The sidecar to spawn; empty uses the bundled one, then `PATH` |
 
 The API key is **not** a setting. Run **Anvil: Set API Key**; it goes into VS
@@ -153,6 +155,13 @@ a log line.
 - **Tells you what it read.** The tab reports which rule files this workspace
   loaded — `AGENTS.md`, `.anvil/rules/*.md`, and optionally `.cursor/rules/*` —
   and says so plainly when one was skipped or cut short by the size budget.
+  It does the same for MCP: a card lists the servers the enabled `mcp.json`
+  layers declare — name, transport, source file — and names a layer whose file
+  is not there. It says nothing about whether a server connected, because the
+  host can only report what a file says; a green dot from that would mean "the
+  file mentioned it", not "it works". A file that will not parse is reported as
+  an error, since an empty list would hide the one thing you can fix. Calls
+  through MCP tools stay behind the `mcp` permission group.
 - **Typesets the reply, and shows the thinking when the provider sends it.** A
   reply is rendered as Markdown — paragraphs, headings, lists, quotes, fenced
   code — by a parser that returns a tree of plain objects and nothing else: the

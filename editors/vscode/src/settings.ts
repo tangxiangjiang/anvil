@@ -8,6 +8,7 @@
  */
 
 import * as vscode from 'vscode';
+import { McpSettings, settingSourcesFor } from './mcp';
 import { SessionConfig } from './session';
 
 const SECTION = 'anvil';
@@ -30,6 +31,12 @@ export interface ResolvedSettings {
    * running is worse than no list.
    */
   rules: { load_project: boolean; load_cursor_rules: boolean };
+  /**
+   * The MCP file layers this session is told to load. Kept beside the session
+   * config so the panel's card asks about the same layers the conversation
+   * uses: a card describing a different set would be worse than no card.
+   */
+  mcp: McpSettings;
 }
 
 /** Reads the workspace configuration into a session config. */
@@ -61,10 +68,23 @@ export function readSettings(): ResolvedSettings {
   // in force. It is sent explicitly, both ways, because the host's default is
   // on and this is the one place a user turns it off.
   session.load_permissions = cfg.get<boolean>('permissions', true) ?? true;
+  // MCP is per source, with deliberately different defaults. The workspace file
+  // is reviewed like the rest of the workspace, and the extension refuses
+  // untrusted workspaces; a home-directory file a user may not remember writing
+  // is a larger act to read, so it is opt-in.
+  const mcp: McpSettings = {
+    project: cfg.get<boolean>('mcp.project', true) ?? true,
+    user: cfg.get<boolean>('mcp.user', false) ?? false,
+  };
+  // Omitted when both are off, which keeps the request exactly as it was before
+  // these settings existed.
+  const sources = settingSourcesFor(mcp);
+  if (sources.length > 0) session.setting_sources = sources;
   return {
     hostPath: (cfg.get<string>('hostPath', '') ?? '').trim(),
     session,
     rules: { load_project: loadProject, load_cursor_rules: loadCursor },
+    mcp,
   };
 }
 
