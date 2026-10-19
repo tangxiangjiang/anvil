@@ -285,11 +285,40 @@ Three details make the contract hold:
 
 ## Input
 
-The remaining items are small and independent: Escape in the composer cancels the running turn
-(the command already exists; only the key binding is missing); files can be dropped on the panel;
-an image can be chosen from the filesystem rather than only pasted; Up and Down walk the prompts
-already sent in this session; an assistant message can be copied; and a status-bar item shows idle
-/ running / waiting-for-approval and opens the chat when clicked.
+The remaining items are small and independent, but each has one decision worth stating:
+
+1. **Escape is heard on the window, not the composer.** The textarea is disabled while a turn
+   runs — which is exactly when Escape matters — so a listener there would never fire. An idle
+   Escape is left entirely alone: there is nothing to interrupt, and the composer's own handler
+   still uses it to close the palette while the draft stays put.
+2. **A drop is classified by type.** An image becomes an attachment, read through the same
+   `FileReader` a paste uses; every other file becomes a mention. Which of the two the drop
+   carries has to be decided on the client, but *whether a path is inside the workspace* is not
+   a client question: the webview posts what the drag carried (plain paths and/or `file:` URIs)
+   and the extension resolves them with the workspace root, refusing an outside file with a
+   sentence rather than letting the host reject the prompt later. Electron no longer exposes
+   a dropped `File`'s path uniformly, so both carriers are read and either is enough.
+3. **The picker answers in the same representation a paste produces.** The webview cannot open a
+   dialog, so the button asks the extension; the extension reads the chosen files and posts
+   `data:` URLs. The composer therefore holds one kind of attachment however it arrived, and the
+   size cap is the paste path's own — checked on the encoded length so a file is never
+   attachable one way and refused the other.
+4. **Prompt history is the conversation's, not the tab's.** The list is held in memory, cleared
+   with the transcript, and repopulated by the replay, so a reloaded tab can recall the prompts
+   its transcript shows and `/clear` cannot recall the ones it just removed. Up and Down act only
+   at the input's edges, so the arrows still move the caret through a multi-line draft; leaving
+   the list downwards returns the draft the walk borrowed; editing a recalled prompt ends the
+   walk rather than being overwritten by the next press.
+5. **Copy writes the source text, through the host.** What a reader pastes elsewhere is the
+   Markdown that arrived, not a second rendering of it. The write goes through
+   `vscode.env.clipboard`: a webview's `navigator.clipboard` access depends on permissions the
+   document does not control, and a Copy that silently fails is worse than a round trip.
+6. **One status-bar item, and a waiting approval outranks a running turn.** The item is
+   window-wide, so it reports the most urgent state any tab is in; a run stopped on a question is
+   the state that needs the user, wherever its tab is. Its click goes to the waiting tab, else
+   the front tab, else any open one, and only then opens a new one — "go where the work is"
+   should not produce a second conversation. It reads the panels' own state on each
+   `onRunningChanged`, so it cannot disagree with them.
 
 ## Security
 
@@ -313,6 +342,9 @@ Nothing in this milestone changes the trust boundary:
 - New public functions (`RenameAgent`, `DeleteAgent`, `ForkAgent`, `ListCheckpoints`,
   `RestoreCheckpoint`) and new host methods; every wire change is additive, so `ProtocolVersion`
   stays at 1 and an old host answers `-32601`, which the client already reads as absence.
+- The input layer is client-only: no SDK or host method, one new contributed command
+  (`anvil.focusChat`, what the status-bar item runs), and webview messages that an older
+  extension never sends.
 
 ## Explicit non-goals
 

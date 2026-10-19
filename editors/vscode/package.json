@@ -112,6 +112,11 @@
         "icon": "$(debug-stop)"
       },
       {
+        "command": "anvil.focusChat",
+        "title": "Anvil: Focus Chat",
+        "category": "Anvil"
+      },
+      {
         "command": "anvil.setApiKey",
         "title": "Anvil: Set API Key",
         "category": "Anvil"

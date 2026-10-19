@@ -694,6 +694,45 @@ button:disabled {
   color: var(--vscode-foreground);
 }
 
+/* --- answer actions ------------------------------------------------------- */
+
+/*
+ * Copy belongs to the bubble rather than to a toolbar: it acts on this answer,
+ * and a bar of actions detached from the message it acts on would leave the
+ * reader to work out which one it meant. It is quiet until hovered, because it
+ * is not what the answer is for.
+ */
+.msg .copy {
+  align-self: flex-start;
+  border: none;
+  background: transparent;
+  color: var(--vscode-descriptionForeground);
+  padding: 0;
+  font: inherit;
+  font-size: 0.8em;
+  cursor: pointer;
+}
+
+.msg .copy:hover:not(:disabled) {
+  color: var(--vscode-foreground);
+}
+
+.msg .copy:disabled {
+  cursor: default;
+}
+
+/* --- dropping files ------------------------------------------------------- */
+
+/*
+ * The whole panel is the drop target, so the highlight is the panel's edge: a
+ * smaller box would suggest there is somewhere in the chat a dropped file
+ * would not go.
+ */
+body.drop-target {
+  outline: 2px dashed var(--vscode-focusBorder);
+  outline-offset: -4px;
+}
+
 /* --- the floating composer ------------------------------------------------ */
 
 /*

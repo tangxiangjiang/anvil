@@ -15,6 +15,7 @@
 
 import { dirname } from 'node:path';
 import * as vscode from 'vscode';
+import { ChatPhase, phaseOf } from './chatStatus';
 import { ChatPanel } from './chatPanel';
 import { SlashCommand, commandCatalogue } from './commands';
 import { HostManager } from './hostManager';
@@ -215,6 +216,44 @@ export class Hub {
   /** Whether the front tab is running a turn; what the editor title bar shows. */
   get activeBusy(): boolean {
     return this.activePanel()?.busy ?? false;
+  }
+
+  /**
+   * What the window's chat is doing, for the status bar.
+   *
+   * The front tab does not decide it: an approval waiting in a tab behind the
+   * one being read is exactly the thing a window-wide indicator is for. The
+   * rule for combining the tabs lives in `chatStatus.ts`, where it is tested.
+   */
+  get phase(): ChatPhase {
+    return phaseOf([...this.panels].map((panel) => ({ busy: panel.busy, awaiting: panel.awaitingApproval() })));
+  }
+
+  /**
+   * Takes the user to the chat: the tab that is asking something, else the
+   * front tab, else any open one, and only then a new tab.
+   *
+   * This is the status bar's click. Opening a fresh tab when one already
+   * exists would make the indicator's one job — "go where the work is" —
+   * produce a second conversation instead.
+   */
+  revealChat(): void {
+    for (const panel of this.panels) {
+      if (panel.awaitingApproval()) {
+        panel.reveal();
+        return;
+      }
+    }
+    const active = this.activePanel();
+    if (active) {
+      active.reveal();
+      return;
+    }
+    for (const panel of this.panels) {
+      panel.reveal();
+      return;
+    }
+    this.openTab();
   }
 
   /** Whether a host child is live, so a redraw need not start one. */

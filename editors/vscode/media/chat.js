@@ -27,6 +27,7 @@
   const banner = document.getElementById('banner');
   const chipsBar = document.getElementById('chips');
   const attachButton = document.getElementById('attach');
+  const imageButton = document.getElementById('image');
   const modeSelect = document.getElementById('mode');
   const bypassStrip = document.getElementById('bypass');
   const dontAskStrip = document.getElementById('dontAsk');
@@ -49,6 +50,17 @@
    * and the session meter can never give one number two spellings.
    */
   const count = meterMath.short;
+
+  /** Prompt recall, from `media/history.js` — another plain global script. */
+  const historyMath = self.anvilHistory;
+  const history = historyMath.create();
+  /**
+   * The value the history last put in the box, or null. It is how the input
+   * handler tells the user editing a recalled prompt from the walk itself
+   * writing one, which is the difference between starting over at the newest
+   * entry and continuing down the list.
+   */
+  let placed = null;
 
   /** Run in flight, if any. */
   let running = false;
@@ -162,6 +174,10 @@
     images = [];
     renderChips();
     closePalette();
+    // The history belongs to the conversation the transcript showed; a replaced
+    // transcript gets its prompts back from the replay, not from memory.
+    historyMath.clear(history);
+    placed = null;
     statusLine.textContent = '';
     statusLine.hidden = true;
     resetUsage();
@@ -209,7 +225,40 @@
    */
   function endRound() {
     if (round && round.think && !round.thinkPinned) round.think.open = false;
+    // Every ending gets the action — a text block, a tool call, the run's end —
+    // because the bubble is complete the moment it stops growing, and a Copy
+    // that only appeared after the whole turn would refuse to copy the answer
+    // the reader is looking at while the agent works on the next step.
+    if (round && round.text.trim() !== '') addCopy(round.wrap, round.text);
     round = null;
+  }
+
+  /**
+   * The copy action on a finished answer.
+   *
+   * The text is the raw Markdown that arrived, not the rendered prose: what a
+   * reader wants to paste elsewhere is the source, and a copy that lost its
+   * fences and links would be a second rendering rather than a copy.
+   *
+   * It goes through the host because the clipboard is the editor's: a webview's
+   * `navigator.clipboard` access depends on permissions this document does not
+   * control, and a Copy button that sometimes silently does nothing is worse
+   * than one that takes a round trip.
+   */
+  function addCopy(wrap, text) {
+    const button = el('button', 'copy', 'Copy');
+    button.type = 'button';
+    button.title = 'Copy this answer';
+    button.addEventListener('click', () => {
+      vscode.postMessage({ type: 'copy', text });
+      button.textContent = 'Copied';
+      button.disabled = true;
+      setTimeout(() => {
+        button.textContent = 'Copy';
+        button.disabled = false;
+      }, 1200);
+    });
+    wrap.appendChild(button);
   }
 
   /**
@@ -1133,7 +1182,7 @@
     const chip = el('span', 'chip image');
     const thumb = el('img');
     thumb.src = images[index];
-    thumb.alt = 'pasted image';
+    thumb.alt = 'attached image';
     chip.appendChild(thumb);
     chip.appendChild(
       removeChip('Remove this image', () => {
@@ -1154,22 +1203,35 @@
   }
 
   /**
-   * Reads a pasted image into a data URL. The bytes never touch the disk: the
-   * host takes base64 straight from the prompt and hands it to the model, so a
-   * paste leaves nothing behind in the workspace.
+   * Reads an image into a data URL, for a paste or a drop. The bytes never
+   * touch the disk: the host takes base64 straight from the prompt and hands it
+   * to the model, so an attachment leaves nothing behind in the workspace.
+   * (The picker reads its files on the host side and posts the same URL.)
    */
   function readImage(file) {
     const reader = new FileReader();
     reader.onload = () => {
       if (typeof reader.result !== 'string') return;
-      images.push(reader.result);
-      renderChips();
-      if (!vision) {
-        showBanner('warn', 'Images are off for this session. Turn on "anvil.vision" and reload the host to use them.');
-      }
+      addImage(reader.result);
     };
     reader.onerror = () => showBanner('error', 'That image could not be read.');
     reader.readAsDataURL(file);
+  }
+
+  /**
+   * Adds one image, as a data URL, to what the composer will send.
+   *
+   * A paste and the picker both arrive here, and the host answers the picker
+   * with data URLs for exactly that reason: one representation means one chip,
+   * one send, and one conversion on the extension side.
+   */
+  function addImage(dataUrl) {
+    if (typeof dataUrl !== 'string' || dataUrl.indexOf('data:image/') !== 0) return;
+    images.push(dataUrl);
+    renderChips();
+    if (!vision) {
+      showBanner('warn', 'Images are off for this session. Turn on "anvil.vision" and reload the host to use them.');
+    }
   }
 
   function askForMentions() {
@@ -1604,6 +1666,7 @@
     sendButton.disabled = running;
     input.disabled = running;
     attachButton.disabled = running;
+    if (imageButton) imageButton.disabled = running;
     // The mode is a session option, so the extension refuses a change mid-turn
     // rather than applying it half way. Saying so by disabling is honest about
     // that; the extension's own check is what enforces it.
@@ -1819,6 +1882,10 @@
     // optimistic echo below is the record of it either way.
     const sentMentions = mentions.slice();
     const sentImages = images.slice();
+    // Recorded before the box is emptied: the prompt is what the user typed,
+    // and the walk below must not depend on the composer still holding it.
+    historyMath.record(history, text);
+    placed = null;
     input.value = '';
     growInput();
     mentions = [];
@@ -1858,11 +1925,42 @@
         return;
       }
     }
+    if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+      if (recall(event.key === 'ArrowUp' ? -1 : 1)) {
+        event.preventDefault();
+        return;
+      }
+    }
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
       composer.dispatchEvent(new Event('submit', { cancelable: true }));
     }
   });
+
+  /**
+   * Walks the prompts sent in this conversation, when the key is the history's
+   * rather than the textarea's.
+   *
+   * Up only recalls from the first line and Down only from the last, so moving
+   * the caret through a multi-line draft stays the textarea's business. Once a
+   * recalled prompt is on screen the caret is put at its end, and Up keeps
+   * walking from there rather than requiring the caret to be at the top.
+   */
+  function recall(delta) {
+    if (delta < 0 && history.cursor === null && !(input.selectionStart === 0 && input.selectionEnd === 0)) {
+      return false;
+    }
+    if (delta > 0 && !(input.selectionStart === input.value.length && input.selectionEnd === input.value.length)) {
+      return false;
+    }
+    const value = historyMath.walk(history, delta, input.value);
+    if (value === null) return false;
+    input.value = value;
+    placed = value;
+    growInput();
+    input.setSelectionRange(value.length, value.length);
+    return true;
+  }
 
   /*
    * "@" opens the reference picker. It is watched on `input` rather than
@@ -1870,6 +1968,13 @@
    * question, and `key` is "Digit2" on the layouts where "@" needs Shift.
    */
   input.addEventListener('input', () => {
+    // An edit to a recalled prompt ends the walk: `placed` is the value the
+    // history put there, so anything else came from the keyboard, and the next
+    // Up should start again from the newest prompt rather than overwrite this.
+    if (placed !== null && input.value !== placed) {
+      historyMath.edited(history);
+      placed = null;
+    }
     growInput();
     if (input.value.endsWith('@')) {
       input.value = input.value.slice(0, -1);
@@ -1919,9 +2024,98 @@
 
   attachButton.addEventListener('click', askForMentions);
 
-  stopButton.addEventListener('click', () => {
+  if (imageButton) {
+    // The picker is the editor's: the webview can read a `File` it was given,
+    // but it cannot open a dialog, and a picked path is then read by the same
+    // side that reads an attachment. The host answers with data URLs, so the
+    // composer ends up with exactly what a paste puts there.
+    imageButton.addEventListener('click', () => vscode.postMessage({ type: 'pickImages' }));
+  }
+
+  /** Asks the host to stop the turn. Shared by the Stop button and Escape. */
+  function requestStop() {
     stopButton.disabled = true;
     vscode.postMessage({ type: 'cancel' });
+  }
+
+  stopButton.addEventListener('click', requestStop);
+
+  /*
+   * Escape interrupts a turn, from anywhere in the panel.
+   *
+   * On the window rather than on the textarea because the textarea is disabled
+   * while a turn runs — which is exactly when Escape matters. An idle Escape is
+   * left alone entirely: there is nothing to interrupt, and the composer's own
+   * handler still uses it to close the palette, while the draft stays put.
+   */
+  window.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape' || !running) return;
+    event.preventDefault();
+    requestStop();
+  });
+
+  // --- dropping files onto the panel ---------------------------------------
+
+  /** Whether a drag is carrying files at all, rather than a text selection. */
+  function carriesFiles(event) {
+    const types = (event.dataTransfer && event.dataTransfer.types) || [];
+    return (
+      Array.prototype.indexOf.call(types, 'Files') !== -1 ||
+      Array.prototype.indexOf.call(types, 'text/uri-list') !== -1 ||
+      Array.prototype.indexOf.call(types, 'application/vnd.code.uri-list') !== -1
+    );
+  }
+
+  document.addEventListener('dragover', (event) => {
+    // Only a file drag is ours. Preventing the default for everything would
+    // swallow a text selection dropped on the transcript, which has no meaning
+    // here but should still not look accepted.
+    if (!carriesFiles(event) || running) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+    document.body.classList.add('drop-target');
+  });
+
+  document.addEventListener('dragleave', (event) => {
+    // `dragleave` also fires when the pointer crosses into a child, so only a
+    // departure from the document itself ends the highlight.
+    if (event.relatedTarget === null) document.body.classList.remove('drop-target');
+  });
+
+  document.addEventListener('drop', (event) => {
+    document.body.classList.remove('drop-target');
+    if (!carriesFiles(event) || running) return;
+    event.preventDefault();
+    const transfer = event.dataTransfer;
+    if (!transfer) return;
+    const files = Array.prototype.slice.call(transfer.files || []);
+    const paths = [];
+    const uris = [];
+    for (const file of files) {
+      if (file.type && file.type.indexOf('image/') === 0) {
+        // An image is an attachment, not a reference: the mention path reads
+        // files as text, and an image is not text.
+        readImage(file);
+        continue;
+      }
+      // Electron used to expose the dropped file's path on the `File`; newer
+      // versions do not, so the URI list is the other way to learn it.
+      if (typeof file.path === 'string' && file.path !== '') paths.push(file.path);
+    }
+    // A drag from the editor's own explorer carries the real paths here; an OS
+    // drag carries them on the `File` when it can.
+    const uriList = (transfer.getData('text/uri-list') || transfer.getData('application/vnd.code.uri-list') || '').split(/\r?\n/);
+    for (const uri of uriList) {
+      const trimmed = uri.trim();
+      if (trimmed !== '' && trimmed.charAt(0) !== '#') uris.push(trimmed);
+    }
+    if (paths.length > 0 || uris.length > 0) {
+      // Resolved on the host: the workspace root is the extension's to know,
+      // and a path outside it is not a mention.
+      vscode.postMessage({ type: 'dropFiles', paths, uris });
+    } else if (files.length > 0) {
+      showBanner('warn', 'That file could not be referenced. Use @ to pick it instead.');
+    }
   });
 
   window.addEventListener('message', (event) => {
@@ -1933,6 +2127,7 @@
           input.disabled = true;
           sendButton.disabled = true;
           attachButton.disabled = true;
+          if (imageButton) imageButton.disabled = true;
         }
         return;
       case 'state':
@@ -1967,6 +2162,12 @@
         return;
       case 'mentions':
         addMentions(msg.paths || []);
+        return;
+      case 'images':
+        // The picker's answer: data URLs in exactly the shape a paste leaves in
+        // `images`, so everything downstream — the chips, the send, the host's
+        // conversion — has one kind of input rather than two.
+        for (const dataUrl of Array.isArray(msg.images) ? msg.images : []) addImage(dataUrl);
         return;
       case 'vision':
         vision = msg.enabled === true;
@@ -2036,6 +2237,9 @@
         // A replayed turn. The composer does this for a live one, and it is not
         // involved here, so the replay asks for it directly.
         addUser(msg.text || '');
+        // It is also a prompt this conversation has shown, which is what the
+        // recall list holds.
+        historyMath.record(history, msg.text || '');
         return;
       case 'note':
         addNote(msg.text || '');

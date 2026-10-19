@@ -8,7 +8,13 @@
 
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
-import { MAX_ATTACHMENT_BASE64, attachmentFromDataUrl, attachmentsFromDataUrls } from '../../src/attachments';
+import {
+  MAX_ATTACHMENT_BASE64,
+  attachmentFromDataUrl,
+  attachmentsFromDataUrls,
+  dataUrlFromBytes,
+  mimeForImagePath,
+} from '../../src/attachments';
 
 /** A real 1x1 PNG, so the payload is a thing an image reader would accept. */
 const PNG =
@@ -72,4 +78,42 @@ test('an empty batch is empty, not undefined', () => {
   const { attachments, errors } = attachmentsFromDataUrls([]);
   assert.deepEqual(attachments, []);
   assert.deepEqual(errors, []);
+});
+
+// --- images read from disk (the picker) -------------------------------------
+
+test('an image extension maps to the MIME type to declare', () => {
+  assert.equal(mimeForImagePath('C:\\work\\shot.PNG'), 'image/png');
+  assert.equal(mimeForImagePath('/tmp/a.jpeg'), 'image/jpeg');
+  assert.equal(mimeForImagePath('/tmp/a.jpg'), 'image/jpeg');
+  assert.equal(mimeForImagePath('/tmp/a.gif'), 'image/gif');
+  assert.equal(mimeForImagePath('/tmp/a.webp'), 'image/webp');
+  assert.equal(mimeForImagePath('/tmp/a.svg'), undefined);
+  assert.equal(mimeForImagePath('/tmp/noextension'), undefined);
+});
+
+test('bytes read from disk become the same data URL a paste produces', () => {
+  const bytes = Buffer.from(PNG, 'base64');
+  const result = dataUrlFromBytes(bytes, mimeForImagePath('shot.png'));
+  assert.equal(result.error, undefined);
+  assert.equal(result.dataUrl, `data:image/png;base64,${PNG}`);
+  // Round trip: the paste path accepts exactly what the picker produced.
+  assert.deepEqual(attachmentFromDataUrl(result.dataUrl ?? '').attachment, {
+    data: PNG,
+    mime: 'image/png',
+  });
+});
+
+test('a non-image type is refused by name', () => {
+  const result = dataUrlFromBytes(Buffer.from('hello'), 'text/plain');
+  assert.equal(result.dataUrl, undefined);
+  assert.ok(result.error?.includes('text/plain'), result.error);
+});
+
+test('an empty file and an oversized one are refused', () => {
+  assert.ok(dataUrlFromBytes(new Uint8Array(0), 'image/png').error);
+  // One byte past the encoded cap: the exact cap is accepted, so the refusal is
+  // about the boundary rather than about rounding.
+  const tooBig = new Uint8Array(Math.ceil(MAX_ATTACHMENT_BASE64 / 4) * 3 + 1);
+  assert.ok(dataUrlFromBytes(tooBig, 'image/png').error?.includes('too large'));
 });

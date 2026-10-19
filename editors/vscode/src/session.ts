@@ -293,6 +293,18 @@ export class ChatSession {
   }
 
   /**
+   * Forgets an approval the host answered itself — a rule written for the card
+   * decided the call, so there is nothing left here to answer.
+   *
+   * Silent on purpose: the card that asked was settled by the rule's result,
+   * and a withdrawal notice on top of it would read as the call having been
+   * dropped rather than allowed.
+   */
+  forgetApproval(requestId: string): void {
+    this.approvals.delete(requestId);
+  }
+
+  /**
    * Closes the live session on the host. The client stays up for the next one,
    * and `conversation` is deliberately kept: the next open resumes this agent,
    * so closing to change an option does not throw the conversation away.

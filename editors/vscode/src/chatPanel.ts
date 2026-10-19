@@ -29,12 +29,12 @@ import { PreImage, planReview, reviewOf } from './editDiff';
 import { PartialDiff, applyAccepted, partialDiff, rewriteArgs } from './hunks';
 import { ReviewPanels } from './reviewPanel';
 import { buildPromptContext, pickMentions } from './editorContext';
-import { attachmentsFromDataUrls } from './attachments';
+import { attachmentsFromDataUrls, dataUrlFromBytes, mimeForImagePath } from './attachments';
 import type { Hub } from './hub';
 import { HostListener, HostManager, ResolvedMode } from './hostManager';
 import { ChatSession, SessionConfig, SessionState } from './session';
 import { PreviewDocuments } from './review';
-import { dedupeMentions } from './mentions';
+import { dedupeMentions, relativeMention } from './mentions';
 import { mcpEnabled, missingMcpSources, settingSourcesFor } from './mcp';
 import { shouldReattach } from './reattach';
 import { replayOf } from './transcript';
@@ -99,7 +99,21 @@ type Inbound =
    */
   | { type: 'reviewCall'; toolCallId: string; runId?: string; name?: string; args?: unknown }
   /** A link the transcript rendered. The URL is re-checked before it is opened. */
-  | { type: 'openLink'; url: string };
+  | { type: 'openLink'; url: string }
+  /**
+   * "Put this answer on the clipboard." The text is the raw Markdown the bubble
+   * holds; the host writes it, because the clipboard belongs to the editor.
+   */
+  | { type: 'copy'; text: string }
+  /** The composer's image button: the extension's own open dialog. */
+  | { type: 'pickImages' }
+  /**
+   * Files dropped on the panel. `paths` are plain absolute paths (Electron's
+   * old `File.path`), `uris` are `file:` URIs (the editor's drag payload); both
+   * are resolved against the workspace here, because only this side knows the
+   * root.
+   */
+  | { type: 'dropFiles'; paths?: string[]; uris?: string[] };
 
 /** A message to the webview. */
 type Outbound =
@@ -142,6 +156,12 @@ type Outbound =
     }
   | { type: 'done'; done: DoneParams; failure: RunFailure }
   | { type: 'mentions'; paths: string[] }
+  /**
+   * Images the picker read, as data URLs — the same shape a paste leaves in
+   * the composer, so the webview has one representation to draw and one path to
+   * send.
+   */
+  | { type: 'images'; images: string[] }
   | { type: 'vision'; enabled: boolean }
   /**
    * The context window the token meter measures the last run against, or 0
@@ -648,6 +668,15 @@ export class ChatPanel implements HostListener {
       case 'openLink':
         await this.openLink(msg.url);
         return;
+      case 'copy':
+        await this.copy(msg.text);
+        return;
+      case 'pickImages':
+        await this.pickImages();
+        return;
+      case 'dropFiles':
+        this.dropFiles(msg.paths, msg.uris);
+        return;
       default:
         return;
     }
@@ -672,6 +701,115 @@ export class ChatPanel implements HostListener {
     const trimmed = url.trim();
     if (!/^https?:\/\/\S+$/i.test(trimmed)) return;
     await vscode.env.openExternal(vscode.Uri.parse(trimmed));
+  }
+
+  /**
+   * Puts an answer on the clipboard.
+   *
+   * The webview could try `navigator.clipboard`, but a webview's access to it
+   * depends on permissions this document does not control, and a Copy that
+   * silently does nothing is worse than a round trip. `vscode.env.clipboard` is
+   * the editor's own, and it needs no permission. Only a string is written: the
+   * text of a bubble the user asked to copy, not anything derived from it.
+   */
+  private async copy(text: unknown): Promise<void> {
+    if (typeof text !== 'string' || text === '') return;
+    await vscode.env.clipboard.writeText(text);
+  }
+
+  /**
+   * Opens the editor's image picker and posts what was chosen.
+   *
+   * A webview cannot open a file dialog, so the composer's button asks here.
+   * The files are read on this side and answered as `data:` URLs — the same
+   * shape a paste leaves in the composer — so the webview has one kind of
+   * attachment to draw and one path to send, whatever produced it.
+   */
+  private async pickImages(): Promise<void> {
+    const picked = await vscode.window.showOpenDialog({
+      canSelectMany: true,
+      title: 'Attach images',
+      openLabel: 'Attach',
+      filters: { Images: ['png', 'jpg', 'jpeg', 'gif', 'webp'] },
+    });
+    if (!picked || picked.length === 0) return;
+    const images: string[] = [];
+    const errors: string[] = [];
+    for (const uri of picked) {
+      try {
+        const bytes = await vscode.workspace.fs.readFile(uri);
+        const result = dataUrlFromBytes(bytes, mimeForImagePath(uri.path));
+        if (result.dataUrl) images.push(result.dataUrl);
+        else if (result.error) errors.push(`${uri.path}: ${result.error}`);
+      } catch (err) {
+        errors.push(`${uri.path}: ${(err as Error).message}`);
+      }
+    }
+    if (images.length > 0) this.post({ type: 'images', images });
+    if (errors.length > 0) {
+      this.post({
+        type: 'notice',
+        level: 'warn',
+        message: `Some images were not attached: ${errors.join('; ')}`,
+      });
+    }
+  }
+
+  /**
+   * Turns dropped files into mentions of the ones inside the workspace.
+   *
+   * The webview posts whatever the drag carried — plain paths and/or `file:`
+   * URIs, because which of the two exists depends on how the drag started —
+   * and this side answers the one question that matters: is the file inside the
+   * workspace? A path outside it is not a mention, and saying so now is better
+   * than letting the host refuse the prompt later.
+   */
+  private dropFiles(paths: unknown, uris: unknown): void {
+    const folder = vscode.workspace.workspaceFolders?.[0];
+    if (!folder) {
+      this.post({
+        type: 'notice',
+        level: 'warn',
+        message: 'No workspace folder is open, so a dropped file has nothing to be relative to.',
+      });
+      return;
+    }
+    const candidates: string[] = [];
+    for (const value of Array.isArray(paths) ? paths : []) {
+      if (typeof value === 'string' && value !== '') candidates.push(value);
+    }
+    for (const value of Array.isArray(uris) ? uris : []) {
+      if (typeof value !== 'string' || value === '') continue;
+      // A drag payload can carry comment lines and blank ones; `Uri.parse`
+      // accepts almost anything, so the scheme is what decides.
+      let uri: vscode.Uri;
+      try {
+        uri = vscode.Uri.parse(value);
+      } catch {
+        continue;
+      }
+      if (uri.scheme !== 'file') continue;
+      candidates.push(uri.fsPath);
+    }
+    const mentions: string[] = [];
+    let outside = 0;
+    for (const candidate of candidates) {
+      const relative = relativeMention(folder.uri.fsPath, candidate);
+      if (relative === undefined) outside++;
+      else mentions.push(relative);
+    }
+    const unique = dedupeMentions(mentions);
+    if (unique.length > 0) this.post({ type: 'mentions', paths: unique });
+    if (outside > 0) {
+      this.post({
+        type: 'notice',
+        level: 'warn',
+        message:
+          outside === 1
+            ? 'A dropped file is outside this workspace, so it was not added.'
+            : `${outside} dropped files are outside this workspace, so they were not added.`,
+      });
+    }
   }
 
   // --- commands ---------------------------------------------------------------
@@ -792,6 +930,18 @@ export class ChatPanel implements HostListener {
   /** Whether a turn is in flight in this tab. */
   get busy(): boolean {
     return this.session?.currentState === 'running';
+  }
+
+  /**
+   * Whether this tab is holding a question the user has to answer.
+   *
+   * It is the front tab that is asked, and the tab behind keeps its own cards:
+   * the window's status bar says "waiting" when any tab is, because a run
+   * blocked on an approval in a tab nobody is looking at is exactly the state a
+   * window-level indicator exists to surface.
+   */
+  awaitingApproval(): boolean {
+    return this.pendingApprovals().length > 0;
   }
 
   /** Composes and sends one turn, with whatever context the editor has. */
@@ -1187,6 +1337,10 @@ export class ChatPanel implements HostListener {
   private async answer(requestId: string, decision: Decision, scope?: string): Promise<void> {
     await this.session?.respond(requestId, decision, { scope });
     await this.closeReview(requestId);
+    // `respond` drops the request from the session's map itself, so no
+    // withdrawal notification follows it — the hub has to be told here or the
+    // status bar would keep saying "waiting" for a question already answered.
+    this.hub.notifyRunning();
   }
 
   /**
@@ -1203,6 +1357,11 @@ export class ChatPanel implements HostListener {
     try {
       const result = await this.hub.addPermissionRule(rule, requestId);
       await this.closeReview(requestId);
+      // A rule that decided this call answered it on the host, and the client
+      // heard that only as this result — without this the tab would keep
+      // claiming a question that is already answered.
+      if (result.approved === true) this.session?.forgetApproval(requestId);
+      this.hub.notifyRunning();
       this.log(
         `wrote ${result.path} rule ${result.index}` +
           (result.decided_by ? ` (decided by ${result.decided_by.describe || 'a rule'})` : ''),
@@ -1511,11 +1670,16 @@ export class ChatPanel implements HostListener {
     // call is blocked until the user answers.
     void this.changes.snapshotToolCall(request.tool, request.args);
     this.post({ type: 'approval', request });
+    // A tab that now needs an answer is a different window state, and the
+    // status bar is the surface that has to show it even when this tab is not
+    // the one in front.
+    this.hub.notifyRunning();
   };
 
   onApprovalWithdrawn = (requestId: string): void => {
     void this.closeReview(requestId);
     this.post({ type: 'approvalWithdrawn', requestId });
+    this.hub.notifyRunning();
   };
 
   onDone = (done: DoneParams, failure: RunFailure): void => {
@@ -1845,6 +2009,12 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
         <button id="permissions" type="button" class="ghost" title="Open .anvil/permissions.json: what runs without asking, and what is refused">Permissions</button>
         <span class="spacer"></span>
         <button id="attach" type="button" class="secondary" title="Reference a file or folder">@</button>
+        <!--
+          The picker the paste path already accepts: a button because a paste
+          needs an image in the clipboard first, and a file on disk is the
+          common case.
+        -->
+        <button id="image" type="button" class="secondary" title="Attach an image">Image</button>
         <button id="stop" type="button" class="secondary" hidden>Stop</button>
         <button id="send" type="submit" class="primary">Send</button>
       </div>
@@ -1866,6 +2036,7 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
   -->
   <script nonce="${nonce}" src="${asset('markdown.js')}"></script>
   <script nonce="${nonce}" src="${asset('meter.js')}"></script>
+  <script nonce="${nonce}" src="${asset('history.js')}"></script>
   <script nonce="${nonce}" src="${asset('chat.js')}"></script>
 </body>
 </html>`;

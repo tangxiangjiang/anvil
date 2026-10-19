@@ -188,6 +188,23 @@ keeps the environment it was spawned with.
   empty list removes it. The call is an ordinary tool card too, so a reopened
   conversation shows the checklist it ended with, rebuilt from the stored
   arguments.
+- **Takes the keyboard and the files.** <kbd>Escape</kbd> interrupts a running
+  turn from anywhere in the panel (an idle Escape keeps its other meanings and
+  never touches the draft). Files dropped on the panel become `@` references —
+  resolved against the workspace by the extension, so a file outside it is
+  refused with a reason — and dropped images become attachments. The **Image**
+  button next to `@` opens a picker for the same attachments a paste produces.
+  <kbd>↑</kbd>/<kbd>↓</kbd> at the edges of the input walk the prompts this
+  conversation has shown, draft included: leaving the list restores what you
+  were typing, and the list is cleared with the transcript rather than outliving
+  the conversation it describes.
+- **Copies an answer, and shows the run from anywhere.** A finished answer has a
+  quiet **Copy** that puts the raw Markdown on the editor's clipboard. One
+  status-bar item describes the window rather than a tab: idle, working, or
+  waiting for an approval — which outranks working, so a question asked in a
+  tab you are not looking at still reaches you. Clicking it goes to the tab that
+  is asking, else the one in front, else any open tab, and only opens a new one
+  when there is none.
 - **Typesets the reply, and shows the thinking when the provider sends it.** A
   reply is rendered as Markdown — paragraphs, headings, lists, quotes, fenced
   code — by a parser that returns a tree of plain objects and nothing else: the

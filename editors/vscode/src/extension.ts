@@ -16,6 +16,7 @@ import { SessionInfo } from './protocol';
 import { SessionNode, SessionRow } from './sessionList';
 import { SessionChoice, filterSessions, sessionChoices } from './sessionSearch';
 import { SessionTreeProvider } from './sessionTree';
+import { ChatStatusBar, STATUS_BAR_COMMAND } from './statusBar';
 import {
   clearApiKey,
   clearWebSearchKey,
@@ -72,6 +73,16 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('anvil.openChat', () => {
       hub.openTab();
     }),
+
+    // What the status bar runs: take the user to the work rather than to a new
+    // tab. When the tab asking a question is in front, this is a no-op.
+    vscode.commands.registerCommand(STATUS_BAR_COMMAND, () => {
+      hub.revealChat();
+    }),
+
+    // Built here rather than in `activate`'s body so its lifetime is the
+    // extension's: the item and its two subscriptions are disposed together.
+    new ChatStatusBar(hub),
 
     // A click on a stored session: reveal the tab already showing it, or open
     // one. One conversation in two tabs would be two runs on one file.
