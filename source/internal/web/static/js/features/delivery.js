@@ -1336,7 +1336,46 @@ window.Features.delivery = {
 
     if (route.section === "test" && route.routeMajor != null) {
       this.bindTestCardControls(el);
+      this.bindTestCampaignJobStreams(el);
     }
+  },
+
+  bindTestCampaignJobStreams(el) {
+    el.querySelectorAll("[data-test-card]").forEach((card) => {
+      const jobId = (card.getAttribute("data-campaign-job") || "").trim();
+      const st = (card.getAttribute("data-campaign-job-status") || "").toLowerCase();
+      if (!jobId || (st !== "running" && st !== "queued")) return;
+      if (this._jobAbort?.[jobId]) return;
+      if (!this._jobAbort) this._jobAbort = {};
+      const ac = new AbortController();
+      this._jobAbort[jobId] = ac;
+      const snip = card.querySelector("[data-campaign-snip]");
+      void this.watchDeliveryJobSSE(jobId, ac.signal, {
+        onEvent(data) {
+          const text = data.text || data.content || data.type || "";
+          if (snip && text) snip.textContent = String(text).slice(0, 160);
+        },
+        onDone: async () => {
+          delete this._jobAbort[jobId];
+          await this.reload();
+          this.render();
+        },
+      });
+    });
+  },
+
+  async awaitDeliveryJob(jobId, { onEvent } = {}) {
+    if (!jobId) return;
+    await new Promise((resolve) => {
+      const ac = new AbortController();
+      void this.watchDeliveryJobSSE(jobId, ac.signal, {
+        onEvent,
+        onDone: async () => {
+          ac.abort();
+          resolve();
+        },
+      });
+    });
   },
 
   closeRoadmapJobStreams() {
@@ -1521,10 +1560,13 @@ window.Features.delivery = {
         const id = btn.getAttribute("data-polish-run");
         btn.disabled = true;
         try {
-          await api.v1.deliveryRunPolish(id);
+          const res = await api.v1.deliveryRunPolish(id);
+          if (res?.job_id) {
+            await this.awaitDeliveryJob(res.job_id);
+          }
           await this.reload();
           this.render();
-          this.showNotice("Polish run finished (mock).", "Polish");
+          this.showNotice("Polish run finished.", "Polish");
         } catch (e) {
           this.showNotice(e.message || String(e), "Polish run failed");
           btn.disabled = false;
@@ -5106,9 +5148,19 @@ window.Features.delivery = {
         </ul>`
       : `<p class="muted del-bug-empty">No buglist items yet.</p>`;
 
+    const campJob = (m.campaign_job_id || "").trim();
+    const campSt = (m.campaign_job_status || "").toLowerCase();
+    const campBusy = campSt === "running" || campSt === "queued";
+    const campStrip = campBusy
+      ? `<div class="del-job-strip" data-campaign-snip>${this.esc(m.campaign_job_kind || "job")} · ${this.esc(campSt)}${m.campaign_job_last_event ? " · " + this.esc(String(m.campaign_job_last_event).slice(0, 120)) : ""}</div>`
+      : campSt === "error"
+        ? `<div class="del-job-strip muted">${this.esc(m.campaign_job_last_event || "campaign job error")}</div>`
+        : "";
+
     return `
       <div class="del-test-card" data-test-card="${this.esc(m.id)}" data-ms-card="${this.esc(m.id)}"
-        data-eng="${this.esc(bind.engId)}" data-major="${bind.major}" data-minor="${bind.minor}">
+        data-eng="${this.esc(bind.engId)}" data-major="${bind.major}" data-minor="${bind.minor}"
+        data-campaign-job="${this.esc(campJob)}" data-campaign-job-status="${this.esc(campSt)}">
         <div class="del-rm-ctrl-top">
           <div class="del-rm-ctrl-id">
             <strong class="del-rm-card-title">${this.esc(m.title)}</strong>
@@ -5120,6 +5172,7 @@ window.Features.delivery = {
           </div>
           ${this.badge("testing")}
         </div>
+        ${campStrip}
         <div class="del-rm-ctrl-links">
           ${desHref ? `<a href="${desHref}">Design</a>` : `<span class="muted">No design</span>`}
           ${reqHref ? `<a href="${reqHref}">Requirements</a>` : `<span class="muted">No req</span>`}
@@ -5144,10 +5197,10 @@ window.Features.delivery = {
         <div class="del-rm-ctrl-btns del-test-actions">
           <button type="button" class="del-run-btn" data-test-run
             data-eng="${this.esc(bind.engId)}" data-major="${bind.major}" data-minor="${bind.minor}"
-            ${canRun ? "" : "disabled"} title="${hasWorker ? "Mock Worker write + run" : "Bind Worker on Roadmap first"}">▶ Run tests</button>
+            ${canRun && !campBusy ? "" : "disabled"} title="${hasWorker ? "Enqueue Worker test run Job" : "Bind Worker on Roadmap first"}">▶ Run tests</button>
           <button type="button" class="del-run-btn ghost" data-test-regress
             data-eng="${this.esc(bind.engId)}" data-major="${bind.major}" data-minor="${bind.minor}"
-            ${hasVerified ? "" : "disabled"}>↻ Regress</button>
+            ${hasVerified && !campBusy ? "" : "disabled"}>↻ Regress</button>
           <button type="button" class="del-run-btn" data-test-pass="${this.esc(m.id)}"
             ${canPass ? "" : "disabled"} title="${canPass ? "Complete milestone" : "Need clean campaign (≥1 case, all passed, no open bugs)"}">✓ Pass</button>
           <button type="button" class="del-run-btn ghost danger" data-test-fail="${this.esc(m.id)}"
@@ -5197,15 +5250,12 @@ window.Features.delivery = {
             major: Number(btn.getAttribute("data-major")),
             minor: Number(btn.getAttribute("data-minor")),
           });
+          if (res?.job_id) {
+            await this.awaitDeliveryJob(res.job_id);
+          }
           await this.reload();
           this.render();
-          const nFail = (res.bugs || []).length;
-          this.showNotice(
-            nFail
-              ? `Run finished · ${nFail} bug(s) opened (mock).`
-              : "Run finished · all cases passed (mock).",
-            "Run tests",
-          );
+          this.showNotice("Test run Job finished.", "Run tests");
         } catch (e) {
           this.showNotice(e.message || String(e), "Run failed");
           btn.disabled = false;
@@ -5216,10 +5266,15 @@ window.Features.delivery = {
       btn.addEventListener("click", async () => {
         btn.disabled = true;
         try {
-          await api.v1.deliveryFixBuglist(btn.getAttribute("data-bug-fix"));
+          const res = await api.v1.deliveryFixBuglist(
+            btn.getAttribute("data-bug-fix"),
+          );
+          if (res?.job_id) {
+            await this.awaitDeliveryJob(res.job_id);
+          }
           await this.reload();
           this.render();
-          this.showNotice("Worker fix mock → verified. Run Regress next.", "Fix");
+          this.showNotice("Fix Job finished → verified. Run Regress next.", "Fix");
         } catch (e) {
           this.showNotice(e.message || String(e), "Fix failed");
           btn.disabled = false;
@@ -5230,14 +5285,17 @@ window.Features.delivery = {
       btn.addEventListener("click", async () => {
         btn.disabled = true;
         try {
-          await api.v1.deliveryRegressBuglist({
+          const res = await api.v1.deliveryRegressBuglist({
             eng_req_id: btn.getAttribute("data-eng"),
             major: Number(btn.getAttribute("data-major")),
             minor: Number(btn.getAttribute("data-minor")),
           });
+          if (res?.job_id) {
+            await this.awaitDeliveryJob(res.job_id);
+          }
           await this.reload();
           this.render();
-          this.showNotice("Regression mock complete.", "Regress");
+          this.showNotice("Regression Job finished.", "Regress");
         } catch (e) {
           this.showNotice(e.message || String(e), "Regress failed");
           btn.disabled = false;

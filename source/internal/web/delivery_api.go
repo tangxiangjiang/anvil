@@ -728,15 +728,16 @@ func (s *Server) handleDelivery(w http.ResponseWriter, r *http.Request) {
 
 	if path == "buglist/regress" && r.Method == http.MethodPost {
 		var body struct {
-			EngReqID string `json:"eng_req_id"`
-			Major    int    `json:"major"`
-			Minor    int    `json:"minor"`
+			EngReqID  string `json:"eng_req_id"`
+			Major     int    `json:"major"`
+			Minor     int    `json:"minor"`
+			ForceStub bool   `json:"force_stub"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "bad json", http.StatusBadRequest)
 			return
 		}
-		res, err := s.delivery.RegressBuglist(body.EngReqID, body.Major, body.Minor)
+		res, err := s.startRegressJob(body.EngReqID, body.Major, body.Minor, body.ForceStub)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -749,12 +750,16 @@ func (s *Server) handleDelivery(w http.ResponseWriter, r *http.Request) {
 		rest := strings.TrimPrefix(path, "buglist/")
 		parts := strings.Split(rest, "/")
 		if len(parts) == 2 && parts[1] == "fix" {
-			b, err := s.delivery.FixBuglistItem(parts[0])
+			var body struct {
+				ForceStub bool `json:"force_stub"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			res, err := s.startBugFixJob(parts[0], body.ForceStub)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
-			writeJSON(w, http.StatusOK, b)
+			writeJSON(w, http.StatusOK, res)
 			return
 		}
 	}
@@ -793,15 +798,16 @@ func (s *Server) handleDelivery(w http.ResponseWriter, r *http.Request) {
 
 	if path == "test-cases/run" && r.Method == http.MethodPost {
 		var body struct {
-			EngReqID string `json:"eng_req_id"`
-			Major    int    `json:"major"`
-			Minor    int    `json:"minor"`
+			EngReqID  string `json:"eng_req_id"`
+			Major     int    `json:"major"`
+			Minor     int    `json:"minor"`
+			ForceStub bool   `json:"force_stub"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "bad json", http.StatusBadRequest)
 			return
 		}
-		res, err := s.delivery.RunTestCases(body.EngReqID, body.Major, body.Minor)
+		res, err := s.startTestRunJob(body.EngReqID, body.Major, body.Minor, body.ForceStub)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -841,12 +847,16 @@ func (s *Server) handleDelivery(w http.ResponseWriter, r *http.Request) {
 		rest := strings.TrimPrefix(path, "polishes/")
 		parts := strings.Split(rest, "/")
 		if len(parts) == 2 && parts[1] == "run" && r.Method == http.MethodPost {
-			p, err := s.delivery.RunPolish(parts[0])
+			var body struct {
+				ForceStub bool `json:"force_stub"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			res, err := s.startPolishJob(parts[0], body.ForceStub)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
-			writeJSON(w, http.StatusOK, p)
+			writeJSON(w, http.StatusOK, res)
 			return
 		}
 	}

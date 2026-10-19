@@ -217,8 +217,9 @@ Primary planning canvas — see §5 interactions below (graph chat, per-node cha
 |--------|----------|
 | **Generation index** | Majors first; open → milestones for that major only |
 | **Graph + cards** | Milestone nodes for **this major** (drag); rich cards: Worker, Start/Pause/Stop, Design/Req links, Polish list |
-| **Polish** | On complete: modal + AI assist → save into Version + card ▶ run (mock until Jobs) |
+| **Polish** | On complete: modal + AI assist → save into Version + card ▶ run via Jobs (0.39.9) |
 | **Phase Jobs** | Start → scheduler job per phase (`phase_id` bind); SSE status on cards (0.39.5+) |
+| **Campaign Jobs** | Test Run / Fix / Regress → Jobs + SSE (0.39.8) |
 | **提交测试** | From `in_development` → lifecycle `testing` (explicit; not auto-on-Stop) |
 | **Phase strip** | Phases under the milestone (seeded from Design Versions; shown as phase count on cards) |
 

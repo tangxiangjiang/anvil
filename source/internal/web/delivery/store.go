@@ -120,7 +120,11 @@ CREATE TABLE IF NOT EXISTS delivery_milestones (
   sort_order INTEGER NOT NULL DEFAULT 0,
   execute_worker_id TEXT NOT NULL DEFAULT '',
   run_state TEXT NOT NULL DEFAULT 'idle',
-  test_note TEXT NOT NULL DEFAULT ''
+  test_note TEXT NOT NULL DEFAULT '',
+  campaign_job_id TEXT NOT NULL DEFAULT '',
+  campaign_job_status TEXT NOT NULL DEFAULT '',
+  campaign_job_kind TEXT NOT NULL DEFAULT '',
+  campaign_job_last_event TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS delivery_buglist_items (
   id TEXT PRIMARY KEY,
@@ -130,7 +134,10 @@ CREATE TABLE IF NOT EXISTS delivery_buglist_items (
   title TEXT NOT NULL DEFAULT '',
   body TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'open',
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  job_id TEXT NOT NULL DEFAULT '',
+  job_status TEXT NOT NULL DEFAULT '',
+  job_last_event TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS delivery_test_cases (
   id TEXT PRIMARY KEY,
@@ -150,7 +157,10 @@ CREATE TABLE IF NOT EXISTS delivery_polishes (
   title TEXT NOT NULL DEFAULT '',
   body TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'ready',
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  job_id TEXT NOT NULL DEFAULT '',
+  job_status TEXT NOT NULL DEFAULT '',
+  job_last_event TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS delivery_phases (
   id TEXT PRIMARY KEY,
@@ -229,6 +239,15 @@ CREATE TABLE IF NOT EXISTS delivery_trash (
 	if err := s.ensurePhaseJobColumns(); err != nil {
 		return err
 	}
+	if err := s.ensureCampaignJobColumns(); err != nil {
+		return err
+	}
+	if err := s.ensureBuglistJobColumns(); err != nil {
+		return err
+	}
+	if err := s.ensurePolishJobColumns(); err != nil {
+		return err
+	}
 	return s.ensurePolishesTable()
 }
 
@@ -237,6 +256,64 @@ func (s *Store) ensurePhaseJobColumns() error {
 		`ALTER TABLE delivery_phases ADD COLUMN job_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE delivery_phases ADD COLUMN job_status TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE delivery_phases ADD COLUMN job_last_event TEXT NOT NULL DEFAULT ''`,
+	} {
+		_, err := s.db.Exec(q)
+		if err == nil {
+			continue
+		}
+		msg := strings.ToLower(err.Error())
+		if strings.Contains(msg, "duplicate column") {
+			continue
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *Store) ensureCampaignJobColumns() error {
+	for _, q := range []string{
+		`ALTER TABLE delivery_milestones ADD COLUMN campaign_job_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE delivery_milestones ADD COLUMN campaign_job_status TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE delivery_milestones ADD COLUMN campaign_job_kind TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE delivery_milestones ADD COLUMN campaign_job_last_event TEXT NOT NULL DEFAULT ''`,
+	} {
+		_, err := s.db.Exec(q)
+		if err == nil {
+			continue
+		}
+		msg := strings.ToLower(err.Error())
+		if strings.Contains(msg, "duplicate column") {
+			continue
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *Store) ensureBuglistJobColumns() error {
+	for _, q := range []string{
+		`ALTER TABLE delivery_buglist_items ADD COLUMN job_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE delivery_buglist_items ADD COLUMN job_status TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE delivery_buglist_items ADD COLUMN job_last_event TEXT NOT NULL DEFAULT ''`,
+	} {
+		_, err := s.db.Exec(q)
+		if err == nil {
+			continue
+		}
+		msg := strings.ToLower(err.Error())
+		if strings.Contains(msg, "duplicate column") {
+			continue
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *Store) ensurePolishJobColumns() error {
+	for _, q := range []string{
+		`ALTER TABLE delivery_polishes ADD COLUMN job_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE delivery_polishes ADD COLUMN job_status TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE delivery_polishes ADD COLUMN job_last_event TEXT NOT NULL DEFAULT ''`,
 	} {
 		_, err := s.db.Exec(q)
 		if err == nil {
@@ -625,42 +702,58 @@ const (
 	RunStopped = "stopped"
 )
 
+// Campaign job kinds on a milestone (0.39.8).
+const (
+	CampaignKindRun     = "run"
+	CampaignKindRegress = "regress"
+)
+
 // Milestone is a roadmap canvas node.
 type Milestone struct {
-	ID              string  `json:"id"`
-	Title           string  `json:"title"`
-	Status          string  `json:"status"`
-	Acceptance      string  `json:"acceptance"`
-	X               float64 `json:"x"`
-	Y               float64 `json:"y"`
-	ExecuteWorkerID string  `json:"execute_worker_id"`
-	RunState        string  `json:"run_state"`
-	TestNote        string  `json:"test_note"`
-	Phases          []Phase `json:"phases"`
+	ID                   string  `json:"id"`
+	Title                string  `json:"title"`
+	Status               string  `json:"status"`
+	Acceptance           string  `json:"acceptance"`
+	X                    float64 `json:"x"`
+	Y                    float64 `json:"y"`
+	ExecuteWorkerID      string  `json:"execute_worker_id"`
+	RunState             string  `json:"run_state"`
+	TestNote             string  `json:"test_note"`
+	CampaignJobID        string  `json:"campaign_job_id,omitempty"`
+	CampaignJobStatus    string  `json:"campaign_job_status,omitempty"`
+	CampaignJobKind      string  `json:"campaign_job_kind,omitempty"`
+	CampaignJobLastEvent string  `json:"campaign_job_last_event,omitempty"`
+	Phases               []Phase `json:"phases"`
 }
 
 // Polish is a post-complete requirement polish item under a milestone.
 type Polish struct {
-	ID        string `json:"id"`
-	EngReqID  string `json:"eng_req_id"`
-	Major     int    `json:"major"`
-	Minor     int    `json:"minor"`
-	Title     string `json:"title"`
-	Body      string `json:"body"`
-	Status    string `json:"status"`
-	CreatedAt string `json:"created_at"`
+	ID           string `json:"id"`
+	EngReqID     string `json:"eng_req_id"`
+	Major        int    `json:"major"`
+	Minor        int    `json:"minor"`
+	Title        string `json:"title"`
+	Body         string `json:"body"`
+	Status       string `json:"status"`
+	CreatedAt    string `json:"created_at"`
+	JobID        string `json:"job_id,omitempty"`
+	JobStatus    string `json:"job_status,omitempty"`
+	JobLastEvent string `json:"job_last_event,omitempty"`
 }
 
 // BuglistItem is a test-fail / campaign bug bound to a milestone (eng_req + major.minor).
 type BuglistItem struct {
-	ID        string `json:"id"`
-	EngReqID  string `json:"eng_req_id"`
-	Major     int    `json:"major"`
-	Minor     int    `json:"minor"`
-	Title     string `json:"title"`
-	Body      string `json:"body"`
-	Status    string `json:"status"` // open | fixing | verified | closed
-	CreatedAt string `json:"created_at"`
+	ID           string `json:"id"`
+	EngReqID     string `json:"eng_req_id"`
+	Major        int    `json:"major"`
+	Minor        int    `json:"minor"`
+	Title        string `json:"title"`
+	Body         string `json:"body"`
+	Status       string `json:"status"` // open | fixing | verified | closed
+	CreatedAt    string `json:"created_at"`
+	JobID        string `json:"job_id,omitempty"`
+	JobStatus    string `json:"job_status,omitempty"`
+	JobLastEvent string `json:"job_last_event,omitempty"`
 }
 
 // TestCase is a campaign test case under a milestone bind.
@@ -2803,9 +2896,11 @@ func (s *Store) GetMilestone(id string) (Milestone, error) {
 func (s *Store) getMilestone(id string) (Milestone, error) {
 	var m Milestone
 	err := s.db.QueryRow(`
-SELECT id, title, status, acceptance, x, y, execute_worker_id, COALESCE(run_state,'idle'), COALESCE(test_note,'')
+SELECT id, title, status, acceptance, x, y, execute_worker_id, COALESCE(run_state,'idle'), COALESCE(test_note,''),
+  COALESCE(campaign_job_id,''), COALESCE(campaign_job_status,''), COALESCE(campaign_job_kind,''), COALESCE(campaign_job_last_event,'')
 FROM delivery_milestones WHERE id=?`, id).Scan(
-		&m.ID, &m.Title, &m.Status, &m.Acceptance, &m.X, &m.Y, &m.ExecuteWorkerID, &m.RunState, &m.TestNote)
+		&m.ID, &m.Title, &m.Status, &m.Acceptance, &m.X, &m.Y, &m.ExecuteWorkerID, &m.RunState, &m.TestNote,
+		&m.CampaignJobID, &m.CampaignJobStatus, &m.CampaignJobKind, &m.CampaignJobLastEvent)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return Milestone{}, fmt.Errorf("milestone not found")
@@ -2831,14 +2926,16 @@ func (s *Store) nextMilestoneCanvasSlot() (x, y float64) {
 func (s *Store) loadRoadmap() (Roadmap, error) {
 	var rm Roadmap
 	rows, err := s.db.Query(`
-SELECT id, title, status, acceptance, x, y, execute_worker_id, COALESCE(run_state,'idle'), COALESCE(test_note,'')
+SELECT id, title, status, acceptance, x, y, execute_worker_id, COALESCE(run_state,'idle'), COALESCE(test_note,''),
+  COALESCE(campaign_job_id,''), COALESCE(campaign_job_status,''), COALESCE(campaign_job_kind,''), COALESCE(campaign_job_last_event,'')
 FROM delivery_milestones ORDER BY sort_order, id`)
 	if err != nil {
 		return rm, err
 	}
 	for rows.Next() {
 		var m Milestone
-		if err := rows.Scan(&m.ID, &m.Title, &m.Status, &m.Acceptance, &m.X, &m.Y, &m.ExecuteWorkerID, &m.RunState, &m.TestNote); err != nil {
+		if err := rows.Scan(&m.ID, &m.Title, &m.Status, &m.Acceptance, &m.X, &m.Y, &m.ExecuteWorkerID, &m.RunState, &m.TestNote,
+			&m.CampaignJobID, &m.CampaignJobStatus, &m.CampaignJobKind, &m.CampaignJobLastEvent); err != nil {
 			_ = rows.Close()
 			return rm, err
 		}
@@ -3112,7 +3209,8 @@ FROM delivery_gates WHERE status='pending' ORDER BY created_at DESC`)
 
 func (s *Store) listPolishes() ([]Polish, error) {
 	rows, err := s.db.Query(`
-SELECT id, eng_req_id, major, minor, title, body, status, created_at
+SELECT id, eng_req_id, major, minor, title, body, status, created_at,
+  COALESCE(job_id,''), COALESCE(job_status,''), COALESCE(job_last_event,'')
 FROM delivery_polishes ORDER BY created_at DESC, id`)
 	if err != nil {
 		return nil, err
@@ -3121,7 +3219,8 @@ FROM delivery_polishes ORDER BY created_at DESC, id`)
 	var list []Polish
 	for rows.Next() {
 		var p Polish
-		if err := rows.Scan(&p.ID, &p.EngReqID, &p.Major, &p.Minor, &p.Title, &p.Body, &p.Status, &p.CreatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.EngReqID, &p.Major, &p.Minor, &p.Title, &p.Body, &p.Status, &p.CreatedAt,
+			&p.JobID, &p.JobStatus, &p.JobLastEvent); err != nil {
 			return nil, err
 		}
 		list = append(list, p)
@@ -3205,37 +3304,25 @@ WHERE eng_req_id=? AND major=? AND minor=? AND patch=?`,
 	}, nil
 }
 
-// RunPolish marks a polish running then done (mock until Jobs land).
+// RunPolish marks a polish done (sync helper for unit tests; web uses Jobs in 0.39.9).
 func (s *Store) RunPolish(id string) (Polish, error) {
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return Polish{}, fmt.Errorf("polish id required")
-	}
-	var p Polish
-	err := s.db.QueryRow(`
-SELECT id, eng_req_id, major, minor, title, body, status, created_at
-FROM delivery_polishes WHERE id=?`, id).Scan(
-		&p.ID, &p.EngReqID, &p.Major, &p.Minor, &p.Title, &p.Body, &p.Status, &p.CreatedAt)
+	p, err := s.GetPolish(id)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return Polish{}, fmt.Errorf("polish not found")
-		}
 		return Polish{}, err
 	}
 	if p.Status == "done" {
 		return p, nil
 	}
-	_, err = s.db.Exec(`UPDATE delivery_polishes SET status=? WHERE id=?`, "done", id)
-	if err != nil {
+	if err := s.CompletePolishJob(id, JobFinished, "done", ""); err != nil {
 		return Polish{}, err
 	}
-	p.Status = "done"
-	return p, nil
+	return s.GetPolish(id)
 }
 
 func (s *Store) listBuglistItems() ([]BuglistItem, error) {
 	rows, err := s.db.Query(`
-SELECT id, eng_req_id, major, minor, title, body, status, created_at
+SELECT id, eng_req_id, major, minor, title, body, status, created_at,
+  COALESCE(job_id,''), COALESCE(job_status,''), COALESCE(job_last_event,'')
 FROM delivery_buglist_items ORDER BY created_at DESC, id`)
 	if err != nil {
 		return nil, err
@@ -3244,7 +3331,8 @@ FROM delivery_buglist_items ORDER BY created_at DESC, id`)
 	var list []BuglistItem
 	for rows.Next() {
 		var b BuglistItem
-		if err := rows.Scan(&b.ID, &b.EngReqID, &b.Major, &b.Minor, &b.Title, &b.Body, &b.Status, &b.CreatedAt); err != nil {
+		if err := rows.Scan(&b.ID, &b.EngReqID, &b.Major, &b.Minor, &b.Title, &b.Body, &b.Status, &b.CreatedAt,
+			&b.JobID, &b.JobStatus, &b.JobLastEvent); err != nil {
 			return nil, err
 		}
 		list = append(list, b)
@@ -3340,7 +3428,8 @@ ORDER BY created_at ASC, id`, engID, major, minor)
 
 func (s *Store) listBuglistForBind(engID string, major, minor int) ([]BuglistItem, error) {
 	rows, err := s.db.Query(`
-SELECT id, eng_req_id, major, minor, title, body, status, created_at
+SELECT id, eng_req_id, major, minor, title, body, status, created_at,
+  COALESCE(job_id,''), COALESCE(job_status,''), COALESCE(job_last_event,'')
 FROM delivery_buglist_items WHERE eng_req_id=? AND major=? AND minor=?
 ORDER BY created_at DESC, id`, engID, major, minor)
 	if err != nil {
@@ -3350,7 +3439,8 @@ ORDER BY created_at DESC, id`, engID, major, minor)
 	var list []BuglistItem
 	for rows.Next() {
 		var b BuglistItem
-		if err := rows.Scan(&b.ID, &b.EngReqID, &b.Major, &b.Minor, &b.Title, &b.Body, &b.Status, &b.CreatedAt); err != nil {
+		if err := rows.Scan(&b.ID, &b.EngReqID, &b.Major, &b.Minor, &b.Title, &b.Body, &b.Status, &b.CreatedAt,
+			&b.JobID, &b.JobStatus, &b.JobLastEvent); err != nil {
 			return nil, err
 		}
 		list = append(list, b)
@@ -3364,6 +3454,34 @@ ORDER BY created_at DESC, id`, engID, major, minor)
 func (s *Store) findMilestoneByBind(engID string, major, minor int) (Milestone, error) {
 	id := fmt.Sprintf("ms_%s_%d_%d", engID, major, minor)
 	return s.getMilestone(id)
+}
+
+// FindMilestoneByBind resolves ms_{eng}_{major}_{minor}.
+func (s *Store) FindMilestoneByBind(engID string, major, minor int) (Milestone, error) {
+	return s.findMilestoneByBind(engID, major, minor)
+}
+
+// RunTestCasesAllPass marks every case passed without spawning bugs (real-job success fallback).
+func (s *Store) RunTestCasesAllPass(engID string, major, minor int) (RunTestCasesResult, error) {
+	var out RunTestCasesResult
+	engID = strings.TrimSpace(engID)
+	if engID == "" {
+		return out, fmt.Errorf("eng_req_id required")
+	}
+	cases, err := s.listTestCasesForBind(engID, major, minor)
+	if err != nil {
+		return out, err
+	}
+	for _, c := range cases {
+		_, err := s.db.Exec(`UPDATE delivery_test_cases SET status=? WHERE id=?`, "passed", c.ID)
+		if err != nil {
+			return out, err
+		}
+		c.Status = "passed"
+		out.Cases = append(out.Cases, c)
+	}
+	out.Bugs = []BuglistItem{}
+	return out, nil
 }
 
 // TestCaseDraft is one case in a batch create.
@@ -3492,32 +3610,19 @@ func (s *Store) RunTestCases(engID string, major, minor int) (RunTestCasesResult
 	return out, nil
 }
 
-// FixBuglistItem mocks Worker entering fix: open → verified.
+// FixBuglistItem marks a bug verified (sync helper for unit tests; web uses Jobs in 0.39.8).
 func (s *Store) FixBuglistItem(id string) (BuglistItem, error) {
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return BuglistItem{}, fmt.Errorf("buglist id required")
-	}
-	var b BuglistItem
-	err := s.db.QueryRow(`
-SELECT id, eng_req_id, major, minor, title, body, status, created_at
-FROM delivery_buglist_items WHERE id=?`, id).Scan(
-		&b.ID, &b.EngReqID, &b.Major, &b.Minor, &b.Title, &b.Body, &b.Status, &b.CreatedAt)
+	b, err := s.GetBuglistItem(id)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return BuglistItem{}, fmt.Errorf("buglist item not found")
-		}
 		return BuglistItem{}, err
 	}
 	if b.Status != "open" && b.Status != "fixing" {
 		return BuglistItem{}, fmt.Errorf("fix requires status open or fixing (got %s)", b.Status)
 	}
-	_, err = s.db.Exec(`UPDATE delivery_buglist_items SET status=? WHERE id=?`, "verified", id)
-	if err != nil {
+	if err := s.CompleteBugFixJob(id, JobFinished, "verified", ""); err != nil {
 		return BuglistItem{}, err
 	}
-	b.Status = "verified"
-	return b, nil
+	return s.GetBuglistItem(id)
 }
 
 // RegressBuglistResult is mock regression outcome for a bind.

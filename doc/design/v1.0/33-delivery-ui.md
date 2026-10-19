@@ -79,7 +79,9 @@ Working-state on the worker project (`.anvil/delivery/`) and markdown export are
 | POST | `/api/v1/delivery/jobs` | Create scheduler job for a phase (bind metadata + composed prompt); Start may call this internally |
 | GET | `/api/v1/delivery/jobs/{id}/events` | Proxy scheduler job SSE (`job.event` / `job.done`) |
 
-**Job bind (0.39.5+):** scheduler `JobAssignBody` accepts optional pass-through `milestone_id`, `phase_id`, `eng_req_id`, `major`, `minor`. Phases store `job_id` / `job_status` (`queued|running|finished|error|cancelled`). Roadmap **Start** enqueues the next unfinished phase; finished auto-advances while `run_state=running`. Test campaign / Polish remain mock until a later phase.
+**Job bind (0.39.5+):** scheduler `JobAssignBody` accepts optional pass-through `milestone_id`, `phase_id`, `eng_req_id`, `major`, `minor`. Phases store `job_id` / `job_status` (`queued|running|finished|error|cancelled`). Roadmap **Start** enqueues the next unfinished phase; finished auto-advances while `run_state=running`.
+
+**Campaign / Polish Jobs (0.39.8–9):** Test **Run** / **Regress** store `campaign_job_*` on the milestone; **Fix** stores `job_*` on the buglist row; Polish ▶ run stores `job_*` on the polish row. `phase_id` pass-through uses kind tags (`campaign:run`, `campaign:regress`, `campaign:fix:{id}`, `polish:{id}`).
 
 Workers for the create picker: cluster inventory when available; otherwise snapshot may include denormalized workers from existing eng-reqs plus seed helpers.
 
@@ -99,9 +101,9 @@ Routes: `#/delivery/{requirements|designs|roadmap|test}` → major index; `#/del
 
 **Design Versions** (`delivery_design_versions` + `delivery_design_version_deps`): execution units under one Design/ADR — each has **Gate**, **Sub-architecture**, **Class design**, and **Depends on** (DAG of sibling Versions). Approve requires complete fields and an acyclic graph; Bootstrap **topo-sorts** Versions then seeds eng-req patches + canvas phases 1:1 (renumbers `sort_order`).  
 
-3. **Roadmap** — Generations → `m/{M}` **graph** (drag) + **control cards**: Worker, Start / Pause / Stop (`run_state` + **phase Jobs** via scheduler), live job snippet while running, **提交测试** (`in_development` → `testing`), Design / Requirements links, **Polish** (mock ▶ run until Jobs). No separate execute page. No Gates tab — gates live on Design Versions.  
+3. **Roadmap** — Generations → `m/{M}` **graph** (drag) + **control cards**: Worker, Start / Pause / Stop (`run_state` + **phase Jobs** via scheduler), live job snippet while running, **提交测试** (`in_development` → `testing`), Design / Requirements links, **Polish** ▶ run via Jobs (0.39.9). No separate execute page. No Gates tab — gates live on Design Versions.  
 
-4. **Test** (0.39.3–0.39.4) — Generations → `m/{M}` **queue of milestones in lifecycle `testing` only**. Campaign on each card: **AI assist** drafts cases (`delivery_test_cases`) → **Run tests** (mock Worker = Roadmap `execute_worker_id`) → failed cases spawn **buglist** → **Fix** / **Regress** → **Pass** → `complete` only when ≥1 case, last run clean, and no `open`/`fixing` bugs. **Fail** remains escape hatch → buglist stub + `awaiting_roadmap`. No real Jobs / auto bugfix phases.
+4. **Test** (0.39.3–0.39.4, Jobs in 0.39.8) — Generations → `m/{M}` **queue of milestones in lifecycle `testing` only**. Campaign: **AI assist** drafts cases → **Run** / **Fix** / **Regress** enqueue Jobs on the Roadmap Worker → SSE status on the card → **Pass** when campaign clean. **Fail** → `awaiting_roadmap`. No auto bug-fix Roadmap phases yet.
 
 ## Non-goals
 
@@ -109,7 +111,7 @@ Routes: `#/delivery/{requirements|designs|roadmap|test}` → major index; `#/del
 - Real AI (chat may append a canned field patch)  
 - GraphPatch apply / drag editor polish  
 - VS Code Server / sandbox review (0.32)  
-- Branch / milestone-accept merge policy (Jobs bind landed in 0.39.5+)  
+- Branch / milestone-accept merge policy (phase + campaign Jobs landed; accept→merge later)  
 
 ## Acceptance
 
