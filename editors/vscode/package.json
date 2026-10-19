@@ -2,7 +2,7 @@
   "name": "anvil-vscode",
   "displayName": "Anvil",
   "description": "Anvil agent in VS Code: streaming chat, tool cards, per-call approvals.",
-  "version": "0.38.4",
+  "version": "0.40.10",
   "publisher": "anvil-dev",
   "license": "MIT",
   "icon": "media/icon.png",

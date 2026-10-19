@@ -24,7 +24,7 @@ import (
 const ProtocolVersion = 1
 
 // Version is the host build version, overridable at link time.
-var Version = "0.38.0-dev"
+var Version = "0.40.0-dev"
 
 // Client to host request methods.
 const (
