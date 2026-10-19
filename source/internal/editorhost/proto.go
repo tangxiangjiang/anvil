@@ -49,6 +49,15 @@ const (
 	// new agent, and answers its id. Additive: a host without it answers -32601,
 	// which a client reads as "no fork here".
 	MethodSessionFork = "session.fork"
+	// MethodSessionCompact summarizes an idle session's older turns on request.
+	// It is the wire behind /compact, and answers the same counts the runtime's
+	// automatic compaction reports. Additive: a host without it answers -32601,
+	// which a client reads as "no manual compaction here".
+	MethodSessionCompact = "session.compact"
+	// MethodSessionContext reports where a live session stands against its
+	// declared window, so a tab that has not run anything can still draw a meter.
+	// Additive for the same reason as the rest of this group.
+	MethodSessionContext = "session.context"
 	// MethodCheckpointList lists the runs of a stored session that captured a
 	// pre-image, so a client can offer to put those files back. Additive: a host
 	// without it answers -32601, which a client reads as "no checkpoints here".
@@ -102,6 +111,11 @@ const (
 	// It is a table-change signal, not a progress stream: the payload is one
 	// snapshot, and a client that wants more asks tasks.list / tasks.output.
 	NotifyTask = "task"
+	// NotifyCompact reports a manual compaction finishing. A run's automatic
+	// compaction travels as an `event` of type compact, because it has a run to
+	// belong to; this one has no run, and a client that replays the transcript
+	// finds the divider in the store instead.
+	NotifyCompact = "compact"
 )
 
 // JSON-RPC 2.0 standard error codes.
@@ -259,6 +273,20 @@ type SessionParams struct {
 	// environment as ANVIL_WEB_SEARCH_API_KEY, the same discipline the model
 	// key follows: credentials do not cross the pipe.
 	WebSearch *WebSearchParams `json:"web_search,omitempty"`
+
+	// Context is the session's declared token budget. Absent means the zero
+	// value, which keeps automatic compaction off exactly as before this field
+	// existed: a client that never declares a window cannot have its session
+	// summarized behind its back. Negative values are normalized by the SDK.
+	Context *ContextParams `json:"context,omitempty"`
+}
+
+// ContextParams is the wire form of anvil.ContextOptions. The SDK fills the
+// defaults, so an omitted fraction or keep count means 0.8 and 8.
+type ContextParams struct {
+	WindowTokens  int     `json:"window_tokens,omitempty"`
+	AutoCompactAt float64 `json:"auto_compact_at,omitempty"`
+	KeepRecent    int     `json:"keep_recent,omitempty"`
 }
 
 // WebSearchParams configures the web tools. Presence is the switch — a client
@@ -683,6 +711,36 @@ type SessionForkResult struct {
 }
 
 // ---------------------------------------------------------------------------
+// session.compact / session.context
+// ---------------------------------------------------------------------------
+
+// SessionCompactResult is what a manual compaction did. Compacted false means
+// there was nothing old enough to summarize — the call is a no-op, not an
+// error, because a person who asks twice should get an answer, not a failure.
+type SessionCompactResult struct {
+	SessionID  string `json:"session_id"`
+	Compacted  bool   `json:"compacted"`
+	Before     int    `json:"before,omitempty"`
+	After      int    `json:"after,omitempty"`
+	Summarized int    `json:"summarized,omitempty"`
+	// Context is the state after the compaction, so a client does not have to
+	// follow with session.context to redraw its meter.
+	Context ContextInfo `json:"context"`
+}
+
+// ContextInfo describes where a session's conversation stands against its
+// declared budget. Every figure is an estimate of the next request's size, never
+// the provider's token count; the field names say so by saying "estimated".
+type ContextInfo struct {
+	EstimatedTokens int `json:"estimated_tokens"`
+	// WindowTokens is 0 when the session did not declare a window, which is also
+	// why CompactAtTokens is 0 and automatic compaction is off.
+	WindowTokens    int `json:"window_tokens"`
+	CompactAtTokens int `json:"compact_at_tokens"`
+	Messages        int `json:"messages"`
+}
+
+// ---------------------------------------------------------------------------
 // checkpoint.list / checkpoint.restore
 // ---------------------------------------------------------------------------
 
@@ -743,7 +801,10 @@ type SessionTranscriptResult struct {
 // what can be rendered and nothing else: the reader never had reasoning or an
 // API key to hand back.
 type TranscriptEntry struct {
-	Kind  string `json:"kind"` // message | run_end
+	// Kind is "message", "run_end", or "summary" (0.43+). A summary entry is the
+	// compaction boundary: it carries the text the model kept and the run it
+	// belongs to, and the turns before it stay in the replay below it.
+	Kind  string `json:"kind"`
 	RunID string `json:"run_id,omitempty"`
 
 	// message
@@ -1080,6 +1141,11 @@ type EventParams struct {
 	// pointer so that an empty list reaches the client as [] — clearing the
 	// panel — while every other event omits the field entirely.
 	Items *[]TodoItem `json:"items,omitempty"`
+	// Compact is set on a `compact` event (0.43+): the runtime folded older
+	// turns into a summary before the next request. It is nil on every other
+	// event, and a manual compaction arrives as a `compact` notification with
+	// the same inner shape.
+	Compact *CompactInfo `json:"compact,omitempty"`
 	// AgentID names the agent that emitted this event: the session's own agent
 	// for parent events, the child's id for a subagent's. ParentToolCallID is
 	// set only on a child event and names the spawn_agent call it belongs under,
@@ -1096,6 +1162,20 @@ type TodoItem struct {
 	Status string `json:"status"`
 }
 
+// CompactInfo is one compaction, live. It is what a client draws as the
+// transcript divider; the replay reads the summary record instead.
+type CompactInfo struct {
+	// Reason is "auto" for the runtime's budget check and "manual" for a person
+	// asking through session.compact.
+	Reason     string `json:"reason"`
+	Before     int    `json:"before"`
+	After      int    `json:"after"`
+	Summarized int    `json:"summarized"`
+	// Window is the declared window in tokens; 0 for a manual compaction on a
+	// session that never declared one.
+	Window int `json:"window,omitempty"`
+}
+
 // DoneParams is the terminal envelope of a run, projected from anvil.RunResult.
 // It is emitted exactly once per prompt, always after the last event.
 type DoneParams struct {
@@ -1107,13 +1187,27 @@ type DoneParams struct {
 	Usage     *Usage `json:"usage,omitempty"`
 	Err       string `json:"err,omitempty"`
 	Code      string `json:"code,omitempty"`
+	// Context is where the conversation stands after the run, including any
+	// compaction the run itself performed. A meter that redraws from this never
+	// has to follow up with session.context.
+	Context *ContextInfo `json:"context,omitempty"`
+	// LastRequestAt is the wall-clock time of the run's last model request, RFC
+	// 3339 in UTC. Empty when the run never reached the provider; a client shows
+	// no cache countdown for that run rather than a wrong one.
+	LastRequestAt string `json:"last_request_at,omitempty"`
 }
 
 // Usage carries provider token counts when the provider reports them.
+//
+// CachedTokens is a subset of the input on OpenAI-compatible providers and a
+// separate count on Anthropic, whose input_tokens excludes it. Both stay zero
+// when the provider reported nothing: zero is "unknown", not "no cache".
 type Usage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
-	TotalTokens  int `json:"total_tokens"`
+	InputTokens      int `json:"input_tokens"`
+	OutputTokens     int `json:"output_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+	CachedTokens     int `json:"cached_tokens,omitempty"`
+	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`
 }
 
 // LogParams is a host diagnostic. Clients may surface these in an output

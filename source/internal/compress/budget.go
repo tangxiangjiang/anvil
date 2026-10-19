@@ -104,6 +104,14 @@ func Compact(ctx context.Context, completer llm.Completer, model string, message
 		return Result{Messages: messages}, nil
 	}
 	old := rest[:cut]
+	// A lone summary has nowhere to fold. Re-summarizing it would cost a model
+	// call and return a near-identical marker, so a second compaction with
+	// nothing new to fold is a no-op — which is what a person asking twice
+	// should see, and what keeps a mid-run budget check from re-summarizing at
+	// every step.
+	if len(old) == 1 && old[0].Name == SummaryMarker {
+		return Result{Messages: messages}, nil
+	}
 	recent := rest[cut:]
 
 	summary, err := summarize(ctx, completer, model, old)

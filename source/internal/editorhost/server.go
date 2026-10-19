@@ -171,6 +171,10 @@ func (s *Server) dispatch(ctx context.Context, req *Request) (any, *RPCError) {
 		return s.handleSessionDelete(ctx, req.Params)
 	case MethodSessionFork:
 		return s.handleSessionFork(ctx, req.Params)
+	case MethodSessionCompact:
+		return s.handleSessionCompact(ctx, req.Params)
+	case MethodSessionContext:
+		return s.handleSessionContext(req.Params)
 	case MethodCheckpointList:
 		return s.handleCheckpointList(ctx, req.Params)
 	case MethodCheckpointRestore:
@@ -365,13 +369,9 @@ func (s *Server) handleSessionList(ctx context.Context, params json.RawMessage) 
 		if !in.UpdatedAt.IsZero() {
 			entry.UpdatedAt = in.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z")
 		}
-		if in.Usage != nil {
-			entry.Usage = &Usage{
-				InputTokens:  in.Usage.InputTokens,
-				OutputTokens: in.Usage.OutputTokens,
-				TotalTokens:  in.Usage.TotalTokens,
-			}
-		}
+		// One projection for every usage on the wire, so a field added to the
+		// shape cannot appear in `done` and be missing from the list.
+		entry.Usage = usageWire(in.Usage)
 		out.Sessions = append(out.Sessions, entry)
 	}
 	if p.Limit > 0 && len(out.Sessions) > p.Limit {
@@ -560,13 +560,7 @@ func (s *Server) handleSessionTranscript(ctx context.Context, params json.RawMes
 				Args: tc.Args,
 			})
 		}
-		if in.Usage != nil {
-			entry.Usage = &Usage{
-				InputTokens:  in.Usage.InputTokens,
-				OutputTokens: in.Usage.OutputTokens,
-				TotalTokens:  in.Usage.TotalTokens,
-			}
-		}
+		entry.Usage = usageWire(in.Usage)
 		out.Entries = append(out.Entries, entry)
 	}
 	return out, nil
@@ -692,6 +686,84 @@ func (s *Server) handleCancel(ctx context.Context, params json.RawMessage) (any,
 	return map[string]any{}, nil
 }
 
+// ---------------------------------------------------------------------------
+// session.compact / session.context
+// ---------------------------------------------------------------------------
+
+// handleSessionCompact summarizes an idle session's older turns on request. It
+// is the wire behind /compact.
+//
+// Refusing a busy session is the same rule prompt follows: compaction rewrites
+// the message slice a run is reading. Agent.Compact refuses again under its own
+// lock, so this check is about the answer — -32003 says "stop the run first",
+// where a raw SDK error would not.
+func (s *Server) handleSessionCompact(ctx context.Context, params json.RawMessage) (any, *RPCError) {
+	p, err := decode[SessionRefParams](params)
+	if err != nil {
+		return nil, errInvalidParams("session.compact: " + err.Error())
+	}
+	sess, ok := s.session(p.SessionID)
+	if !ok {
+		return nil, errCode(CodeNoSession, "unknown session: "+p.SessionID)
+	}
+	if _, runID := sess.activeRun(); runID != "" {
+		return nil, errCode(CodeRunInProgress, "session already has an active run: "+runID)
+	}
+	agent := sess.sdk()
+	if agent == nil {
+		return nil, errCode(CodeNoSession, "session is not open: "+p.SessionID)
+	}
+	res, err := agent.Compact(ctx)
+	if err != nil {
+		return nil, errHost(err)
+	}
+	out := SessionCompactResult{
+		SessionID:  sess.id,
+		Compacted:  res.Compacted,
+		Before:     res.Before,
+		After:      res.After,
+		Summarized: res.Summarized,
+		Context:    contextInfo(agent.ContextUsage()),
+	}
+	if res.Compacted {
+		// A manual compaction has no run, so it cannot ride the event stream —
+		// every event there is keyed by run_id. It gets its own notification,
+		// with the same inner shape, and the client draws the same divider.
+		s.notify(NotifyCompact, EventParams{
+			SessionID: sess.id,
+			Type:      "compact",
+			AgentID:   sess.agentIdentity(),
+			Compact: &CompactInfo{
+				Reason:     "manual",
+				Before:     res.Before,
+				After:      res.After,
+				Summarized: res.Summarized,
+				Window:     out.Context.WindowTokens,
+			},
+		})
+	}
+	s.logf("session.compact id=%s compacted=%v before=%d after=%d", sess.id, res.Compacted, res.Before, res.After)
+	return out, nil
+}
+
+// handleSessionContext answers a live session's estimate against its declared
+// budget, so a tab that has run nothing can still draw its meter.
+func (s *Server) handleSessionContext(params json.RawMessage) (any, *RPCError) {
+	p, err := decode[SessionRefParams](params)
+	if err != nil {
+		return nil, errInvalidParams("session.context: " + err.Error())
+	}
+	sess, ok := s.session(p.SessionID)
+	if !ok {
+		return nil, errCode(CodeNoSession, "unknown session: "+p.SessionID)
+	}
+	agent := sess.sdk()
+	if agent == nil {
+		return nil, errCode(CodeNoSession, "session is not open: "+p.SessionID)
+	}
+	return contextInfo(agent.ContextUsage()), nil
+}
+
 // drain pumps one run: SDK events out as `event` notifications, then the
 // terminal `done`. It owns the run until endRun.
 func (s *Server) drain(sess *session, run *anvil.Run) {
@@ -711,8 +783,22 @@ func (s *Server) drain(sess *session, run *anvil.Run) {
 	// stops accepting messages and drops anything pushed after it. Released
 	// first, a shutdown-cancelled run could therefore lose the very `done` the
 	// client is waiting for. push never blocks, so there is nothing to deadlock.
-	s.notify(NotifyDone, projectDone(sess.id, runID, res, err))
+	s.notify(NotifyDone, doneWithContext(sess, projectDone(sess.id, runID, res, err)))
 	sess.endRun(run)
+}
+
+// doneWithContext appends the post-run estimate to a terminal envelope.
+//
+// It is read here, after Wait returned, because that is when the agent has
+// folded the run — including any compaction it performed — into its history.
+// A session whose agent is already gone (shutdown) sends no context rather than
+// a zero, which a meter would draw as an empty conversation.
+func doneWithContext(sess *session, done DoneParams) DoneParams {
+	if agent := sess.sdk(); agent != nil {
+		ci := contextInfo(agent.ContextUsage())
+		done.Context = &ci
+	}
+	return done
 }
 
 // forwardSubagentEvent projects one child event onto the `event` notification
@@ -1282,6 +1368,16 @@ func (s *Server) buildOptions(p SessionParams, sess *session) (anvil.Options, *R
 		return opts, rpcErr
 	}
 	opts.WebSearch = web
+	// The budget is the client's declaration. Absent keeps every field at zero,
+	// which is "no window", which is exactly the behaviour before this field
+	// existed — an older client cannot start compacting behind the user's back.
+	if p.Context != nil {
+		opts.Context = anvil.ContextOptions{
+			WindowTokens:  p.Context.WindowTokens,
+			AutoCompactAt: p.Context.AutoCompactAt,
+			KeepRecent:    p.Context.KeepRecent,
+		}
+	}
 	if sess.mode == ModePlan {
 		// Plan mode removes the tools that can change the workspace, so the
 		// model produces a plan instead of acting on it. The instruction that

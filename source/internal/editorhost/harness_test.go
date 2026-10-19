@@ -59,6 +59,9 @@ type stubLLM struct {
 	route func(body string) (turn, bool)
 	// script is the cursor into turns for requests route does not claim.
 	script int
+	// cached, when positive, is reported as prompt_tokens_details.cached_tokens
+	// on every usage chunk, so the cache-accounting path can be exercised.
+	cached int
 }
 
 func newStubLLM(t *testing.T, turns ...turn) *stubLLM {
@@ -81,6 +84,13 @@ func (s *stubLLM) callCount() int {
 func (s *stubLLM) setRoute(fn func(body string) (turn, bool)) {
 	s.mu.Lock()
 	s.route = fn
+	s.mu.Unlock()
+}
+
+// setCachedTokens makes every subsequent usage chunk report cached input.
+func (s *stubLLM) setCachedTokens(n int) {
+	s.mu.Lock()
+	s.cached = n
 	s.mu.Unlock()
 }
 
@@ -116,6 +126,7 @@ func (s *stubLLM) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		s.script++
 	}
+	cached := s.cached
 	s.calls++
 	s.lastBody = string(body)
 	s.mu.Unlock()
@@ -147,9 +158,13 @@ func (s *stubLLM) serve(w http.ResponseWriter, r *http.Request) {
 			}}})
 		}
 	}
+	usage := map[string]any{"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}
+	if cached > 0 {
+		usage["prompt_tokens_details"] = map[string]any{"cached_tokens": cached}
+	}
 	write(map[string]any{
 		"choices": []any{},
-		"usage":   map[string]any{"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+		"usage":   usage,
 	})
 	fmt.Fprint(w, "data: [DONE]\n\n")
 	flusher.Flush()

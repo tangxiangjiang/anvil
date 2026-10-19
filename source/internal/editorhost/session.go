@@ -154,7 +154,8 @@ func (s *session) waitRun(timeout time.Duration) bool {
 func projectEvent(sessionID, runID string, ev anvil.Event) (EventParams, bool) {
 	switch ev.Type {
 	case anvil.EventProgress, anvil.EventAssistant, anvil.EventReasoning,
-		anvil.EventToolCall, anvil.EventToolResult, anvil.EventError, anvil.EventTodo:
+		anvil.EventToolCall, anvil.EventToolResult, anvil.EventError, anvil.EventTodo,
+		anvil.EventCompact:
 	default:
 		return EventParams{}, false
 	}
@@ -182,7 +183,34 @@ func projectEvent(sessionID, runID string, ev anvil.Event) (EventParams, bool) {
 		Rule:       ruleInfo(ev.Rule),
 		Usage:      usageWire(ev.Usage),
 		Items:      items,
+		Compact:    compactWire(ev.Compact),
 	}, true
+}
+
+// compactWire projects one compaction onto the wire shape. It is nil in, nil
+// out, which is what keeps "no compaction" distinguishable from "compacted
+// nothing".
+func compactWire(c *anvil.CompactInfo) *CompactInfo {
+	if c == nil {
+		return nil
+	}
+	return &CompactInfo{
+		Reason:     c.Reason,
+		Before:     c.Before,
+		After:      c.After,
+		Summarized: c.Summarized,
+		Window:     c.Window,
+	}
+}
+
+// contextInfo projects an SDK usage estimate onto the wire shape.
+func contextInfo(u anvil.ContextUsage) ContextInfo {
+	return ContextInfo{
+		EstimatedTokens: u.EstimatedTokens,
+		WindowTokens:    u.WindowTokens,
+		CompactAtTokens: u.CompactAtTokens,
+		Messages:        u.Messages,
+	}
 }
 
 // usageWire projects public usage onto the wire shape. It is nil in, nil out:
@@ -193,9 +221,11 @@ func usageWire(u *anvil.Usage) *Usage {
 		return nil
 	}
 	return &Usage{
-		InputTokens:  u.InputTokens,
-		OutputTokens: u.OutputTokens,
-		TotalTokens:  u.TotalTokens,
+		InputTokens:      u.InputTokens,
+		OutputTokens:     u.OutputTokens,
+		TotalTokens:      u.TotalTokens,
+		CachedTokens:     u.CachedTokens,
+		CacheWriteTokens: u.CacheWriteTokens,
 	}
 }
 
@@ -235,6 +265,11 @@ func projectDone(sessionID, runID string, res *anvil.RunResult, runErr error) Do
 		out.Err = res.Err
 		out.Code = string(res.Code)
 		out.Usage = usageWire(res.Usage)
+		// The anchor of the cache countdown. Zero stays empty: a run that never
+		// reached the provider has no cache to count down from.
+		if !res.LastRequestAt.IsZero() {
+			out.LastRequestAt = res.LastRequestAt.UTC().Format(time.RFC3339)
+		}
 	}
 	if out.Err == "" && runErr != nil {
 		out.Err = runErr.Error()

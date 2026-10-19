@@ -222,3 +222,26 @@ func TestCompactForceWithNothingToFold(t *testing.T) {
 		t.Fatalf("forced compaction folded a single turn: %+v calls=%d", res, f.calls)
 	}
 }
+
+// TestCompactDoesNotRefoldALoneSummary covers the second /compact: the only
+// thing before the tail is the previous summary, so folding it would only spend
+// a model call to produce the same marker again.
+func TestCompactDoesNotRefoldALoneSummary(t *testing.T) {
+	msgs := []llm.Message{
+		{Role: llm.RoleSystem, Content: "sys"},
+		{Role: llm.RoleUser, Name: SummaryMarker, Content: "[conversation summary]\nS"},
+		{Role: llm.RoleUser, Content: "u2"},
+		{Role: llm.RoleAssistant, Content: "a2"},
+	}
+	f := &fixedCompleter{text: "S2"}
+	res, err := Compact(context.Background(), f, "m", msgs, BudgetOptions{Force: true, KeepRecent: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.DidCompress || f.calls != 0 {
+		t.Fatalf("a lone summary was folded again: %+v calls=%d", res, f.calls)
+	}
+	if len(res.Messages) != len(msgs) {
+		t.Fatalf("messages changed: %d vs %d", len(res.Messages), len(msgs))
+	}
+}

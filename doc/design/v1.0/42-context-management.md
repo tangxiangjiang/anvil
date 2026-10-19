@@ -100,6 +100,9 @@ func (a *Agent) ContextUsage() ContextUsage
   nothing to compact it returns `Compacted: false` and no error.
 - It persists the summary marker and the tail through the same sink path the loop uses, so the
   store looks exactly like an automatic compaction's.
+- It is a no-op when the only thing before the tail is the previous summary: re-summarizing a
+  lone marker costs a model call and changes nothing. A second `/compact` therefore answers
+  `Compacted: false` rather than rewriting the same boundary.
 - `ContextUsage()` returns the estimated tokens, the window, the mark, and the message count —
   the numbers the editor's meter needs for an idle session.
 
@@ -160,11 +163,12 @@ Two breakpoints bound the cached prefix: the system prompt and the growing conve
 request shape for messages already uses block arrays, so only the system field changes type; the
 OpenAI-compatible path is untouched because those providers cache automatically.
 
-The TTL is **5 minutes** — the documented Anthropic ephemeral TTL — and is reported to callers as
-`Context.CachedTTL` only when prompt caching is on. For other providers the default is 0:
-DeepSeek's cache is documented as lasting hours to days, and OpenAI publishes no figure, so a
-five-minute countdown there would be a lie. A session may declare a TTL it knows
-(`anvil.cacheTtlSeconds`); zero means "show cache activity, draw no countdown".
+The TTL is **5 minutes** — the documented Anthropic ephemeral TTL. The SDK reports facts, not a
+clock: cached counts and `LastRequestAt` cross the wire, and the client applies the TTL it knows.
+The editor's default is 300 seconds for the Anthropic provider and 0 elsewhere — DeepSeek's cache
+is documented as lasting hours to days, and OpenAI publishes no figure, so a five-minute countdown
+there would be a lie. A session may declare its own TTL (`anvil.cacheTtlSeconds`); zero means
+"show cache activity, draw no countdown".
 
 ### 3.3 The clock
 
