@@ -504,6 +504,24 @@ func (s *Server) handleDelivery(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusCreated, v)
 			return
 		}
+		if len(parts) == 4 && parts[1] == "versions" && parts[3] == "gate-check" && r.Method == http.MethodPost {
+			vid := parts[2]
+			var body struct {
+				Index int  `json:"index"`
+				Done  bool `json:"done"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, "bad json", http.StatusBadRequest)
+				return
+			}
+			v, err := s.delivery.ToggleDesignVersionGateCheck(id, vid, body.Index, body.Done)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			writeJSON(w, http.StatusOK, v)
+			return
+		}
 		if len(parts) == 3 && parts[1] == "versions" {
 			vid := parts[2]
 			if r.Method == http.MethodPatch {
@@ -590,6 +608,43 @@ func (s *Server) handleDelivery(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(path, "roadmap/milestones/") {
 		id := strings.TrimPrefix(path, "roadmap/milestones/")
 		id = strings.Trim(id, "/")
+		if id != "" && strings.HasSuffix(id, "/merge") && r.Method == http.MethodPost {
+			msID := strings.TrimSuffix(id, "/merge")
+			msID = strings.Trim(msID, "/")
+			var body struct {
+				ForceStub bool `json:"force_stub"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			m, err := s.delivery.MergeMilestone(msID, delivery.MergeMilestoneInput{
+				ForceStub: body.ForceStub,
+				MergeRoot: s.cfg.DeliveryMergeRoot,
+			})
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			writeJSON(w, http.StatusOK, m)
+			return
+		}
+		if id != "" && strings.HasSuffix(id, "/acceptance-check") && r.Method == http.MethodPost {
+			msID := strings.TrimSuffix(id, "/acceptance-check")
+			msID = strings.Trim(msID, "/")
+			var body struct {
+				Index int  `json:"index"`
+				Done  bool `json:"done"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, "bad json", http.StatusBadRequest)
+				return
+			}
+			m, err := s.delivery.ToggleMilestoneAcceptanceCheck(msID, body.Index, body.Done)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			writeJSON(w, http.StatusOK, m)
+			return
+		}
 		if id != "" && !strings.Contains(id, "/") && r.Method == http.MethodPatch {
 			var body struct {
 				X               *float64 `json:"x"`
@@ -603,6 +658,9 @@ func (s *Server) handleDelivery(w http.ResponseWriter, r *http.Request) {
 				FailTest        *bool    `json:"fail_test"`
 				FailTitle       string   `json:"fail_title"`
 				FailBody        string   `json:"fail_body"`
+				ReadyDev        *bool    `json:"ready_dev"`
+				AcceptMilestone *bool    `json:"accept_milestone"`
+				ForceStub       bool     `json:"force_stub"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				http.Error(w, "bad json", http.StatusBadRequest)
@@ -612,33 +670,126 @@ func (s *Server) handleDelivery(w http.ResponseWriter, r *http.Request) {
 			submit := body.SubmitTest != nil && *body.SubmitTest
 			pass := body.PassTest != nil && *body.PassTest
 			fail := body.FailTest != nil && *body.FailTest
+			ready := body.ReadyDev != nil && *body.ReadyDev
+			accept := body.AcceptMilestone != nil && *body.AcceptMilestone
 			if body.X == nil && body.Y == nil && body.ExecuteWorkerID == nil && body.RunState == nil &&
-				body.TestNote == nil && !exec && !submit && !pass && !fail {
-				http.Error(w, "x/y, execute_worker_id, run_state, test_note, execute, or test action required", http.StatusBadRequest)
+				body.TestNote == nil && !exec && !submit && !pass && !fail && !ready && !accept {
+				http.Error(w, "x/y, execute_worker_id, run_state, test_note, execute, or test/ready/accept action required", http.StatusBadRequest)
 				return
 			}
 			if (body.X != nil) != (body.Y != nil) {
 				http.Error(w, "x and y must both be set when moving", http.StatusBadRequest)
 				return
 			}
+			// Pause / Stop: soft-cancel active phase job then set run_state.
+			if body.RunState != nil && !exec {
+				rs := strings.ToLower(strings.TrimSpace(*body.RunState))
+				if rs == delivery.RunPaused || rs == delivery.RunStopped {
+					if err := s.softStopMilestoneJobs(id, rs); err != nil {
+						http.Error(w, err.Error(), http.StatusBadRequest)
+						return
+					}
+					m, err := s.delivery.GetMilestone(id)
+					if err != nil {
+						http.Error(w, err.Error(), http.StatusBadRequest)
+						return
+					}
+					writeJSON(w, http.StatusOK, m)
+					return
+				}
+			}
+			// 提交测试: stop active jobs first so testing does not race a live phase job.
+			if submit {
+				_ = s.softStopMilestoneJobs(id, delivery.RunStopped)
+			}
+
+			// Start: persist worker, preflight job, then commit Execute; roll back on enqueue failure.
+			if exec {
+				prev, err := s.delivery.GetMilestone(id)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				if body.ExecuteWorkerID != nil || body.X != nil || body.Y != nil || body.TestNote != nil {
+					if _, err := s.delivery.PatchMilestone(id, delivery.PatchMilestoneInput{
+						X:               body.X,
+						Y:               body.Y,
+						ExecuteWorkerID: body.ExecuteWorkerID,
+						TestNote:        body.TestNote,
+					}); err != nil {
+						http.Error(w, err.Error(), http.StatusBadRequest)
+						return
+					}
+				}
+				if _, err := s.preflightMilestonePhaseJob(id, body.ForceStub); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				m, err := s.delivery.PatchMilestone(id, delivery.PatchMilestoneInput{Execute: true})
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				if _, err := s.startMilestonePhaseJob(id, body.ForceStub); err != nil {
+					_ = s.delivery.RestoreMilestoneRun(id, prev.Status, prev.RunState)
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				m, err = s.delivery.GetMilestone(id)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				writeJSON(w, http.StatusOK, m)
+				return
+			}
+
 			m, err := s.delivery.PatchMilestone(id, delivery.PatchMilestoneInput{
 				X:               body.X,
 				Y:               body.Y,
 				ExecuteWorkerID: body.ExecuteWorkerID,
 				RunState:        body.RunState,
 				TestNote:        body.TestNote,
-				Execute:         exec,
 				SubmitTest:      submit,
 				PassTest:        pass,
 				FailTest:        fail,
 				FailTitle:       body.FailTitle,
 				FailBody:        body.FailBody,
+				ReadyDev:        ready,
+				AcceptMilestone: accept,
 			})
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
 			writeJSON(w, http.StatusOK, m)
+			return
+		}
+	}
+
+	if path == "jobs" && r.Method == http.MethodPost {
+		var body struct {
+			MilestoneID string `json:"milestone_id"`
+			ForceStub   bool   `json:"force_stub"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+		ph, err := s.startMilestonePhaseJob(body.MilestoneID, body.ForceStub)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, http.StatusOK, ph)
+		return
+	}
+
+	if strings.HasPrefix(path, "jobs/") && r.Method == http.MethodGet {
+		rest := strings.TrimPrefix(path, "jobs/")
+		parts := strings.Split(rest, "/")
+		if len(parts) == 2 && parts[1] == "events" {
+			s.handleDeliveryJobEvents(w, r, parts[0])
 			return
 		}
 	}
@@ -672,15 +823,16 @@ func (s *Server) handleDelivery(w http.ResponseWriter, r *http.Request) {
 
 	if path == "buglist/regress" && r.Method == http.MethodPost {
 		var body struct {
-			EngReqID string `json:"eng_req_id"`
-			Major    int    `json:"major"`
-			Minor    int    `json:"minor"`
+			EngReqID  string `json:"eng_req_id"`
+			Major     int    `json:"major"`
+			Minor     int    `json:"minor"`
+			ForceStub bool   `json:"force_stub"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "bad json", http.StatusBadRequest)
 			return
 		}
-		res, err := s.delivery.RegressBuglist(body.EngReqID, body.Major, body.Minor)
+		res, err := s.startRegressJob(body.EngReqID, body.Major, body.Minor, body.ForceStub)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -693,12 +845,16 @@ func (s *Server) handleDelivery(w http.ResponseWriter, r *http.Request) {
 		rest := strings.TrimPrefix(path, "buglist/")
 		parts := strings.Split(rest, "/")
 		if len(parts) == 2 && parts[1] == "fix" {
-			b, err := s.delivery.FixBuglistItem(parts[0])
+			var body struct {
+				ForceStub bool `json:"force_stub"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			res, err := s.startBugFixJob(parts[0], body.ForceStub)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
-			writeJSON(w, http.StatusOK, b)
+			writeJSON(w, http.StatusOK, res)
 			return
 		}
 	}
@@ -737,15 +893,16 @@ func (s *Server) handleDelivery(w http.ResponseWriter, r *http.Request) {
 
 	if path == "test-cases/run" && r.Method == http.MethodPost {
 		var body struct {
-			EngReqID string `json:"eng_req_id"`
-			Major    int    `json:"major"`
-			Minor    int    `json:"minor"`
+			EngReqID  string `json:"eng_req_id"`
+			Major     int    `json:"major"`
+			Minor     int    `json:"minor"`
+			ForceStub bool   `json:"force_stub"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "bad json", http.StatusBadRequest)
 			return
 		}
-		res, err := s.delivery.RunTestCases(body.EngReqID, body.Major, body.Minor)
+		res, err := s.startTestRunJob(body.EngReqID, body.Major, body.Minor, body.ForceStub)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -785,12 +942,16 @@ func (s *Server) handleDelivery(w http.ResponseWriter, r *http.Request) {
 		rest := strings.TrimPrefix(path, "polishes/")
 		parts := strings.Split(rest, "/")
 		if len(parts) == 2 && parts[1] == "run" && r.Method == http.MethodPost {
-			p, err := s.delivery.RunPolish(parts[0])
+			var body struct {
+				ForceStub bool `json:"force_stub"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			res, err := s.startPolishJob(parts[0], body.ForceStub)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
-			writeJSON(w, http.StatusOK, p)
+			writeJSON(w, http.StatusOK, res)
 			return
 		}
 	}

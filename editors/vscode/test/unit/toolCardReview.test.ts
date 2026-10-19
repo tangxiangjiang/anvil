@@ -45,6 +45,24 @@ function methodOf(source: string, signature: string): string {
   return rest.slice(0, next);
 }
 
+test('an edit card opens onto a short comparison, and the button stays under it', () => {
+  const call = bodyOf(CHAT_JS, 'addToolCall');
+  assert.match(call, /event\.name === 'edit_file'/);
+  assert.match(call, /card\.open = true/);
+  assert.match(call, /renderEditDiff\(edit, anchor\)/);
+  // The comparison is drawn as text, like every other line in the transcript.
+  const diff = bodyOf(CHAT_JS, 'renderEditDiff');
+  assert.match(diff, /el\('span', 'ln', String\(row\.line\)\)/);
+  assert.match(diff, /el\('span', 'code'/);
+  assert.doesNotMatch(diff, /innerHTML/);
+  // Under the comparison, not above the pane: the card is already open, and
+  // the click is still the same reviewCall the other cards send.
+  const button = bodyOf(CHAT_JS, 'addReviewButton');
+  assert.match(button, /querySelector\('\.edit-diff'\)/);
+  assert.match(button, /card\.appendChild\(open\)/);
+  assert.match(button, /type: 'reviewCall'/);
+});
+
 test('the button is a sibling of the summary, never inside it', () => {
   // `<details>` toggles from its summary. A button inside it would collapse the
   // card on the same click that opens the diff, which is the bug this pins.
@@ -60,7 +78,7 @@ test('a card stores the call facts only when the extension said there is a chang
   // goes stale the first time one is renamed. It stores the facts it is told to
   // keep, and nothing else.
   const call = bodyOf(CHAT_JS, 'addToolCall');
-  assert.match(call, /function addToolCall\(event, reviewable\)/);
+  assert.match(call, /function addToolCall\(event, reviewable, anchor\)/);
   assert.match(call, /if \(reviewable\) \{/);
   assert.match(call, /callFacts\.set\(event\.tool_call_id/);
   // The arguments are kept as they arrived, beside the id they belong to.
@@ -87,16 +105,16 @@ test('every tool call the card gets carries the answer about its review', () => 
   const from = CHAT_PANEL.indexOf('onEvent = (event: HostEvent)');
   assert.ok(from > 0, 'the panel has an onEvent');
   const listener = CHAT_PANEL.slice(from, CHAT_PANEL.indexOf('onApproval = ', from));
-  assert.match(listener, /this\.postEvent\(event\)/);
+  assert.match(listener, /this\.postEvent\(event, 'snapshot'\)/);
 
-  const body = methodOf(CHAT_PANEL, 'private postEvent');
+  const body = methodOf(CHAT_PANEL, 'private async postEvent');
   assert.match(body, /reviewOf\(event\.name, event\.args\) !== undefined/);
-  assert.match(body, /this\.post\(\{ type: 'event', event, reviewable \}\)/);
+  assert.match(body, /this\.post\(\{ type: 'event', event, reviewable, edit \}\)/);
 
   // The renderer believes the extension and nothing else: it reads the flag as
   // a boolean, so a field that went missing reads as "no review" rather than as
   // a fact about the call.
-  assert.match(CHAT_JS, /addToolCall\(e, msg\.reviewable === true\)/);
+  assert.match(CHAT_JS, /addToolCall\(e, msg\.reviewable === true, msg\.edit\)/);
 });
 
 test('the click hands back the call, not just its id', () => {

@@ -120,7 +120,16 @@ CREATE TABLE IF NOT EXISTS delivery_milestones (
   sort_order INTEGER NOT NULL DEFAULT 0,
   execute_worker_id TEXT NOT NULL DEFAULT '',
   run_state TEXT NOT NULL DEFAULT 'idle',
-  test_note TEXT NOT NULL DEFAULT ''
+  test_note TEXT NOT NULL DEFAULT '',
+  campaign_job_id TEXT NOT NULL DEFAULT '',
+  campaign_job_status TEXT NOT NULL DEFAULT '',
+  campaign_job_kind TEXT NOT NULL DEFAULT '',
+  campaign_job_last_event TEXT NOT NULL DEFAULT '',
+  accept_status TEXT NOT NULL DEFAULT '',
+  accepted_at TEXT NOT NULL DEFAULT '',
+  merge_status TEXT NOT NULL DEFAULT '',
+  merge_note TEXT NOT NULL DEFAULT '',
+  merged_at TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS delivery_buglist_items (
   id TEXT PRIMARY KEY,
@@ -130,7 +139,10 @@ CREATE TABLE IF NOT EXISTS delivery_buglist_items (
   title TEXT NOT NULL DEFAULT '',
   body TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'open',
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  job_id TEXT NOT NULL DEFAULT '',
+  job_status TEXT NOT NULL DEFAULT '',
+  job_last_event TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS delivery_test_cases (
   id TEXT PRIMARY KEY,
@@ -150,14 +162,20 @@ CREATE TABLE IF NOT EXISTS delivery_polishes (
   title TEXT NOT NULL DEFAULT '',
   body TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'ready',
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  job_id TEXT NOT NULL DEFAULT '',
+  job_status TEXT NOT NULL DEFAULT '',
+  job_last_event TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS delivery_phases (
   id TEXT PRIMARY KEY,
   milestone_id TEXT NOT NULL REFERENCES delivery_milestones(id) ON DELETE CASCADE,
   title TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'planned',
-  sort_order INTEGER NOT NULL DEFAULT 0
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  job_id TEXT NOT NULL DEFAULT '',
+  job_status TEXT NOT NULL DEFAULT '',
+  job_last_event TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS delivery_edges (
   from_id TEXT NOT NULL,
@@ -223,7 +241,120 @@ CREATE TABLE IF NOT EXISTS delivery_trash (
 	if err := s.ensureTestCasesTable(); err != nil {
 		return err
 	}
+	if err := s.ensurePhaseJobColumns(); err != nil {
+		return err
+	}
+	if err := s.ensureCampaignJobColumns(); err != nil {
+		return err
+	}
+	if err := s.ensureBuglistJobColumns(); err != nil {
+		return err
+	}
+	if err := s.ensurePolishJobColumns(); err != nil {
+		return err
+	}
+	if err := s.ensureMilestoneAcceptColumns(); err != nil {
+		return err
+	}
 	return s.ensurePolishesTable()
+}
+
+func (s *Store) ensureMilestoneAcceptColumns() error {
+	for _, q := range []string{
+		`ALTER TABLE delivery_milestones ADD COLUMN accept_status TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE delivery_milestones ADD COLUMN accepted_at TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE delivery_milestones ADD COLUMN merge_status TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE delivery_milestones ADD COLUMN merge_note TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE delivery_milestones ADD COLUMN merged_at TEXT NOT NULL DEFAULT ''`,
+	} {
+		_, err := s.db.Exec(q)
+		if err == nil {
+			continue
+		}
+		msg := strings.ToLower(err.Error())
+		if strings.Contains(msg, "duplicate column") {
+			continue
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *Store) ensurePhaseJobColumns() error {
+	for _, q := range []string{
+		`ALTER TABLE delivery_phases ADD COLUMN job_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE delivery_phases ADD COLUMN job_status TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE delivery_phases ADD COLUMN job_last_event TEXT NOT NULL DEFAULT ''`,
+	} {
+		_, err := s.db.Exec(q)
+		if err == nil {
+			continue
+		}
+		msg := strings.ToLower(err.Error())
+		if strings.Contains(msg, "duplicate column") {
+			continue
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *Store) ensureCampaignJobColumns() error {
+	for _, q := range []string{
+		`ALTER TABLE delivery_milestones ADD COLUMN campaign_job_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE delivery_milestones ADD COLUMN campaign_job_status TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE delivery_milestones ADD COLUMN campaign_job_kind TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE delivery_milestones ADD COLUMN campaign_job_last_event TEXT NOT NULL DEFAULT ''`,
+	} {
+		_, err := s.db.Exec(q)
+		if err == nil {
+			continue
+		}
+		msg := strings.ToLower(err.Error())
+		if strings.Contains(msg, "duplicate column") {
+			continue
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *Store) ensureBuglistJobColumns() error {
+	for _, q := range []string{
+		`ALTER TABLE delivery_buglist_items ADD COLUMN job_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE delivery_buglist_items ADD COLUMN job_status TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE delivery_buglist_items ADD COLUMN job_last_event TEXT NOT NULL DEFAULT ''`,
+	} {
+		_, err := s.db.Exec(q)
+		if err == nil {
+			continue
+		}
+		msg := strings.ToLower(err.Error())
+		if strings.Contains(msg, "duplicate column") {
+			continue
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *Store) ensurePolishJobColumns() error {
+	for _, q := range []string{
+		`ALTER TABLE delivery_polishes ADD COLUMN job_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE delivery_polishes ADD COLUMN job_status TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE delivery_polishes ADD COLUMN job_last_event TEXT NOT NULL DEFAULT ''`,
+	} {
+		_, err := s.db.Exec(q)
+		if err == nil {
+			continue
+		}
+		msg := strings.ToLower(err.Error())
+		if strings.Contains(msg, "duplicate column") {
+			continue
+		}
+		return err
+	}
+	return nil
 }
 
 // ensureMilestoneExecuteWorker adds execute_worker_id on older DBs (0.39.1).
@@ -573,11 +704,23 @@ func scanDesign(scanner interface {
 	return nil
 }
 
+// Phase job_status values (0.39.5+).
+const (
+	JobQueued    = "queued"
+	JobRunning   = "running"
+	JobFinished  = "finished"
+	JobError     = "error"
+	JobCancelled = "cancelled"
+)
+
 // Phase is a step under a milestone.
 type Phase struct {
-	ID     string `json:"id"`
-	Title  string `json:"title"`
-	Status string `json:"status"`
+	ID           string `json:"id"`
+	Title        string `json:"title"`
+	Status       string `json:"status"`
+	JobID        string `json:"job_id,omitempty"`
+	JobStatus    string `json:"job_status,omitempty"`
+	JobLastEvent string `json:"job_last_event,omitempty"`
 }
 
 // Run-state values for milestone execute controls (pre-Job).
@@ -588,42 +731,70 @@ const (
 	RunStopped = "stopped"
 )
 
+// Campaign job kinds on a milestone (0.39.8).
+const (
+	CampaignKindRun     = "run"
+	CampaignKindRegress = "regress"
+)
+
+// Milestone accept_status values (0.39.12).
+const (
+	AcceptNone     = ""
+	AcceptPending  = "pending"
+	AcceptAccepted = "accepted"
+)
+
 // Milestone is a roadmap canvas node.
 type Milestone struct {
-	ID              string  `json:"id"`
-	Title           string  `json:"title"`
-	Status          string  `json:"status"`
-	Acceptance      string  `json:"acceptance"`
-	X               float64 `json:"x"`
-	Y               float64 `json:"y"`
-	ExecuteWorkerID string  `json:"execute_worker_id"`
-	RunState        string  `json:"run_state"`
-	TestNote        string  `json:"test_note"`
-	Phases          []Phase `json:"phases"`
+	ID                   string  `json:"id"`
+	Title                string  `json:"title"`
+	Status               string  `json:"status"`
+	Acceptance           string  `json:"acceptance"`
+	X                    float64 `json:"x"`
+	Y                    float64 `json:"y"`
+	ExecuteWorkerID      string  `json:"execute_worker_id"`
+	RunState             string  `json:"run_state"`
+	TestNote             string  `json:"test_note"`
+	CampaignJobID        string  `json:"campaign_job_id,omitempty"`
+	CampaignJobStatus    string  `json:"campaign_job_status,omitempty"`
+	CampaignJobKind      string  `json:"campaign_job_kind,omitempty"`
+	CampaignJobLastEvent string  `json:"campaign_job_last_event,omitempty"`
+	AcceptStatus         string  `json:"accept_status,omitempty"`
+	AcceptedAt           string  `json:"accepted_at,omitempty"`
+	MergeStatus          string  `json:"merge_status,omitempty"`
+	MergeNote            string  `json:"merge_note,omitempty"`
+	MergedAt             string  `json:"merged_at,omitempty"`
+	Phases               []Phase `json:"phases"`
 }
 
 // Polish is a post-complete requirement polish item under a milestone.
 type Polish struct {
-	ID        string `json:"id"`
-	EngReqID  string `json:"eng_req_id"`
-	Major     int    `json:"major"`
-	Minor     int    `json:"minor"`
-	Title     string `json:"title"`
-	Body      string `json:"body"`
-	Status    string `json:"status"`
-	CreatedAt string `json:"created_at"`
+	ID           string `json:"id"`
+	EngReqID     string `json:"eng_req_id"`
+	Major        int    `json:"major"`
+	Minor        int    `json:"minor"`
+	Title        string `json:"title"`
+	Body         string `json:"body"`
+	Status       string `json:"status"`
+	CreatedAt    string `json:"created_at"`
+	JobID        string `json:"job_id,omitempty"`
+	JobStatus    string `json:"job_status,omitempty"`
+	JobLastEvent string `json:"job_last_event,omitempty"`
 }
 
 // BuglistItem is a test-fail / campaign bug bound to a milestone (eng_req + major.minor).
 type BuglistItem struct {
-	ID        string `json:"id"`
-	EngReqID  string `json:"eng_req_id"`
-	Major     int    `json:"major"`
-	Minor     int    `json:"minor"`
-	Title     string `json:"title"`
-	Body      string `json:"body"`
-	Status    string `json:"status"` // open | fixing | verified | closed
-	CreatedAt string `json:"created_at"`
+	ID           string `json:"id"`
+	EngReqID     string `json:"eng_req_id"`
+	Major        int    `json:"major"`
+	Minor        int    `json:"minor"`
+	Title        string `json:"title"`
+	Body         string `json:"body"`
+	Status       string `json:"status"` // open | fixing | verified | closed
+	CreatedAt    string `json:"created_at"`
+	JobID        string `json:"job_id,omitempty"`
+	JobStatus    string `json:"job_status,omitempty"`
+	JobLastEvent string `json:"job_last_event,omitempty"`
 }
 
 // TestCase is a campaign test case under a milestone bind.
@@ -2542,6 +2713,8 @@ type PatchMilestoneInput struct {
 	FailTest        bool
 	FailTitle       string
 	FailBody        string
+	ReadyDev        bool // awaiting_roadmap → awaiting_development
+	AcceptMilestone bool // complete + pending → accepted
 }
 
 // PatchMilestonePosition updates canvas card coordinates (persisted).
@@ -2582,8 +2755,14 @@ func (s *Store) PatchMilestone(id string, in PatchMilestoneInput) (Milestone, er
 	if in.FailTest {
 		actionN++
 	}
+	if in.ReadyDev {
+		actionN++
+	}
+	if in.AcceptMilestone {
+		actionN++
+	}
 	if actionN > 1 {
-		return Milestone{}, fmt.Errorf("only one of execute, submit_test, pass_test, fail_test allowed")
+		return Milestone{}, fmt.Errorf("only one of execute, submit_test, pass_test, fail_test, ready_dev, accept_milestone allowed")
 	}
 
 	x, y := cur.X, cur.Y
@@ -2629,6 +2808,8 @@ func (s *Store) PatchMilestone(id string, in PatchMilestoneInput) (Milestone, er
 	}
 
 	status := cur.Status
+	acceptStatus := cur.AcceptStatus
+	acceptedAt := cur.AcceptedAt
 	bind := parseMilestoneBind(id)
 
 	if in.Execute {
@@ -2672,6 +2853,8 @@ func (s *Store) PatchMilestone(id string, in PatchMilestoneInput) (Milestone, er
 		}
 		status = LifeComplete
 		runState = RunIdle
+		acceptStatus = AcceptPending
+		acceptedAt = ""
 		if err := s.SetMilestoneLifecycle(bind.EngID, bind.Major, bind.Minor, LifeComplete); err != nil {
 			return Milestone{}, err
 		}
@@ -2701,16 +2884,62 @@ func (s *Store) PatchMilestone(id string, in PatchMilestoneInput) (Milestone, er
 		}); err != nil {
 			return Milestone{}, err
 		}
+		if _, err := s.SeedBugfixPhases(id, bind.EngID, bind.Major, bind.Minor); err != nil {
+			return Milestone{}, err
+		}
 		status = LifeAwaitingRoadmap
 		runState = RunIdle
+		acceptStatus = AcceptNone
+		acceptedAt = ""
 		if err := s.SetMilestoneLifecycle(bind.EngID, bind.Major, bind.Minor, LifeAwaitingRoadmap); err != nil {
 			return Milestone{}, err
 		}
 	}
 
+	if in.ReadyDev {
+		if status != LifeAwaitingRoadmap {
+			return Milestone{}, fmt.Errorf("ready_dev requires status %s (got %s)", LifeAwaitingRoadmap, status)
+		}
+		if bind == nil {
+			return Milestone{}, fmt.Errorf("ready_dev requires bound milestone id")
+		}
+		unfinished := false
+		for _, p := range cur.Phases {
+			st := strings.ToLower(p.Status)
+			if st != "finished" && st != "done" && st != JobFinished {
+				unfinished = true
+				break
+			}
+		}
+		if !unfinished {
+			return Milestone{}, fmt.Errorf("ready_dev requires at least one unfinished phase (bugfix or planned)")
+		}
+		status = LifeAwaitingDevelopment
+		runState = RunIdle
+		if err := s.SetMilestoneLifecycle(bind.EngID, bind.Major, bind.Minor, LifeAwaitingDevelopment); err != nil {
+			return Milestone{}, err
+		}
+	}
+
+	if in.AcceptMilestone {
+		if status != LifeComplete {
+			return Milestone{}, fmt.Errorf("accept_milestone requires status %s (got %s)", LifeComplete, status)
+		}
+		if acceptStatus == AcceptAccepted {
+			// idempotent
+		} else {
+			if err := s.assertAcceptChecklist(cur); err != nil {
+				return Milestone{}, err
+			}
+			acceptStatus = AcceptAccepted
+			acceptedAt = nowRFC3339()
+		}
+	}
+
 	res, err := s.db.Exec(`
-UPDATE delivery_milestones SET x=?, y=?, execute_worker_id=?, run_state=?, test_note=?, status=? WHERE id=?`,
-		x, y, workerID, runState, testNote, status, id)
+UPDATE delivery_milestones SET x=?, y=?, execute_worker_id=?, run_state=?, test_note=?, status=?,
+  accept_status=?, accepted_at=? WHERE id=?`,
+		x, y, workerID, runState, testNote, status, acceptStatus, acceptedAt, id)
 	if err != nil {
 		return Milestone{}, err
 	}
@@ -2758,12 +2987,46 @@ func parseMilestoneBind(msID string) *milestoneBind {
 	return &milestoneBind{EngID: engID, Major: major, Minor: minor}
 }
 
+// GetMilestone returns a milestone with phases.
+func (s *Store) GetMilestone(id string) (Milestone, error) {
+	return s.getMilestone(id)
+}
+
+// RestoreMilestoneRun restores status + run_state after a failed Execute start (and eng lifecycle).
+func (s *Store) RestoreMilestoneRun(id, status, runState string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("milestone id required")
+	}
+	rs := strings.TrimSpace(strings.ToLower(runState))
+	if rs == "" {
+		rs = RunIdle
+	}
+	norm, err := normalizeRunState(rs)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`UPDATE delivery_milestones SET status=?, run_state=? WHERE id=?`, status, norm, id)
+	if err != nil {
+		return err
+	}
+	if bind := parseMilestoneBind(id); bind != nil && status != "" {
+		_ = s.SetMilestoneLifecycle(bind.EngID, bind.Major, bind.Minor, status)
+	}
+	return nil
+}
+
 func (s *Store) getMilestone(id string) (Milestone, error) {
 	var m Milestone
 	err := s.db.QueryRow(`
-SELECT id, title, status, acceptance, x, y, execute_worker_id, COALESCE(run_state,'idle'), COALESCE(test_note,'')
+SELECT id, title, status, acceptance, x, y, execute_worker_id, COALESCE(run_state,'idle'), COALESCE(test_note,''),
+  COALESCE(campaign_job_id,''), COALESCE(campaign_job_status,''), COALESCE(campaign_job_kind,''), COALESCE(campaign_job_last_event,''),
+  COALESCE(accept_status,''), COALESCE(accepted_at,''),
+  COALESCE(merge_status,''), COALESCE(merge_note,''), COALESCE(merged_at,'')
 FROM delivery_milestones WHERE id=?`, id).Scan(
-		&m.ID, &m.Title, &m.Status, &m.Acceptance, &m.X, &m.Y, &m.ExecuteWorkerID, &m.RunState, &m.TestNote)
+		&m.ID, &m.Title, &m.Status, &m.Acceptance, &m.X, &m.Y, &m.ExecuteWorkerID, &m.RunState, &m.TestNote,
+		&m.CampaignJobID, &m.CampaignJobStatus, &m.CampaignJobKind, &m.CampaignJobLastEvent,
+		&m.AcceptStatus, &m.AcceptedAt, &m.MergeStatus, &m.MergeNote, &m.MergedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return Milestone{}, fmt.Errorf("milestone not found")
@@ -2789,14 +3052,19 @@ func (s *Store) nextMilestoneCanvasSlot() (x, y float64) {
 func (s *Store) loadRoadmap() (Roadmap, error) {
 	var rm Roadmap
 	rows, err := s.db.Query(`
-SELECT id, title, status, acceptance, x, y, execute_worker_id, COALESCE(run_state,'idle'), COALESCE(test_note,'')
+SELECT id, title, status, acceptance, x, y, execute_worker_id, COALESCE(run_state,'idle'), COALESCE(test_note,''),
+  COALESCE(campaign_job_id,''), COALESCE(campaign_job_status,''), COALESCE(campaign_job_kind,''), COALESCE(campaign_job_last_event,''),
+  COALESCE(accept_status,''), COALESCE(accepted_at,''),
+  COALESCE(merge_status,''), COALESCE(merge_note,''), COALESCE(merged_at,'')
 FROM delivery_milestones ORDER BY sort_order, id`)
 	if err != nil {
 		return rm, err
 	}
 	for rows.Next() {
 		var m Milestone
-		if err := rows.Scan(&m.ID, &m.Title, &m.Status, &m.Acceptance, &m.X, &m.Y, &m.ExecuteWorkerID, &m.RunState, &m.TestNote); err != nil {
+		if err := rows.Scan(&m.ID, &m.Title, &m.Status, &m.Acceptance, &m.X, &m.Y, &m.ExecuteWorkerID, &m.RunState, &m.TestNote,
+			&m.CampaignJobID, &m.CampaignJobStatus, &m.CampaignJobKind, &m.CampaignJobLastEvent,
+			&m.AcceptStatus, &m.AcceptedAt, &m.MergeStatus, &m.MergeNote, &m.MergedAt); err != nil {
 			_ = rows.Close()
 			return rm, err
 		}
@@ -2839,7 +3107,8 @@ FROM delivery_milestones ORDER BY sort_order, id`)
 
 func (s *Store) listPhases(msID string) ([]Phase, error) {
 	rows, err := s.db.Query(`
-SELECT id, title, status FROM delivery_phases WHERE milestone_id=? ORDER BY sort_order, id`, msID)
+SELECT id, title, status, COALESCE(job_id,''), COALESCE(job_status,''), COALESCE(job_last_event,'')
+FROM delivery_phases WHERE milestone_id=? ORDER BY sort_order, id`, msID)
 	if err != nil {
 		return nil, err
 	}
@@ -2847,12 +3116,202 @@ SELECT id, title, status FROM delivery_phases WHERE milestone_id=? ORDER BY sort
 	var list []Phase
 	for rows.Next() {
 		var p Phase
-		if err := rows.Scan(&p.ID, &p.Title, &p.Status); err != nil {
+		if err := rows.Scan(&p.ID, &p.Title, &p.Status, &p.JobID, &p.JobStatus, &p.JobLastEvent); err != nil {
 			return nil, err
 		}
 		list = append(list, p)
 	}
 	return list, rows.Err()
+}
+
+// GetPhase returns one phase by id.
+func (s *Store) GetPhase(phaseID string) (Phase, string, error) {
+	var p Phase
+	var msID string
+	err := s.db.QueryRow(`
+SELECT id, milestone_id, title, status, COALESCE(job_id,''), COALESCE(job_status,''), COALESCE(job_last_event,'')
+FROM delivery_phases WHERE id=?`, phaseID).Scan(
+		&p.ID, &msID, &p.Title, &p.Status, &p.JobID, &p.JobStatus, &p.JobLastEvent)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return Phase{}, "", fmt.Errorf("phase not found")
+		}
+		return Phase{}, "", err
+	}
+	return p, msID, nil
+}
+
+// NextRunnablePhase returns the first phase that is not finished (by sort_order).
+func (s *Store) NextRunnablePhase(msID string) (Phase, error) {
+	phases, err := s.listPhases(msID)
+	if err != nil {
+		return Phase{}, err
+	}
+	for _, p := range phases {
+		st := strings.ToLower(p.Status)
+		if st == "finished" || st == "done" || st == JobFinished {
+			continue
+		}
+		if p.JobStatus == JobRunning || p.JobStatus == JobQueued {
+			return p, nil
+		}
+		return p, nil
+	}
+	return Phase{}, fmt.Errorf("no runnable phases")
+}
+
+// ActivePhaseJob returns the phase currently queued/running for a milestone, if any.
+func (s *Store) ActivePhaseJob(msID string) (Phase, error) {
+	phases, err := s.listPhases(msID)
+	if err != nil {
+		return Phase{}, err
+	}
+	for _, p := range phases {
+		if p.JobStatus == JobRunning || p.JobStatus == JobQueued {
+			return p, nil
+		}
+	}
+	return Phase{}, fmt.Errorf("no active phase job")
+}
+
+// SetPhaseJob binds a job to a phase.
+func (s *Store) SetPhaseJob(phaseID, jobID, jobStatus, lastEvent string) error {
+	_, err := s.db.Exec(`
+UPDATE delivery_phases SET job_id=?, job_status=?, job_last_event=? WHERE id=?`,
+		jobID, jobStatus, truncateRunes(lastEvent, 280), phaseID)
+	return err
+}
+
+// AppendPhaseJobEvent updates the last-event snippet and status.
+func (s *Store) AppendPhaseJobEvent(phaseID, jobStatus, lastEvent string) error {
+	_, err := s.db.Exec(`
+UPDATE delivery_phases SET job_status=?, job_last_event=? WHERE id=?`,
+		jobStatus, truncateRunes(lastEvent, 280), phaseID)
+	return err
+}
+
+// CompletePhaseJob marks phase finished/error and clears running state fields appropriately.
+func (s *Store) CompletePhaseJob(phaseID, jobStatus, phaseStatus, lastEvent string) error {
+	_, err := s.db.Exec(`
+UPDATE delivery_phases SET job_status=?, status=?, job_last_event=? WHERE id=?`,
+		jobStatus, phaseStatus, truncateRunes(lastEvent, 280), phaseID)
+	return err
+}
+
+// FindPhaseByJobID locates a phase with the given job id.
+func (s *Store) FindPhaseByJobID(jobID string) (Phase, string, error) {
+	jobID = strings.TrimSpace(jobID)
+	if jobID == "" {
+		return Phase{}, "", fmt.Errorf("job id required")
+	}
+	var p Phase
+	var msID string
+	err := s.db.QueryRow(`
+SELECT id, milestone_id, title, status, COALESCE(job_id,''), COALESCE(job_status,''), COALESCE(job_last_event,'')
+FROM delivery_phases WHERE job_id=?`, jobID).Scan(
+		&p.ID, &msID, &p.Title, &p.Status, &p.JobID, &p.JobStatus, &p.JobLastEvent)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return Phase{}, "", fmt.Errorf("phase not found for job")
+		}
+		return Phase{}, "", err
+	}
+	return p, msID, nil
+}
+
+// BuildPhasePrompt composes the v1 agent prompt for a phase under a milestone.
+func (s *Store) BuildPhasePrompt(msID, phaseID string) (string, error) {
+	ms, err := s.getMilestone(msID)
+	if err != nil {
+		return "", err
+	}
+	ph, _, err := s.GetPhase(phaseID)
+	if err != nil {
+		return "", err
+	}
+	phases, err := s.listPhases(msID)
+	if err != nil {
+		return "", err
+	}
+	idx, total := 1, len(phases)
+	for i, p := range phases {
+		if p.ID == phaseID {
+			idx = i + 1
+			break
+		}
+	}
+	bind := parseMilestoneBind(msID)
+	var gate, arch, class, success, project string
+	if bind != nil {
+		eng, err := s.GetEngReq(bind.EngID)
+		if err == nil {
+			project = eng.ProjectKey
+			if project == "" {
+				project = eng.WorkerMeta.ProjectRel
+			}
+			var head *ReqVersion
+			for i := range eng.Versions {
+				v := &eng.Versions[i]
+				if v.Major == bind.Major && v.Minor == bind.Minor {
+					if head == nil || v.Patch < head.Patch {
+						head = v
+					}
+				}
+			}
+			if head != nil {
+				success = head.Success
+				if success == "" {
+					success = head.Goals
+				}
+			}
+		}
+		for _, d := range mustListDesigns(s) {
+			if d.EngReqID == bind.EngID && d.Major == bind.Major && d.Minor == bind.Minor {
+				vers, _ := s.listDesignVersions(d.ID)
+				if idx-1 < len(vers) {
+					dv := vers[idx-1]
+					gate, arch, class = dv.Gate, dv.SubArchitecture, dv.ClassDesign
+				} else if len(vers) > 0 {
+					dv := vers[0]
+					gate, arch, class = dv.Gate, dv.SubArchitecture, dv.ClassDesign
+				}
+				break
+			}
+		}
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "Milestone %s", ms.Title)
+	if bind != nil {
+		fmt.Fprintf(&b, " (%d.%d)", bind.Major, bind.Minor)
+	}
+	fmt.Fprintf(&b, " phase %d/%d: %s\n", idx, total, ph.Title)
+	if project != "" {
+		fmt.Fprintf(&b, "Worker checkout: %s\n", project)
+	}
+	if gate != "" {
+		fmt.Fprintf(&b, "Gate: %s\n", truncateRunes(gate, 800))
+	}
+	if arch != "" {
+		fmt.Fprintf(&b, "Sub-architecture: %s\n", truncateRunes(arch, 800))
+	}
+	if class != "" {
+		fmt.Fprintf(&b, "Class design: %s\n", truncateRunes(class, 800))
+	}
+	if success != "" {
+		fmt.Fprintf(&b, "Req success / acceptance: %s\n", truncateRunes(success, 800))
+	} else if ms.Acceptance != "" {
+		fmt.Fprintf(&b, "Req success / acceptance: %s\n", truncateRunes(ms.Acceptance, 800))
+	}
+	b.WriteString("Implement this phase only; commit on the current branch when done.\n")
+	return b.String(), nil
+}
+
+func mustListDesigns(s *Store) []Design {
+	list, err := s.listDesigns()
+	if err != nil {
+		return nil
+	}
+	return list
 }
 
 func (s *Store) listGates() ([]Gate, error) {
@@ -2879,7 +3338,8 @@ FROM delivery_gates WHERE status='pending' ORDER BY created_at DESC`)
 
 func (s *Store) listPolishes() ([]Polish, error) {
 	rows, err := s.db.Query(`
-SELECT id, eng_req_id, major, minor, title, body, status, created_at
+SELECT id, eng_req_id, major, minor, title, body, status, created_at,
+  COALESCE(job_id,''), COALESCE(job_status,''), COALESCE(job_last_event,'')
 FROM delivery_polishes ORDER BY created_at DESC, id`)
 	if err != nil {
 		return nil, err
@@ -2888,7 +3348,8 @@ FROM delivery_polishes ORDER BY created_at DESC, id`)
 	var list []Polish
 	for rows.Next() {
 		var p Polish
-		if err := rows.Scan(&p.ID, &p.EngReqID, &p.Major, &p.Minor, &p.Title, &p.Body, &p.Status, &p.CreatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.EngReqID, &p.Major, &p.Minor, &p.Title, &p.Body, &p.Status, &p.CreatedAt,
+			&p.JobID, &p.JobStatus, &p.JobLastEvent); err != nil {
 			return nil, err
 		}
 		list = append(list, p)
@@ -2972,37 +3433,25 @@ WHERE eng_req_id=? AND major=? AND minor=? AND patch=?`,
 	}, nil
 }
 
-// RunPolish marks a polish running then done (mock until Jobs land).
+// RunPolish marks a polish done (sync helper for unit tests; web uses Jobs in 0.39.9).
 func (s *Store) RunPolish(id string) (Polish, error) {
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return Polish{}, fmt.Errorf("polish id required")
-	}
-	var p Polish
-	err := s.db.QueryRow(`
-SELECT id, eng_req_id, major, minor, title, body, status, created_at
-FROM delivery_polishes WHERE id=?`, id).Scan(
-		&p.ID, &p.EngReqID, &p.Major, &p.Minor, &p.Title, &p.Body, &p.Status, &p.CreatedAt)
+	p, err := s.GetPolish(id)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return Polish{}, fmt.Errorf("polish not found")
-		}
 		return Polish{}, err
 	}
 	if p.Status == "done" {
 		return p, nil
 	}
-	_, err = s.db.Exec(`UPDATE delivery_polishes SET status=? WHERE id=?`, "done", id)
-	if err != nil {
+	if err := s.CompletePolishJob(id, JobFinished, "done", ""); err != nil {
 		return Polish{}, err
 	}
-	p.Status = "done"
-	return p, nil
+	return s.GetPolish(id)
 }
 
 func (s *Store) listBuglistItems() ([]BuglistItem, error) {
 	rows, err := s.db.Query(`
-SELECT id, eng_req_id, major, minor, title, body, status, created_at
+SELECT id, eng_req_id, major, minor, title, body, status, created_at,
+  COALESCE(job_id,''), COALESCE(job_status,''), COALESCE(job_last_event,'')
 FROM delivery_buglist_items ORDER BY created_at DESC, id`)
 	if err != nil {
 		return nil, err
@@ -3011,7 +3460,8 @@ FROM delivery_buglist_items ORDER BY created_at DESC, id`)
 	var list []BuglistItem
 	for rows.Next() {
 		var b BuglistItem
-		if err := rows.Scan(&b.ID, &b.EngReqID, &b.Major, &b.Minor, &b.Title, &b.Body, &b.Status, &b.CreatedAt); err != nil {
+		if err := rows.Scan(&b.ID, &b.EngReqID, &b.Major, &b.Minor, &b.Title, &b.Body, &b.Status, &b.CreatedAt,
+			&b.JobID, &b.JobStatus, &b.JobLastEvent); err != nil {
 			return nil, err
 		}
 		list = append(list, b)
@@ -3107,7 +3557,8 @@ ORDER BY created_at ASC, id`, engID, major, minor)
 
 func (s *Store) listBuglistForBind(engID string, major, minor int) ([]BuglistItem, error) {
 	rows, err := s.db.Query(`
-SELECT id, eng_req_id, major, minor, title, body, status, created_at
+SELECT id, eng_req_id, major, minor, title, body, status, created_at,
+  COALESCE(job_id,''), COALESCE(job_status,''), COALESCE(job_last_event,'')
 FROM delivery_buglist_items WHERE eng_req_id=? AND major=? AND minor=?
 ORDER BY created_at DESC, id`, engID, major, minor)
 	if err != nil {
@@ -3117,7 +3568,8 @@ ORDER BY created_at DESC, id`, engID, major, minor)
 	var list []BuglistItem
 	for rows.Next() {
 		var b BuglistItem
-		if err := rows.Scan(&b.ID, &b.EngReqID, &b.Major, &b.Minor, &b.Title, &b.Body, &b.Status, &b.CreatedAt); err != nil {
+		if err := rows.Scan(&b.ID, &b.EngReqID, &b.Major, &b.Minor, &b.Title, &b.Body, &b.Status, &b.CreatedAt,
+			&b.JobID, &b.JobStatus, &b.JobLastEvent); err != nil {
 			return nil, err
 		}
 		list = append(list, b)
@@ -3131,6 +3583,34 @@ ORDER BY created_at DESC, id`, engID, major, minor)
 func (s *Store) findMilestoneByBind(engID string, major, minor int) (Milestone, error) {
 	id := fmt.Sprintf("ms_%s_%d_%d", engID, major, minor)
 	return s.getMilestone(id)
+}
+
+// FindMilestoneByBind resolves ms_{eng}_{major}_{minor}.
+func (s *Store) FindMilestoneByBind(engID string, major, minor int) (Milestone, error) {
+	return s.findMilestoneByBind(engID, major, minor)
+}
+
+// RunTestCasesAllPass marks every case passed without spawning bugs (real-job success fallback).
+func (s *Store) RunTestCasesAllPass(engID string, major, minor int) (RunTestCasesResult, error) {
+	var out RunTestCasesResult
+	engID = strings.TrimSpace(engID)
+	if engID == "" {
+		return out, fmt.Errorf("eng_req_id required")
+	}
+	cases, err := s.listTestCasesForBind(engID, major, minor)
+	if err != nil {
+		return out, err
+	}
+	for _, c := range cases {
+		_, err := s.db.Exec(`UPDATE delivery_test_cases SET status=? WHERE id=?`, "passed", c.ID)
+		if err != nil {
+			return out, err
+		}
+		c.Status = "passed"
+		out.Cases = append(out.Cases, c)
+	}
+	out.Bugs = []BuglistItem{}
+	return out, nil
 }
 
 // TestCaseDraft is one case in a batch create.
@@ -3259,32 +3739,19 @@ func (s *Store) RunTestCases(engID string, major, minor int) (RunTestCasesResult
 	return out, nil
 }
 
-// FixBuglistItem mocks Worker entering fix: open → verified.
+// FixBuglistItem marks a bug verified (sync helper for unit tests; web uses Jobs in 0.39.8).
 func (s *Store) FixBuglistItem(id string) (BuglistItem, error) {
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return BuglistItem{}, fmt.Errorf("buglist id required")
-	}
-	var b BuglistItem
-	err := s.db.QueryRow(`
-SELECT id, eng_req_id, major, minor, title, body, status, created_at
-FROM delivery_buglist_items WHERE id=?`, id).Scan(
-		&b.ID, &b.EngReqID, &b.Major, &b.Minor, &b.Title, &b.Body, &b.Status, &b.CreatedAt)
+	b, err := s.GetBuglistItem(id)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return BuglistItem{}, fmt.Errorf("buglist item not found")
-		}
 		return BuglistItem{}, err
 	}
 	if b.Status != "open" && b.Status != "fixing" {
 		return BuglistItem{}, fmt.Errorf("fix requires status open or fixing (got %s)", b.Status)
 	}
-	_, err = s.db.Exec(`UPDATE delivery_buglist_items SET status=? WHERE id=?`, "verified", id)
-	if err != nil {
+	if err := s.CompleteBugFixJob(id, JobFinished, "verified", ""); err != nil {
 		return BuglistItem{}, err
 	}
-	b.Status = "verified"
-	return b, nil
+	return s.GetBuglistItem(id)
 }
 
 // RegressBuglistResult is mock regression outcome for a bind.

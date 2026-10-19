@@ -186,6 +186,13 @@ test('the composer is a card, and the tab is themed as an editor', () => {
   assert.doesNotMatch(body, /--vscode-sideBar-background/);
 });
 
+test('the error banner can be hidden', () => {
+  // `.banner` is `display: flex`, which beats the user-agent rule for the
+  // hidden attribute. Without this override the dismiss button sets `hidden`
+  // and the bar stays on screen.
+  assert.match(bodiesOf('.banner[hidden]').join(';'), /display:\s*none\s*!important/);
+});
+
 test('the assistant body reflows, and a code block does not', () => {
   // The rest of `.body` is `pre-wrap`, which is right for text the user typed and
   // wrong for Markdown: it would keep every line break the model wrote and stop

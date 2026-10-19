@@ -217,7 +217,9 @@ Primary planning canvas — see §5 interactions below (graph chat, per-node cha
 |--------|----------|
 | **Generation index** | Majors first; open → milestones for that major only |
 | **Graph + cards** | Milestone nodes for **this major** (drag); rich cards: Worker, Start/Pause/Stop, Design/Req links, Polish list |
-| **Polish** | On complete: modal + AI assist → save into Version + card ▶ run (mock until Jobs) |
+| **Polish** | On complete: modal + AI assist → save into Version + card ▶ run via Jobs (0.39.9) |
+| **Phase Jobs** | Start → scheduler job per phase (`phase_id` bind); SSE status on cards (0.39.5+) |
+| **Campaign Jobs** | Test Run / Fix / Regress → Jobs + SSE (0.39.8) |
 | **提交测试** | From `in_development` → lifecycle `testing` (explicit; not auto-on-Stop) |
 | **Phase strip** | Phases under the milestone (seeded from Design Versions; shown as phase count on cards) |
 
@@ -229,14 +231,16 @@ Primary planning canvas — see §5 interactions below (graph chat, per-node cha
 | **Campaign** | AI-draft cases → Worker mock write/run → buglist → Worker fix → regress → Pass |
 | **Test card** | Acceptance excerpt; cases list; Run / Fix / Regress; Pass gated on clean campaign |
 | **Buglist** | Rows bound to `eng_req` + `major.minor`; status `open|fixing|verified|closed` |
-| **Fail** | Escape hatch → stub + `awaiting_roadmap` (no auto bugfix phases yet) |
+| **Fail** | Escape hatch → buglist + bugfix phases + `awaiting_roadmap`; Ready → re-develop (0.39.11) |
+| **Accept** | After Pass/`complete`: acceptance checklist → `accept_status=accepted` |
+| **Merge** | After Accept: merge `milestone/{id}` → main (stub or local git via `delivery_merge_root`, 0.39.15) |
 
 Test queue is **not** the `complete` list — `complete` means tests already passed (Pass after clean campaign).
 | **Graph chat** | Floating/docked: whole-graph polish → `GraphPatch` preview → Apply / Discard |
 | **Node chat** | From inspector: context = node + neighbors + design/req slices → local patch |
 | **Export** | Preview markdown tabs (`m_*.md`, `p_*.md`) → write to configured export root |
 
-**Gates** for execute are authored on each **Design Version** (`Gate` field: entry/exit, DoD, human check) — not a Roadmap sub-tab.
+**Gates** for execute are authored on each **Design Version** (`Gate` field: entry/exit, DoD, human check) — not a Roadmap sub-tab. Checkbox lines in Gate are **hard pre-checks** before phase / test-run Job enqueue (0.39.10).
 
 Human always confirms Apply on AI patches (no silent overwrite).
 

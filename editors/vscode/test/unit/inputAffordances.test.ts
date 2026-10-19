@@ -28,13 +28,15 @@ test('Escape interrupts only when a turn is running', () => {
   // Nothing in that handler touches the composer: an idle Escape belongs to the
   // palette and to the draft.
   assert.doesNotMatch(body, /input\.value/);
-  // The Stop button and Escape are one action.
-  assert.match(CHAT_JS, /stopButton\.addEventListener\('click', requestStop\)/);
+  // The send button — the same control that stops a running turn — and Escape
+  // are one action, so the two paths cannot drift.
+  assert.match(CHAT_JS, /sendButton\.addEventListener\('click', \(\) => \{[\s\S]*?if \(running\) \{[\s\S]*?requestStop\(\)/);
+  assert.match(CHAT_JS, /function requestStop\(\) \{\s*sendButton\.disabled = true;\s*vscode\.postMessage\(\{ type: 'cancel' \}\)/);
   assert.match(CHAT_JS, /vscode\.postMessage\(\{ type: 'cancel' \}\)/);
 });
 
 test('the picker button sits beside the attach button and asks the host', () => {
-  assert.match(CHAT_PANEL, /id="attach"[\s\S]*?id="image"[\s\S]*?id="stop"/);
+  assert.match(CHAT_PANEL, /id="attach"[\s\S]*?id="image"[\s\S]*?id="send"/);
   assert.match(CHAT_JS, /imageButton\.addEventListener\('click', \(\) => vscode\.postMessage\(\{ type: 'pickImages' \}\)\)/);
   // Locked with the rest of the composer while a turn runs.
   assert.match(CHAT_JS, /if \(imageButton\) imageButton\.disabled = running;/);

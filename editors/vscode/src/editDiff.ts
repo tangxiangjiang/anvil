@@ -129,6 +129,41 @@ export function planReview(review: Review, preImage?: PreImage): ReviewPlan {
   };
 }
 
+/** Where an edit sits in a file, plus a few lines on either side of it. */
+export interface EditAnchor {
+  /** 1-based line on which the matched text begins. */
+  startLine: number;
+  /** Lines immediately above the match, in order. */
+  before: string[];
+  /** Lines immediately below the match, in order. */
+  after: string[];
+}
+
+/**
+ * Finds `needle` in a file and reports the lines around it.
+ *
+ * The needle is the replacement itself — `old_string` in the file as the call
+ * found it, or `new_string` once the write has landed. A needle that occurs
+ * twice is refused: the line number would be a guess, and an edit the tool
+ * accepted was unique.
+ */
+export function locateEdit(fileText: string, needle: string, pad = 3): EditAnchor | undefined {
+  if (needle === '') return undefined;
+  const at = fileText.indexOf(needle);
+  if (at < 0) return undefined;
+  if (fileText.indexOf(needle, at + needle.length) >= 0) return undefined;
+
+  const startLine = fileText.slice(0, at).split('\n').length;
+  const lines = fileText === '' ? [] : fileText.endsWith('\n') ? fileText.slice(0, -1).split('\n') : fileText.split('\n');
+  const startIdx = startLine - 1;
+  const span = needle.endsWith('\n') ? needle.slice(0, -1).split('\n').length : needle.split('\n').length;
+  return {
+    startLine,
+    before: lines.slice(Math.max(0, startIdx - pad), startIdx),
+    after: lines.slice(startIdx + span, startIdx + span + pad),
+  };
+}
+
 /**
  * The document name a patch opens under. One file gets that file's name, so
  * several patches open at once can still be told apart; a patch over several

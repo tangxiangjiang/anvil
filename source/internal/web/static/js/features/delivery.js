@@ -1325,6 +1325,7 @@ window.Features.delivery = {
         this.loadExecuteWorkers();
         this.bindRoadmapCanvas(el);
         this.bindMilestoneCardControls(el);
+        this.bindRoadmapJobStreams(el);
         if (this._rmFocusMs) {
           const focusId = this._rmFocusMs;
           this._rmFocusMs = null;
@@ -1335,6 +1336,132 @@ window.Features.delivery = {
 
     if (route.section === "test" && route.routeMajor != null) {
       this.bindTestCardControls(el);
+      this.bindTestCampaignJobStreams(el);
+    }
+  },
+
+  bindTestCampaignJobStreams(el) {
+    el.querySelectorAll("[data-test-card]").forEach((card) => {
+      const jobId = (card.getAttribute("data-campaign-job") || "").trim();
+      const st = (card.getAttribute("data-campaign-job-status") || "").toLowerCase();
+      if (!jobId || (st !== "running" && st !== "queued")) return;
+      if (this._jobAbort?.[jobId]) return;
+      if (!this._jobAbort) this._jobAbort = {};
+      const ac = new AbortController();
+      this._jobAbort[jobId] = ac;
+      const snip = card.querySelector("[data-campaign-snip]");
+      void this.watchDeliveryJobSSE(jobId, ac.signal, {
+        onEvent(data) {
+          const text = data.text || data.content || data.type || "";
+          if (snip && text) snip.textContent = String(text).slice(0, 160);
+        },
+        onDone: async () => {
+          delete this._jobAbort[jobId];
+          await this.reload();
+          this.render();
+        },
+      });
+    });
+  },
+
+  async awaitDeliveryJob(jobId, { onEvent } = {}) {
+    if (!jobId) return;
+    await new Promise((resolve) => {
+      const ac = new AbortController();
+      void this.watchDeliveryJobSSE(jobId, ac.signal, {
+        onEvent,
+        onDone: async () => {
+          ac.abort();
+          resolve();
+        },
+      });
+    });
+  },
+
+  closeRoadmapJobStreams() {
+    if (this._jobAbort) {
+      for (const a of Object.values(this._jobAbort)) {
+        try {
+          a.abort();
+        } catch (_) {}
+      }
+    }
+    this._jobAbort = {};
+  },
+
+  bindRoadmapJobStreams(el) {
+    this.closeRoadmapJobStreams();
+    this._jobAbort = {};
+    el.querySelectorAll("[data-ms-card]").forEach((card) => {
+      const run = (card.getAttribute("data-run-state") || "").toLowerCase();
+      const jobId = (card.getAttribute("data-active-job") || "").trim();
+      if (run !== "running" || !jobId) return;
+      if (this._jobAbort[jobId]) return;
+      const ac = new AbortController();
+      this._jobAbort[jobId] = ac;
+      const snip = card.querySelector("[data-job-snip]");
+      void this.watchDeliveryJobSSE(jobId, ac.signal, {
+        onEvent(data) {
+          const text = data.text || data.content || data.type || "";
+          if (snip && text) snip.textContent = String(text).slice(0, 160);
+        },
+        onDone: async () => {
+          delete this._jobAbort[jobId];
+          await this.reload();
+          this.render();
+        },
+      });
+    });
+  },
+
+  async watchDeliveryJobSSE(jobId, signal, { onEvent, onDone }) {
+    try {
+      const tok = api.getToken?.() || localStorage.getItem("anvil_web_token") || "";
+      const res = await fetch(api.v1.deliveryJobEventsURL(jobId), {
+        headers: tok ? { Authorization: "Bearer " + tok } : {},
+        signal,
+      });
+      if (!res.ok || !res.body) {
+        if (onDone) await onDone();
+        return;
+      }
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      let eventName = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const parts = buf.split("\n");
+        buf = parts.pop() || "";
+        for (const line of parts) {
+          if (line.startsWith("event:")) {
+            eventName = line.slice(6).trim();
+            continue;
+          }
+          if (line.startsWith("data:")) {
+            const raw = line.slice(5).trim();
+            let data = {};
+            try {
+              data = JSON.parse(raw);
+            } catch (_) {
+              data = { text: raw };
+            }
+            if (eventName === "job.event" && onEvent) onEvent(data);
+            if (eventName === "job.done" || eventName === "error") {
+              if (onDone) await onDone();
+              return;
+            }
+            eventName = "";
+          }
+          if (line === "") eventName = "";
+        }
+      }
+      if (onDone) await onDone();
+    } catch (e) {
+      if (e?.name === "AbortError") return;
+      if (onDone) await onDone();
     }
   },
 
@@ -1367,14 +1494,101 @@ window.Features.delivery = {
         ).trim();
         btn.disabled = true;
         try {
-          await api.v1.deliveryPatchMilestone(msId, {
+          const body = {
             execute_worker_id: workerId,
             execute: true,
-          });
+          };
+          if (this.deliveryForceStub()) body.force_stub = true;
+          await api.v1.deliveryPatchMilestone(msId, body);
           await this.reload();
           this.render();
         } catch (e) {
           this.showNotice(e.message || String(e), "Start failed");
+          await this.reload();
+          this.render();
+        }
+      });
+    });
+    el.querySelectorAll("[data-gate-check]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const designId = btn.getAttribute("data-design");
+        const versionId = btn.getAttribute("data-version");
+        const index = Number(btn.getAttribute("data-gate-check"));
+        const done = btn.getAttribute("data-done") !== "1";
+        btn.disabled = true;
+        try {
+          await api.v1.deliveryToggleGateCheck(designId, versionId, {
+            index,
+            done,
+          });
+          await this.reload();
+          this.render();
+        } catch (e) {
+          this.showNotice(e.message || String(e), "Gate check failed");
+          btn.disabled = false;
+        }
+      });
+    });
+    el.querySelectorAll("[data-accept-check]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const msId = btn.getAttribute("data-ms");
+        const index = Number(btn.getAttribute("data-accept-check"));
+        const done = btn.getAttribute("data-done") !== "1";
+        btn.disabled = true;
+        try {
+          await api.v1.deliveryToggleAcceptanceCheck(msId, { index, done });
+          await this.reload();
+          this.render();
+        } catch (e) {
+          this.showNotice(e.message || String(e), "Acceptance check failed");
+          btn.disabled = false;
+        }
+      });
+    });
+    el.querySelectorAll("[data-ms-ready]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const msId = btn.getAttribute("data-ms-ready");
+        btn.disabled = true;
+        try {
+          await api.v1.deliveryPatchMilestone(msId, { ready_dev: true });
+          await this.reload();
+          this.render();
+          this.showNotice("Marked awaiting development — Start when ready.", "Ready");
+        } catch (e) {
+          this.showNotice(e.message || String(e), "Ready failed");
+          btn.disabled = false;
+        }
+      });
+    });
+    el.querySelectorAll("[data-ms-accept]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const msId = btn.getAttribute("data-ms-accept");
+        btn.disabled = true;
+        try {
+          await api.v1.deliveryPatchMilestone(msId, { accept_milestone: true });
+          await this.reload();
+          this.render();
+          this.showNotice("Milestone accepted — Merge to main when ready.", "Accept");
+        } catch (e) {
+          this.showNotice(e.message || String(e), "Accept failed");
+          btn.disabled = false;
+        }
+      });
+    });
+    el.querySelectorAll("[data-ms-merge]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const msId = btn.getAttribute("data-ms-merge");
+        btn.disabled = true;
+        try {
+          const m = await api.v1.deliveryMergeMilestone(msId, {});
+          await this.reload();
+          this.render();
+          this.showNotice(
+            m.merge_note || "Merged to main.",
+            m.merge_status === "merged" ? "Merge" : "Merge status",
+          );
+        } catch (e) {
+          this.showNotice(e.message || String(e), "Merge failed");
           btn.disabled = false;
         }
       });
@@ -1433,10 +1647,14 @@ window.Features.delivery = {
         const id = btn.getAttribute("data-polish-run");
         btn.disabled = true;
         try {
-          await api.v1.deliveryRunPolish(id);
+          const polBody = this.deliveryForceStub() ? { force_stub: true } : {};
+          const res = await api.v1.deliveryRunPolish(id, polBody);
+          if (res?.job_id) {
+            await this.awaitDeliveryJob(res.job_id);
+          }
           await this.reload();
           this.render();
-          this.showNotice("Polish run finished (mock).", "Polish");
+          this.showNotice("Polish run finished.", "Polish");
         } catch (e) {
           this.showNotice(e.message || String(e), "Polish run failed");
           btn.disabled = false;
@@ -4992,13 +5210,21 @@ window.Features.delivery = {
     const bugs = this.buglistForBind(bind.engId, bind.major, bind.minor);
     const hasVerified = bugs.some((b) => b.status === "verified");
     const hasWorker = !!(m.execute_worker_id || "").trim();
-    const canRun = hasWorker && cases.length > 0;
+    const campJob = (m.campaign_job_id || "").trim();
+    const campSt = (m.campaign_job_status || "").toLowerCase();
+    const campBusy = campSt === "running" || campSt === "queued";
+    const openGates = this.designOpenGateCount(des);
+    const canRun = hasWorker && cases.length > 0 && !campBusy && openGates === 0;
+    const canRegress = hasWorker && hasVerified && !campBusy;
     const canPass = this.campaignPassReady(cases, bugs);
     const bugRows = bugs.length
       ? `<ul class="del-bug-list">
           ${bugs
             .map((b) => {
-              const canFix = b.status === "open" || b.status === "fixing";
+              const bugBusy =
+                b.job_status === "running" || b.job_status === "queued";
+              const canFix =
+                (b.status === "open" || b.status === "fixing") && !bugBusy;
               return `
             <li class="del-bug-row">
               <div class="del-bug-main">
@@ -5008,7 +5234,9 @@ window.Features.delivery = {
                   canFix
                     ? `<button type="button" class="del-icon-btn" data-bug-fix="${this.esc(b.id)}"
                          title="Worker fix" aria-label="Fix">▶</button>`
-                    : ""
+                    : bugBusy
+                      ? `<span class="muted">fixing…</span>`
+                      : ""
                 }
               </div>
               ${b.body ? `<p class="muted del-bug-body">${this.esc(b.body)}</p>` : ""}
@@ -5017,10 +5245,16 @@ window.Features.delivery = {
             .join("")}
         </ul>`
       : `<p class="muted del-bug-empty">No buglist items yet.</p>`;
+    const campStrip = campBusy
+      ? `<div class="del-job-strip" data-campaign-snip>${this.esc(m.campaign_job_kind || "job")} · ${this.esc(campSt)}${m.campaign_job_last_event ? " · " + this.esc(String(m.campaign_job_last_event).slice(0, 120)) : ""}</div>`
+      : campSt === "error"
+        ? `<div class="del-job-strip muted">${this.esc(m.campaign_job_last_event || "campaign job error")}</div>`
+        : "";
 
     return `
       <div class="del-test-card" data-test-card="${this.esc(m.id)}" data-ms-card="${this.esc(m.id)}"
-        data-eng="${this.esc(bind.engId)}" data-major="${bind.major}" data-minor="${bind.minor}">
+        data-eng="${this.esc(bind.engId)}" data-major="${bind.major}" data-minor="${bind.minor}"
+        data-campaign-job="${this.esc(campJob)}" data-campaign-job-status="${this.esc(campSt)}">
         <div class="del-rm-ctrl-top">
           <div class="del-rm-ctrl-id">
             <strong class="del-rm-card-title">${this.esc(m.title)}</strong>
@@ -5032,6 +5266,7 @@ window.Features.delivery = {
           </div>
           ${this.badge("testing")}
         </div>
+        ${campStrip}
         <div class="del-rm-ctrl-links">
           ${desHref ? `<a href="${desHref}">Design</a>` : `<span class="muted">No design</span>`}
           ${reqHref ? `<a href="${reqHref}">Requirements</a>` : `<span class="muted">No req</span>`}
@@ -5056,14 +5291,22 @@ window.Features.delivery = {
         <div class="del-rm-ctrl-btns del-test-actions">
           <button type="button" class="del-run-btn" data-test-run
             data-eng="${this.esc(bind.engId)}" data-major="${bind.major}" data-minor="${bind.minor}"
-            ${canRun ? "" : "disabled"} title="${hasWorker ? "Mock Worker write + run" : "Bind Worker on Roadmap first"}">▶ Run tests</button>
+            ${canRun ? "" : "disabled"}
+            title="${!hasWorker ? "Bind Worker on Roadmap first" : openGates ? "Close Design Gate checkboxes first" : campBusy ? "Campaign job running" : "Enqueue Worker test run Job"}">▶ Run tests</button>
           <button type="button" class="del-run-btn ghost" data-test-regress
             data-eng="${this.esc(bind.engId)}" data-major="${bind.major}" data-minor="${bind.minor}"
-            ${hasVerified ? "" : "disabled"}>↻ Regress</button>
+            ${canRegress ? "" : "disabled"}
+            title="${!hasWorker ? "Bind Worker first" : !hasVerified ? "Verify bugs first" : "Regress"}">↻ Regress</button>
+          ${
+            campBusy
+              ? `<button type="button" class="del-run-btn ghost" data-test-cancel="${this.esc(m.id)}"
+                   title="Cancel campaign job">⏹ Cancel</button>`
+              : ""
+          }
           <button type="button" class="del-run-btn" data-test-pass="${this.esc(m.id)}"
             ${canPass ? "" : "disabled"} title="${canPass ? "Complete milestone" : "Need clean campaign (≥1 case, all passed, no open bugs)"}">✓ Pass</button>
           <button type="button" class="del-run-btn ghost danger" data-test-fail="${this.esc(m.id)}"
-            data-title="${this.esc(m.title)}">✗ Fail</button>
+            data-title="${this.esc(m.title)}" ${campBusy ? "disabled" : ""}>✗ Fail</button>
         </div>
         <div class="del-bug-block">
           <div class="del-polish-head muted">Buglist</div>
@@ -5104,23 +5347,39 @@ window.Features.delivery = {
       btn.addEventListener("click", async () => {
         btn.disabled = true;
         try {
-          const res = await api.v1.deliveryRunTestCases({
+          const body = {
             eng_req_id: btn.getAttribute("data-eng"),
             major: Number(btn.getAttribute("data-major")),
             minor: Number(btn.getAttribute("data-minor")),
-          });
+          };
+          if (this.deliveryForceStub()) body.force_stub = true;
+          const res = await api.v1.deliveryRunTestCases(body);
+          if (res?.job_id) {
+            await this.awaitDeliveryJob(res.job_id);
+          }
           await this.reload();
           this.render();
-          const nFail = (res.bugs || []).length;
-          this.showNotice(
-            nFail
-              ? `Run finished · ${nFail} bug(s) opened (mock).`
-              : "Run finished · all cases passed (mock).",
-            "Run tests",
-          );
+          this.showNotice("Test run Job finished.", "Run tests");
         } catch (e) {
           this.showNotice(e.message || String(e), "Run failed");
-          btn.disabled = false;
+          await this.reload();
+          this.render();
+        }
+      });
+    });
+    el.querySelectorAll("[data-test-cancel]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const msId = btn.getAttribute("data-test-cancel");
+        btn.disabled = true;
+        try {
+          await api.v1.deliveryPatchMilestone(msId, { run_state: "stopped" });
+          await this.reload();
+          this.render();
+          this.showNotice("Campaign job cancelled.", "Cancel");
+        } catch (e) {
+          this.showNotice(e.message || String(e), "Cancel failed");
+          await this.reload();
+          this.render();
         }
       });
     });
@@ -5128,13 +5387,19 @@ window.Features.delivery = {
       btn.addEventListener("click", async () => {
         btn.disabled = true;
         try {
-          await api.v1.deliveryFixBuglist(btn.getAttribute("data-bug-fix"));
+          const id = btn.getAttribute("data-bug-fix");
+          const body = this.deliveryForceStub() ? { force_stub: true } : {};
+          const res = await api.v1.deliveryFixBuglist(id, body);
+          if (res?.job_id) {
+            await this.awaitDeliveryJob(res.job_id);
+          }
           await this.reload();
           this.render();
-          this.showNotice("Worker fix mock → verified. Run Regress next.", "Fix");
+          this.showNotice("Fix Job finished → verified. Run Regress next.", "Fix");
         } catch (e) {
           this.showNotice(e.message || String(e), "Fix failed");
-          btn.disabled = false;
+          await this.reload();
+          this.render();
         }
       });
     });
@@ -5142,17 +5407,23 @@ window.Features.delivery = {
       btn.addEventListener("click", async () => {
         btn.disabled = true;
         try {
-          await api.v1.deliveryRegressBuglist({
+          const body = {
             eng_req_id: btn.getAttribute("data-eng"),
             major: Number(btn.getAttribute("data-major")),
             minor: Number(btn.getAttribute("data-minor")),
-          });
+          };
+          if (this.deliveryForceStub()) body.force_stub = true;
+          const res = await api.v1.deliveryRegressBuglist(body);
+          if (res?.job_id) {
+            await this.awaitDeliveryJob(res.job_id);
+          }
           await this.reload();
           this.render();
-          this.showNotice("Regression mock complete.", "Regress");
+          this.showNotice("Regression Job finished.", "Regress");
         } catch (e) {
           this.showNotice(e.message || String(e), "Regress failed");
-          btn.disabled = false;
+          await this.reload();
+          this.render();
         }
       });
     });
@@ -5169,7 +5440,7 @@ window.Features.delivery = {
           await api.v1.deliveryPatchMilestone(msId, body);
           await this.reload();
           this.render();
-          this.showNotice("Marked complete — Polish on Roadmap when ready.", "Pass");
+          this.showNotice("Marked complete — Accept on Roadmap when ready.", "Pass");
         } catch (e) {
           this.showNotice(e.message || String(e), "Pass failed");
           btn.disabled = false;
@@ -5292,7 +5563,10 @@ window.Features.delivery = {
         this.closeUiModal();
         await this.reload();
         this.render();
-        this.showNotice("Buglist stub created · back on Roadmap as awaiting roadmap.", "Fail");
+        this.showNotice(
+          "Buglist + bugfix phases seeded · awaiting roadmap — use Ready then Start.",
+          "Fail",
+        );
       } catch (e) {
         if (err) err.textContent = e.message || String(e);
       }
@@ -5344,9 +5618,22 @@ window.Features.delivery = {
         `<option value="${this.esc(w.id)}"${sel}>${this.esc(label)}</option>`,
       );
     }
+    const phasesForStart = m.phases || [];
+    const hasRunnablePhase = phasesForStart.some((p) => {
+      const st = (p.status || "").toLowerCase();
+      return st !== "finished" && st !== "done";
+    });
+    const phaseJobBusy = phasesForStart.some(
+      (p) => p.job_status === "running" || p.job_status === "queued",
+    );
+    const nextPhaseOpenGates = this.nextPhaseOpenGateCount(m, des);
     const canStart =
       !!curWorker &&
       r.nPh > 0 &&
+      hasRunnablePhase &&
+      !phaseJobBusy &&
+      run !== "running" &&
+      nextPhaseOpenGates === 0 &&
       (life === "awaiting_development" ||
         life === "in_development" ||
         run === "paused" ||
@@ -5356,7 +5643,22 @@ window.Features.delivery = {
     const canStop = run === "running" || run === "paused";
     const showPolish =
       life === "complete" || life === "testing" || life === "done";
-    const canSubmitTest = life === "in_development";
+    const canSubmitTest = life === "in_development" && !phaseJobBusy;
+    const canReady =
+      life === "awaiting_roadmap" &&
+      phasesForStart.some((p) => {
+        const st = (p.status || "").toLowerCase();
+        return st !== "finished" && st !== "done";
+      });
+    const acceptSt = (m.accept_status || "").toLowerCase();
+    const acceptOpen = this.parseGateChecklist(m.acceptance || "").filter(
+      (it) => !it.done,
+    ).length;
+    const canAccept =
+      life === "complete" && acceptSt !== "accepted" && acceptOpen === 0;
+    const mergeSt = (m.merge_status || "").toLowerCase();
+    const canMerge = acceptSt === "accepted" && mergeSt !== "merged";
+    const acceptStrip = this.roadmapAcceptStripHtml(m);
     const polishes =
       bind != null ? this.polishesForBind(bind.engId, bind.major, bind.minor) : [];
     const polishRows = polishes.length
@@ -5378,9 +5680,26 @@ window.Features.delivery = {
       : showPolish
         ? `<p class="muted del-polish-empty">No polish items yet.</p>`
         : "";
+    const phases = m.phases || [];
+    const activePh =
+      phases.find(
+        (p) => p.job_status === "running" || p.job_status === "queued",
+      ) || phases.find((p) => p.job_id);
+    const jobStrip = activePh
+      ? `<div class="del-job-strip" data-job-id="${this.esc(activePh.job_id || "")}">
+           <span class="muted">Phase</span>
+           <span>${this.esc(activePh.title || "")}</span>
+           ${this.badge(activePh.job_status || activePh.status)}
+           <span class="muted del-job-snip" data-job-snip>${this.esc(activePh.job_last_event || "")}</span>
+         </div>`
+      : phases.length
+        ? `<div class="del-job-strip muted">${phases.filter((p) => (p.status || "") === "finished" || p.job_status === "finished").length}/${phases.length} phases finished</div>`
+        : "";
+    const gateStrip = this.roadmapGateStripHtml(des);
 
     return `
-      <div class="del-rm-ctrl-card" data-ms-card="${this.esc(m.id)}" id="ms-card-${this.esc(m.id)}">
+      <div class="del-rm-ctrl-card" data-ms-card="${this.esc(m.id)}" id="ms-card-${this.esc(m.id)}"
+        data-run-state="${this.esc(run)}" data-active-job="${this.esc(activePh?.job_id || "")}">
         <div class="del-rm-ctrl-top">
           <div class="del-rm-ctrl-id">
             <strong class="del-rm-card-title">${this.esc(m.title)}</strong>
@@ -5393,6 +5712,9 @@ window.Features.delivery = {
           </div>
           ${this.badge(life || m.status)}
         </div>
+        ${jobStrip}
+        ${gateStrip}
+        ${acceptStrip}
         <div class="del-rm-ctrl-links">
           ${
             desHref
@@ -5412,15 +5734,41 @@ window.Features.delivery = {
           </select>
           <div class="del-rm-ctrl-btns">
             <button type="button" class="del-run-btn" data-ms-start="${this.esc(m.id)}"
-              title="Start" ${canStart ? "" : "disabled"}>▶ Start</button>
+              title="${canStart ? "Start" : nextPhaseOpenGates ? "Close open gates first" : phaseJobBusy || run === "running" ? "Job already running" : !hasRunnablePhase ? "No runnable phase" : "Start"}"
+              ${canStart ? "" : "disabled"}>▶ Start</button>
             <button type="button" class="del-run-btn ghost" data-ms-pause="${this.esc(m.id)}"
               title="Pause" ${canPause ? "" : "disabled"}>⏸ Pause</button>
             <button type="button" class="del-run-btn ghost" data-ms-stop="${this.esc(m.id)}"
               title="Stop" ${canStop ? "" : "disabled"}>⏹ Stop</button>
             ${
+              canReady
+                ? `<button type="button" class="del-run-btn" data-ms-ready="${this.esc(m.id)}"
+                     title="Ready for development">Ready</button>`
+                : ""
+            }
+            ${
               canSubmitTest
                 ? `<button type="button" class="del-run-btn" data-ms-submit-test="${this.esc(m.id)}"
                      title="Submit to Test">提交测试</button>`
+                : ""
+            }
+            ${
+              canAccept
+                ? `<button type="button" class="del-run-btn" data-ms-accept="${this.esc(m.id)}"
+                     title="Accept milestone">✓ Accept</button>`
+                : life === "complete" && acceptSt !== "accepted" && acceptOpen > 0
+                  ? `<span class="muted" title="Check acceptance items first">Accept blocked</span>`
+                  : ""
+            }
+            ${
+              canMerge
+                ? `<button type="button" class="del-run-btn" data-ms-merge="${this.esc(m.id)}"
+                     title="Merge milestone branch into main">Merge main</button>`
+                : ""
+            }
+            ${
+              acceptSt === "accepted"
+                ? `<span class="muted">Accepted${m.accepted_at ? " · " + this.esc(m.accepted_at.slice(0, 10)) : ""}${mergeSt === "merged" ? " · merged" : ""}</span>`
                 : ""
             }
             ${
@@ -5441,6 +5789,107 @@ window.Features.delivery = {
             : ""
         }
       </div>`;
+  },
+
+  /** Dev: localStorage anvil_delivery_force_stub=1 → pass force_stub on Jobs. */
+  deliveryForceStub() {
+    try {
+      return localStorage.getItem("anvil_delivery_force_stub") === "1";
+    } catch (_) {
+      return false;
+    }
+  },
+
+  nextPhaseOpenGateCount(m, des) {
+    if (!des || !m) return 0;
+    const phases = m.phases || [];
+    let idx = phases.findIndex((p) => {
+      const st = (p.status || "").toLowerCase();
+      return st !== "finished" && st !== "done";
+    });
+    if (idx < 0) return 0;
+    const vers = des.versions || [];
+    if (!vers.length) return 0;
+    const v = idx < vers.length ? vers[idx] : vers[0];
+    return this.parseGateChecklist(v.gate || "").filter((it) => !it.done).length;
+  },
+
+  designOpenGateCount(des) {
+    if (!des) return 0;
+    let n = 0;
+    for (const v of des.versions || []) {
+      n += this.parseGateChecklist(v.gate || "").filter((it) => !it.done).length;
+    }
+    return n;
+  },
+
+  parseGateChecklist(gate) {
+    const lines = String(gate || "").split("\n");
+    const out = [];
+    let idx = 0;
+    for (const line of lines) {
+      const m = line.match(/^\s*(?:[-*]|\d+\.)\s+\[([ xX])\]\s+(.*)$/);
+      if (!m) continue;
+      out.push({
+        index: idx,
+        done: m[1].toLowerCase() === "x",
+        text: (m[2] || "").trim(),
+      });
+      idx += 1;
+    }
+    return out;
+  },
+
+  roadmapGateStripHtml(des) {
+    if (!des) return "";
+    const vers = des.versions || [];
+    const rows = [];
+    for (const v of vers) {
+      const items = this.parseGateChecklist(v.gate || "");
+      for (const it of items) {
+        if (it.done) continue;
+        rows.push(`
+          <li class="del-gate-row">
+            <button type="button" class="del-gate-check" data-gate-check="${it.index}"
+              data-design="${this.esc(des.id)}" data-version="${this.esc(v.id)}" data-done="0"
+              title="Mark done">☐</button>
+            <span class="muted">${this.esc(v.title || "Version")}:</span>
+            <span>${this.esc(it.text || "#" + it.index)}</span>
+          </li>`);
+      }
+    }
+    if (!rows.length) return "";
+    return `<div class="del-gate-strip">
+      <div class="del-polish-head muted">Open gates</div>
+      <ul class="del-gate-list">${rows.join("")}</ul>
+    </div>`;
+  },
+
+  roadmapAcceptStripHtml(m) {
+    if (!m || (m.status || "") !== "complete") return "";
+    if ((m.accept_status || "") === "accepted") return "";
+    const items = this.parseGateChecklist(m.acceptance || "");
+    const open = items.filter((it) => !it.done);
+    if (!items.length) {
+      return `<div class="del-gate-strip muted">Acceptance pending — no checklist (Accept when ready).</div>`;
+    }
+    if (!open.length) {
+      return `<div class="del-gate-strip muted">Acceptance checklist complete — Accept when ready.</div>`;
+    }
+    const rows = open
+      .map(
+        (it) => `
+      <li class="del-gate-row">
+        <button type="button" class="del-gate-check" data-accept-check="${it.index}"
+          data-ms="${this.esc(m.id)}" data-done="0" title="Mark done">☐</button>
+        <span>${this.esc(it.text || "#" + it.index)}</span>
+      </li>`,
+      )
+      .join("");
+    return `<div class="del-gate-strip">
+      <div class="del-polish-head muted">Acceptance</div>
+      <ul class="del-gate-list">${rows}</ul>
+    </div>`;
   },
 
   /** Parse bootstrap milestone id `ms_{engId}_{major}_{minor}` when present. */

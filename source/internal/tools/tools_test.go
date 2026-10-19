@@ -8,8 +8,10 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/anvil-dev/anvil/internal/tools"
 )
@@ -61,6 +63,41 @@ func TestEditFileHappyPath(t *testing.T) {
 	data, _ := os.ReadFile(path)
 	if string(data) != "hello anvil" {
 		t.Fatalf("got %q", data)
+	}
+}
+
+func TestShellTimeoutKillsTheCommand(t *testing.T) {
+	if testing.Short() {
+		t.Skip()
+	}
+	if runtime.GOOS == "windows" {
+		t.Skip("cmd has no sleep")
+	}
+	reg := tools.NewRegistry(t.TempDir(), true)
+	start := time.Now()
+	res := reg.Execute(context.Background(), "shell", mustJSON(map[string]any{
+		"command":         "sleep 30",
+		"timeout_seconds": 1,
+	}))
+	if !res.IsError {
+		t.Fatalf("expected timeout error, got %q", res.Content)
+	}
+	if !strings.Contains(res.Content, "killed after") {
+		t.Fatalf("expected kill note, got %q", res.Content)
+	}
+	if time.Since(start) > 8*time.Second {
+		t.Fatalf("shell stayed blocked for %s", time.Since(start))
+	}
+}
+
+func TestShellRejectsTimeoutOutOfRange(t *testing.T) {
+	reg := tools.NewRegistry(t.TempDir(), true)
+	res := reg.Execute(context.Background(), "shell", mustJSON(map[string]any{
+		"command":         "echo hi",
+		"timeout_seconds": 999,
+	}))
+	if !res.IsError {
+		t.Fatalf("expected range error, got %q", res.Content)
 	}
 }
 

@@ -247,6 +247,17 @@ window.api = {
         body,
       );
     },
+    deliveryToggleGateCheck(designId, versionId, body) {
+      return api.req(
+        "POST",
+        "/api/v1/delivery/designs/" +
+          encodeURIComponent(designId) +
+          "/versions/" +
+          encodeURIComponent(versionId) +
+          "/gate-check",
+        body || {},
+      );
+    },
     deliveryDeleteDesignVersion(designId, versionId) {
       return api.req(
         "DELETE",
@@ -270,14 +281,32 @@ window.api = {
         body || {},
       );
     },
+    deliveryToggleAcceptanceCheck(msId, body) {
+      return api.req(
+        "POST",
+        "/api/v1/delivery/roadmap/milestones/" +
+          encodeURIComponent(msId) +
+          "/acceptance-check",
+        body || {},
+      );
+    },
+    deliveryMergeMilestone(msId, body) {
+      return api.req(
+        "POST",
+        "/api/v1/delivery/roadmap/milestones/" +
+          encodeURIComponent(msId) +
+          "/merge",
+        body || {},
+      );
+    },
     deliveryCreatePolish(body) {
       return api.req("POST", "/api/v1/delivery/polishes", body || {});
     },
-    deliveryRunPolish(id) {
+    deliveryRunPolish(id, body) {
       return api.req(
         "POST",
         "/api/v1/delivery/polishes/" + encodeURIComponent(id) + "/run",
-        {},
+        body || {},
       );
     },
     deliveryCreateBuglist(body) {
@@ -289,15 +318,22 @@ window.api = {
     deliveryRunTestCases(body) {
       return api.req("POST", "/api/v1/delivery/test-cases/run", body || {});
     },
-    deliveryFixBuglist(id) {
+    deliveryFixBuglist(id, body) {
       return api.req(
         "POST",
         "/api/v1/delivery/buglist/" + encodeURIComponent(id) + "/fix",
-        {},
+        body || {},
       );
     },
     deliveryRegressBuglist(body) {
       return api.req("POST", "/api/v1/delivery/buglist/regress", body || {});
+    },
+    deliveryCreateJob(body) {
+      return api.req("POST", "/api/v1/delivery/jobs", body || {});
+    },
+    /** Absolute URL for EventSource (same origin + session cookie). */
+    deliveryJobEventsURL(jobId) {
+      return "/api/v1/delivery/jobs/" + encodeURIComponent(jobId) + "/events";
     },
   },
 };

@@ -67,15 +67,28 @@ Working-state on the worker project (`.anvil/delivery/`) and markdown export are
 | PATCH | `/api/v1/delivery/designs/{id}` | ADR sections |
 | POST | `/api/v1/delivery/designs/{id}/versions` | Add Design Version |
 | PATCH | `/api/v1/delivery/designs/{id}/versions/{vid}` | Update Gate / Sub-architecture / Class design / `depends_on` |
+| POST | `/api/v1/delivery/designs/{id}/versions/{vid}/gate-check` | Toggle Gate checklist item `{index, done}` |
 | DELETE | `/api/v1/delivery/designs/{id}/versions/{vid}` | Remove Version (draft) |
 | POST | `/api/v1/delivery/designs/{id}/approve` | Approve when Versions complete |
 | POST | `/api/v1/delivery/designs/{id}/bootstrap` | Seed roadmap phases from Versions |
-| PATCH | `/api/v1/delivery/roadmap/milestones/{id}` | Canvas `x`/`y`; optional `execute_worker_id` / `run_state`; `execute: true` → `in_development`; `submit_test` / `pass_test` / `fail_test` (+ fail note) |
+| PATCH | `/api/v1/delivery/roadmap/milestones/{id}` | Canvas `x`/`y`; Worker / `run_state`; `execute` / `submit_test` / `pass_test` / `fail_test` / `ready_dev` / `accept_milestone` |
+| POST | `/api/v1/delivery/roadmap/milestones/{id}/acceptance-check` | Toggle Acceptance checklist `{index, done}` |
+| POST | `/api/v1/delivery/roadmap/milestones/{id}/merge` | After Accept: merge `milestone/{id}` → main (stub or `delivery_merge_root`) |
 | POST | `/api/v1/delivery/buglist` | Optional create-only path for a buglist stub (Fail usually goes through milestone PATCH) |
 | POST | `/api/v1/delivery/test-cases` | Batch create cases `{ eng_req_id, major, minor, cases:[{title,body}] }` |
 | POST | `/api/v1/delivery/test-cases/run` | Mock Worker run for bind; failed cases spawn open buglist items |
 | POST | `/api/v1/delivery/buglist/{id}/fix` | Mock Worker fix: `open` → `verified` |
 | POST | `/api/v1/delivery/buglist/regress` | Mock regression for bind; `verified` → `closed` (or reopen) |
+| POST | `/api/v1/delivery/jobs` | Create scheduler job for a phase (bind metadata + composed prompt); Start may call this internally |
+| GET | `/api/v1/delivery/jobs/{id}/events` | Proxy scheduler job SSE (`job.event` / `job.done`) |
+
+**Job bind (0.39.5+):** scheduler `JobAssignBody` accepts optional pass-through `milestone_id`, `phase_id`, `eng_req_id`, `major`, `minor`. Phases store `job_id` / `job_status` (`queued|running|finished|error|cancelled`). Roadmap **Start** enqueues the next unfinished phase; finished auto-advances while `run_state=running`.
+
+**Campaign / Polish Jobs (0.39.8–9):** Test **Run** / **Regress** store `campaign_job_*` on the milestone; **Fix** stores `job_*` on the buglist row; Polish ▶ run stores `job_*` on the polish row. `phase_id` pass-through uses kind tags (`campaign:run`, `campaign:regress`, `campaign:fix:{id}`, `polish:{id}`).
+
+**Gates hard check (0.39.10):** Design Version `Gate` markdown checkboxes (`- [ ]` / `- [x]`) must all be checked before phase Job enqueue (Start / auto-advance) and before Test **Run**. Text-only Gates (no boxes) do not block. Toggle via `POST .../versions/{vid}/gate-check`.
+
+**Cancel / parse / merge (0.39.13–15):** Pause/Stop call scheduler `POST /v1/jobs/{id}/cancel` when possible. Test Run applies `ANVIL_CAMPAIGN_RESULT` JSON from job result when present. After Accept, **Merge main** records merge (local git when `delivery_merge_root` is set).
 
 Workers for the create picker: cluster inventory when available; otherwise snapshot may include denormalized workers from existing eng-reqs plus seed helpers.
 
@@ -95,9 +108,9 @@ Routes: `#/delivery/{requirements|designs|roadmap|test}` → major index; `#/del
 
 **Design Versions** (`delivery_design_versions` + `delivery_design_version_deps`): execution units under one Design/ADR — each has **Gate**, **Sub-architecture**, **Class design**, and **Depends on** (DAG of sibling Versions). Approve requires complete fields and an acyclic graph; Bootstrap **topo-sorts** Versions then seeds eng-req patches + canvas phases 1:1 (renumbers `sort_order`).  
 
-3. **Roadmap** — Generations → `m/{M}` **graph** (drag) + **control cards**: Worker, Start / Pause / Stop (`run_state` + Execute lifecycle), **提交测试** (`in_development` → `testing`), Design / Requirements links, **Polish** (complete milestones → modal + AI assist → store on Version + card ▶ run). No separate execute page. No Gates tab — gates live on Design Versions.  
+3. **Roadmap** — Generations → `m/{M}` **graph** (drag) + **control cards**: Worker, Start / Pause / Stop (`run_state` + **phase Jobs** via scheduler), live job snippet while running, **提交测试** (`in_development` → `testing`), Design / Requirements links, **Polish** ▶ run via Jobs (0.39.9). No separate execute page. No Gates tab — gates live on Design Versions.  
 
-4. **Test** (0.39.3–0.39.4) — Generations → `m/{M}` **queue of milestones in lifecycle `testing` only**. Campaign on each card: **AI assist** drafts cases (`delivery_test_cases`) → **Run tests** (mock Worker = Roadmap `execute_worker_id`) → failed cases spawn **buglist** → **Fix** / **Regress** → **Pass** → `complete` only when ≥1 case, last run clean, and no `open`/`fixing` bugs. **Fail** remains escape hatch → buglist stub + `awaiting_roadmap`. No real Jobs / auto bugfix phases.
+4. **Test** (0.39.3–0.39.4, Jobs in 0.39.8) — Generations → `m/{M}` **queue of milestones in lifecycle `testing` only**. Campaign: **AI assist** drafts cases → **Run** / **Fix** / **Regress** enqueue Jobs on the Roadmap Worker → SSE status on the card → **Pass** when campaign clean (`accept_status=pending`). **Fail** → buglist + **bugfix phases** + `awaiting_roadmap`; Roadmap **Ready** → `awaiting_development` then Start again (0.39.11). **Accept** on complete (0.39.12) records acceptance; merge-to-main not yet.
 
 ## Non-goals
 
@@ -105,7 +118,7 @@ Routes: `#/delivery/{requirements|designs|roadmap|test}` → major index; `#/del
 - Real AI (chat may append a canned field patch)  
 - GraphPatch apply / drag editor polish  
 - VS Code Server / sandbox review (0.32)  
-- Job binding / branch policy  
+- Branch / milestone-accept merge policy (phase + campaign Jobs landed; accept→merge later)  
 
 ## Acceptance
 

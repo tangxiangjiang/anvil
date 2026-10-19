@@ -29,6 +29,9 @@ type Config struct {
 	AdminUserEnv      string       `json:"admin_user_env" yaml:"admin_user_env"`
 	AdminPasswordEnv  string       `json:"admin_password_env" yaml:"admin_password_env"`
 	Fleets            []FleetEntry `json:"fleets" yaml:"fleets"` // optional; default = one fleet from scheduler_url
+	// DeliveryMergeRoot is an optional absolute parent of Worker project_rel checkouts
+	// used for Accept→merge main (0.39.15). Empty → stub merge only.
+	DeliveryMergeRoot string `json:"delivery_merge_root" yaml:"delivery_merge_root"`
 }
 
 // DefaultConfig returns defaults.

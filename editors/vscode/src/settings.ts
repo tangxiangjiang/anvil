@@ -1,22 +1,25 @@
 /**
  * Settings and secrets.
  *
- * The API key lives in SecretStorage and is passed to the child through its
- * environment, matching the protocol's rule that credentials never cross the
- * pipe. Nothing here ever writes the key to a setting, a log, or an error
- * message — the settings written to disk are exactly the ones the user typed.
+ * The API key is passed to the child through its environment, matching the
+ * protocol's rule that credentials never cross the pipe. It is not a setting:
+ * nothing here writes it to settings.json, a log, or an error message. It is
+ * kept in SecretStorage and in the extension's global state, so a restart
+ * still has it when the system secret store comes back empty.
  */
 
 import * as vscode from 'vscode';
+import { ApiKeyStore, applyApiKeyEnv, forgetApiKey, loadApiKey, saveApiKey } from './apiKeyStore';
 import { McpSettings, settingSourcesFor } from './mcp';
 import { SessionConfig } from './session';
 import { WebSearchSettings, webSearchParams } from './webSearch';
 
 const SECTION = 'anvil';
 const SECRET_KEY = 'anvil.apiKey';
-const ENV_KEY = 'ANVIL_API_KEY';
 const WEB_SECRET_KEY = 'anvil.webSearchKey';
 const WEB_ENV_KEY = 'ANVIL_WEB_SEARCH_API_KEY';
+/** Global state only. Not registered with `setKeysForSync`, so it stays on this machine. */
+const SAVED_KEY = 'anvil.apiKey';
 
 export interface ResolvedSettings {
   /**
@@ -136,17 +139,28 @@ export interface ChildKeys {
  * beyond the user's own environment; provider / model / base URL travel in
  * `session.new`, where the host also accepts them per session.
  *
- * Each key is read from SecretStorage by the caller and handed straight to the
- * spawn, so it never lands in a settings file, a log line, or an error object.
- * A key that is absent is deleted from the inherited environment as well: the
- * host must not pick up a value this window did not decide on, or "clear the
- * key" would only be true for the next process if nobody exported one.
+ * Both keys are read by the caller and handed straight to the spawn, so neither
+ * lands in a settings file, a log line, or an error object. The API key keeps
+ * the rule that a saved key overrides `ANVIL_API_KEY` while an inherited one is
+ * left alone, so a launch that already has the variable needs no command; the
+ * web-search key has no such precedence and is *deleted* when absent, because
+ * a value the window did not decide on would make "clear the key" untrue until
+ * the next process.
  */
 export function childEnv(keys: ChildKeys): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  setSecret(env, ENV_KEY, keys.apiKey);
+  const env = applyApiKeyEnv(process.env, keys.apiKey);
   setSecret(env, WEB_ENV_KEY, keys.webSearchKey);
   return env;
+}
+
+function keyStore(context: vscode.ExtensionContext): ApiKeyStore {
+  return {
+    getSecret: () => Promise.resolve(context.secrets.get(SECRET_KEY)),
+    setSecret: (value) => Promise.resolve(context.secrets.store(SECRET_KEY, value)),
+    deleteSecret: () => Promise.resolve(context.secrets.delete(SECRET_KEY)),
+    getSaved: () => context.globalState.get<string>(SAVED_KEY),
+    setSaved: (value) => Promise.resolve(context.globalState.update(SAVED_KEY, value)),
+  };
 }
 
 function setSecret(env: NodeJS.ProcessEnv, name: string, value: string | undefined): void {
@@ -159,26 +173,26 @@ function setSecret(env: NodeJS.ProcessEnv, name: string, value: string | undefin
 
 /** Reads the stored key, or undefined when the user has not set one. */
 export async function readApiKey(context: vscode.ExtensionContext): Promise<string | undefined> {
-  return context.secrets.get(SECRET_KEY);
+  return loadApiKey(keyStore(context));
 }
 
 /** Prompts for a key and stores it. Returns false when the user cancels. */
 export async function promptForApiKey(context: vscode.ExtensionContext): Promise<boolean> {
   const value = await vscode.window.showInputBox({
     title: 'Anvil API key',
-    prompt: 'Stored in VS Code SecretStorage and passed to the host process environment.',
+    prompt: 'Remembered on this machine and passed to the host process environment. You only need to set it once.',
     password: true,
     ignoreFocusOut: true,
     validateInput: (input) => (input.trim() === '' ? 'The key cannot be empty.' : undefined),
   });
   if (value === undefined) return false;
-  await context.secrets.store(SECRET_KEY, value.trim());
+  await saveApiKey(keyStore(context), value);
   return true;
 }
 
 /** Removes the stored key. */
 export async function clearApiKey(context: vscode.ExtensionContext): Promise<void> {
-  await context.secrets.delete(SECRET_KEY);
+  await forgetApiKey(keyStore(context));
 }
 
 /** Reads the stored web-search key, or undefined when none is set. */

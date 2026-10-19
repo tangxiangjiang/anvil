@@ -4,6 +4,7 @@
 package schedclient
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -13,6 +14,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/anvil-dev/anvil/internal/daemon"
 )
 
 // Client talks to anvil-scheduler HTTP API.
@@ -171,3 +174,151 @@ func (c *Client) RegisterWorkspace(ctx context.Context, id, token, name string) 
 		"id": id, "token": token, "name": name,
 	}, nil)
 }
+
+// JobCreate is POST /v1/jobs body (app-facing).
+type JobCreate struct {
+	JobID       string   `json:"job_id,omitempty"`
+	RepoID      string   `json:"repo_id"`
+	Prompt      string   `json:"prompt"`
+	ResumeID    string   `json:"resume_id,omitempty"`
+	MaxSteps    int      `json:"max_steps,omitempty"`
+	Model       string   `json:"model,omitempty"`
+	Provider    string   `json:"provider,omitempty"`
+	Plugins     []string `json:"plugins,omitempty"`
+	NodeID      string   `json:"node_id,omitempty"`
+	ForceStub   bool     `json:"force_stub,omitempty"`
+	Stream      bool     `json:"stream,omitempty"`
+	MilestoneID string   `json:"milestone_id,omitempty"`
+	PhaseID     string   `json:"phase_id,omitempty"`
+	EngReqID    string   `json:"eng_req_id,omitempty"`
+	Major       int      `json:"major,omitempty"`
+	Minor       int      `json:"minor,omitempty"`
+}
+
+// CancelJob POSTs /v1/jobs/{id}/cancel.
+func (c *Client) CancelJob(ctx context.Context, jobID string) error {
+	jobID = strings.TrimSpace(jobID)
+	if jobID == "" {
+		return fmt.Errorf("job_id required")
+	}
+	return c.do(ctx, http.MethodPost, "/v1/jobs/"+jobID+"/cancel", map[string]any{}, nil)
+}
+
+// CreateJob POSTs /v1/jobs and waits for JobDone (non-streaming).
+func (c *Client) CreateJob(ctx context.Context, in JobCreate) (daemon.JobDoneBody, error) {
+	in.Stream = false
+	var done daemon.JobDoneBody
+	if err := c.do(ctx, http.MethodPost, "/v1/jobs", in, &done); err != nil {
+		return daemon.JobDoneBody{}, err
+	}
+	return done, nil
+}
+
+// CreateJobStream POSTs /v1/jobs with SSE; calls onEvent for each job.event; returns job.done.
+func (c *Client) CreateJobStream(ctx context.Context, in JobCreate, onEvent func(daemon.JobEventBody)) (daemon.JobDoneBody, error) {
+	in.Stream = true
+	base := strings.TrimRight(c.BaseURL, "/")
+	b, err := json.Marshal(in)
+	if err != nil {
+		return daemon.JobDoneBody{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/v1/jobs", bytes.NewReader(b))
+	if err != nil {
+		return daemon.JobDoneBody{}, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.Token)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	cli := c.HTTP
+	if cli == nil {
+		cli = &http.Client{Timeout: 0} // stream until done
+	}
+	res, err := cli.Do(req)
+	if err != nil {
+		return daemon.JobDoneBody{}, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode >= 300 {
+		data, _ := io.ReadAll(res.Body)
+		return daemon.JobDoneBody{}, fmt.Errorf("scheduler POST /v1/jobs: HTTP %d: %s", res.StatusCode, strings.TrimSpace(string(data)))
+	}
+	return readJobSSE(res.Body, onEvent)
+}
+
+func readJobSSE(r io.Reader, onEvent func(daemon.JobEventBody)) (daemon.JobDoneBody, error) {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	var eventName string
+	var dataBuf strings.Builder
+	flush := func() error {
+		if eventName == "" && dataBuf.Len() == 0 {
+			return nil
+		}
+		data := strings.TrimRight(dataBuf.String(), "\n")
+		name := eventName
+		eventName = ""
+		dataBuf.Reset()
+		switch name {
+		case "job.event":
+			var ev daemon.JobEventBody
+			if err := json.Unmarshal([]byte(data), &ev); err != nil {
+				return err
+			}
+			if onEvent != nil {
+				onEvent(ev)
+			}
+		case "job.done":
+			var done daemon.JobDoneBody
+			if err := json.Unmarshal([]byte(data), &done); err != nil {
+				return err
+			}
+			return errDone{done}
+		case "error":
+			var e struct {
+				Error string `json:"error"`
+			}
+			_ = json.Unmarshal([]byte(data), &e)
+			if e.Error == "" {
+				e.Error = data
+			}
+			return fmt.Errorf("%s", e.Error)
+		}
+		return nil
+	}
+	for sc.Scan() {
+		line := sc.Text()
+		if line == "" {
+			if err := flush(); err != nil {
+				if d, ok := err.(errDone); ok {
+					return d.done, nil
+				}
+				return daemon.JobDoneBody{}, err
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "event:") {
+			eventName = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+			continue
+		}
+		if strings.HasPrefix(line, "data:") {
+			if dataBuf.Len() > 0 {
+				dataBuf.WriteByte('\n')
+			}
+			dataBuf.WriteString(strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+		}
+	}
+	if err := flush(); err != nil {
+		if d, ok := err.(errDone); ok {
+			return d.done, nil
+		}
+		return daemon.JobDoneBody{}, err
+	}
+	if err := sc.Err(); err != nil {
+		return daemon.JobDoneBody{}, err
+	}
+	return daemon.JobDoneBody{}, fmt.Errorf("job stream ended without job.done")
+}
+
+type errDone struct{ done daemon.JobDoneBody }
+
+func (e errDone) Error() string { return "job.done" }

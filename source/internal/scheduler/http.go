@@ -28,6 +28,7 @@ func (h *Hub) AppHandler() http.Handler {
 	mux.HandleFunc("/v1/workspaces", h.withAuth(h.handleWorkspaces))
 	mux.HandleFunc("/v1/models", h.withAuth(h.handleModels))
 	mux.HandleFunc("/v1/jobs", h.withAuth(h.handleJobs))
+	mux.HandleFunc("/v1/jobs/", h.withAuth(h.handleJobRoutes))
 	mux.HandleFunc("/v1/usage", h.withAuth(h.handleUsage))
 	return mux
 }
@@ -366,24 +367,45 @@ func (h *Hub) handleModels(w http.ResponseWriter, r *http.Request) {
 	_ = h.EnsureDefaultModel(r.Context())
 	llm := h.GetLLM()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"data":             list,
-		"selected_model":   llm.Model,
+		"data":              list,
+		"selected_model":    llm.Model,
 		"selected_provider": llm.Provider,
 	})
 }
 
 type jobRequest struct {
-	JobID     string   `json:"job_id"`
-	RepoID    string   `json:"repo_id"`
-	Prompt    string   `json:"prompt"`
-	ResumeID  string   `json:"resume_id"`
-	MaxSteps  int      `json:"max_steps"`
-	Model     string   `json:"model"`
-	Provider  string   `json:"provider"`
-	Plugins   []string `json:"plugins"`
-	NodeID    string   `json:"node_id"`
-	ForceStub bool     `json:"force_stub"`
-	Stream    bool     `json:"stream"`
+	JobID       string   `json:"job_id"`
+	RepoID      string   `json:"repo_id"`
+	Prompt      string   `json:"prompt"`
+	ResumeID    string   `json:"resume_id"`
+	MaxSteps    int      `json:"max_steps"`
+	Model       string   `json:"model"`
+	Provider    string   `json:"provider"`
+	Plugins     []string `json:"plugins"`
+	NodeID      string   `json:"node_id"`
+	ForceStub   bool     `json:"force_stub"`
+	Stream      bool     `json:"stream"`
+	MilestoneID string   `json:"milestone_id"`
+	PhaseID     string   `json:"phase_id"`
+	EngReqID    string   `json:"eng_req_id"`
+	Major       int      `json:"major"`
+	Minor       int      `json:"minor"`
+}
+
+func (h *Hub) handleJobRoutes(w http.ResponseWriter, r *http.Request) {
+	rest := strings.TrimPrefix(r.URL.Path, "/v1/jobs/")
+	rest = strings.Trim(rest, "/")
+	parts := strings.Split(rest, "/")
+	if len(parts) == 2 && parts[1] == "cancel" && r.Method == http.MethodPost {
+		jobID := parts[0]
+		if err := h.CancelJob(jobID); err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "job_id": jobID})
+		return
+	}
+	http.NotFound(w, r)
 }
 
 func (h *Hub) handleJobs(w http.ResponseWriter, r *http.Request) {
@@ -405,15 +427,20 @@ func (h *Hub) handleJobs(w http.ResponseWriter, r *http.Request) {
 		jobID = id.New()
 	}
 	job := daemon.JobAssignBody{
-		JobID:     jobID,
-		RepoID:    req.RepoID,
-		Prompt:    req.Prompt,
-		ResumeID:  req.ResumeID,
-		MaxSteps:  req.MaxSteps,
-		Model:     req.Model,
-		Provider:  req.Provider,
-		Plugins:   req.Plugins,
-		ForceStub: req.ForceStub,
+		JobID:       jobID,
+		RepoID:      req.RepoID,
+		Prompt:      req.Prompt,
+		ResumeID:    req.ResumeID,
+		MaxSteps:    req.MaxSteps,
+		Model:       req.Model,
+		Provider:    req.Provider,
+		Plugins:     req.Plugins,
+		ForceStub:   req.ForceStub,
+		MilestoneID: req.MilestoneID,
+		PhaseID:     req.PhaseID,
+		EngReqID:    req.EngReqID,
+		Major:       req.Major,
+		Minor:       req.Minor,
 	}
 	if job.Model == "" || job.Provider == "" {
 		_ = h.EnsureDefaultModel(r.Context())

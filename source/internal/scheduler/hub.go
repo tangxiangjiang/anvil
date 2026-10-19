@@ -98,8 +98,8 @@ type Hub struct {
 	modelsAt    time.Time
 	modelsCache []modelJSON
 
-	wsMu        sync.RWMutex
-	workspaces  map[string]wsReg // token -> registration
+	wsMu       sync.RWMutex
+	workspaces map[string]wsReg // token -> registration
 
 	sessions *auth.Store // optional; validates anvil-web session Bearers on app HTTP
 }
@@ -116,15 +116,15 @@ func NewHub(cfg Config, logger *log.Logger) *Hub {
 		logger = log.Default()
 	}
 	return &Hub{
-		cfg:        cfg,
-		log:        logger,
-		llm:        cfg.BootstrapLLM(),
-		nodes:      make(map[string]*nodeConn),
-		waiters:    make(map[string]chan daemon.JobDoneBody),
-		eventHooks: make(map[string]func(daemon.JobEventBody)),
-		jobNode:    make(map[string]string),
-		usageN:     make(map[string]UsageTotals),
-		workspaces: make(map[string]wsReg),
+		cfg:         cfg,
+		log:         logger,
+		llm:         cfg.BootstrapLLM(),
+		nodes:       make(map[string]*nodeConn),
+		waiters:     make(map[string]chan daemon.JobDoneBody),
+		eventHooks:  make(map[string]func(daemon.JobEventBody)),
+		jobNode:     make(map[string]string),
+		usageN:      make(map[string]UsageTotals),
+		workspaces:  make(map[string]wsReg),
 		workerWait:  make(map[string]chan daemon.ClusterWorkerResultBody),
 		sandboxWait: make(map[string]chan daemon.ClusterSandboxResultBody),
 	}
@@ -632,6 +632,31 @@ func (h *Hub) recordUsage(nodeID string, u *daemon.TokenUsage) {
 	cur.TotalTokens += u.TotalTokens
 	cur.Jobs++
 	h.usageN[nodeID] = cur
+}
+
+// CancelJob asks the node that owns jobID to cancel it.
+func (h *Hub) CancelJob(jobID string) error {
+	jobID = strings.TrimSpace(jobID)
+	if jobID == "" {
+		return fmt.Errorf("job_id required")
+	}
+	h.waitMu.Lock()
+	nodeID := h.jobNode[jobID]
+	h.waitMu.Unlock()
+	if nodeID == "" {
+		return fmt.Errorf("job %q not found on scheduler", jobID)
+	}
+	h.nodesMu.Lock()
+	n := h.nodes[nodeID]
+	h.nodesMu.Unlock()
+	if n == nil {
+		return fmt.Errorf("node %q for job %q is offline", nodeID, jobID)
+	}
+	body, _ := daemon.MarshalBody(daemon.JobCancelBody{JobID: jobID})
+	if err := h.writeNode(n, daemon.Envelope{Kind: daemon.KindJobCancel, ID: jobID, Body: body}); err != nil {
+		return fmt.Errorf("cancel on %s: %w", nodeID, err)
+	}
+	return nil
 }
 
 // AssignJobTo runs a job on preferNode (empty = round-robin idle).

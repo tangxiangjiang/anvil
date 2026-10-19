@@ -23,22 +23,22 @@ const (
 	KindError       = "error"
 
 	// Cluster (0.11 edge; 0.24 scheduler llm provision).
-	KindClusterJoin      = "cluster.join"
-	KindClusterJoinOK    = "cluster.join_ok"
-	KindClusterHeartbeat = "cluster.heartbeat"
-	KindClusterAssign    = "cluster.assign"
-	KindClusterEvent     = "cluster.event"
-	KindClusterDone      = "cluster.done"
-	KindClusterConfig       = "cluster.config"
-	KindClusterControl      = "cluster.control"
+	KindClusterJoin           = "cluster.join"
+	KindClusterJoinOK         = "cluster.join_ok"
+	KindClusterHeartbeat      = "cluster.heartbeat"
+	KindClusterAssign         = "cluster.assign"
+	KindClusterEvent          = "cluster.event"
+	KindClusterDone           = "cluster.done"
+	KindClusterConfig         = "cluster.config"
+	KindClusterControl        = "cluster.control"
 	KindClusterWorkerAdd      = "cluster.worker_add"
 	KindClusterWorkerRemove   = "cluster.worker_remove"
 	KindClusterWorkerStart    = "cluster.worker_start"
 	KindClusterWorkerShutdown = "cluster.worker_shutdown"
 	KindClusterWorkerResult   = "cluster.worker_result"
-	KindClusterSandboxList   = "cluster.sandbox_list"
-	KindClusterSandboxMkdir  = "cluster.sandbox_mkdir"
-	KindClusterSandboxResult = "cluster.sandbox_result"
+	KindClusterSandboxList    = "cluster.sandbox_list"
+	KindClusterSandboxMkdir   = "cluster.sandbox_mkdir"
+	KindClusterSandboxResult  = "cluster.sandbox_result"
 )
 
 // Envelope is a length-framed JSON control message.
@@ -95,15 +95,21 @@ type WorkerListResultBody struct {
 
 // JobAssignBody assigns work to an allowlisted repo.
 type JobAssignBody struct {
-	JobID      string   `json:"job_id"`
-	RepoID     string   `json:"repo_id"`
-	Prompt     string   `json:"prompt"`
-	ResumeID   string   `json:"resume_id,omitempty"`
-	MaxSteps   int      `json:"max_steps,omitempty"`
-	Model      string   `json:"model,omitempty"`
-	Provider   string   `json:"provider,omitempty"`
-	Plugins    []string `json:"plugins,omitempty"` // 0.20+ intersected with daemon policy
-	ForceStub  bool     `json:"force_stub,omitempty"` // test: skip LLM
+	JobID     string   `json:"job_id"`
+	RepoID    string   `json:"repo_id"`
+	Prompt    string   `json:"prompt"`
+	ResumeID  string   `json:"resume_id,omitempty"`
+	MaxSteps  int      `json:"max_steps,omitempty"`
+	Model     string   `json:"model,omitempty"`
+	Provider  string   `json:"provider,omitempty"`
+	Plugins   []string `json:"plugins,omitempty"`    // 0.20+ intersected with daemon policy
+	ForceStub bool     `json:"force_stub,omitempty"` // test: skip LLM
+	// Delivery bind (0.39.5+): pass-through metadata for logs / web; scheduler does not interpret.
+	MilestoneID string `json:"milestone_id,omitempty"`
+	PhaseID     string `json:"phase_id,omitempty"`
+	EngReqID    string `json:"eng_req_id,omitempty"`
+	Major       int    `json:"major,omitempty"`
+	Minor       int    `json:"minor,omitempty"`
 }
 
 // JobEventBody streams one run event to the controller.
@@ -137,7 +143,7 @@ type TokenUsage struct {
 type JobDoneBody struct {
 	JobID   string      `json:"job_id"`
 	AgentID string      `json:"agent_id,omitempty"` // for resume_id on the next turn
-	Status  string      `json:"status"`            // finished|error|cancelled
+	Status  string      `json:"status"`             // finished|error|cancelled
 	Result  string      `json:"result,omitempty"`
 	Error   string      `json:"error,omitempty"`
 	Code    string      `json:"code,omitempty"`
@@ -256,12 +262,12 @@ type SandboxEntry struct {
 
 // ClusterSandboxResultBody is the reply for sandbox list/mkdir.
 type ClusterSandboxResultBody struct {
-	OK          bool           `json:"ok"`
-	Error       string         `json:"error,omitempty"`
-	Request     string         `json:"request,omitempty"` // list|mkdir
-	SandboxDir  string         `json:"sandbox_dir,omitempty"`
-	Path        string         `json:"path,omitempty"`
-	Entries     []SandboxEntry `json:"entries,omitempty"`
+	OK         bool           `json:"ok"`
+	Error      string         `json:"error,omitempty"`
+	Request    string         `json:"request,omitempty"` // list|mkdir
+	SandboxDir string         `json:"sandbox_dir,omitempty"`
+	Path       string         `json:"path,omitempty"`
+	Entries    []SandboxEntry `json:"entries,omitempty"`
 }
 
 // MustMarshalBody encodes v as JSON RawMessage; panics only on programmer error in tests — prefer MarshalBody.
