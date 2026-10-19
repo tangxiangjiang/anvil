@@ -281,6 +281,15 @@ window.api = {
         body || {},
       );
     },
+    deliveryToggleAcceptanceCheck(msId, body) {
+      return api.req(
+        "POST",
+        "/api/v1/delivery/roadmap/milestones/" +
+          encodeURIComponent(msId) +
+          "/acceptance-check",
+        body || {},
+      );
+    },
     deliveryCreatePolish(body) {
       return api.req("POST", "/api/v1/delivery/polishes", body || {});
     },

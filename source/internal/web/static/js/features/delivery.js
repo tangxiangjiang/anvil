@@ -1526,6 +1526,52 @@ window.Features.delivery = {
         }
       });
     });
+    el.querySelectorAll("[data-accept-check]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const msId = btn.getAttribute("data-ms");
+        const index = Number(btn.getAttribute("data-accept-check"));
+        const done = btn.getAttribute("data-done") !== "1";
+        btn.disabled = true;
+        try {
+          await api.v1.deliveryToggleAcceptanceCheck(msId, { index, done });
+          await this.reload();
+          this.render();
+        } catch (e) {
+          this.showNotice(e.message || String(e), "Acceptance check failed");
+          btn.disabled = false;
+        }
+      });
+    });
+    el.querySelectorAll("[data-ms-ready]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const msId = btn.getAttribute("data-ms-ready");
+        btn.disabled = true;
+        try {
+          await api.v1.deliveryPatchMilestone(msId, { ready_dev: true });
+          await this.reload();
+          this.render();
+          this.showNotice("Marked awaiting development — Start when ready.", "Ready");
+        } catch (e) {
+          this.showNotice(e.message || String(e), "Ready failed");
+          btn.disabled = false;
+        }
+      });
+    });
+    el.querySelectorAll("[data-ms-accept]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const msId = btn.getAttribute("data-ms-accept");
+        btn.disabled = true;
+        try {
+          await api.v1.deliveryPatchMilestone(msId, { accept_milestone: true });
+          await this.reload();
+          this.render();
+          this.showNotice("Milestone accepted (merge to main not wired yet).", "Accept");
+        } catch (e) {
+          this.showNotice(e.message || String(e), "Accept failed");
+          btn.disabled = false;
+        }
+      });
+    });
     el.querySelectorAll("[data-ms-pause]").forEach((btn) => {
       btn.addEventListener("click", async () => {
         const msId = btn.getAttribute("data-ms-pause");
@@ -5335,7 +5381,7 @@ window.Features.delivery = {
           await api.v1.deliveryPatchMilestone(msId, body);
           await this.reload();
           this.render();
-          this.showNotice("Marked complete — Polish on Roadmap when ready.", "Pass");
+          this.showNotice("Marked complete — Accept on Roadmap when ready.", "Pass");
         } catch (e) {
           this.showNotice(e.message || String(e), "Pass failed");
           btn.disabled = false;
@@ -5458,7 +5504,10 @@ window.Features.delivery = {
         this.closeUiModal();
         await this.reload();
         this.render();
-        this.showNotice("Buglist stub created · back on Roadmap as awaiting roadmap.", "Fail");
+        this.showNotice(
+          "Buglist + bugfix phases seeded · awaiting roadmap — use Ready then Start.",
+          "Fail",
+        );
       } catch (e) {
         if (err) err.textContent = e.message || String(e);
       }
@@ -5523,6 +5572,15 @@ window.Features.delivery = {
     const showPolish =
       life === "complete" || life === "testing" || life === "done";
     const canSubmitTest = life === "in_development";
+    const canReady =
+      life === "awaiting_roadmap" &&
+      (m.phases || []).some((p) => {
+        const st = (p.status || "").toLowerCase();
+        return st !== "finished" && st !== "done";
+      });
+    const acceptSt = (m.accept_status || "").toLowerCase();
+    const canAccept = life === "complete" && acceptSt !== "accepted";
+    const acceptStrip = this.roadmapAcceptStripHtml(m);
     const polishes =
       bind != null ? this.polishesForBind(bind.engId, bind.major, bind.minor) : [];
     const polishRows = polishes.length
@@ -5578,6 +5636,7 @@ window.Features.delivery = {
         </div>
         ${jobStrip}
         ${gateStrip}
+        ${acceptStrip}
         <div class="del-rm-ctrl-links">
           ${
             desHref
@@ -5603,9 +5662,26 @@ window.Features.delivery = {
             <button type="button" class="del-run-btn ghost" data-ms-stop="${this.esc(m.id)}"
               title="Stop" ${canStop ? "" : "disabled"}>⏹ Stop</button>
             ${
+              canReady
+                ? `<button type="button" class="del-run-btn" data-ms-ready="${this.esc(m.id)}"
+                     title="Ready for development">Ready</button>`
+                : ""
+            }
+            ${
               canSubmitTest
                 ? `<button type="button" class="del-run-btn" data-ms-submit-test="${this.esc(m.id)}"
                      title="Submit to Test">提交测试</button>`
+                : ""
+            }
+            ${
+              canAccept
+                ? `<button type="button" class="del-run-btn" data-ms-accept="${this.esc(m.id)}"
+                     title="Accept milestone">✓ Accept</button>`
+                : ""
+            }
+            ${
+              acceptSt === "accepted"
+                ? `<span class="muted">Accepted${m.accepted_at ? " · " + this.esc(m.accepted_at.slice(0, 10)) : ""}</span>`
                 : ""
             }
             ${
@@ -5667,6 +5743,33 @@ window.Features.delivery = {
     return `<div class="del-gate-strip">
       <div class="del-polish-head muted">Open gates</div>
       <ul class="del-gate-list">${rows.join("")}</ul>
+    </div>`;
+  },
+
+  roadmapAcceptStripHtml(m) {
+    if (!m || (m.status || "") !== "complete") return "";
+    if ((m.accept_status || "") === "accepted") return "";
+    const items = this.parseGateChecklist(m.acceptance || "");
+    const open = items.filter((it) => !it.done);
+    if (!items.length) {
+      return `<div class="del-gate-strip muted">Acceptance pending — no checklist (Accept when ready).</div>`;
+    }
+    if (!open.length) {
+      return `<div class="del-gate-strip muted">Acceptance checklist complete — Accept when ready.</div>`;
+    }
+    const rows = open
+      .map(
+        (it) => `
+      <li class="del-gate-row">
+        <button type="button" class="del-gate-check" data-accept-check="${it.index}"
+          data-ms="${this.esc(m.id)}" data-done="0" title="Mark done">☐</button>
+        <span>${this.esc(it.text || "#" + it.index)}</span>
+      </li>`,
+      )
+      .join("");
+    return `<div class="del-gate-strip">
+      <div class="del-polish-head muted">Acceptance</div>
+      <ul class="del-gate-list">${rows}</ul>
     </div>`;
   },
 

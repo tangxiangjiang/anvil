@@ -231,7 +231,8 @@ Primary planning canvas — see §5 interactions below (graph chat, per-node cha
 | **Campaign** | AI-draft cases → Worker mock write/run → buglist → Worker fix → regress → Pass |
 | **Test card** | Acceptance excerpt; cases list; Run / Fix / Regress; Pass gated on clean campaign |
 | **Buglist** | Rows bound to `eng_req` + `major.minor`; status `open|fixing|verified|closed` |
-| **Fail** | Escape hatch → stub + `awaiting_roadmap` (no auto bugfix phases yet) |
+| **Fail** | Escape hatch → buglist + bugfix phases + `awaiting_roadmap`; Ready → re-develop (0.39.11) |
+| **Accept** | After Pass/`complete`: acceptance checklist → `accept_status=accepted` (merge later) |
 
 Test queue is **not** the `complete` list — `complete` means tests already passed (Pass after clean campaign).
 | **Graph chat** | Floating/docked: whole-graph polish → `GraphPatch` preview → Apply / Discard |

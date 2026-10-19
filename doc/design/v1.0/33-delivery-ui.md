@@ -71,7 +71,8 @@ Working-state on the worker project (`.anvil/delivery/`) and markdown export are
 | DELETE | `/api/v1/delivery/designs/{id}/versions/{vid}` | Remove Version (draft) |
 | POST | `/api/v1/delivery/designs/{id}/approve` | Approve when Versions complete |
 | POST | `/api/v1/delivery/designs/{id}/bootstrap` | Seed roadmap phases from Versions |
-| PATCH | `/api/v1/delivery/roadmap/milestones/{id}` | Canvas `x`/`y`; optional `execute_worker_id` / `run_state`; `execute: true` → `in_development`; `submit_test` / `pass_test` / `fail_test` (+ fail note) |
+| PATCH | `/api/v1/delivery/roadmap/milestones/{id}` | Canvas `x`/`y`; Worker / `run_state`; `execute` / `submit_test` / `pass_test` / `fail_test` / `ready_dev` / `accept_milestone` |
+| POST | `/api/v1/delivery/roadmap/milestones/{id}/acceptance-check` | Toggle Acceptance checklist `{index, done}` |
 | POST | `/api/v1/delivery/buglist` | Optional create-only path for a buglist stub (Fail usually goes through milestone PATCH) |
 | POST | `/api/v1/delivery/test-cases` | Batch create cases `{ eng_req_id, major, minor, cases:[{title,body}] }` |
 | POST | `/api/v1/delivery/test-cases/run` | Mock Worker run for bind; failed cases spawn open buglist items |
@@ -106,7 +107,7 @@ Routes: `#/delivery/{requirements|designs|roadmap|test}` → major index; `#/del
 
 3. **Roadmap** — Generations → `m/{M}` **graph** (drag) + **control cards**: Worker, Start / Pause / Stop (`run_state` + **phase Jobs** via scheduler), live job snippet while running, **提交测试** (`in_development` → `testing`), Design / Requirements links, **Polish** ▶ run via Jobs (0.39.9). No separate execute page. No Gates tab — gates live on Design Versions.  
 
-4. **Test** (0.39.3–0.39.4, Jobs in 0.39.8) — Generations → `m/{M}` **queue of milestones in lifecycle `testing` only**. Campaign: **AI assist** drafts cases → **Run** / **Fix** / **Regress** enqueue Jobs on the Roadmap Worker → SSE status on the card → **Pass** when campaign clean. **Fail** → `awaiting_roadmap`. No auto bug-fix Roadmap phases yet.
+4. **Test** (0.39.3–0.39.4, Jobs in 0.39.8) — Generations → `m/{M}` **queue of milestones in lifecycle `testing` only**. Campaign: **AI assist** drafts cases → **Run** / **Fix** / **Regress** enqueue Jobs on the Roadmap Worker → SSE status on the card → **Pass** when campaign clean (`accept_status=pending`). **Fail** → buglist + **bugfix phases** + `awaiting_roadmap`; Roadmap **Ready** → `awaiting_development` then Start again (0.39.11). **Accept** on complete (0.39.12) records acceptance; merge-to-main not yet.
 
 ## Non-goals
 

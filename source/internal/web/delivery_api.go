@@ -608,6 +608,25 @@ func (s *Server) handleDelivery(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(path, "roadmap/milestones/") {
 		id := strings.TrimPrefix(path, "roadmap/milestones/")
 		id = strings.Trim(id, "/")
+		if id != "" && strings.HasSuffix(id, "/acceptance-check") && r.Method == http.MethodPost {
+			msID := strings.TrimSuffix(id, "/acceptance-check")
+			msID = strings.Trim(msID, "/")
+			var body struct {
+				Index int  `json:"index"`
+				Done  bool `json:"done"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, "bad json", http.StatusBadRequest)
+				return
+			}
+			m, err := s.delivery.ToggleMilestoneAcceptanceCheck(msID, body.Index, body.Done)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			writeJSON(w, http.StatusOK, m)
+			return
+		}
 		if id != "" && !strings.Contains(id, "/") && r.Method == http.MethodPatch {
 			var body struct {
 				X               *float64 `json:"x"`
@@ -621,6 +640,8 @@ func (s *Server) handleDelivery(w http.ResponseWriter, r *http.Request) {
 				FailTest        *bool    `json:"fail_test"`
 				FailTitle       string   `json:"fail_title"`
 				FailBody        string   `json:"fail_body"`
+				ReadyDev        *bool    `json:"ready_dev"`
+				AcceptMilestone *bool    `json:"accept_milestone"`
 				ForceStub       bool     `json:"force_stub"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -631,9 +652,11 @@ func (s *Server) handleDelivery(w http.ResponseWriter, r *http.Request) {
 			submit := body.SubmitTest != nil && *body.SubmitTest
 			pass := body.PassTest != nil && *body.PassTest
 			fail := body.FailTest != nil && *body.FailTest
+			ready := body.ReadyDev != nil && *body.ReadyDev
+			accept := body.AcceptMilestone != nil && *body.AcceptMilestone
 			if body.X == nil && body.Y == nil && body.ExecuteWorkerID == nil && body.RunState == nil &&
-				body.TestNote == nil && !exec && !submit && !pass && !fail {
-				http.Error(w, "x/y, execute_worker_id, run_state, test_note, execute, or test action required", http.StatusBadRequest)
+				body.TestNote == nil && !exec && !submit && !pass && !fail && !ready && !accept {
+				http.Error(w, "x/y, execute_worker_id, run_state, test_note, execute, or test/ready/accept action required", http.StatusBadRequest)
 				return
 			}
 			if (body.X != nil) != (body.Y != nil) {
@@ -669,6 +692,8 @@ func (s *Server) handleDelivery(w http.ResponseWriter, r *http.Request) {
 				FailTest:        fail,
 				FailTitle:       body.FailTitle,
 				FailBody:        body.FailBody,
+				ReadyDev:        ready,
+				AcceptMilestone: accept,
 			})
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)

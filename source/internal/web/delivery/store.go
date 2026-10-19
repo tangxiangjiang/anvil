@@ -124,7 +124,9 @@ CREATE TABLE IF NOT EXISTS delivery_milestones (
   campaign_job_id TEXT NOT NULL DEFAULT '',
   campaign_job_status TEXT NOT NULL DEFAULT '',
   campaign_job_kind TEXT NOT NULL DEFAULT '',
-  campaign_job_last_event TEXT NOT NULL DEFAULT ''
+  campaign_job_last_event TEXT NOT NULL DEFAULT '',
+  accept_status TEXT NOT NULL DEFAULT '',
+  accepted_at TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS delivery_buglist_items (
   id TEXT PRIMARY KEY,
@@ -248,7 +250,28 @@ CREATE TABLE IF NOT EXISTS delivery_trash (
 	if err := s.ensurePolishJobColumns(); err != nil {
 		return err
 	}
+	if err := s.ensureMilestoneAcceptColumns(); err != nil {
+		return err
+	}
 	return s.ensurePolishesTable()
+}
+
+func (s *Store) ensureMilestoneAcceptColumns() error {
+	for _, q := range []string{
+		`ALTER TABLE delivery_milestones ADD COLUMN accept_status TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE delivery_milestones ADD COLUMN accepted_at TEXT NOT NULL DEFAULT ''`,
+	} {
+		_, err := s.db.Exec(q)
+		if err == nil {
+			continue
+		}
+		msg := strings.ToLower(err.Error())
+		if strings.Contains(msg, "duplicate column") {
+			continue
+		}
+		return err
+	}
+	return nil
 }
 
 func (s *Store) ensurePhaseJobColumns() error {
@@ -708,6 +731,13 @@ const (
 	CampaignKindRegress = "regress"
 )
 
+// Milestone accept_status values (0.39.12).
+const (
+	AcceptNone     = ""
+	AcceptPending  = "pending"
+	AcceptAccepted = "accepted"
+)
+
 // Milestone is a roadmap canvas node.
 type Milestone struct {
 	ID                   string  `json:"id"`
@@ -723,6 +753,8 @@ type Milestone struct {
 	CampaignJobStatus    string  `json:"campaign_job_status,omitempty"`
 	CampaignJobKind      string  `json:"campaign_job_kind,omitempty"`
 	CampaignJobLastEvent string  `json:"campaign_job_last_event,omitempty"`
+	AcceptStatus         string  `json:"accept_status,omitempty"`
+	AcceptedAt           string  `json:"accepted_at,omitempty"`
 	Phases               []Phase `json:"phases"`
 }
 
@@ -2672,6 +2704,8 @@ type PatchMilestoneInput struct {
 	FailTest        bool
 	FailTitle       string
 	FailBody        string
+	ReadyDev        bool // awaiting_roadmap → awaiting_development
+	AcceptMilestone bool // complete + pending → accepted
 }
 
 // PatchMilestonePosition updates canvas card coordinates (persisted).
@@ -2712,8 +2746,14 @@ func (s *Store) PatchMilestone(id string, in PatchMilestoneInput) (Milestone, er
 	if in.FailTest {
 		actionN++
 	}
+	if in.ReadyDev {
+		actionN++
+	}
+	if in.AcceptMilestone {
+		actionN++
+	}
 	if actionN > 1 {
-		return Milestone{}, fmt.Errorf("only one of execute, submit_test, pass_test, fail_test allowed")
+		return Milestone{}, fmt.Errorf("only one of execute, submit_test, pass_test, fail_test, ready_dev, accept_milestone allowed")
 	}
 
 	x, y := cur.X, cur.Y
@@ -2759,6 +2799,8 @@ func (s *Store) PatchMilestone(id string, in PatchMilestoneInput) (Milestone, er
 	}
 
 	status := cur.Status
+	acceptStatus := cur.AcceptStatus
+	acceptedAt := cur.AcceptedAt
 	bind := parseMilestoneBind(id)
 
 	if in.Execute {
@@ -2802,6 +2844,8 @@ func (s *Store) PatchMilestone(id string, in PatchMilestoneInput) (Milestone, er
 		}
 		status = LifeComplete
 		runState = RunIdle
+		acceptStatus = AcceptPending
+		acceptedAt = ""
 		if err := s.SetMilestoneLifecycle(bind.EngID, bind.Major, bind.Minor, LifeComplete); err != nil {
 			return Milestone{}, err
 		}
@@ -2831,16 +2875,62 @@ func (s *Store) PatchMilestone(id string, in PatchMilestoneInput) (Milestone, er
 		}); err != nil {
 			return Milestone{}, err
 		}
+		if _, err := s.SeedBugfixPhases(id, bind.EngID, bind.Major, bind.Minor); err != nil {
+			return Milestone{}, err
+		}
 		status = LifeAwaitingRoadmap
 		runState = RunIdle
+		acceptStatus = AcceptNone
+		acceptedAt = ""
 		if err := s.SetMilestoneLifecycle(bind.EngID, bind.Major, bind.Minor, LifeAwaitingRoadmap); err != nil {
 			return Milestone{}, err
 		}
 	}
 
+	if in.ReadyDev {
+		if status != LifeAwaitingRoadmap {
+			return Milestone{}, fmt.Errorf("ready_dev requires status %s (got %s)", LifeAwaitingRoadmap, status)
+		}
+		if bind == nil {
+			return Milestone{}, fmt.Errorf("ready_dev requires bound milestone id")
+		}
+		unfinished := false
+		for _, p := range cur.Phases {
+			st := strings.ToLower(p.Status)
+			if st != "finished" && st != "done" && st != JobFinished {
+				unfinished = true
+				break
+			}
+		}
+		if !unfinished {
+			return Milestone{}, fmt.Errorf("ready_dev requires at least one unfinished phase (bugfix or planned)")
+		}
+		status = LifeAwaitingDevelopment
+		runState = RunIdle
+		if err := s.SetMilestoneLifecycle(bind.EngID, bind.Major, bind.Minor, LifeAwaitingDevelopment); err != nil {
+			return Milestone{}, err
+		}
+	}
+
+	if in.AcceptMilestone {
+		if status != LifeComplete {
+			return Milestone{}, fmt.Errorf("accept_milestone requires status %s (got %s)", LifeComplete, status)
+		}
+		if acceptStatus == AcceptAccepted {
+			// idempotent
+		} else {
+			if err := s.assertAcceptChecklist(cur); err != nil {
+				return Milestone{}, err
+			}
+			acceptStatus = AcceptAccepted
+			acceptedAt = nowRFC3339()
+		}
+	}
+
 	res, err := s.db.Exec(`
-UPDATE delivery_milestones SET x=?, y=?, execute_worker_id=?, run_state=?, test_note=?, status=? WHERE id=?`,
-		x, y, workerID, runState, testNote, status, id)
+UPDATE delivery_milestones SET x=?, y=?, execute_worker_id=?, run_state=?, test_note=?, status=?,
+  accept_status=?, accepted_at=? WHERE id=?`,
+		x, y, workerID, runState, testNote, status, acceptStatus, acceptedAt, id)
 	if err != nil {
 		return Milestone{}, err
 	}
@@ -2897,10 +2987,12 @@ func (s *Store) getMilestone(id string) (Milestone, error) {
 	var m Milestone
 	err := s.db.QueryRow(`
 SELECT id, title, status, acceptance, x, y, execute_worker_id, COALESCE(run_state,'idle'), COALESCE(test_note,''),
-  COALESCE(campaign_job_id,''), COALESCE(campaign_job_status,''), COALESCE(campaign_job_kind,''), COALESCE(campaign_job_last_event,'')
+  COALESCE(campaign_job_id,''), COALESCE(campaign_job_status,''), COALESCE(campaign_job_kind,''), COALESCE(campaign_job_last_event,''),
+  COALESCE(accept_status,''), COALESCE(accepted_at,'')
 FROM delivery_milestones WHERE id=?`, id).Scan(
 		&m.ID, &m.Title, &m.Status, &m.Acceptance, &m.X, &m.Y, &m.ExecuteWorkerID, &m.RunState, &m.TestNote,
-		&m.CampaignJobID, &m.CampaignJobStatus, &m.CampaignJobKind, &m.CampaignJobLastEvent)
+		&m.CampaignJobID, &m.CampaignJobStatus, &m.CampaignJobKind, &m.CampaignJobLastEvent,
+		&m.AcceptStatus, &m.AcceptedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return Milestone{}, fmt.Errorf("milestone not found")
@@ -2927,7 +3019,8 @@ func (s *Store) loadRoadmap() (Roadmap, error) {
 	var rm Roadmap
 	rows, err := s.db.Query(`
 SELECT id, title, status, acceptance, x, y, execute_worker_id, COALESCE(run_state,'idle'), COALESCE(test_note,''),
-  COALESCE(campaign_job_id,''), COALESCE(campaign_job_status,''), COALESCE(campaign_job_kind,''), COALESCE(campaign_job_last_event,'')
+  COALESCE(campaign_job_id,''), COALESCE(campaign_job_status,''), COALESCE(campaign_job_kind,''), COALESCE(campaign_job_last_event,''),
+  COALESCE(accept_status,''), COALESCE(accepted_at,'')
 FROM delivery_milestones ORDER BY sort_order, id`)
 	if err != nil {
 		return rm, err
@@ -2935,7 +3028,8 @@ FROM delivery_milestones ORDER BY sort_order, id`)
 	for rows.Next() {
 		var m Milestone
 		if err := rows.Scan(&m.ID, &m.Title, &m.Status, &m.Acceptance, &m.X, &m.Y, &m.ExecuteWorkerID, &m.RunState, &m.TestNote,
-			&m.CampaignJobID, &m.CampaignJobStatus, &m.CampaignJobKind, &m.CampaignJobLastEvent); err != nil {
+			&m.CampaignJobID, &m.CampaignJobStatus, &m.CampaignJobKind, &m.CampaignJobLastEvent,
+			&m.AcceptStatus, &m.AcceptedAt); err != nil {
 			_ = rows.Close()
 			return rm, err
 		}

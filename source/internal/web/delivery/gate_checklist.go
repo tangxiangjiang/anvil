@@ -177,6 +177,40 @@ func (s *Store) AssertCampaignGatesReady(engID string, major, minor int) error {
 	return nil
 }
 
+// assertAcceptChecklist requires milestone Acceptance checkboxes (if any) to be checked.
+func (s *Store) assertAcceptChecklist(ms Milestone) error {
+	open := OpenGateItems(ms.Acceptance)
+	if len(open) == 0 {
+		return nil
+	}
+	parts := make([]string, 0, len(open))
+	for _, it := range open {
+		if it.Text == "" {
+			parts = append(parts, fmt.Sprintf("#%d", it.Index))
+		} else {
+			parts = append(parts, it.Text)
+		}
+	}
+	return fmt.Errorf("acceptance checklist incomplete: %s", strings.Join(parts, "; "))
+}
+
+// ToggleMilestoneAcceptanceCheck flips a checkbox in milestone.acceptance (allowed anytime).
+func (s *Store) ToggleMilestoneAcceptanceCheck(msID string, index int, done bool) (Milestone, error) {
+	ms, err := s.getMilestone(msID)
+	if err != nil {
+		return Milestone{}, err
+	}
+	next, err := SetGateChecklistItem(ms.Acceptance, index, done)
+	if err != nil {
+		return Milestone{}, err
+	}
+	_, err = s.db.Exec(`UPDATE delivery_milestones SET acceptance=? WHERE id=?`, next, msID)
+	if err != nil {
+		return Milestone{}, err
+	}
+	return s.getMilestone(msID)
+}
+
 // ToggleDesignVersionGateCheck sets one Gate checkbox. Allowed after Design Approve
 // (checklist is an execute control, not an authoring edit).
 func (s *Store) ToggleDesignVersionGateCheck(designID, versionID string, index int, done bool) (DesignVersion, error) {
