@@ -306,6 +306,64 @@ async function runScript(session, run, message) {
     return;
   }
 
+  if (scenario === 'partial') {
+    // An edit_file with two separate hunks, previewed the way a real host
+    // previews a gated edit: a unified diff plus both whole bodies. What runs
+    // is whatever the answer's arguments say — so a test can accept one hunk
+    // and read back the file that call actually produced.
+    const before = readIfPresent(diffFile);
+    const after = before.replace('bravo', 'BRAVO').replace('echo', 'ECHO');
+    const diff = [
+      '@@ -1,3 +1,3 @@',
+      ' alpha',
+      '-bravo',
+      '+BRAVO',
+      ' charlie',
+      '@@ -4,3 +4,3 @@',
+      ' delta',
+      '-echo',
+      '+ECHO',
+      ' foxtrot',
+    ].join('\n');
+    const args = { path: diffFile, old_string: before, new_string: after };
+    event(session, run, { type: 'assistant', text: 'I will make two edits.' });
+    event(session, run, { type: 'tool_call', tool_call_id: 't1', name: 'edit_file', args });
+    const requestId = `req-${run}`;
+    notify('approval.request', {
+      request_id: requestId,
+      session_id: session.session_id,
+      run_id: run,
+      tool: 'edit_file',
+      args,
+      preview: { kind: 'diff', path: diffFile, diff, before, after },
+      decisions: ['allow', 'allow_session', 'deny'],
+      timeout_ms: 30_000,
+    });
+    const answer = await new Promise((resolve) => approvals.set(requestId, resolve));
+    if (answer.decision === 'deny') {
+      event(session, run, { type: 'tool_result', tool_call_id: 't1', content: 'denied by the user', is_error: true });
+      finish(session, run, { status: 'finished', result: 'nothing written', steps: 2 });
+      return;
+    }
+    // The rewritten call is the one that executes. A single-occurrence replace
+    // is what edit_file does; here the old side is the whole pre-image, so one
+    // occurrence is all there is.
+    const called = answer.args && typeof answer.args === 'object' ? answer.args : args;
+    const oldText = typeof called.old_string === 'string' ? called.old_string : '';
+    const newText = typeof called.new_string === 'string' ? called.new_string : '';
+    const written =
+      typeof called.content === 'string'
+        ? called.content
+        : oldText === ''
+          ? before
+          : before.replace(oldText, newText);
+    writeFileSync(diffFile, written);
+    event(session, run, { type: 'tool_result', tool_call_id: 't1', content: `edited ${written.length} bytes`, is_error: false });
+    event(session, run, { type: 'assistant', text: 'Done.' });
+    finish(session, run, { status: 'finished', result: 'ok', steps: 3 });
+    return;
+  }
+
   if (scenario === 'permissions') {
     // What the real host sends when a rule says `ask`: the card names the rule
     // that insisted, and every "always allow" shape that would decide this very
@@ -708,6 +766,9 @@ async function handle(msg) {
         fail(msg.id, -32004, 'no pending approval');
         return;
       }
+      // Recorded before the answer takes effect, so a test can read exactly
+      // which call the client asked the host to run.
+      echo('approval.response', msg.params || {});
       approvals.delete(requestId);
       ok(msg.id, { accepted: true });
       resolve(msg.params);

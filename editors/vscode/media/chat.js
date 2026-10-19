@@ -818,6 +818,18 @@
         open.title = 'Open this change as a diff before deciding';
         open.addEventListener('click', () => vscode.postMessage({ type: 'review', requestId: request.request_id }));
         box.appendChild(open);
+        // A change that is one file's text can be kept in parts. The extension
+        // proves it before opening anything; this is only the offer, and it is
+        // made for the two tools whose arguments carry exactly those bodies.
+        if (request.tool === 'write_file' || request.tool === 'edit_file') {
+          const partial = el('button', 'review', 'Review changes…');
+          partial.type = 'button';
+          partial.title = 'Keep only some of this change';
+          partial.addEventListener('click', () =>
+            vscode.postMessage({ type: 'reviewPartial', requestId: request.request_id }),
+          );
+          box.appendChild(partial);
+        }
       } else if (preview.truncated === true) {
         box.appendChild(el('div', 'why', 'This change is too large to open in a diff editor. The diff below is the whole change.'));
       }
@@ -1019,6 +1031,31 @@
     card.classList.add('resolved');
     for (const button of card.querySelectorAll('button')) button.disabled = true;
     card.appendChild(el('div', 'why', 'This request is no longer pending.'));
+  }
+
+  /**
+   * An approval the review panel answered. The card settles on this rather than
+   * on a click of its own, and a partial acceptance says how much was kept:
+   * "Allowed." over a change that was half applied would misstate the thing the
+   * reviewer just chose.
+   */
+  function settleFromReview(msg) {
+    const card = approvals.get(msg.requestId);
+    if (!card) return;
+    approvals.delete(msg.requestId);
+    card.classList.add('resolved');
+    for (const button of card.querySelectorAll('button')) button.disabled = true;
+    if (msg.decision === 'deny') {
+      card.appendChild(el('div', 'why', 'Denied.'));
+      return;
+    }
+    const kept = typeof msg.kept === 'number' ? msg.kept : NaN;
+    const total = typeof msg.total === 'number' ? msg.total : NaN;
+    const text =
+      kept >= 0 && total > 0 && kept < total
+        ? 'Allowed, keeping ' + kept + ' of ' + total + ' parts.'
+        : 'Allowed.';
+    card.appendChild(el('div', 'why', text));
   }
 
   // --- composer chips -------------------------------------------------------
@@ -1621,6 +1658,9 @@
         return;
       case 'approvalWithdrawn':
         withdrawApproval(msg.requestId);
+        return;
+      case 'approvalSettled':
+        settleFromReview(msg);
         return;
       case 'rememberResult':
         resolveRemember(msg);

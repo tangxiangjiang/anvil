@@ -26,6 +26,8 @@ import { randomBytes } from 'node:crypto';
 import * as vscode from 'vscode';
 import { ChangesTracker, ChangedFile } from './changes';
 import { PreImage, planReview, reviewOf } from './editDiff';
+import { PartialDiff, applyAccepted, partialDiff, rewriteArgs } from './hunks';
+import { ReviewPanels } from './reviewPanel';
 import { buildPromptContext, pickMentions } from './editorContext';
 import { attachmentsFromDataUrls } from './attachments';
 import type { Hub } from './hub';
@@ -71,6 +73,8 @@ type Inbound =
   | { type: 'commands' }
   | { type: 'mode'; mode: string }
   | { type: 'review'; requestId: string }
+  /** "Let me keep only some of this", from an approval card's diff preview. */
+  | { type: 'reviewPartial'; requestId: string }
   | { type: 'reviewChange'; path: string }
   /**
    * "Show me what that call changed", from a finished tool card. The call's
@@ -97,6 +101,18 @@ type Outbound =
   | { type: 'event'; event: HostEvent; reviewable?: boolean }
   | { type: 'approval'; request: ApprovalRequest }
   | { type: 'approvalWithdrawn'; requestId: string }
+  /**
+   * An approval the review panel answered. The card settles on this rather than
+   * on its own button, and says how much was kept when it was not all of it —
+   * "Allowed." over a change that was half applied would be a lie of degree.
+   */
+  | {
+      type: 'approvalSettled';
+      requestId: string;
+      decision: Decision;
+      kept?: number;
+      total?: number;
+    }
   /**
    * What became of a "remember this" choice. Exactly one of the three endings:
    * the host settled the card (`approved`), the rule was written but does not
@@ -258,6 +274,8 @@ export class ChatPanel implements HostListener {
   };
   /** Review tabs opened for an approval, closed when it is answered. */
   private readonly reviews = new Map<string, vscode.Uri[]>();
+  /** The per-hunk review documents, one per pending approval that can be split. */
+  private readonly partialReviews: ReviewPanels;
   /** The rule files the last session reported, re-announced to a reloaded view. */
   private rules: RuleFileInfo[] = [];
   /**
@@ -284,6 +302,7 @@ export class ChatPanel implements HostListener {
   ) {
     this.mode = readMode(context);
     this.agentId = agentId === '' ? undefined : agentId;
+    this.partialReviews = new ReviewPanels(context.extensionUri);
   }
 
   /**
@@ -550,6 +569,9 @@ export class ChatPanel implements HostListener {
         return;
       case 'review':
         await this.openReview(msg.requestId);
+        return;
+      case 'reviewPartial':
+        await this.openPartialReview(msg.requestId);
         return;
       case 'reviewChange':
         await this.openChangeReview(msg.path);
@@ -1113,6 +1135,115 @@ export class ChatPanel implements HostListener {
     this.reviews.set(requestId, [...existing, ...uris]);
   }
 
+  /**
+   * Opens the per-hunk review for an approval that can be taken in parts.
+   *
+   * The card's `Review changes…` button is a hint about shape — a diff with both
+   * bodies. Whether the change really can be split is decided by `partialDiff`,
+   * which proves every hunk applies. A change that fails the proof is answered
+   * with Allow or Deny, and the notice says so rather than leaving a button
+   * that would produce a guessed file.
+   */
+  private async openPartialReview(requestId: string): Promise<void> {
+    const request = this.pendingApprovals().find((candidate) => candidate.request_id === requestId);
+    const partial = request ? partialDiff(request.tool, request.preview) : undefined;
+    if (!request || !partial) {
+      this.post({
+        type: 'notice',
+        level: 'warn',
+        message: 'This change cannot be applied in parts. Use Allow or Deny.',
+      });
+      return;
+    }
+    this.partialReviews.open(requestId, {
+      path: request.preview?.path ?? request.tool,
+      hunks: partial.hunks,
+      onAccept: (accepted) => this.answerPartial(request, partial, accepted),
+      onReject: () => this.rejectPartial(request, partial.hunks.length),
+    });
+  }
+
+  /**
+   * Answers "keep these parts" with an allow whose arguments carry the accepted
+   * text.
+   *
+   * The text is computed against the preview's whole `before` and handed to the
+   * host as rewritten arguments, so the call executes exactly what the reviewer
+   * chose — there is no second diff, and nothing is re-applied from the patch.
+   * When the computation or the rewrite refuses, nothing is sent and the card
+   * keeps its ordinary choice.
+   */
+  private async answerPartial(
+    request: ApprovalRequest,
+    partial: PartialDiff,
+    accepted: readonly number[],
+  ): Promise<void> {
+    if (accepted.length === 0) {
+      await this.rejectPartial(request, partial.hunks.length);
+      return;
+    }
+    const text = applyAccepted(partial.before, partial.hunks, accepted);
+    const args =
+      text === undefined
+        ? undefined
+        : rewriteArgs(request.tool, request.args, partial.before, partial.after, text);
+    if (text === undefined || args === undefined) {
+      this.post({
+        type: 'notice',
+        level: 'warn',
+        message:
+          'This change no longer matches the file it was previewed from, so nothing was sent. Decide with Allow or Deny.',
+      });
+      return;
+    }
+    const session = this.session;
+    if (!session) return;
+    try {
+      await session.respond(request.request_id, 'allow', { args });
+    } catch (err) {
+      this.post({
+        type: 'notice',
+        level: 'error',
+        message: `Could not answer the approval: ${(err as Error).message}`,
+      });
+      return;
+    }
+    await this.closeReview(request.request_id);
+    this.post({
+      type: 'approvalSettled',
+      requestId: request.request_id,
+      decision: 'allow',
+      kept: accepted.length,
+      total: partial.hunks.length,
+    });
+  }
+
+  /** Answers "keep none of it" as a denial, in the same words the card's Deny uses. */
+  private async rejectPartial(request: ApprovalRequest, total: number): Promise<void> {
+    const session = this.session;
+    if (!session) return;
+    try {
+      await session.respond(request.request_id, 'deny', {
+        message: 'The reviewer rejected this change.',
+      });
+    } catch (err) {
+      this.post({
+        type: 'notice',
+        level: 'error',
+        message: `Could not answer the approval: ${(err as Error).message}`,
+      });
+      return;
+    }
+    await this.closeReview(request.request_id);
+    this.post({
+      type: 'approvalSettled',
+      requestId: request.request_id,
+      decision: 'deny',
+      kept: 0,
+      total,
+    });
+  }
+
   private async openChangeReview(path: string): Promise<void> {
     const change = this.lastChanges.files.get(path);
     if (!change) return;
@@ -1212,6 +1343,10 @@ export class ChatPanel implements HostListener {
   }
 
   private async closeReview(requestId: string): Promise<void> {
+    // Both surfaces belong to one question: closing the diff tabs while the
+    // per-hunk document stayed up would leave a live set of buttons over a
+    // request that has already been answered.
+    this.partialReviews.close(requestId);
     const uris = this.reviews.get(requestId);
     if (!uris) return;
     this.reviews.delete(requestId);
@@ -1433,6 +1568,7 @@ export class ChatPanel implements HostListener {
     this.panel = undefined;
     this.listening = false;
     this.pending = [];
+    this.partialReviews.dispose();
     const session = this.session;
     this.session = undefined;
     this.opening = undefined;
