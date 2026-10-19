@@ -43,9 +43,21 @@ type loopGuard struct {
 	callStreak   int
 	lastResultFP string
 	resultStreak int
-	nameSeq      []string
+	// seq is the recent call sequence, one entry per call. A cycle is judged on
+	// the fingerprint (name and arguments), not the name alone: reading a file
+	// and then searching for what it mentioned, with a new path and a new
+	// pattern each time, is how a person reads a codebase, and a name-only
+	// window called that a loop.
+	seq []seqEntry
 
 	warned bool
+}
+
+// seqEntry is one tool call as the cycle detector remembers it: the name for
+// the message it prints, and the fingerprint it actually compares.
+type seqEntry struct {
+	name string
+	fp   string
 }
 
 func newLoopGuard() *loopGuard {
@@ -91,7 +103,7 @@ func (g *loopGuard) Observe(calls []llm.ToolCall, results []tools.Result) (loopA
 			break
 		}
 
-		g.nameSeq = append(g.nameSeq, tc.Name)
+		g.seq = append(g.seq, seqEntry{name: tc.Name, fp: cfp})
 		if msg := g.detectCycle(); msg != "" {
 			reason = msg
 			break
@@ -107,18 +119,23 @@ func (g *loopGuard) Observe(calls []llm.ToolCall, results []tools.Result) (loopA
 	return loopStop, reason
 }
 
+// detectCycle reports a short sequence of identical calls repeated in a row.
+//
+// Identity is the call fingerprint, not the tool name: `read_file A` then
+// `grep X` then `read_file B` then `grep Y` is progress even though the names
+// repeat, and only a second pass over the *same* calls is a loop. Identical
+// consecutive calls are left to the repeat detector, which owns that case.
+// The message still prints names, because they are what a reader recognises.
 func (g *loopGuard) detectCycle() string {
 	need := g.cycleLen * g.cycleRepeats
-	if len(g.nameSeq) < need || g.cycleLen < 2 {
+	if len(g.seq) < need || g.cycleLen < 2 {
 		return ""
 	}
-	window := g.nameSeq[len(g.nameSeq)-need:]
+	window := g.seq[len(g.seq)-need:]
 	pattern := window[:g.cycleLen]
-	// Ping-pong only: ignore degenerate [A A]… (same tool reused for different args;
-	// identical-call / stall fingerprints already cover true no-progress).
 	distinct := map[string]struct{}{}
-	for _, n := range pattern {
-		distinct[n] = struct{}{}
+	for _, e := range pattern {
+		distinct[e.fp] = struct{}{}
 	}
 	if len(distinct) < 2 {
 		return ""
@@ -126,12 +143,16 @@ func (g *loopGuard) detectCycle() string {
 	for r := 1; r < g.cycleRepeats; r++ {
 		off := r * g.cycleLen
 		for i := 0; i < g.cycleLen; i++ {
-			if window[off+i] != pattern[i] {
+			if window[off+i].fp != pattern[i].fp {
 				return ""
 			}
 		}
 	}
-	return fmt.Sprintf("tool cycle %v repeated ×%d", pattern, g.cycleRepeats)
+	names := make([]string, len(pattern))
+	for i, e := range pattern {
+		names[i] = e.name
+	}
+	return fmt.Sprintf("tool cycle %v repeated ×%d", names, g.cycleRepeats)
 }
 
 func callFingerprint(tc llm.ToolCall) string {
