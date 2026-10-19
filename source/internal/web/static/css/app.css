@@ -797,6 +797,33 @@ span.del-crumb { color: var(--text); }
 .del-rm-ctrl-btns {
   display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center;
 }
+.del-gate-strip {
+  margin: 0.35rem 0 0.5rem;
+  padding: 0.4rem 0.55rem;
+  border-left: 2px solid var(--border);
+  background: color-mix(in srgb, var(--panel) 80%, transparent);
+}
+.del-gate-list {
+  list-style: none;
+  margin: 0.25rem 0 0;
+  padding: 0;
+}
+.del-gate-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  font-size: 0.82rem;
+  margin: 0.15rem 0;
+}
+.del-gate-check {
+  border: none;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+  font-size: 0.95rem;
+}
 .del-job-strip {
   display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 0.55rem;
   font-size: 0.82rem;

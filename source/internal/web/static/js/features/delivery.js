@@ -1506,6 +1506,26 @@ window.Features.delivery = {
         }
       });
     });
+    el.querySelectorAll("[data-gate-check]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const designId = btn.getAttribute("data-design");
+        const versionId = btn.getAttribute("data-version");
+        const index = Number(btn.getAttribute("data-gate-check"));
+        const done = btn.getAttribute("data-done") !== "1";
+        btn.disabled = true;
+        try {
+          await api.v1.deliveryToggleGateCheck(designId, versionId, {
+            index,
+            done,
+          });
+          await this.reload();
+          this.render();
+        } catch (e) {
+          this.showNotice(e.message || String(e), "Gate check failed");
+          btn.disabled = false;
+        }
+      });
+    });
     el.querySelectorAll("[data-ms-pause]").forEach((btn) => {
       btn.addEventListener("click", async () => {
         const msId = btn.getAttribute("data-ms-pause");
@@ -5539,6 +5559,7 @@ window.Features.delivery = {
       : phases.length
         ? `<div class="del-job-strip muted">${phases.filter((p) => (p.status || "") === "finished" || p.job_status === "finished").length}/${phases.length} phases finished</div>`
         : "";
+    const gateStrip = this.roadmapGateStripHtml(des);
 
     return `
       <div class="del-rm-ctrl-card" data-ms-card="${this.esc(m.id)}" id="ms-card-${this.esc(m.id)}"
@@ -5556,6 +5577,7 @@ window.Features.delivery = {
           ${this.badge(life || m.status)}
         </div>
         ${jobStrip}
+        ${gateStrip}
         <div class="del-rm-ctrl-links">
           ${
             desHref
@@ -5604,6 +5626,48 @@ window.Features.delivery = {
             : ""
         }
       </div>`;
+  },
+
+  parseGateChecklist(gate) {
+    const lines = String(gate || "").split("\n");
+    const out = [];
+    let idx = 0;
+    for (const line of lines) {
+      const m = line.match(/^\s*(?:[-*]|\d+\.)\s+\[([ xX])\]\s+(.*)$/);
+      if (!m) continue;
+      out.push({
+        index: idx,
+        done: m[1].toLowerCase() === "x",
+        text: (m[2] || "").trim(),
+      });
+      idx += 1;
+    }
+    return out;
+  },
+
+  roadmapGateStripHtml(des) {
+    if (!des) return "";
+    const vers = des.versions || [];
+    const rows = [];
+    for (const v of vers) {
+      const items = this.parseGateChecklist(v.gate || "");
+      for (const it of items) {
+        if (it.done) continue;
+        rows.push(`
+          <li class="del-gate-row">
+            <button type="button" class="del-gate-check" data-gate-check="${it.index}"
+              data-design="${this.esc(des.id)}" data-version="${this.esc(v.id)}" data-done="0"
+              title="Mark done">☐</button>
+            <span class="muted">${this.esc(v.title || "Version")}:</span>
+            <span>${this.esc(it.text || "#" + it.index)}</span>
+          </li>`);
+      }
+    }
+    if (!rows.length) return "";
+    return `<div class="del-gate-strip">
+      <div class="del-polish-head muted">Open gates</div>
+      <ul class="del-gate-list">${rows.join("")}</ul>
+    </div>`;
   },
 
   /** Parse bootstrap milestone id `ms_{engId}_{major}_{minor}` when present. */

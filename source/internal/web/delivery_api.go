@@ -504,6 +504,24 @@ func (s *Server) handleDelivery(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusCreated, v)
 			return
 		}
+		if len(parts) == 4 && parts[1] == "versions" && parts[3] == "gate-check" && r.Method == http.MethodPost {
+			vid := parts[2]
+			var body struct {
+				Index int  `json:"index"`
+				Done  bool `json:"done"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, "bad json", http.StatusBadRequest)
+				return
+			}
+			v, err := s.delivery.ToggleDesignVersionGateCheck(id, vid, body.Index, body.Done)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			writeJSON(w, http.StatusOK, v)
+			return
+		}
 		if len(parts) == 3 && parts[1] == "versions" {
 			vid := parts[2]
 			if r.Method == http.MethodPatch {

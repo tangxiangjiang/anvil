@@ -238,7 +238,7 @@ Test queue is **not** the `complete` list — `complete` means tests already pas
 | **Node chat** | From inspector: context = node + neighbors + design/req slices → local patch |
 | **Export** | Preview markdown tabs (`m_*.md`, `p_*.md`) → write to configured export root |
 
-**Gates** for execute are authored on each **Design Version** (`Gate` field: entry/exit, DoD, human check) — not a Roadmap sub-tab.
+**Gates** for execute are authored on each **Design Version** (`Gate` field: entry/exit, DoD, human check) — not a Roadmap sub-tab. Checkbox lines in Gate are **hard pre-checks** before phase / test-run Job enqueue (0.39.10).
 
 Human always confirms Apply on AI patches (no silent overwrite).
 

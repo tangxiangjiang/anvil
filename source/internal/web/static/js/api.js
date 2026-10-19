@@ -247,6 +247,17 @@ window.api = {
         body,
       );
     },
+    deliveryToggleGateCheck(designId, versionId, body) {
+      return api.req(
+        "POST",
+        "/api/v1/delivery/designs/" +
+          encodeURIComponent(designId) +
+          "/versions/" +
+          encodeURIComponent(versionId) +
+          "/gate-check",
+        body || {},
+      );
+    },
     deliveryDeleteDesignVersion(designId, versionId) {
       return api.req(
         "DELETE",

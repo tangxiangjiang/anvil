@@ -67,6 +67,7 @@ Working-state on the worker project (`.anvil/delivery/`) and markdown export are
 | PATCH | `/api/v1/delivery/designs/{id}` | ADR sections |
 | POST | `/api/v1/delivery/designs/{id}/versions` | Add Design Version |
 | PATCH | `/api/v1/delivery/designs/{id}/versions/{vid}` | Update Gate / Sub-architecture / Class design / `depends_on` |
+| POST | `/api/v1/delivery/designs/{id}/versions/{vid}/gate-check` | Toggle Gate checklist item `{index, done}` |
 | DELETE | `/api/v1/delivery/designs/{id}/versions/{vid}` | Remove Version (draft) |
 | POST | `/api/v1/delivery/designs/{id}/approve` | Approve when Versions complete |
 | POST | `/api/v1/delivery/designs/{id}/bootstrap` | Seed roadmap phases from Versions |
@@ -82,6 +83,8 @@ Working-state on the worker project (`.anvil/delivery/`) and markdown export are
 **Job bind (0.39.5+):** scheduler `JobAssignBody` accepts optional pass-through `milestone_id`, `phase_id`, `eng_req_id`, `major`, `minor`. Phases store `job_id` / `job_status` (`queued|running|finished|error|cancelled`). Roadmap **Start** enqueues the next unfinished phase; finished auto-advances while `run_state=running`.
 
 **Campaign / Polish Jobs (0.39.8–9):** Test **Run** / **Regress** store `campaign_job_*` on the milestone; **Fix** stores `job_*` on the buglist row; Polish ▶ run stores `job_*` on the polish row. `phase_id` pass-through uses kind tags (`campaign:run`, `campaign:regress`, `campaign:fix:{id}`, `polish:{id}`).
+
+**Gates hard check (0.39.10):** Design Version `Gate` markdown checkboxes (`- [ ]` / `- [x]`) must all be checked before phase Job enqueue (Start / auto-advance) and before Test **Run**. Text-only Gates (no boxes) do not block. Toggle via `POST .../versions/{vid}/gate-check`.
 
 Workers for the create picker: cluster inventory when available; otherwise snapshot may include denormalized workers from existing eng-reqs plus seed helpers.
 

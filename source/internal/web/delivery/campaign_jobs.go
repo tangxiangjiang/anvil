@@ -163,7 +163,7 @@ UPDATE delivery_polishes SET job_status=?, job_last_event=?, status=? WHERE id=?
 	return err
 }
 
-// AssertCampaignRunnable validates worker + cases (and no active campaign job).
+// AssertCampaignRunnable validates worker + cases + gates (and no active campaign job).
 func (s *Store) AssertCampaignRunnable(engID string, major, minor int) (Milestone, error) {
 	ms, err := s.findMilestoneByBind(engID, major, minor)
 	if err != nil {
@@ -174,6 +174,9 @@ func (s *Store) AssertCampaignRunnable(engID string, major, minor int) (Mileston
 	}
 	if ms.CampaignJobStatus == JobRunning || ms.CampaignJobStatus == JobQueued {
 		return Milestone{}, fmt.Errorf("campaign job already %s", ms.CampaignJobStatus)
+	}
+	if err := s.AssertCampaignGatesReady(engID, major, minor); err != nil {
+		return Milestone{}, err
 	}
 	cases, err := s.listTestCasesForBind(engID, major, minor)
 	if err != nil {

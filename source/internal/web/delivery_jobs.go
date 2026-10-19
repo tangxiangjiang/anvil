@@ -217,6 +217,9 @@ func (s *Server) startMilestonePhaseJob(msID string, forceStub bool) (delivery.P
 	if ph.JobStatus == delivery.JobRunning || ph.JobStatus == delivery.JobQueued {
 		return ph, nil
 	}
+	if err := s.delivery.AssertPhaseGateReady(msID, ph.ID); err != nil {
+		return delivery.Phase{}, err
+	}
 	target, resolveErr := s.resolveWorkerTarget(workerID)
 	localStub := false
 	if resolveErr != nil {
@@ -280,7 +283,11 @@ func (s *Server) runPhaseJobLocalStub(msID, phaseID, jobID string, advance bool)
 	}
 	ms, err := s.delivery.GetMilestone(msID)
 	if err == nil && ms.RunState == delivery.RunRunning {
-		_, _ = s.startMilestonePhaseJob(msID, true)
+		if _, err := s.startMilestonePhaseJob(msID, true); err != nil && strings.Contains(err.Error(), "gate checklist") {
+			_ = s.delivery.AppendPhaseJobEvent(phaseID, delivery.JobFinished, err.Error())
+			rs := delivery.RunPaused
+			_, _ = s.delivery.PatchMilestone(msID, delivery.PatchMilestoneInput{RunState: &rs})
+		}
 	}
 }
 
@@ -349,8 +356,14 @@ func (s *Server) runPhaseJob(msID, phaseID, jobID string, in schedclient.JobCrea
 		if err == nil && ms.RunState == delivery.RunRunning {
 			if _, err := s.startMilestonePhaseJob(msID, in.ForceStub); err != nil {
 				// No more phases or cannot start — leave running until Stop/SubmitTest.
-				if !strings.Contains(err.Error(), "no runnable") {
+				if strings.Contains(err.Error(), "no runnable") {
+					// ok
+				} else {
 					_ = s.delivery.AppendPhaseJobEvent(phaseID, delivery.JobFinished, err.Error())
+					if strings.Contains(err.Error(), "gate checklist") {
+						rs := delivery.RunPaused
+						_, _ = s.delivery.PatchMilestone(msID, delivery.PatchMilestoneInput{RunState: &rs})
+					}
 				}
 			}
 		}
