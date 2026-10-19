@@ -73,6 +73,7 @@ Working-state on the worker project (`.anvil/delivery/`) and markdown export are
 | POST | `/api/v1/delivery/designs/{id}/bootstrap` | Seed roadmap phases from Versions |
 | PATCH | `/api/v1/delivery/roadmap/milestones/{id}` | Canvas `x`/`y`; Worker / `run_state`; `execute` / `submit_test` / `pass_test` / `fail_test` / `ready_dev` / `accept_milestone` |
 | POST | `/api/v1/delivery/roadmap/milestones/{id}/acceptance-check` | Toggle Acceptance checklist `{index, done}` |
+| POST | `/api/v1/delivery/roadmap/milestones/{id}/merge` | After Accept: merge `milestone/{id}` → main (stub or `delivery_merge_root`) |
 | POST | `/api/v1/delivery/buglist` | Optional create-only path for a buglist stub (Fail usually goes through milestone PATCH) |
 | POST | `/api/v1/delivery/test-cases` | Batch create cases `{ eng_req_id, major, minor, cases:[{title,body}] }` |
 | POST | `/api/v1/delivery/test-cases/run` | Mock Worker run for bind; failed cases spawn open buglist items |
@@ -86,6 +87,8 @@ Working-state on the worker project (`.anvil/delivery/`) and markdown export are
 **Campaign / Polish Jobs (0.39.8–9):** Test **Run** / **Regress** store `campaign_job_*` on the milestone; **Fix** stores `job_*` on the buglist row; Polish ▶ run stores `job_*` on the polish row. `phase_id` pass-through uses kind tags (`campaign:run`, `campaign:regress`, `campaign:fix:{id}`, `polish:{id}`).
 
 **Gates hard check (0.39.10):** Design Version `Gate` markdown checkboxes (`- [ ]` / `- [x]`) must all be checked before phase Job enqueue (Start / auto-advance) and before Test **Run**. Text-only Gates (no boxes) do not block. Toggle via `POST .../versions/{vid}/gate-check`.
+
+**Cancel / parse / merge (0.39.13–15):** Pause/Stop call scheduler `POST /v1/jobs/{id}/cancel` when possible. Test Run applies `ANVIL_CAMPAIGN_RESULT` JSON from job result when present. After Accept, **Merge main** records merge (local git when `delivery_merge_root` is set).
 
 Workers for the create picker: cluster inventory when available; otherwise snapshot may include denormalized workers from existing eng-reqs plus seed helpers.
 

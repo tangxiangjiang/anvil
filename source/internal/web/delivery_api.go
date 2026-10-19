@@ -608,6 +608,24 @@ func (s *Server) handleDelivery(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(path, "roadmap/milestones/") {
 		id := strings.TrimPrefix(path, "roadmap/milestones/")
 		id = strings.Trim(id, "/")
+		if id != "" && strings.HasSuffix(id, "/merge") && r.Method == http.MethodPost {
+			msID := strings.TrimSuffix(id, "/merge")
+			msID = strings.Trim(msID, "/")
+			var body struct {
+				ForceStub bool `json:"force_stub"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			m, err := s.delivery.MergeMilestone(msID, delivery.MergeMilestoneInput{
+				ForceStub: body.ForceStub,
+				MergeRoot: s.cfg.DeliveryMergeRoot,
+			})
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			writeJSON(w, http.StatusOK, m)
+			return
+		}
 		if id != "" && strings.HasSuffix(id, "/acceptance-check") && r.Method == http.MethodPost {
 			msID := strings.TrimSuffix(id, "/acceptance-check")
 			msID = strings.Trim(msID, "/")

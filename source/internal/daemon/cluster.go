@@ -132,6 +132,12 @@ func (e *ClusterEdge) session(ctx context.Context, url string) error {
 				var job JobAssignBody
 				_ = DecodeBody(msg, &job)
 				go e.forwardAssign(ctx, conn, job)
+			case KindJobCancel:
+				var body JobCancelBody
+				_ = DecodeBody(msg, &body)
+				if body.JobID != "" {
+					_ = e.server.CancelActiveJob(body.JobID)
+				}
 			case KindClusterConfig:
 				var cfgBody ClusterConfigBody
 				_ = DecodeBody(msg, &cfgBody)

@@ -383,15 +383,50 @@ func (s *Server) runPhaseJob(msID, phaseID, jobID string, in schedclient.JobCrea
 }
 
 func (s *Server) softStopMilestoneJobs(msID string, runState string) error {
+	hub := s.ensureJobHub()
 	ph, err := s.delivery.ActivePhaseJob(msID)
 	if err == nil && ph.JobID != "" {
-		_ = s.delivery.CompletePhaseJob(ph.ID, delivery.JobCancelled, ph.Status, "cancelled locally (soft pause/stop)")
-		hub := s.ensureJobHub()
+		_ = s.cancelSchedulerJob(ph.JobID)
+		_ = s.delivery.CompletePhaseJob(ph.ID, delivery.JobCancelled, "cancelled", "cancelled (pause/stop)")
 		hub.publishDone(ph.JobID, daemon.JobDoneBody{JobID: ph.JobID, Status: "cancelled"}, "")
+	}
+	ms, err := s.delivery.GetMilestone(msID)
+	if err == nil {
+		st := ms.CampaignJobStatus
+		if (st == delivery.JobRunning || st == delivery.JobQueued) && ms.CampaignJobID != "" {
+			_ = s.cancelSchedulerJob(ms.CampaignJobID)
+			_ = s.delivery.ClearCampaignJob(msID, delivery.JobCancelled, "cancelled (pause/stop)")
+			hub.publishDone(ms.CampaignJobID, daemon.JobDoneBody{JobID: ms.CampaignJobID, Status: "cancelled"}, "")
+		}
 	}
 	rs := runState
 	_, err = s.delivery.PatchMilestone(msID, delivery.PatchMilestoneInput{RunState: &rs})
 	return err
+}
+
+func (s *Server) cancelSchedulerJob(jobID string) error {
+	jobID = strings.TrimSpace(jobID)
+	if jobID == "" {
+		return fmt.Errorf("job id required")
+	}
+	tok := s.cfg.SchedulerToken()
+	var last error
+	for _, f := range s.cfg.Fleets {
+		cli := &schedclient.Client{
+			BaseURL: f.SchedulerURL,
+			Token:   tok,
+			HTTP:    &http.Client{Timeout: 8 * time.Second},
+		}
+		if err := cli.CancelJob(context.Background(), jobID); err != nil {
+			last = err
+			continue
+		}
+		return nil
+	}
+	if last != nil {
+		return last
+	}
+	return fmt.Errorf("no fleets configured to cancel job")
 }
 
 func (s *Server) handleDeliveryJobEvents(w http.ResponseWriter, r *http.Request, jobID string) {

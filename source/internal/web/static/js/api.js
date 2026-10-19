@@ -290,6 +290,15 @@ window.api = {
         body || {},
       );
     },
+    deliveryMergeMilestone(msId, body) {
+      return api.req(
+        "POST",
+        "/api/v1/delivery/roadmap/milestones/" +
+          encodeURIComponent(msId) +
+          "/merge",
+        body || {},
+      );
+    },
     deliveryCreatePolish(body) {
       return api.req("POST", "/api/v1/delivery/polishes", body || {});
     },

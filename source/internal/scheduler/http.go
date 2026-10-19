@@ -28,6 +28,7 @@ func (h *Hub) AppHandler() http.Handler {
 	mux.HandleFunc("/v1/workspaces", h.withAuth(h.handleWorkspaces))
 	mux.HandleFunc("/v1/models", h.withAuth(h.handleModels))
 	mux.HandleFunc("/v1/jobs", h.withAuth(h.handleJobs))
+	mux.HandleFunc("/v1/jobs/", h.withAuth(h.handleJobRoutes))
 	mux.HandleFunc("/v1/usage", h.withAuth(h.handleUsage))
 	return mux
 }
@@ -389,6 +390,22 @@ type jobRequest struct {
 	EngReqID    string   `json:"eng_req_id"`
 	Major       int      `json:"major"`
 	Minor       int      `json:"minor"`
+}
+
+func (h *Hub) handleJobRoutes(w http.ResponseWriter, r *http.Request) {
+	rest := strings.TrimPrefix(r.URL.Path, "/v1/jobs/")
+	rest = strings.Trim(rest, "/")
+	parts := strings.Split(rest, "/")
+	if len(parts) == 2 && parts[1] == "cancel" && r.Method == http.MethodPost {
+		jobID := parts[0]
+		if err := h.CancelJob(jobID); err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "job_id": jobID})
+		return
+	}
+	http.NotFound(w, r)
 }
 
 func (h *Hub) handleJobs(w http.ResponseWriter, r *http.Request) {

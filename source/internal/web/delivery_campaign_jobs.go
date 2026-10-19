@@ -302,11 +302,12 @@ func (s *Server) touchCampaignProgress(kind, msID, refID, status, event string) 
 func (s *Server) applyCampaignFinished(kind, msID, engID string, major, minor int, refID string, done daemon.JobDoneBody, useMockRun bool) {
 	switch kind {
 	case delivery.CampaignKindRun:
-		if useMockRun || s.jobs != nil {
-			// Stub / injected runner: keep deterministic odd-index fail semantics.
+		if trail, ok := delivery.ParseCampaignResult(done.Result); ok {
+			_, _ = s.delivery.ApplyCampaignRunResult(engID, major, minor, trail)
+		} else if useMockRun || s.jobs != nil {
+			// Stub / injected runner without trailer: deterministic odd-index fail.
 			_, _ = s.delivery.RunTestCases(engID, major, minor)
 		} else {
-			// Real worker without structured parse: treat finished as all passed.
 			_, _ = s.delivery.RunTestCasesAllPass(engID, major, minor)
 		}
 		_ = s.delivery.ClearCampaignJob(msID, delivery.JobFinished, truncateEvent(done.Result))

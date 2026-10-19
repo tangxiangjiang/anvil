@@ -126,7 +126,10 @@ CREATE TABLE IF NOT EXISTS delivery_milestones (
   campaign_job_kind TEXT NOT NULL DEFAULT '',
   campaign_job_last_event TEXT NOT NULL DEFAULT '',
   accept_status TEXT NOT NULL DEFAULT '',
-  accepted_at TEXT NOT NULL DEFAULT ''
+  accepted_at TEXT NOT NULL DEFAULT '',
+  merge_status TEXT NOT NULL DEFAULT '',
+  merge_note TEXT NOT NULL DEFAULT '',
+  merged_at TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS delivery_buglist_items (
   id TEXT PRIMARY KEY,
@@ -260,6 +263,9 @@ func (s *Store) ensureMilestoneAcceptColumns() error {
 	for _, q := range []string{
 		`ALTER TABLE delivery_milestones ADD COLUMN accept_status TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE delivery_milestones ADD COLUMN accepted_at TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE delivery_milestones ADD COLUMN merge_status TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE delivery_milestones ADD COLUMN merge_note TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE delivery_milestones ADD COLUMN merged_at TEXT NOT NULL DEFAULT ''`,
 	} {
 		_, err := s.db.Exec(q)
 		if err == nil {
@@ -755,6 +761,9 @@ type Milestone struct {
 	CampaignJobLastEvent string  `json:"campaign_job_last_event,omitempty"`
 	AcceptStatus         string  `json:"accept_status,omitempty"`
 	AcceptedAt           string  `json:"accepted_at,omitempty"`
+	MergeStatus          string  `json:"merge_status,omitempty"`
+	MergeNote            string  `json:"merge_note,omitempty"`
+	MergedAt             string  `json:"merged_at,omitempty"`
 	Phases               []Phase `json:"phases"`
 }
 
@@ -2988,11 +2997,12 @@ func (s *Store) getMilestone(id string) (Milestone, error) {
 	err := s.db.QueryRow(`
 SELECT id, title, status, acceptance, x, y, execute_worker_id, COALESCE(run_state,'idle'), COALESCE(test_note,''),
   COALESCE(campaign_job_id,''), COALESCE(campaign_job_status,''), COALESCE(campaign_job_kind,''), COALESCE(campaign_job_last_event,''),
-  COALESCE(accept_status,''), COALESCE(accepted_at,'')
+  COALESCE(accept_status,''), COALESCE(accepted_at,''),
+  COALESCE(merge_status,''), COALESCE(merge_note,''), COALESCE(merged_at,'')
 FROM delivery_milestones WHERE id=?`, id).Scan(
 		&m.ID, &m.Title, &m.Status, &m.Acceptance, &m.X, &m.Y, &m.ExecuteWorkerID, &m.RunState, &m.TestNote,
 		&m.CampaignJobID, &m.CampaignJobStatus, &m.CampaignJobKind, &m.CampaignJobLastEvent,
-		&m.AcceptStatus, &m.AcceptedAt)
+		&m.AcceptStatus, &m.AcceptedAt, &m.MergeStatus, &m.MergeNote, &m.MergedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return Milestone{}, fmt.Errorf("milestone not found")
@@ -3020,7 +3030,8 @@ func (s *Store) loadRoadmap() (Roadmap, error) {
 	rows, err := s.db.Query(`
 SELECT id, title, status, acceptance, x, y, execute_worker_id, COALESCE(run_state,'idle'), COALESCE(test_note,''),
   COALESCE(campaign_job_id,''), COALESCE(campaign_job_status,''), COALESCE(campaign_job_kind,''), COALESCE(campaign_job_last_event,''),
-  COALESCE(accept_status,''), COALESCE(accepted_at,'')
+  COALESCE(accept_status,''), COALESCE(accepted_at,''),
+  COALESCE(merge_status,''), COALESCE(merge_note,''), COALESCE(merged_at,'')
 FROM delivery_milestones ORDER BY sort_order, id`)
 	if err != nil {
 		return rm, err
@@ -3029,7 +3040,7 @@ FROM delivery_milestones ORDER BY sort_order, id`)
 		var m Milestone
 		if err := rows.Scan(&m.ID, &m.Title, &m.Status, &m.Acceptance, &m.X, &m.Y, &m.ExecuteWorkerID, &m.RunState, &m.TestNote,
 			&m.CampaignJobID, &m.CampaignJobStatus, &m.CampaignJobKind, &m.CampaignJobLastEvent,
-			&m.AcceptStatus, &m.AcceptedAt); err != nil {
+			&m.AcceptStatus, &m.AcceptedAt, &m.MergeStatus, &m.MergeNote, &m.MergedAt); err != nil {
 			_ = rows.Close()
 			return rm, err
 		}

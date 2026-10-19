@@ -195,6 +195,15 @@ type JobCreate struct {
 	Minor       int      `json:"minor,omitempty"`
 }
 
+// CancelJob POSTs /v1/jobs/{id}/cancel.
+func (c *Client) CancelJob(ctx context.Context, jobID string) error {
+	jobID = strings.TrimSpace(jobID)
+	if jobID == "" {
+		return fmt.Errorf("job_id required")
+	}
+	return c.do(ctx, http.MethodPost, "/v1/jobs/"+jobID+"/cancel", map[string]any{}, nil)
+}
+
 // CreateJob POSTs /v1/jobs and waits for JobDone (non-streaming).
 func (c *Client) CreateJob(ctx context.Context, in JobCreate) (daemon.JobDoneBody, error) {
 	in.Stream = false

@@ -327,7 +327,7 @@ func (s *Server) handleJobCancel(w *connWriter, env Envelope) {
 		_ = s.writeErr(w, env.ID, "job_id required", "")
 		return
 	}
-	if !s.slots.CancelJob(body.JobID) {
+	if !s.CancelActiveJob(body.JobID) {
 		_ = s.writeErr(w, env.ID, "no active job "+body.JobID, body.JobID)
 		return
 	}
@@ -336,6 +336,11 @@ func (s *Server) handleJobCancel(w *connWriter, env Envelope) {
 		Type:  "status",
 		Text:  "cancelling",
 	})})
+}
+
+// CancelActiveJob cancels a running slot job (local or via cluster cancel).
+func (s *Server) CancelActiveJob(jobID string) bool {
+	return s.slots.CancelJob(jobID)
 }
 
 func (s *Server) writeErr(w *connWriter, id, msg, jobID string) error {

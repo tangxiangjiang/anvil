@@ -1565,9 +1565,27 @@ window.Features.delivery = {
           await api.v1.deliveryPatchMilestone(msId, { accept_milestone: true });
           await this.reload();
           this.render();
-          this.showNotice("Milestone accepted (merge to main not wired yet).", "Accept");
+          this.showNotice("Milestone accepted — Merge to main when ready.", "Accept");
         } catch (e) {
           this.showNotice(e.message || String(e), "Accept failed");
+          btn.disabled = false;
+        }
+      });
+    });
+    el.querySelectorAll("[data-ms-merge]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const msId = btn.getAttribute("data-ms-merge");
+        btn.disabled = true;
+        try {
+          const m = await api.v1.deliveryMergeMilestone(msId, {});
+          await this.reload();
+          this.render();
+          this.showNotice(
+            m.merge_note || "Merged to main.",
+            m.merge_status === "merged" ? "Merge" : "Merge status",
+          );
+        } catch (e) {
+          this.showNotice(e.message || String(e), "Merge failed");
           btn.disabled = false;
         }
       });
@@ -5580,6 +5598,8 @@ window.Features.delivery = {
       });
     const acceptSt = (m.accept_status || "").toLowerCase();
     const canAccept = life === "complete" && acceptSt !== "accepted";
+    const mergeSt = (m.merge_status || "").toLowerCase();
+    const canMerge = acceptSt === "accepted" && mergeSt !== "merged";
     const acceptStrip = this.roadmapAcceptStripHtml(m);
     const polishes =
       bind != null ? this.polishesForBind(bind.engId, bind.major, bind.minor) : [];
@@ -5680,8 +5700,14 @@ window.Features.delivery = {
                 : ""
             }
             ${
+              canMerge
+                ? `<button type="button" class="del-run-btn" data-ms-merge="${this.esc(m.id)}"
+                     title="Merge milestone branch into main">Merge main</button>`
+                : ""
+            }
+            ${
               acceptSt === "accepted"
-                ? `<span class="muted">Accepted${m.accepted_at ? " · " + this.esc(m.accepted_at.slice(0, 10)) : ""}</span>`
+                ? `<span class="muted">Accepted${m.accepted_at ? " · " + this.esc(m.accepted_at.slice(0, 10)) : ""}${mergeSt === "merged" ? " · merged" : ""}</span>`
                 : ""
             }
             ${
