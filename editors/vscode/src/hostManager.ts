@@ -29,6 +29,7 @@ import {
   PermissionsAddParams,
   PermissionsAddResult,
   PermissionsResult,
+  PermissionsSetParams,
   RuleFileInfo,
   RuleSpec,
   SessionDeleteResult,
@@ -421,6 +422,20 @@ export class HostManager {
     const params: PermissionsAddParams = { rule };
     if (requestId !== undefined && requestId !== '') params.request_id = requestId;
     return client.request<PermissionsAddResult>(Method.PermissionsAdd, params);
+  }
+
+  /**
+   * Replaces the workspace rule file with the list a manager showed a person.
+   *
+   * The answer is `permissions.get`'s result, not an echo: the panel renders what
+   * a session will read, including a declaration the host re-read differently. A
+   * file this build cannot parse is refused and left untouched, and the message
+   * names the line — the manager shows it rather than writing over the one thing
+   * the user was told to go and fix.
+   */
+  async savePermissionRules(params: PermissionsSetParams): Promise<PermissionsResult> {
+    const client = await this.startClient();
+    return client.request<PermissionsResult>(Method.PermissionsSet, params);
   }
 
   /**

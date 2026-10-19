@@ -191,6 +191,8 @@ func (s *Server) dispatch(ctx context.Context, req *Request) (any, *RPCError) {
 		return s.handlePermissionsGet(ctx, req.Params)
 	case MethodPermissionsAdd:
 		return s.handlePermissionsAdd(ctx, req.Params)
+	case MethodPermissionsSet:
+		return s.handlePermissionsSet(ctx, req.Params)
 	case MethodApprovalResponse:
 		return s.handleApprovalResponse(req.Params)
 	default:
@@ -964,6 +966,65 @@ func (s *Server) handlePermissionsAdd(_ context.Context, params json.RawMessage)
 		}
 	}
 	return out, nil
+}
+
+// handlePermissionsSet replaces the workspace rule file with the list a person
+// approved in the manager.
+//
+// It is a replacement, not an append, so it makes the append's refusals again
+// and adds one: every rule must compile, the declared mode must be one a project
+// file may declare, and the file on disk must read — replacing a policy this
+// build could not parse would discard the very text the user was told to go and
+// fix. The write is whole-file and atomic, and the answer is the file read back
+// the way permissions.get reads it, so the panel shows what a new session will
+// open under rather than merely what it sent.
+func (s *Server) handlePermissionsSet(ctx context.Context, params json.RawMessage) (any, *RPCError) {
+	p, err := decode[PermissionsSetParams](params)
+	if err != nil {
+		return nil, errInvalidParams("permissions.set: " + err.Error())
+	}
+	rules := make([]anvil.PermissionRule, 0, len(p.Rules))
+	for i, r := range p.Rules {
+		tool := strings.TrimSpace(r.Tool)
+		if tool == "" {
+			return nil, errInvalidParams(fmt.Sprintf("permissions.set: rule %d: tool is required", i+1))
+		}
+		// A row the manager left on its default is an allow; a file written by hand
+		// sends the word it wants either way.
+		effect := strings.TrimSpace(r.Effect)
+		if effect == "" {
+			effect = anvil.PermissionEffectAllow
+		}
+		rules = append(rules, anvil.PermissionRule{
+			Effect:  effect,
+			Tool:    tool,
+			Pattern: r.Pattern,
+			Reason:  r.Reason,
+		})
+	}
+	mode := strings.TrimSpace(p.DefaultMode)
+	if mode != "" && honouredMode(mode) == "" {
+		// One wording for "this declaration will not be honoured", whichever of
+		// get, the session result or a save is asking. A save is refused in
+		// advance; the sentence reads the same because the rule is the same.
+		return nil, errInvalidParams("permissions.set: " + refusedMode(mode))
+	}
+
+	cwd := s.cwdPath()
+	// Read before writing. The manager shows the problem and disables Save in this
+	// state, so reaching here means a client skipped that step — and the old file
+	// still gets the benefit of the doubt.
+	if _, err := anvil.LoadPermissionRuleFile(cwd); err != nil {
+		return nil, errCode(CodeInvalidRequest, "permissions.set: "+err.Error())
+	}
+	if err := anvil.SavePermissionRuleFile(cwd, rules, mode); err != nil {
+		var perr *anvil.PermissionRuleError
+		if errors.As(err, &perr) {
+			return nil, errInvalidParams("permissions.set: " + perr.Error())
+		}
+		return nil, errHost(err)
+	}
+	return s.handlePermissionsGet(ctx, nil)
 }
 
 // ruleInfos names the rules of a set for the wire: where each one sits and how

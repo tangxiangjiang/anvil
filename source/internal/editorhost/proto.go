@@ -72,6 +72,11 @@ const (
 	// MethodPermissionsAdd appends one rule to that file, and answers the pending
 	// approval it was written for when the new file decides it.
 	MethodPermissionsAdd = "permissions.add"
+	// MethodPermissionsSet replaces the whole file with the list a client showed
+	// a person. It is the writer behind the rules manager: the host compiles the
+	// text with the same parser a session uses before touching the disk. Additive:
+	// a host without it answers -32601, which a client reads as "no manager here".
+	MethodPermissionsSet = "permissions.set"
 	MethodShutdown       = "shutdown"
 
 	// MethodApprovalResponse answers a pending approval.request. It is the only
@@ -376,6 +381,21 @@ type PermissionsAddResult struct {
 	// because the file now decides the call. False means the card still has to be
 	// answered — DecidedBy says what stood in the way.
 	Approved bool `json:"approved,omitempty"`
+}
+
+// PermissionsSetParams replaces the workspace rule file with exactly these
+// rules and this declaration.
+//
+// It is a replacement, not a patch: a client sends the list it showed a person,
+// and the file becomes that list. The host refuses rather than guesses when the
+// existing file cannot be read — replacing a policy this build could not parse
+// is the failure the rule file is arranged against.
+type PermissionsSetParams struct {
+	Rules []RuleSpec `json:"rules"`
+	// DefaultMode is a ladder word, or empty to remove the declaration. The host
+	// refuses a word the ladder does not have and refuses bypass, in the same
+	// words get and the session result use.
+	DefaultMode string `json:"default_mode,omitempty"`
 }
 
 // RememberOption is one "always allow" a client may offer on an approval card.

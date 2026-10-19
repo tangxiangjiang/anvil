@@ -145,6 +145,11 @@
         "command": "anvil.openPermissionRules",
         "title": "Anvil: Open Permission Rules",
         "category": "Anvil"
+      },
+      {
+        "command": "anvil.openPermissionRulesFile",
+        "title": "Anvil: Open Permission Rules File",
+        "category": "Anvil"
       }
     ],
     "menus": {

@@ -371,6 +371,160 @@ func TestPermissionsAddWithAStaleRequestID(t *testing.T) {
 	}
 }
 
+// --- replacing it from the manager -----------------------------------------
+
+// The manager sends the list a person approved, and the file becomes that list:
+// rows go, rows change, and the declaration is written and read back in the words
+// the ladder uses. The answer is permissions.get's, so the panel renders what a
+// new session will open under.
+func TestPermissionsSetReplacesTheFile(t *testing.T) {
+	llm := newStubLLM(t)
+	h, dir := initHost(t, llm.baseURL())
+	writeRules(t, dir, `{"version":1,"defaultMode":"ask","rules":[
+		{"effect":"allow","tool":"shell","pattern":"readonly","reason":"旧规则"},
+		{"effect":"deny","tool":"shell","pattern":"rm -rf:*"}
+	]}`)
+
+	res := resultOf(t, h.callOK(MethodPermissionsSet, PermissionsSetParams{
+		Rules: []RuleSpec{
+			{Effect: "allow", Tool: "shell", Pattern: "git status:*", Reason: "只读"},
+		},
+		DefaultMode: ModeAuto,
+	}))
+
+	if exists, _ := res["exists"].(bool); !exists {
+		t.Fatalf("exists = false after a write: %v", res)
+	}
+	if got := res["default_mode"]; got != ModeAuto {
+		t.Errorf("default_mode = %v, want %q", got, ModeAuto)
+	}
+	rules, _ := res["rules"].([]any)
+	if len(rules) != 1 {
+		t.Fatalf("rules = %v, want the one just saved", rules)
+	}
+	row, _ := rules[0].(map[string]any)
+	if row["effect"] != "allow" || row["pattern"] != "git status:*" || row["reason"] != "只读" {
+		t.Errorf("row = %v", row)
+	}
+	if got, _ := row["index"].(float64); int(got) != 1 {
+		t.Errorf("index = %v, want 1", row["index"])
+	}
+	// Replacement means the rows that were there are gone, not merged.
+	set, err := anvil.LoadPermissionRuleFile(dir)
+	if err != nil || set == nil || len(set.Rules) != 1 || set.DefaultMode != ModeAuto {
+		t.Fatalf("the file does not hold what was saved: %+v %v", set, err)
+	}
+	if body := readRules(t, dir); strings.Contains(body, "旧规则") || strings.Contains(body, "rm -rf:*") {
+		t.Errorf("a replaced file kept old rows:\n%s", body)
+	}
+}
+
+// An empty list is a decision too: a workspace with no rules is a state the panel
+// can save, and the file says so with an empty array rather than disappearing.
+func TestPermissionsSetWritesAnEmptyList(t *testing.T) {
+	llm := newStubLLM(t)
+	h, dir := initHost(t, llm.baseURL())
+	writeRules(t, dir, `{"version":1,"rules":[{"effect":"allow","tool":"shell","pattern":"readonly"}]}`)
+
+	res := resultOf(t, h.callOK(MethodPermissionsSet, PermissionsSetParams{Rules: []RuleSpec{}}))
+	if rules, _ := res["rules"].([]any); len(rules) != 0 {
+		t.Fatalf("rules = %v, want none", rules)
+	}
+	if _, ok := res["default_mode"]; ok {
+		t.Errorf("no declaration was sent, so none is reported: %v", res)
+	}
+	set, err := anvil.LoadPermissionRuleFile(dir)
+	if err != nil || set == nil || len(set.Rules) != 0 {
+		t.Fatalf("the file does not hold an empty list: %+v %v", set, err)
+	}
+}
+
+// A row the manager left on its default is an allow, the same reading the card's
+// buttons have.
+func TestPermissionsSetDefaultsAnOmittedEffectToAllow(t *testing.T) {
+	llm := newStubLLM(t)
+	h, dir := initHost(t, llm.baseURL())
+
+	h.callOK(MethodPermissionsSet, PermissionsSetParams{Rules: []RuleSpec{{Tool: "web_search"}}})
+	rules, err := anvil.LoadPermissionRules(dir)
+	if err != nil || len(rules) != 1 || rules[0].Effect != "allow" {
+		t.Fatalf("rules = %v %v, want one allow", rules, err)
+	}
+}
+
+// The manager validates before it sends; the host validates again, because the
+// file is the thing a session trusts. A rule the loader would refuse never
+// reaches the disk.
+func TestPermissionsSetRefusesARuleTheLoaderWould(t *testing.T) {
+	llm := newStubLLM(t)
+	h, dir := initHost(t, llm.baseURL())
+
+	rpcErr, ok := rpcErrorOf(h.call(MethodPermissionsSet, PermissionsSetParams{
+		Rules: []RuleSpec{{Effect: "maybe", Tool: "shell"}},
+	}))
+	if !ok || rpcErr.Code != CodeInvalidParams {
+		t.Fatalf("want CodeInvalidParams, got %v", rpcErr)
+	}
+	if _, err := os.Stat(anvil.PermissionRulesPath(dir)); !os.IsNotExist(err) {
+		t.Fatalf("a refused set must not create the file: %v", err)
+	}
+}
+
+func TestPermissionsSetRequiresATool(t *testing.T) {
+	llm := newStubLLM(t)
+	h, dir := initHost(t, llm.baseURL())
+
+	rpcErr, ok := rpcErrorOf(h.call(MethodPermissionsSet, PermissionsSetParams{
+		Rules: []RuleSpec{{Effect: "allow", Pattern: "readonly"}},
+	}))
+	if !ok || rpcErr.Code != CodeInvalidParams {
+		t.Fatalf("want CodeInvalidParams, got %v", rpcErr)
+	}
+	if _, err := os.Stat(anvil.PermissionRulesPath(dir)); !os.IsNotExist(err) {
+		t.Fatalf("a refused set must not create the file: %v", err)
+	}
+}
+
+// A project file may not grant bypass, so the manager may not write it either.
+// A word that is not a mode is refused in the same place.
+func TestPermissionsSetRefusesADefaultModeTheHostWouldNotHonour(t *testing.T) {
+	for _, mode := range []string{ModeBypass, "accept edits"} {
+		llm := newStubLLM(t)
+		h, dir := initHost(t, llm.baseURL())
+
+		rpcErr, ok := rpcErrorOf(h.call(MethodPermissionsSet, PermissionsSetParams{DefaultMode: mode}))
+		if !ok || rpcErr.Code != CodeInvalidParams {
+			t.Fatalf("%q: want CodeInvalidParams, got %v", mode, rpcErr)
+		}
+		if _, err := os.Stat(anvil.PermissionRulesPath(dir)); !os.IsNotExist(err) {
+			t.Fatalf("%q: a refused set must not create the file: %v", mode, err)
+		}
+	}
+}
+
+// Replacement is the one operation most tempted to "fix" a broken file, and it
+// must not: the old text is what the user was told to go and edit, and the panel
+// is in its read-only state precisely because of it.
+func TestPermissionsSetRefusesAMalformedFile(t *testing.T) {
+	llm := newStubLLM(t)
+	h, dir := initHost(t, llm.baseURL())
+	broken := "{\n  \"version\": 1,\n  \"rules\": [\n    {\"effect\": \"allow\", \"tool\": \"shell\",}\n  ]\n}\n"
+	writeRules(t, dir, broken)
+
+	rpcErr, ok := rpcErrorOf(h.call(MethodPermissionsSet, PermissionsSetParams{
+		Rules: []RuleSpec{{Effect: "allow", Tool: "shell", Pattern: "readonly"}},
+	}))
+	if !ok {
+		t.Fatalf("replacing a broken file must fail")
+	}
+	if !strings.Contains(rpcErr.Message, "permissions.json") || !strings.Contains(rpcErr.Message, "line 4") {
+		t.Errorf("the error must name the file and the place: %q", rpcErr.Message)
+	}
+	if got := readRules(t, dir); got != broken {
+		t.Fatalf("the file must be untouched:\n%s", got)
+	}
+}
+
 // --- what the card is told ---------------------------------------------------
 
 // The card is offered exactly the choices that would decide this call, each one

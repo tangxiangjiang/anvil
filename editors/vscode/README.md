@@ -162,7 +162,8 @@ spawned with.
   `allowed by rule N: …` on its card, and a refused one shows the rule's reason.
   A rules file that will not compile is opened where it is broken, with a
   diagnostic on the line, rather than failing the session with a bare error —
-  and **Anvil: Open Permission Rules** is how you get to the file.
+  and **Anvil: Open Permission Rules** is the manager that edits it without the
+  JSON; **Anvil: Open Permission Rules File** opens the file itself.
 - **Kills its child.** One host per window, stopped on deactivate, on a folder
   change, and on a settings change (the host reads its configuration at spawn).
 - **Tells you what it read.** The tab reports which rule files this workspace
@@ -321,10 +322,14 @@ Type `/` in the composer for the catalogue. Built-ins:
 | `/clear` | Start a new conversation |
 | `/help` | List the commands |
 
-**Anvil: Open Permission Rules** (also the **Permissions** button on the composer) opens this
-workspace's `.anvil/permissions.json`, creating it with an empty rule set if it is not there
-yet. That file is what decides whether a tool call runs, stops to ask you, or is refused
-outright — see *Permission modes and rules*.
+**Anvil: Open Permission Rules** (also the **Permissions** button on the composer) opens the
+rules manager: this workspace's rules as a list of effect, tool, pattern and reason rows, plus
+the mode new sessions start in. Save sends the whole list to the host, which compiles it with
+the same parser a session uses and writes the file atomically; a file that will not parse is
+read-only in the manager rather than overwritten. **Open JSON** in the manager, and
+**Anvil: Open Permission Rules File** in the palette, open `.anvil/permissions.json` itself —
+creating it with an empty rule set if it is not there yet. That file is what decides whether a
+tool call runs, stops to ask you, or is refused outright — see *Permission modes and rules*.
 
 Skills in the workspace (`.anvil/skills/<id>/SKILL.md`) are listed as commands
 of their own: running one turns that skill on for the conversation. `@`

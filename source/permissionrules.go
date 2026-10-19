@@ -153,6 +153,50 @@ func AddPermissionRule(cwd string, rule PermissionRule) ([]PermissionRule, error
 	return permissionRuleList(set.Rules()), nil
 }
 
+// SavePermissionRuleFile replaces the workspace rule file with exactly these
+// rules and this declaration (0.41+).
+//
+// It is the writer behind a rules manager, and its contract is replacement: the
+// caller has the list it showed a person, and the file becomes that list. It
+// does not read the previous file — a caller that cannot read it must not
+// overwrite it, and that decision belongs where the reading happened.
+//
+// The text is compiled by the same parser a session uses before anything
+// reaches the disk, so a set this function accepts is a set the next session
+// opens under. A malformed rule is reported with its position, like a rule
+// appended through AddPermissionRule. defaultMode is passed through as written
+// when non-empty; whether a word is a *mode* is the host's vocabulary, not this
+// package's, so only its shape is checked here.
+//
+// Nothing else of the old file survives — there is nothing else to survive. The
+// parser refuses unknown keys, so a file it reads holds only a version, this
+// declaration and these rules.
+func SavePermissionRuleFile(cwd string, rules []PermissionRule, defaultMode string) error {
+	compiled := permissionRules(rules)
+	if compiled == nil {
+		compiled = []permissions.Rule{}
+	}
+	var declared *string
+	if defaultMode != "" {
+		mode := defaultMode
+		declared = &mode
+	}
+	data, err := json.MarshalIndent(permissions.File{
+		Version:     permissions.Version,
+		DefaultMode: declared,
+		Rules:       compiled,
+	}, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	p := PermissionRulesPath(cwd)
+	if _, err := permissions.Parse(data); err != nil {
+		return ruleFileError(p, err)
+	}
+	return writeRuleFile(p, data)
+}
+
 // EvaluatePermissionRules reports which of these rules decides a call, or nil
 // when none does.
 //

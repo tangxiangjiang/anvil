@@ -209,11 +209,17 @@ export function activate(context: vscode.ExtensionContext): void {
       await hub.restart();
     }),
 
-    // Opens — or creates — the file that says what the agent may do without
-    // asking. The same layers the SDK reads, so a rule written here is a rule
-    // the next session obeys.
+    // Opens the rules as a form: effect, tool, pattern and reason, plus the mode
+    // new sessions start in. The file is still one click away, because a pattern
+    // with quoting in it is easier to see in JSON than in a one-line input.
     vscode.commands.registerCommand('anvil.openPermissionRules', async () => {
-      await hub.openPermissionRules();
+      hub.openPermissionRules();
+    }),
+
+    // The JSON itself, created when the workspace has none. This is the path the
+    // manager's Open JSON button takes too.
+    vscode.commands.registerCommand('anvil.openPermissionRulesFile', async () => {
+      await hub.openPermissionRulesFile();
     }),
 
     vscode.commands.registerCommand('anvil.setApiKey', async () => {

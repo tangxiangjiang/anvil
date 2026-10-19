@@ -19,6 +19,7 @@ import { ChatPhase, phaseOf } from './chatStatus';
 import { ChatPanel } from './chatPanel';
 import { SlashCommand, commandCatalogue } from './commands';
 import { HostManager } from './hostManager';
+import { PermissionsPanels } from './permissionsPanel';
 import {
   CheckpointRestoreResult,
   CheckpointRun,
@@ -26,6 +27,7 @@ import {
   ModelEntry,
   PermissionsAddResult,
   PermissionsResult,
+  PermissionsSetParams,
   RuleFileInfo,
   RuleProblem,
   RuleSpec,
@@ -42,6 +44,8 @@ export class Hub {
   readonly manager: HostManager;
 
   private readonly panels = new Set<ChatPanel>();
+  /** The window's rules manager; one document, revealed rather than duplicated. */
+  private readonly permissions: PermissionsPanels;
   /** The slash catalogue: built-ins plus this workspace's skills. */
   private catalogue: SlashCommand[] | undefined;
   /** The rule files the last session reported. Workspace-level, like the files. */
@@ -77,6 +81,7 @@ export class Hub {
     this.manager.onReset(() => {
       for (const panel of this.panels) panel.hostReset();
     });
+    this.permissions = new PermissionsPanels(context.extensionUri, this);
   }
 
   // --- panels -----------------------------------------------------------------
@@ -393,9 +398,40 @@ export class Hub {
 
   // --- permission rules -------------------------------------------------------
 
+  /** The workspace rule file as the host reads it, for the manager. */
+  permissionRules(): Promise<PermissionsResult> {
+    return this.manager.permissionRules();
+  }
+
+  /**
+   * Replaces the workspace rule file with the list the manager showed.
+   *
+   * It lives here rather than in the panel because the panel is a document: it
+   * knows what a form looks like, not that there is a host child behind it. The
+   * answer is the file read back, which the panel renders.
+   */
+  savePermissionRules(params: PermissionsSetParams): Promise<PermissionsResult> {
+    return this.manager.savePermissionRules(params);
+  }
+
+  /** Whether sessions read the rule file at all; the panel says so when they do not. */
+  loadPermissionsEnabled(): boolean {
+    return readSettings().session.load_permissions !== false;
+  }
+
+  /** Opens the manager: the rules as a form, without knowing the JSON. */
+  openPermissionRules(): void {
+    this.permissions.open();
+  }
+
   /**
    * Shows the workspace rule file where it lives, creating it when this
    * workspace has written no rules yet.
+   *
+   * The manager's Open JSON button and the `Anvil: Open Permission Rules File`
+   * command are this path. Hand editing is not the legacy way to edit a rule —
+   * a pattern with quoting in it is still easier to see in the file — so it stays
+   * one click from the form rather than behind an advanced setting.
    *
    * A file that will not compile is opened at the place the parser objected to,
    * reported against the file in the Problems panel, and said in every tab: it
@@ -404,7 +440,7 @@ export class Hub {
    * session itself reports the same problem as a failure to open, and this is
    * the way to it.
    */
-  async openPermissionRules(): Promise<void> {
+  async openPermissionRulesFile(): Promise<void> {
     let state: PermissionsResult;
     try {
       state = await this.manager.permissionRules();
@@ -475,6 +511,7 @@ export class Hub {
     this.runningChanged.dispose();
     this.diagnostics?.dispose();
     this.diagnostics = undefined;
+    this.permissions.dispose();
     for (const panel of panels) await panel.dispose().catch(() => undefined);
     await this.manager.dispose();
   }

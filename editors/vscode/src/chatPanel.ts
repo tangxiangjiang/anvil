@@ -2034,7 +2034,7 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
           <option value="bypass">Bypass approvals</option>
         </select>
         <button id="rules" type="button" class="ghost" title="Which rule files this workspace loaded" hidden>Rules</button>
-        <button id="permissions" type="button" class="ghost" title="Open .anvil/permissions.json: what runs without asking, and what is refused">Permissions</button>
+        <button id="permissions" type="button" class="ghost" title="Manage permission rules: what runs without asking, what asks, and what is refused">Permissions</button>
         <span class="spacer"></span>
         <button id="attach" type="button" class="secondary" title="Reference a file or folder">@</button>
         <!--

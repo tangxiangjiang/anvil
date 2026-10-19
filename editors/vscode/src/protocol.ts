@@ -64,6 +64,12 @@ export const Method = {
   McpList: 'mcp.list',
   PermissionsGet: 'permissions.get',
   PermissionsAdd: 'permissions.add',
+  /**
+   * Replaces the workspace rule file with the list a manager showed a person.
+   * Additive: a host that predates it answers `-32601`, and the manager then
+   * says so rather than pretending the save happened.
+   */
+  PermissionsSet: 'permissions.set',
   Shutdown: 'shutdown',
   ApprovalResponse: 'approval.response',
 } as const;
@@ -310,6 +316,20 @@ export interface PermissionsAddResult {
    * `decided_by` says what stood in the way.
    */
   approved?: boolean;
+}
+
+/**
+ * Replaces the whole rule file: the manager sends the list it showed a person,
+ * and the file becomes that list. The host answers with `PermissionsResult`, so
+ * the panel renders what a new session will read rather than what it sent.
+ *
+ * `default_mode` omitted removes the declaration. A word the ladder does not
+ * have, and `bypass`, are refused by the host — a project file may not grant a
+ * mode that approves everything without showing it.
+ */
+export interface PermissionsSetParams {
+  rules: RuleSpec[];
+  default_mode?: PermissionMode;
 }
 
 /**
