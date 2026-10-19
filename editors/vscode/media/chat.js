@@ -66,14 +66,43 @@
   /** True once a prompt has been sent: the empty state is gone for good. */
   let started = false;
   /**
-   * The assistant round being streamed, or null. One reference for its Thinking
-   * block and its answer, because they are one round: a user message, a tool
-   * call, an approval, a notice, a session marker, the end of the run and a
-   * transcript reset all end it. Reasoning that outlived its round would append
-   * to a block sitting *above* the tool cards, so the transcript would show
-   * thinking before the calls it actually followed.
+   * A render target: the window's transcript, or one spawn call's body.
+   *
+   * A child's events are drawn inside the card its parent's `spawn_agent` call
+   * made, not into the parent's transcript. Giving each target its own round
+   * and container is what lets the same primitives — text, reasoning, tool
+   * cards — draw both, rather than a second renderer that would drift from the
+   * first. `active` is the target the next block lands in; event dispatch
+   * switches it for a child and back.
    */
-  let round = null;
+  function makeScope(container) {
+    return { container, round: null };
+  }
+  const mainScope = makeScope(transcript);
+  let active = mainScope;
+  /**
+   * The target of each spawn call, by the `tool_call_id` of the call. A child's
+   * event names its spawn call, which is how it finds the card — at any depth,
+   * because a grandchild's spawn call is registered by the same code.
+   */
+  const spawnScopes = new Map();
+  /** Runs `fn` with `scope` as the target, and restores the previous one. */
+  function inScope(scope, fn) {
+    const previous = active;
+    active = scope;
+    try {
+      fn();
+    } finally {
+      active = previous;
+    }
+  }
+  /** The assistant round being streamed in the active target, or null. */
+  function currentRound() {
+    return active.round;
+  }
+  function setCurrentRound(state) {
+    active.round = state;
+  }
   /** Tool cards by tool_call_id, so a result can find its call. */
   const toolCards = new Map();
   /**
@@ -149,7 +178,7 @@
   function append(node) {
     const pinned = atBottom();
     clearEmpty();
-    transcript.appendChild(node);
+    active.container.appendChild(node);
     scrollIfPinned(pinned);
   }
 
@@ -163,6 +192,10 @@
    * the user is no longer looking at.
    */
   function clearTranscript() {
+    // A card from the vanished conversation cannot receive a child's events any
+    // more, and its container is about to be detached with the transcript.
+    spawnScopes.clear();
+    active = mainScope;
     endRound();
     toolCards.clear();
     callFacts.clear();
@@ -223,13 +256,14 @@
    * rather than appending to one the reader has already read past.
    */
   function endRound() {
+    const round = currentRound();
     if (round && round.think && !round.thinkPinned) round.think.open = false;
     // Every ending gets the action — a text block, a tool call, the run's end —
     // because the bubble is complete the moment it stops growing, and a Copy
     // that only appeared after the whole turn would refuse to copy the answer
     // the reader is looking at while the agent works on the next step.
     if (round && round.text.trim() !== '') addCopy(round.wrap, round.text);
-    round = null;
+    setCurrentRound(null);
   }
 
   /**
@@ -270,12 +304,12 @@
    * because re-parsing only the new tail is exactly what it must not do.
    */
   function ensureRound() {
-    if (round) return round;
+    if (currentRound()) return currentRound();
     const wrap = el('div', 'msg assistant');
     wrap.appendChild(el('div', 'who', 'anvil'));
     const body = el('div', 'body md');
     wrap.appendChild(body);
-    round = {
+    const state = {
       wrap,
       body,
       text: '',
@@ -286,8 +320,9 @@
       thinkPinned: false,
       md: { node: body, settled: [], offset: 0, rendered: 0 },
     };
+    setCurrentRound(state);
     append(wrap);
-    return round;
+    return state;
   }
 
   function addAssistantChunk(text) {
@@ -723,31 +758,78 @@
     return wrap;
   }
 
+  /**
+   * The brief a spawn call carries: the description the person saw, then the
+   * whole prompt the child gets. The prompt is shown because the child sees
+   * nothing else from this conversation — a card that hid it would leave the
+   * reader guessing what was delegated.
+   */
+  function spawnBrief(args) {
+    if (!args || typeof args !== 'object') return '';
+    const lines = [];
+    if (typeof args.description === 'string' && args.description.trim() !== '') {
+      lines.push(args.description.trim());
+    }
+    if (typeof args.prompt === 'string' && args.prompt.trim() !== '') {
+      if (lines.length > 0) lines.push('');
+      lines.push(args.prompt.trim());
+    }
+    return lines.join('\n');
+  }
+
+  /** The one-line hint on a spawn card's summary. */
+  function spawnDescription(args) {
+    if (args && typeof args === 'object' && typeof args.description === 'string') {
+      const description = args.description.trim();
+      if (description !== '') return description;
+    }
+    return callHint('spawn_agent', args);
+  }
+
   function addToolCall(event, reviewable, anchor) {
     endRound();
-    const card = el('details', 'tool');
+    const spawn = event.name === 'spawn_agent';
+    const card = el('details', 'tool' + (spawn ? ' spawn' : ''));
     const summary = el('summary');
-    summary.appendChild(el('span', 'name', event.name || 'tool'));
-    summary.appendChild(el('span', 'hint', callHint(event.name, event.args)));
-    summary.appendChild(el('span', 'state', 'running…'));
+    summary.appendChild(el('span', 'name', spawn ? 'subagent' : event.name || 'tool'));
+    summary.appendChild(el('span', 'hint', spawn ? spawnDescription(event.args) : callHint(event.name, event.args)));
+    summary.appendChild(el('span', 'state', spawn ? 'starting…' : 'running…'));
     card.appendChild(summary);
 
     const pane = el('div', 'pane');
-    // An edit already carries both sides of the change, so the card shows that
-    // comparison instead of the raw arguments, and opens onto it. Every other
-    // call keeps the labelled IN block. Omitted rather than shown empty:
-    // `undefined` would otherwise be rendered as the string "undefined".
-    const edit = event.name === 'edit_file' ? editPair(event.args) : undefined;
-    if (edit) {
+    /** Where a spawn call's child events go; undefined for every other tool. */
+    let body;
+    // A spawn card starts open so the child's work is visible while it runs. A
+    // replayed spawn has no steps to show and is collapsed by its result.
+    if (spawn) {
       card.open = true;
-      pane.appendChild(renderEditDiff(edit, anchor));
+      const brief = spawnBrief(event.args);
+      if (brief !== '') pane.appendChild(section('task', 'TASK', brief));
+      body = el('div', 'spawn-body');
+      pane.appendChild(body);
+    } else if (event.name === 'edit_file') {
+      // An edit already carries both sides of the change, so the card shows that
+      // comparison instead of the raw arguments, and opens onto it.
+      const edit = editPair(event.args);
+      if (edit) {
+        card.open = true;
+        pane.appendChild(renderEditDiff(edit, anchor));
+      } else if (event.args !== undefined) {
+        pane.appendChild(section('in', 'IN', safeJson(event.args)));
+      }
     } else if (event.args !== undefined) {
+      // Every other call keeps the labelled IN block. Omitted rather than shown
+      // empty: `undefined` would otherwise be rendered as the string "undefined".
       pane.appendChild(section('in', 'IN', safeJson(event.args)));
     }
     card.appendChild(pane);
 
     if (event.tool_call_id) {
       toolCards.set(event.tool_call_id, card);
+      // A child's events name this call, so this is the card they land in — and
+      // a grandchild's spawn call is registered from inside this same body,
+      // which is what makes the nesting work at any depth.
+      if (spawn) spawnScopes.set(event.tool_call_id, makeScope(body));
       // Only for a call the extension said has a change to show. The button
       // itself waits for the result: a change that failed to apply is not a
       // change, and a diff of one would describe something that never happened.
@@ -917,6 +999,10 @@
       addNotice(`tool result: ${event.content || ''}`);
       return;
     }
+    if (event.tool_call_id && spawnScopes.has(event.tool_call_id)) {
+      addSpawnResult(card, event);
+      return;
+    }
     const state = card.querySelector('.state');
     const failed = event.is_error === true;
     card.classList.add(failed ? 'failed' : 'done');
@@ -956,6 +1042,81 @@
       });
       out.appendChild(more);
     }
+  }
+
+  /** A button in a spawn card's action row. */
+  function spawnAction(label, onClick) {
+    const button = el('button', 'spawn-action', label);
+    button.type = 'button';
+    button.addEventListener('click', onClick);
+    return button;
+  }
+
+  /**
+   * Offers the child's stored conversation.
+   *
+   * The child is a session like any other — the store keeps it, the sidebar
+   * nests it — so this is the same open a sidebar click does. It is offered
+   * only when an id is known: a foreground spawn's result carries it, and a
+   * background spawn's child announced it on its own events.
+   */
+  function addSpawnTranscriptButton(pane, agentId) {
+    if (!agentId) return;
+    const row = el('div', 'spawn-actions');
+    row.appendChild(
+      spawnAction('Open subagent transcript', () =>
+        vscode.postMessage({ type: 'openAgentTranscript', agentId }),
+      ),
+    );
+    pane.appendChild(row);
+  }
+
+  /**
+   * Settles a spawn card.
+   *
+   * The result is the parent's half of the delegation: the child's id, its step
+   * count, and its final message. The child's own steps arrived as events and
+   * are already in the body. A replayed tab has no child records — the child's
+   * conversation is a separate stored agent — so the result's text is all there
+   * is, and the card says what happened rather than pretending the steps exist.
+   */
+  function addSpawnResult(card, event) {
+    const content = event.content || '';
+    const failed = event.is_error === true;
+    card.classList.add(failed ? 'failed' : 'done');
+    const state = card.querySelector('.state');
+    const pane = card.querySelector('.pane');
+    const body = card.querySelector('.spawn-body');
+    const scope = spawnScopes.get(event.tool_call_id);
+    const live = body !== null && body.childNodes.length > 0;
+
+    const lines = content.split('\n');
+    const first = lines[0] || '';
+    const rest = lines.slice(1).join('\n').trim();
+    const finished = /^(\S+) finished in (\d+) steps?\./.exec(first);
+    const background = /^(\S+) started in the background/.exec(first);
+
+    if (failed) {
+      state.textContent = 'failed';
+      pane.appendChild(section('out', 'OUT', content));
+      if (!live) card.open = false;
+      return;
+    }
+    if (background) {
+      state.textContent = 'background';
+      const row = el('div', 'spawn-actions');
+      row.appendChild(el('span', 'spawn-note', 'Running in the background.'));
+      row.appendChild(spawnAction('Open Tasks', () => vscode.postMessage({ type: 'openTasks' })));
+      pane.appendChild(row);
+      addSpawnTranscriptButton(pane, scope && scope.agentId);
+      return;
+    }
+    state.textContent = finished ? `done · ${finished[2]} steps` : 'done';
+    addSpawnTranscriptButton(pane, (scope && scope.agentId) || (finished ? finished[1] : ''));
+    // A live spawn already has the child's message in the body, streamed as the
+    // child's own events. A replayed one does not: its result is the only copy.
+    if (!live && rest !== '') pane.appendChild(section('result', 'RESULT', rest));
+    if (!live) card.open = false;
   }
 
   function safeJson(value) {
@@ -2007,6 +2168,17 @@
   composer.addEventListener('submit', (event) => {
     event.preventDefault();
     const text = input.value.trim();
+    // `/tasks` is this document's own command: it opens the window's task table
+    // and sends nothing. Checked before the running guard, because the table is
+    // most useful while a turn is running. The text is consumed; anything else
+    // in the composer was not sent, so it stays for the next prompt.
+    if (text === '/tasks') {
+      input.value = '';
+      growInput();
+      closePalette();
+      vscode.postMessage({ type: 'openTasks' });
+      return;
+    }
     if (text === '' || running) return;
     // The composer is emptied here but the turn keeps what was sent, so the
     // optimistic echo below is the record of it either way.
@@ -2281,6 +2453,26 @@
     composer.dispatchEvent(new Event('submit', { cancelable: true }));
   });
 
+  /**
+   * Draws one event on whichever scope is active.
+   *
+   * Split out from the listener so a child's events can be drawn inside the
+   * spawn card that started it: the listener picks the scope, this decides what
+   * the event means. Everything that appends goes through `active`.
+   */
+  function renderEvent(e, msg) {
+    if (e.type === 'assistant') addAssistantChunk(e.text || '');
+    else if (e.type === 'reasoning') addReasoning(e.text || '');
+    else if (e.type === 'tool_call') addToolCall(e, msg.reviewable === true, msg.edit);
+    else if (e.type === 'tool_result') addToolResult(e);
+    else if (e.type === 'todo') setTodos(e.items);
+    else if (e.type === 'error') addNotice(e.text || 'The run reported an error.');
+    else if (e.type === 'progress' && e.text) {
+      statusLine.textContent = e.text;
+      statusLine.hidden = false;
+    }
+  }
+
   window.addEventListener('message', (event) => {
     const msg = event.data;
     switch (msg.type) {
@@ -2299,16 +2491,16 @@
         return;
       case 'event': {
         const e = msg.event;
-        if (e.type === 'assistant') addAssistantChunk(e.text || '');
-        else if (e.type === 'reasoning') addReasoning(e.text || '');
-        else if (e.type === 'tool_call') addToolCall(e, msg.reviewable === true, msg.edit);
-        else if (e.type === 'tool_result') addToolResult(e);
-        else if (e.type === 'todo') setTodos(e.items);
-        else if (e.type === 'error') addNotice(e.text || 'The run reported an error.');
-        else if (e.type === 'progress' && e.text) {
-          statusLine.textContent = e.text;
-          statusLine.hidden = false;
+        // A child's events name the spawn call that started them, so they are
+        // drawn in that card's body rather than in the parent's flow. The id is
+        // also how the card learns which stored session to offer afterwards.
+        const target = e.parent_tool_call_id ? spawnScopes.get(e.parent_tool_call_id) : undefined;
+        if (target) {
+          if (e.agent_id) target.agentId = e.agent_id;
+          inScope(target, () => renderEvent(e, msg));
+          return;
         }
+        renderEvent(e, msg);
         return;
       }
       case 'approval':

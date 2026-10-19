@@ -77,7 +77,15 @@ const (
 	// text with the same parser a session uses before touching the disk. Additive:
 	// a host without it answers -32601, which a client reads as "no manager here".
 	MethodPermissionsSet = "permissions.set"
-	MethodShutdown       = "shutdown"
+	// MethodTasksList reports the session tree's background work, shell jobs and
+	// subagents alike. Additive: a host without it answers -32601, which a client
+	// reads as "no task surface here".
+	MethodTasksList = "tasks.list"
+	// MethodTasksOutput pages one task's output from a byte offset.
+	MethodTasksOutput = "tasks.output"
+	// MethodTasksCancel stops one running task and answers its final state.
+	MethodTasksCancel = "tasks.cancel"
+	MethodShutdown    = "shutdown"
 
 	// MethodApprovalResponse answers a pending approval.request. It is the only
 	// client request that resolves a notification the host sent earlier.
@@ -90,6 +98,10 @@ const (
 	NotifyDone            = "done"
 	NotifyLog             = "log"
 	NotifyApprovalRequest = "approval.request"
+	// NotifyTask reports a background task starting, ending, or changing state.
+	// It is a table-change signal, not a progress stream: the payload is one
+	// snapshot, and a client that wants more asks tasks.list / tasks.output.
+	NotifyTask = "task"
 )
 
 // JSON-RPC 2.0 standard error codes.
@@ -114,6 +126,10 @@ const (
 	// CodeNoApproval reports an approval.response naming a request that is not
 	// pending — already answered, timed out, or aborted by a cancel.
 	CodeNoApproval = -32004
+	// CodeNoTask reports tasks.output / tasks.cancel naming a task that is not in
+	// this session's table. A task id belonging to another session lands here
+	// rather than being served.
+	CodeNoTask = -32005
 )
 
 // Request is one inbound JSON-RPC call or notification. A nil ID marks a
@@ -227,6 +243,12 @@ type SessionParams struct {
 	// a prompt carrying attachments to a session that did not opt in is
 	// refused, so a client never gets a run that quietly ignores the image.
 	Vision bool `json:"vision,omitempty"`
+
+	// Subagents registers spawn_agent and the background task tools. It is on
+	// for the editor unless sent as false, which is the one way a user turns
+	// agent-in-agent off for a workspace. The pointer distinguishes "not sent"
+	// from "sent as false" for the same reason the load flags use one.
+	Subagents *bool `json:"subagents,omitempty"`
 
 	// WebSearch turns on the SDK's web tools for this session. Absent means
 	// off, and off means the tools are not registered at all: a tool the model
@@ -460,8 +482,10 @@ var PermissionModes = []string{ModeAsk, ModeAcceptEdits, ModeAuto, ModePlan, Mod
 // DefaultPermissionGroups is what ModeAsk and ModeAcceptEdits gate when the
 // client names no groups. It closes the historical gap: before 0.35 only
 // write_file, edit_file, apply_patch, and shell were gated, leaving run_tests,
-// build, egress, MCP, plugin, and custom tools able to run unattended.
-var DefaultPermissionGroups = []string{"write", "edit", "shell", "verify", "web", "mcp"}
+// build, egress, MCP, plugin, and custom tools able to run unattended. The
+// agent group joined in 0.42: a call that spends tokens and creates an agent
+// with this session's permissions is exactly what a card is for.
+var DefaultPermissionGroups = []string{"write", "edit", "shell", "verify", "web", "mcp", "agent"}
 
 // DefaultApprovalTimeout bounds an unanswered approval. On expiry the call is
 // denied, so a run can never hang forever on a closed editor window.
@@ -523,6 +547,12 @@ type ApprovalRequestParams struct {
 	Remember []RememberOption `json:"remember,omitempty"`
 	// TimeoutMS is how long the host will wait, for a UI countdown.
 	TimeoutMS int `json:"timeout_ms,omitempty"`
+	// AgentID and Depth name the agent whose call is being decided, so a card can
+	// say a subagent is asking instead of implying the session's own agent is.
+	// AgentID is empty only for a callback installed outside Create/Resume, and
+	// Depth is 0 and omitted for the session's own agent.
+	AgentID string `json:"agent_id,omitempty"`
+	Depth   int    `json:"depth,omitempty"`
 }
 
 // ApprovalResponseParams answers an approval.request.
@@ -575,6 +605,13 @@ type SessionInfo struct {
 	// any. The store is the only place a past session's tokens exist: the
 	// terminal `done` of a run that has already ended is gone.
 	Usage *Usage `json:"usage,omitempty"`
+	// Subagent identity (0.42+). Empty on a top-level session. ParentAgentID is
+	// what the tree nests a child under, and TaskTitle is the description its
+	// spawn call carried — the name a person gave the work, not a derived one.
+	ParentAgentID string `json:"parent_agent_id,omitempty"`
+	Depth         int    `json:"depth,omitempty"`
+	Subagent      bool   `json:"subagent,omitempty"`
+	TaskTitle     string `json:"task_title,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
@@ -908,6 +945,83 @@ type CancelParams struct {
 }
 
 // ---------------------------------------------------------------------------
+// tasks.list / tasks.output / tasks.cancel
+// ---------------------------------------------------------------------------
+
+// TaskInfo mirrors anvil.TaskInfo in host vocabulary: one row of the session
+// tree's background work.
+type TaskInfo struct {
+	ID string `json:"id"`
+	// Kind is "shell" or "agent".
+	Kind string `json:"kind"`
+	// Title is the command for a shell task, the description for an agent task.
+	Title  string `json:"title"`
+	Status string `json:"status"` // running | finished | failed | cancelled
+	// AgentID is the agent whose tool call started the task. For an agent task
+	// it is the starter, not the child: the child does not exist yet when the
+	// row is created.
+	AgentID   string    `json:"agent_id,omitempty"`
+	StartedAt time.Time `json:"started_at"`
+	// EndedAt is absent while the task runs.
+	EndedAt *time.Time `json:"ended_at,omitempty"`
+	// ExitCode is the process exit code of a shell task, -1 when it did not
+	// exit on its own. It is 0 for an agent task.
+	ExitCode int `json:"exit_code"`
+}
+
+// TasksListParams names the session whose tree to report. A task id from
+// another session's tree is never served.
+type TasksListParams struct {
+	SessionID string `json:"session_id"`
+}
+
+// TasksListResult is the whole tree's tasks in start order.
+type TasksListResult struct {
+	Tasks []TaskInfo `json:"tasks"`
+}
+
+// TasksOutputParams pages one task's output. Offset is a byte offset into the
+// ring; Limit caps the chunk (0 means the host's per-call cap).
+type TasksOutputParams struct {
+	SessionID string `json:"session_id"`
+	TaskID    string `json:"task_id"`
+	Offset    int    `json:"offset,omitempty"`
+	Limit     int    `json:"limit,omitempty"`
+}
+
+// TasksOutputResult is one read. Truncated says the requested offset had
+// already been dropped, so the client shows a gap rather than pretending the
+// output starts where it asked.
+type TasksOutputResult struct {
+	Status      string `json:"status"`
+	ExitCode    int    `json:"exit_code"`
+	Output      string `json:"output,omitempty"`
+	NextOffset  int    `json:"next_offset"`
+	FirstOffset int    `json:"first_offset"`
+	Truncated   bool   `json:"truncated,omitempty"`
+}
+
+// TasksCancelParams names the task to stop. Cancelling a task that already
+// ended answers its final state and no error.
+type TasksCancelParams struct {
+	SessionID string `json:"session_id"`
+	TaskID    string `json:"task_id"`
+}
+
+// TasksCancelResult is the task's state after the cancel.
+type TasksCancelResult struct {
+	Task TaskInfo `json:"task"`
+}
+
+// TaskNotification reports one task changing state. It is additive: a client
+// that does not know the method ignores it, and one that never asks
+// tasks.list still learns nothing it did not ask for.
+type TaskNotification struct {
+	SessionID string   `json:"session_id"`
+	Task      TaskInfo `json:"task"`
+}
+
+// ---------------------------------------------------------------------------
 // models.list
 // ---------------------------------------------------------------------------
 
@@ -966,6 +1080,14 @@ type EventParams struct {
 	// pointer so that an empty list reaches the client as [] — clearing the
 	// panel — while every other event omits the field entirely.
 	Items *[]TodoItem `json:"items,omitempty"`
+	// AgentID names the agent that emitted this event: the session's own agent
+	// for parent events, the child's id for a subagent's. ParentToolCallID is
+	// set only on a child event and names the spawn_agent call it belongs under,
+	// which is the key the webview groups its steps by. Depth is 0 and omitted
+	// for the session's own agent (0.42+).
+	AgentID          string `json:"agent_id,omitempty"`
+	ParentToolCallID string `json:"parent_tool_call_id,omitempty"`
+	Depth            int    `json:"depth,omitempty"`
 }
 
 // TodoItem is one row of the model's plan.

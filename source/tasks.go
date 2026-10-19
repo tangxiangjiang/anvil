@@ -88,6 +88,20 @@ func (a *Agent) Tasks() []TaskInfo {
 	return out
 }
 
+// Task returns one background task's snapshot. An unknown id is an error
+// naming it.
+func (a *Agent) Task(taskID string) (TaskInfo, error) {
+	mgr := a.taskManager()
+	if mgr == nil {
+		return TaskInfo{}, fmt.Errorf("unknown task: %s", taskID)
+	}
+	info, err := mgr.Get(taskID)
+	if err != nil {
+		return TaskInfo{}, err
+	}
+	return toTaskInfo(info), nil
+}
+
 // TaskOutput reads a background task's output from offset, at most limit bytes
 // (0 means the per-call cap of 64 KiB). It does not wait for the task: a
 // running task returns the bytes it has so far and a NextOffset to poll from.

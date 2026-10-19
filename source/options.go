@@ -204,7 +204,11 @@ type SubagentEvent struct {
 	// AgentID and RunID name the child and the run that emitted Event.
 	AgentID string
 	RunID   string
-	Event   Event
+	// Depth is the child's nesting level: 1 for a root's child, 2 for its
+	// grandchild. It is what lets a client draw a grandchild under the card that
+	// started its parent rather than at the top level (0.42+).
+	Depth int
+	Event Event
 }
 
 // CheckpointOptions says where run pre-images are kept and how many survive.

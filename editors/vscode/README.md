@@ -194,6 +194,26 @@ spawned with.
   empty list removes it. The call is an ordinary tool card too, so a reopened
   conversation shows the checklist it ended with, rebuilt from the stored
   arguments.
+- **Lets one agent hand work to another.** With `anvil.subagents` on (the
+  default) the session has `spawn_agent`: the model writes a brief, and a child
+  agent runs it in its own conversation with the parent's tools and permission
+  callback. The child's steps stream under the spawn card — assistant text,
+  reasoning and tool calls, drawn with the same renderer and indented rather
+  than redrawn. A child that needs approval stops the same person the parent
+  would, and its card names the child. Afterwards **Open subagent transcript**
+  opens the child's stored conversation, which is a session like any other;
+  replay shows the spawn call's brief and result, not steps the store never
+  wrote. With `background: true` the call returns a task id instead of waiting,
+  and the same table that lists shell jobs lists the child.
+- **Shows work that outlived the call.** A background `shell` or subagent is a
+  row in the Tasks panel: kind, title, status, elapsed, and the actions that
+  apply — **View output** for a shell task, **Open transcript** for an agent
+  task, **Cancel** while it runs. `/tasks` opens it, and so does the status-bar
+  item that appears while anything is running; the item counts the window's
+  live sessions, because the panel is about the window rather than about one
+  tab. Closing a session stops its tasks, and the panel then says what they
+  became instead of showing a job that vanished. Output is text, read from the
+  host's ring on demand, with a note when older bytes were dropped.
 - **Takes the keyboard and the files.** <kbd>Escape</kbd> interrupts a running
   turn from anywhere in the panel (an idle Escape keeps its other meanings and
   never touches the draft). Files dropped on the panel become `@` references —
@@ -310,6 +330,13 @@ The list is cached and only re-read when something changes — a run starting or
 finishing, a session opening, the host restarting. The view never spawns a host
 just to draw itself.
 
+A subagent is a session too, and it hangs under the session that spawned it:
+collapsed, labelled with the description its spawn call gave the task, with the
+parent id and task in the tooltip. Opening one resumes and replays it through
+the same path as any other row. A child whose parent is no longer in the list is
+a root rather than a disappearance, and deleting a parent says how many child
+sessions go with it before anything is removed.
+
 ## Commands
 
 Type `/` in the composer for the catalogue. Built-ins:
@@ -320,6 +347,7 @@ Type `/` in the composer for the catalogue. Built-ins:
 | `/model [id]` | Choose the model this conversation uses |
 | `/resume [agent id]` | Continue a past session in this workspace |
 | `/clear` | Start a new conversation |
+| `/tasks` | Open the background tasks panel; sends nothing to the model |
 | `/help` | List the commands |
 
 **Anvil: Open Permission Rules** (also the **Permissions** button on the composer) opens the

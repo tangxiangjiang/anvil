@@ -19,10 +19,13 @@ import { ChatPhase, phaseOf } from './chatStatus';
 import { ChatPanel } from './chatPanel';
 import { SlashCommand, commandCatalogue } from './commands';
 import { HostManager } from './hostManager';
+import { HostRpcError } from './hostClient';
 import { PermissionsPanels } from './permissionsPanel';
+import { TaskRow, TasksPanels } from './tasksPanel';
 import {
   CheckpointRestoreResult,
   CheckpointRun,
+  CodeNoSession,
   McpListResult,
   ModelEntry,
   PermissionsAddResult,
@@ -34,6 +37,7 @@ import {
   SessionInfo,
   SessionTranscriptResult,
   SkillEntry,
+  TaskInfo,
 } from './protocol';
 import { PreviewDocuments } from './review';
 import { describeProblem, emptyRulesFile, problemPosition } from './rulesFile';
@@ -46,6 +50,17 @@ export class Hub {
   private readonly panels = new Set<ChatPanel>();
   /** The window's rules manager; one document, revealed rather than duplicated. */
   private readonly permissions: PermissionsPanels;
+  /** The window's Tasks panel; one table of background work, revealed the same. */
+  private readonly tasks: TasksPanels;
+  /**
+   * The running background tasks of each live session, by session id.
+   *
+   * It exists for the status-bar count, which is a window-wide number while the
+   * table belongs to a session. The panel and the sidebar read the host for the
+   * rows themselves; this is only "how many are running", fed by the `task`
+   * notifications and never by a poll.
+   */
+  private readonly runningTasks = new Map<string, Set<string>>();
   /** The slash catalogue: built-ins plus this workspace's skills. */
   private catalogue: SlashCommand[] | undefined;
   /** The rule files the last session reported. Workspace-level, like the files. */
@@ -66,6 +81,9 @@ export class Hub {
   private readonly runningChanged = new vscode.EventEmitter<void>();
   /** A turn started or ended, in any tab, or the front tab changed. */
   readonly onRunningChanged = this.runningChanged.event;
+  private readonly tasksChanged = new vscode.EventEmitter<void>();
+  /** A background task started or ended, in any session of this window. */
+  readonly onTasksChanged = this.tasksChanged.event;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -80,8 +98,21 @@ export class Hub {
     });
     this.manager.onReset(() => {
       for (const panel of this.panels) panel.hostReset();
+      // The tasks belonged to the child that is gone; no terminal notification
+      // will arrive for them, so the count is dropped here rather than left
+      // claiming work nobody is doing.
+      this.forgetAllTasks();
     });
     this.permissions = new PermissionsPanels(context.extensionUri, this);
+    this.tasks = new TasksPanels(context.extensionUri, {
+      listTasks: () => this.listTasks(),
+      taskOutput: (sessionId, taskId, offset, limit) =>
+        this.manager.taskOutput(sessionId, taskId, offset, limit),
+      cancelTask: (sessionId, taskId) => this.manager.cancelTask(sessionId, taskId),
+      listSessions: () => this.listSessions(),
+      openSession: (agentId) => this.openSession(agentId),
+      onTasksChanged: (listener) => this.tasksChanged.event(listener),
+    });
   }
 
   // --- panels -----------------------------------------------------------------
@@ -287,6 +318,89 @@ export class Hub {
   /** A tab learned which agent it is showing. */
   notifyTabs(): void {
     this.tabsChanged.fire();
+  }
+
+  // --- background tasks -------------------------------------------------------
+
+  /**
+   * A background task started or ended in one session tree.
+   *
+   * The notification carries the task's whole snapshot, so a terminal row is
+   * known by its status and not by a separate "removed" message. Every task
+   * notification fires the event, start or end: the panel re-lists on either,
+   * and the count only changes on the two edges.
+   */
+  noteTask(sessionId: string, task: TaskInfo): void {
+    let running = this.runningTasks.get(sessionId);
+    if (task.status === 'running') {
+      if (!running) {
+        running = new Set<string>();
+        this.runningTasks.set(sessionId, running);
+      }
+      running.add(task.id);
+    } else if (running) {
+      running.delete(task.id);
+      if (running.size === 0) this.runningTasks.delete(sessionId);
+    }
+    this.tasksChanged.fire();
+  }
+
+  /**
+   * Forgets one session's running tasks, when that session is closed.
+   *
+   * Closing a session stops its tasks on the host, which cannot notify for a
+   * session that is no longer there. Dropping the bucket is what keeps the
+   * status-bar count from outliving the tab that started the work.
+   */
+  forgetTasks(sessionId: string): void {
+    if (!this.runningTasks.delete(sessionId)) return;
+    this.tasksChanged.fire();
+  }
+
+  private forgetAllTasks(): void {
+    if (this.runningTasks.size === 0) return;
+    this.runningTasks.clear();
+    this.tasksChanged.fire();
+  }
+
+  /** How many background tasks are running across this window's sessions. */
+  get runningTaskCount(): number {
+    let count = 0;
+    for (const tasks of this.runningTasks.values()) count += tasks.size;
+    return count;
+  }
+
+  /**
+   * Every running or finished task of every live session, in start order.
+   *
+   * One table per session tree, rooted at the agent the person opened; this
+   * flattens them so the window's panel can show them together. A session the
+   * host no longer knows is dropped from the count rather than reported as a
+   * failure: it was closed between the tab and the question.
+   */
+  async listTasks(): Promise<TaskRow[]> {
+    const rows: TaskRow[] = [];
+    for (const session of this.manager.liveSessions()) {
+      const sessionId = session.id;
+      if (!sessionId) continue;
+      try {
+        for (const task of await this.manager.listTasks(sessionId)) {
+          rows.push({ sessionId, task });
+        }
+      } catch (err) {
+        if (err instanceof HostRpcError && err.code === CodeNoSession) {
+          this.forgetTasks(sessionId);
+          continue;
+        }
+        throw err;
+      }
+    }
+    return rows;
+  }
+
+  /** Opens the Tasks panel, or brings the open one to the front. */
+  openTasks(): void {
+    this.tasks.open();
   }
 
   // --- catalogue --------------------------------------------------------------
@@ -509,9 +623,11 @@ export class Hub {
     this.tabsChanged.dispose();
     this.sessionsChanged.dispose();
     this.runningChanged.dispose();
+    this.tasksChanged.dispose();
     this.diagnostics?.dispose();
     this.diagnostics = undefined;
     this.permissions.dispose();
+    this.tasks.dispose();
     for (const panel of panels) await panel.dispose().catch(() => undefined);
     await this.manager.dispose();
   }

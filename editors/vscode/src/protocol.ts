@@ -70,6 +70,14 @@ export const Method = {
    * says so rather than pretending the save happened.
    */
   PermissionsSet: 'permissions.set',
+  /**
+   * The session tree's background work. Additive: a host that predates the
+   * methods answers `-32601`, and the panel then says it has nothing to show
+   * rather than failing at nothing in particular.
+   */
+  TasksList: 'tasks.list',
+  TasksOutput: 'tasks.output',
+  TasksCancel: 'tasks.cancel',
   Shutdown: 'shutdown',
   ApprovalResponse: 'approval.response',
 } as const;
@@ -80,6 +88,12 @@ export const Notify = {
   Done: 'done',
   Log: 'log',
   ApprovalRequest: 'approval.request',
+  /**
+   * A background task started or ended. It is a change signal rather than a
+   * stream: the row it carries is the task's whole snapshot, and a panel that
+   * needs the table asks `tasks.list` for it.
+   */
+  Task: 'task',
 } as const;
 
 // --- errors ------------------------------------------------------------------
@@ -97,6 +111,8 @@ export const CodeNoSession = -32001;
 export const CodeNoRun = -32002;
 export const CodeRunInProgress = -32003;
 export const CodeNoApproval = -32004;
+/** `tasks.output` / `tasks.cancel` on an id this session tree does not own. */
+export const CodeNoTask = -32005;
 
 /** A JSON-RPC error object, as it arrives on the wire. */
 export interface RpcError {
@@ -170,6 +186,12 @@ export interface SessionParams {
    * `Vision.Enabled` is what makes it accept one at all.
    */
   vision?: boolean;
+  /**
+   * Registers `spawn_agent` and the background task tools. Omitted means on:
+   * the editor sends it explicitly only to turn the feature off, and a host
+   * that predates it has no such tools to register either way.
+   */
+  subagents?: boolean;
   /**
    * Turn on the web tools. Absent means off; there is no `enabled` field
    * because a host that predates the field and a client that does not want the
@@ -389,6 +411,19 @@ export interface ApprovalRequest {
   preview?: ApprovalPreview;
   decisions: Decision[];
   /**
+   * The agent that is actually asking, which is not the session's own agent
+   * when a subagent raised the prompt. `depth` is its nesting level, 1 for a
+   * child of the session. Both are additive: a host that predates them sends
+   * neither, and an older client simply draws the card without a name.
+   *
+   * `run_id` is still the *session's* active run even for a child's card, so
+   * `cancel` withdraws every prompt that belongs to the turn. A background
+   * child asking while the session is idle carries an empty `run_id`, and is
+   * withdrawn by `session.close` or by cancelling its task.
+   */
+  agent_id?: string;
+  depth?: number;
+  /**
    * The workspace rule that insisted on this prompt, when one did. Absent means
    * the mode gate alone is the reason, so a card never claims a rule asked when
    * none did.
@@ -483,6 +518,77 @@ export interface CancelParams {
   run_id?: string;
 }
 
+// --- tasks.list / tasks.output / tasks.cancel --------------------------------
+
+/**
+ * One row of a session tree's background work. The table is the whole tree's:
+ * a child's background job is listed here too, and `agent_id` says whose tool
+ * call started it.
+ *
+ * `ended_at` is absent while the task runs rather than a zero timestamp; the
+ * host writes the field only once there is an end.
+ */
+export interface TaskInfo {
+  id: string;
+  kind: 'shell' | 'agent';
+  /** The command for a shell task, the brief's description for an agent. */
+  title: string;
+  status: 'running' | 'finished' | 'failed' | 'cancelled';
+  /** The agent whose tool call started the task, not a subagent's own id. */
+  agent_id?: string;
+  started_at: string;
+  ended_at?: string;
+  /** A shell task's exit code; -1 when the process did not exit on its own. */
+  exit_code: number;
+}
+
+export interface TasksListParams {
+  session_id: string;
+}
+
+export interface TasksListResult {
+  tasks: TaskInfo[];
+}
+
+export interface TasksOutputParams {
+  session_id: string;
+  task_id: string;
+  /**
+   * Where to start. The ring is byte-addressed, and an offset older than
+   * `first_offset` comes back with `truncated` rather than with a gap.
+   */
+  offset?: number;
+  /** Bytes to read; 0 or absent uses the host's per-call cap. */
+  limit?: number;
+}
+
+export interface TasksOutputResult {
+  status: string;
+  exit_code: number;
+  output: string;
+  next_offset: number;
+  first_offset: number;
+  /**
+   * True when the requested offset had already been dropped. The panel says
+   * so rather than drawing a transcript with a silent hole in it.
+   */
+  truncated?: boolean;
+}
+
+export interface TasksCancelParams {
+  session_id: string;
+  task_id: string;
+}
+
+export interface TasksCancelResult {
+  task: TaskInfo;
+}
+
+export interface TaskNotification {
+  session_id: string;
+  task: TaskInfo;
+}
+
 // --- session.list ------------------------------------------------------------
 
 export interface SessionInfo {
@@ -503,6 +609,16 @@ export interface SessionInfo {
   runs: number;
   /** Cumulative across the stored runs, when the provider reported any. */
   usage?: Usage;
+  /**
+   * The agent that spawned this one, when it is a subagent, and its nesting
+   * level (1 for a root's child). A child is a stored session like any other;
+   * these are what nest it under its parent in the sidebar.
+   */
+  parent_agent_id?: string;
+  depth?: number;
+  subagent?: boolean;
+  /** The description the spawn call gave the task, which is the readable name. */
+  task_title?: string;
 }
 
 // --- session.transcript ------------------------------------------------------
@@ -758,6 +874,21 @@ export interface HostEvent {
   session_id: string;
   run_id: string;
   type: EventType;
+  /**
+   * Which agent the step belongs to. Every event names one: the session's own
+   * agent for the turn in flight, a child's id for a subagent's steps. Absent
+   * only from a host that predates subagents.
+   */
+  agent_id?: string;
+  /**
+   * Set on a child's events to the `spawn_agent` call that started it. It is
+   * the grouping key: the panel draws those steps under that call's card
+   * instead of in the transcript's flow. `run_id` on such an event is the
+   * child's own run, not the parent's.
+   */
+  parent_tool_call_id?: string;
+  /** The child's nesting level; 0 for the session's own agent and omitted. */
+  depth?: number;
   text?: string;
   tool_call_id?: string;
   name?: string;

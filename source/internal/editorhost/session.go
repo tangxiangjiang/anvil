@@ -44,6 +44,7 @@ type session struct {
 
 	mu      sync.Mutex
 	agent   *anvil.Agent
+	agentID string
 	run     *anvil.Run
 	runID   string
 	runDone chan struct{}
@@ -63,6 +64,16 @@ func (s *session) attach(agent *anvil.Agent) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.agent = agent
+	s.agentID = agent.AgentID()
+}
+
+// agentIdentity reports the attached agent's id, empty when none is open. It
+// is what a parent event carries as agent_id: the same value a child's events
+// carry, so a client places every event on one axis.
+func (s *session) agentIdentity() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.agentID
 }
 
 // sdk returns the live agent, or nil when attach has not run or the session was

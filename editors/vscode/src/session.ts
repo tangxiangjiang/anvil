@@ -21,6 +21,8 @@ import {
   PromptResult,
   SessionParams,
   SessionResult,
+  TaskInfo,
+  TaskNotification,
 } from './protocol';
 
 export type SessionState = 'idle' | 'running';
@@ -50,6 +52,15 @@ export interface ChatSessionHandlers {
    * that answer exists, so it is announced here rather than waited for.
    */
   onSession?: (result: SessionResult) => void;
+  /**
+   * A background task in this session tree started or ended.
+   *
+   * The row is the task's whole snapshot, and the session keeps none of it: a
+   * task belongs to the root agent's table, and a panel that wants the table
+   * asks for it. The session id travels too, because the window-level count is
+   * keyed by it and this is the only place both facts are together.
+   */
+  onTask?: (task: TaskInfo, sessionId: string) => void;
   onLog?: LogFn;
 }
 
@@ -138,6 +149,12 @@ export class ChatSession {
           this.handlers.onApprovalWithdrawn?.(id);
         }
         this.handlers.onDone?.(done, classifyDone(done));
+        return;
+      }
+      case Notify.Task: {
+        const notification = params as TaskNotification;
+        if (!this.isMine(notification.session_id)) return;
+        this.handlers.onTask?.(notification.task, notification.session_id);
         return;
       }
       case Notify.Log: {

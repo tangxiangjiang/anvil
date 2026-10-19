@@ -40,6 +40,13 @@ import {
   SessionTranscriptParams,
   SessionTranscriptResult,
   SkillEntry,
+  TaskInfo,
+  TasksCancelParams,
+  TasksCancelResult,
+  TasksListParams,
+  TasksListResult,
+  TasksOutputParams,
+  TasksOutputResult,
 } from './protocol';
 import { RunFailure } from './errors';
 
@@ -52,6 +59,8 @@ export interface HostListener {
   onState?: (state: SessionState, runId?: string) => void;
   /** A session opened, with the mode the host resolved for it. */
   onSession?: (result: SessionResult) => void;
+  /** A background task in this session tree started or ended. */
+  onTask?: (task: TaskInfo, sessionId: string) => void;
   onNotice?: (level: 'info' | 'warn' | 'error', message: string) => void;
 }
 
@@ -118,6 +127,7 @@ export class HostManager {
         this.router.register(result.session_id, session);
         listener.onSession?.(result);
       },
+      onTask: listener.onTask,
       onLog: this.log,
     });
     return session;
@@ -453,6 +463,53 @@ export class HostManager {
       base_url: options.base_url ?? settings.session.base_url,
     });
     return result.models ?? [];
+  }
+
+  /**
+   * The background work of one session tree, in start order.
+   *
+   * The table belongs to the root agent, so a child's background job and a
+   * subagent started in the background are rows here too; `agent_id` says
+   * which agent's call started each one. A session id the host does not know
+   * is `CodeNoSession` — a closed tab's table is gone with its agent.
+   */
+  async listTasks(sessionId: string): Promise<TaskInfo[]> {
+    const client = await this.startClient();
+    const params: TasksListParams = { session_id: sessionId };
+    const result = await client.request<TasksListResult>(Method.TasksList, params);
+    return result.tasks ?? [];
+  }
+
+  /**
+   * One page of a task's output, from a byte offset.
+   *
+   * An offset the ring has already dropped comes back with `truncated` rather
+   * than as a gap, and an offset at the end is an empty page rather than an
+   * error — which is what a Refresh on a finished task reads.
+   */
+  async taskOutput(
+    sessionId: string,
+    taskId: string,
+    offset = 0,
+    limit = 0,
+  ): Promise<TasksOutputResult> {
+    const client = await this.startClient();
+    const params: TasksOutputParams = { session_id: sessionId, task_id: taskId, offset };
+    if (limit > 0) params.limit = limit;
+    return client.request<TasksOutputResult>(Method.TasksOutput, params);
+  }
+
+  /**
+   * Stops a running task and answers with its final snapshot.
+   *
+   * Cancelling a task that already ended is not an error, so a button pressed
+   * a moment late still settles on the truth rather than on a failure.
+   */
+  async cancelTask(sessionId: string, taskId: string): Promise<TaskInfo> {
+    const client = await this.startClient();
+    const params: TasksCancelParams = { session_id: sessionId, task_id: taskId };
+    const result = await client.request<TasksCancelResult>(Method.TasksCancel, params);
+    return result.task;
   }
 
   async dispose(): Promise<void> {

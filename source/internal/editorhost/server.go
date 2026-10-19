@@ -193,6 +193,12 @@ func (s *Server) dispatch(ctx context.Context, req *Request) (any, *RPCError) {
 		return s.handlePermissionsAdd(ctx, req.Params)
 	case MethodPermissionsSet:
 		return s.handlePermissionsSet(ctx, req.Params)
+	case MethodTasksList:
+		return s.handleTasksList(req.Params)
+	case MethodTasksOutput:
+		return s.handleTasksOutput(req.Params)
+	case MethodTasksCancel:
+		return s.handleTasksCancel(req.Params)
 	case MethodApprovalResponse:
 		return s.handleApprovalResponse(req.Params)
 	default:
@@ -248,7 +254,7 @@ func (s *Server) handleInitialize(params json.RawMessage) (any, *RPCError) {
 }
 
 func capabilities() []string {
-	return []string{"streaming", "sessions", "resume", "cancel", "models", "approval", "context", "vision", "plan", "skills", "rules", "permissions", "mcp"}
+	return []string{"streaming", "sessions", "resume", "cancel", "models", "approval", "context", "vision", "plan", "skills", "rules", "permissions", "mcp", "subagents", "tasks"}
 }
 
 // ---------------------------------------------------------------------------
@@ -347,6 +353,11 @@ func (s *Server) handleSessionList(ctx context.Context, params json.RawMessage) 
 			LastStatus: in.LastStatus,
 			LastRunID:  in.LastRunID,
 			Runs:       in.Runs,
+
+			ParentAgentID: in.ParentAgentID,
+			Depth:         in.Depth,
+			Subagent:      in.Kind == "subagent",
+			TaskTitle:     in.TaskTitle,
 		}
 		if !in.CreatedAt.IsZero() {
 			entry.CreatedAt = in.CreatedAt.UTC().Format("2006-01-02T15:04:05Z")
@@ -688,6 +699,7 @@ func (s *Server) drain(sess *session, run *anvil.Run) {
 	// Run.Stream ignores its context; ranging to close is the documented contract.
 	for ev := range run.Stream(context.Background()) {
 		if p, ok := projectEvent(sess.id, runID, ev); ok {
+			p.AgentID = sess.agentIdentity()
 			s.notify(NotifyEvent, p)
 		}
 	}
@@ -701,6 +713,144 @@ func (s *Server) drain(sess *session, run *anvil.Run) {
 	// client is waiting for. push never blocks, so there is nothing to deadlock.
 	s.notify(NotifyDone, projectDone(sess.id, runID, res, err))
 	sess.endRun(run)
+}
+
+// forwardSubagentEvent projects one child event onto the `event` notification
+// with the identity that places it under its spawn card.
+//
+// It deliberately does not go through drain: the parent's run is blocked on the
+// spawn call, and a background child's run is not the session's run at all.
+// The session id is still the routing key — one session, one event stream —
+// and parent_tool_call_id is what the panel groups by.
+func (s *Server) forwardSubagentEvent(sess *session, ev anvil.SubagentEvent) {
+	if _, ok := s.session(sess.id); !ok {
+		// A closed session's children are cancelled with it; what they emit
+		// while unwinding has no reader, and the client asked not to hear it.
+		return
+	}
+	p, ok := projectEvent(sess.id, ev.RunID, ev.Event)
+	if !ok {
+		return
+	}
+	p.AgentID = ev.AgentID
+	p.ParentToolCallID = ev.ToolCallID
+	p.Depth = ev.Depth
+	s.notify(NotifyEvent, p)
+}
+
+// forwardTask reports one background task changing state, so a panel and a
+// status bar can follow the tree without polling. A task that ends after its
+// session closed is dropped: the lookup fails, and there is no surface left to
+// tell.
+func (s *Server) forwardTask(sess *session, info anvil.TaskInfo) {
+	if _, ok := s.session(sess.id); !ok {
+		return
+	}
+	s.notify(NotifyTask, TaskNotification{SessionID: sess.id, Task: taskInfo(info)})
+}
+
+// taskInfo projects one public task snapshot onto the wire shape.
+func taskInfo(t anvil.TaskInfo) TaskInfo {
+	out := TaskInfo{
+		ID:        t.ID,
+		Kind:      string(t.Kind),
+		Title:     t.Title,
+		Status:    string(t.Status),
+		AgentID:   t.AgentID,
+		StartedAt: t.StartedAt,
+		ExitCode:  t.ExitCode,
+	}
+	if !t.EndedAt.IsZero() {
+		ended := t.EndedAt
+		out.EndedAt = &ended
+	}
+	return out
+}
+
+// ---------------------------------------------------------------------------
+// tasks.list / tasks.output / tasks.cancel
+// ---------------------------------------------------------------------------
+
+// taskAgent resolves a session to the live agent that owns its task table.
+// An unknown session and a session whose agent has closed are both "no
+// session": the rows live on the agent, so asking after the close is asking
+// about work nobody can list.
+func (s *Server) taskAgent(sessionID string) (*anvil.Agent, *RPCError) {
+	sess, ok := s.session(sessionID)
+	if !ok {
+		return nil, errCode(CodeNoSession, "unknown session: "+sessionID)
+	}
+	agent := sess.sdk()
+	if agent == nil {
+		return nil, errCode(CodeNoSession, "session is not open: "+sessionID)
+	}
+	return agent, nil
+}
+
+func (s *Server) handleTasksList(params json.RawMessage) (any, *RPCError) {
+	p, err := decode[TasksListParams](params)
+	if err != nil {
+		return nil, errInvalidParams("tasks.list: " + err.Error())
+	}
+	agent, rpcErr := s.taskAgent(p.SessionID)
+	if rpcErr != nil {
+		return nil, rpcErr
+	}
+	infos := agent.Tasks()
+	out := TasksListResult{Tasks: make([]TaskInfo, 0, len(infos))}
+	for _, info := range infos {
+		out.Tasks = append(out.Tasks, taskInfo(info))
+	}
+	return out, nil
+}
+
+func (s *Server) handleTasksOutput(params json.RawMessage) (any, *RPCError) {
+	p, err := decode[TasksOutputParams](params)
+	if err != nil {
+		return nil, errInvalidParams("tasks.output: " + err.Error())
+	}
+	if strings.TrimSpace(p.TaskID) == "" {
+		return nil, errInvalidParams("tasks.output: task_id is required")
+	}
+	agent, rpcErr := s.taskAgent(p.SessionID)
+	if rpcErr != nil {
+		return nil, rpcErr
+	}
+	info, err := agent.Task(p.TaskID)
+	if err != nil {
+		return nil, errCode(CodeNoTask, err.Error())
+	}
+	chunk, err := agent.TaskOutput(p.TaskID, p.Offset, p.Limit)
+	if err != nil {
+		return nil, errCode(CodeNoTask, err.Error())
+	}
+	return TasksOutputResult{
+		Status:      string(info.Status),
+		ExitCode:    info.ExitCode,
+		Output:      chunk.Text,
+		NextOffset:  int(chunk.NextOffset),
+		FirstOffset: int(chunk.FirstOffset),
+		Truncated:   chunk.Truncated,
+	}, nil
+}
+
+func (s *Server) handleTasksCancel(params json.RawMessage) (any, *RPCError) {
+	p, err := decode[TasksCancelParams](params)
+	if err != nil {
+		return nil, errInvalidParams("tasks.cancel: " + err.Error())
+	}
+	if strings.TrimSpace(p.TaskID) == "" {
+		return nil, errInvalidParams("tasks.cancel: task_id is required")
+	}
+	agent, rpcErr := s.taskAgent(p.SessionID)
+	if rpcErr != nil {
+		return nil, rpcErr
+	}
+	info, err := agent.CancelTask(p.TaskID)
+	if err != nil {
+		return nil, errCode(CodeNoTask, err.Error())
+	}
+	return TasksCancelResult{Task: taskInfo(info)}, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -1097,6 +1247,17 @@ func (s *Server) buildOptions(p SessionParams, sess *session) (anvil.Options, *R
 		// SDK defaults ({cwd}/.anvil/checkpoints, 100 runs, 30 days).
 		Checkpoints: &anvil.CheckpointOptions{},
 	}
+	// Agent-in-agent is on for the editor unless the client sends subagents:
+	// false. The two callbacks name the session rather than the agent: they are
+	// installed before the agent exists, and every child in the tree — however
+	// deep — reports through the same options.
+	if boolOr(p.Subagents, true) {
+		opts.Subagents = anvil.SubagentOptions{
+			Enabled: true,
+			OnEvent: func(ev anvil.SubagentEvent) { s.forwardSubagentEvent(sess, ev) },
+			OnTask:  func(info anvil.TaskInfo) { s.forwardTask(sess, info) },
+		}
+	}
 	if len(p.TestCommand) > 0 {
 		opts.Test = anvil.TestOptions{Command: p.TestCommand}
 	}
@@ -1400,6 +1561,13 @@ func (s *Server) permissionHook(sess *session, timeout time.Duration) anvil.Perm
 			// written into a file this session ignores would be a button that lies.
 			Remember:  rememberOptions(sess, call),
 			TimeoutMS: int(timeout / time.Millisecond),
+			// The child that asked, when one did. run_id stays the session's
+			// active run, so session.cancel still withdraws the prompts that
+			// belong to the turn; a background child asking while the session is
+			// idle carries an empty run_id and is withdrawn by session.close or
+			// by cancelling its task.
+			AgentID: req.AgentID,
+			Depth:   req.Depth,
 		})
 
 		resp := s.approvals.wait(ctx, requestID, p)

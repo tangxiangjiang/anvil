@@ -65,6 +65,7 @@ test('the catalogue lists built-ins first and a skill never shadows one', () => 
     'model',
     'resume',
     'clear',
+    'tasks',
     'help',
   ]);
   assert.equal(names.filter((name) => name === 'plan').length, 1);

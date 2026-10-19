@@ -88,6 +88,11 @@ export function readSettings(): ResolvedSettings {
   // in force. It is sent explicitly, both ways, because the host's default is
   // on and this is the one place a user turns it off.
   session.load_permissions = cfg.get<boolean>('permissions', true) ?? true;
+  // Subagents are on by default: a session that hands work to a child is the
+  // editor's normal shape. Sent explicitly both ways, because a host's default
+  // is not this client's to assume, and turning it off has to reach the session
+  // that was just opened rather than the next one.
+  session.subagents = cfg.get<boolean>('subagents', true) ?? true;
   // MCP is per source, with deliberately different defaults. The workspace file
   // is reviewed like the rest of the workspace, and the extension refuses
   // untrusted workspaces; a home-directory file a user may not remember writing

@@ -465,6 +465,68 @@ body {
   font-size: 0.9em;
 }
 
+/* --- subagent spawn ------------------------------------------------------- */
+
+/*
+ * A spawn card holds a whole conversation, not one call's output. The body is
+ * inset behind a rule so the child's cards read as nested rather than as the
+ * parent's own work, and the nesting repeats at every depth because it is the
+ * same markup each time.
+ */
+.tool.spawn {
+  border-color: var(--vscode-charts-blue, #3794ff);
+}
+
+.tool.spawn .name {
+  color: var(--vscode-charts-blue, #3794ff);
+}
+
+.tool .spawn-body {
+  margin-top: 6px;
+  padding-left: 10px;
+  border-left: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* A replayed spawn has no child records, so its body has nothing to say and
+ * takes no space; the result's section speaks for it. */
+.tool .spawn-body:empty {
+  display: none;
+}
+
+.tool .spawn-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.tool .spawn-actions:first-child {
+  margin-top: 0;
+}
+
+.tool .spawn-note {
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.9em;
+}
+
+.tool .spawn-action {
+  background: none;
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
+  border-radius: 4px;
+  color: var(--vscode-textLink-foreground);
+  cursor: pointer;
+  padding: 2px 8px;
+  font-size: 0.9em;
+}
+
+.tool .spawn-action:hover {
+  background: var(--vscode-button-secondaryHoverBackground, rgba(128, 128, 128, 0.12));
+}
+
 /* --- approval ------------------------------------------------------------- */
 
 .approval {

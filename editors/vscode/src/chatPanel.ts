@@ -54,6 +54,7 @@ import {
   SessionInfo,
   SessionResult,
   SessionTranscriptResult,
+  TaskInfo,
 } from './protocol';
 import { RunFailure } from './errors';
 import { readSettings, readWebSearchKey } from './settings';
@@ -85,6 +86,17 @@ type Inbound =
    * there is no second undo for it.
    */
   | { type: 'restoreCheckpoint'; runId: string }
+  /**
+   * "Show the background tasks of this window", from `/tasks` or a spawn card's
+   * link. The panel is window-wide, so no session travels with it.
+   */
+  | { type: 'openTasks' }
+  /**
+   * "Open the stored conversation of the child this card spawned." The id came
+   * from the spawn result or from the child's own events; it is only ever used
+   * to resume a session, which is the same path a sidebar click takes.
+   */
+  | { type: 'openAgentTranscript'; agentId: string }
   /**
    * "Branch the conversation from this run", from a finished run's row. The new
    * conversation opens in its own tab; this one stays exactly as it is.
@@ -662,6 +674,12 @@ export class ChatPanel implements HostListener {
       case 'restoreCheckpoint':
         await this.restoreCheckpoint(msg.runId);
         return;
+      case 'openTasks':
+        this.hub.openTasks();
+        return;
+      case 'openAgentTranscript':
+        await this.hub.openSession(msg.agentId);
+        return;
       case 'forkSession':
         await this.forkSession(msg.runId);
         return;
@@ -998,6 +1016,12 @@ export class ChatPanel implements HostListener {
         return;
       case 'clear':
         await this.clearConversation();
+        return;
+      case 'tasks':
+        // Window-wide, and it sends nothing to the model: the command is a way
+        // to open a document, not a prompt.
+        this.hub.openTasks();
+        this.postState();
         return;
       case 'help':
         this.post({ type: 'help', commands: await this.commandCatalogue() });
@@ -1741,6 +1765,18 @@ export class ChatPanel implements HostListener {
   onNotice = (level: 'info' | 'warn' | 'error', message: string): void =>
     this.post({ type: 'notice', level, message });
 
+  /**
+   * A background task in this session tree started or ended.
+   *
+   * The tab draws nothing for it — the spawn card already shows the child's
+   * steps, and a background task is read in the Tasks panel — but the window's
+   * count is this tab's to report, because only this tab has the session id the
+   * host keyed the task to.
+   */
+  onTask = (task: TaskInfo, sessionId: string): void => {
+    this.hub.noteTask(sessionId, task);
+  };
+
   /** Reports what the turn actually changed, once the writes have landed. */
   private async reportChanges(runId: string): Promise<void> {
     try {
@@ -1969,6 +2005,10 @@ export class ChatPanel implements HostListener {
     this.pending = [];
     this.partialReviews.dispose();
     const session = this.session;
+    // Closing the session stops its tasks on the host, and no terminal
+    // notification follows a session that is no longer there. The count is
+    // dropped with the tab, before the handle goes away.
+    if (session?.id) this.hub.forgetTasks(session.id);
     this.session = undefined;
     this.opening = undefined;
     for (const uris of this.reviews.values()) {

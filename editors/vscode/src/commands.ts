@@ -50,6 +50,11 @@ export const BUILTIN_COMMANDS: readonly SlashCommand[] = [
     source: 'builtin',
   },
   {
+    name: 'tasks',
+    description: 'Show background commands and subagents',
+    source: 'builtin',
+  },
+  {
     name: 'help',
     description: 'List the available commands',
     source: 'builtin',
@@ -150,6 +155,7 @@ export type CommandAction =
   | { kind: 'model'; model: string }
   | { kind: 'resume'; agentId: string }
   | { kind: 'clear' }
+  | { kind: 'tasks' }
   | { kind: 'help' };
 
 export function route(text: string, commands: SlashCommand[]): CommandAction {
@@ -168,6 +174,8 @@ export function route(text: string, commands: SlashCommand[]): CommandAction {
       return { kind: 'resume', agentId: parsed.args };
     case 'clear':
       return { kind: 'clear' };
+    case 'tasks':
+      return { kind: 'tasks' };
     case 'help':
       return { kind: 'help' };
     default:

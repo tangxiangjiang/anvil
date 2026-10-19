@@ -1137,6 +1137,7 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 					ToolCallID:    origin.toolCallID,
 					AgentID:       a.id,
 					RunID:         run.id,
+					Depth:         a.depth,
 					Event:         out,
 				})
 			}

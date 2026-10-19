@@ -27,10 +27,18 @@ export interface SessionRow {
   contextValue: string;
   agentId: string;
   /**
-   * The stored name, when there is one. The label falls back to the id for a
-   * session nobody has named, and a rename box must not start out holding that
-   * fallback as if it were the name.
+   * The subagent sessions this one spawned, newest first.
+   *
+   * A child is a stored session like any other, and it stays in the listing —
+   * but the row a person opened is the parent, so the children hang under it
+   * rather than competing with it for the same recency heading. A child whose
+   * parent is no longer in the listing is a root row: the store can hold one
+   * after a delete, and hiding it would be worse than showing where it sits.
    */
+  children: SessionRow[];
+  /** The stored name, when there is one. The label falls back to the id for a
+   * session nobody has named, and a rename box must not start out holding that
+   * fallback as if it were the name. */
   title?: string;
   /**
    * The last run the session ended, when it has ended one. It is where
@@ -100,25 +108,66 @@ export function buildSessionView(
 ): SessionNode[] {
   if (sessions.length === 0) return [sessionNote('empty')];
 
-  const sorted = sortSessionsByRecency(sessions);
-  const dated = sorted.some((session) => timestampOf(session) !== undefined);
+  const childrenOf = childrenByParent(sessions);
+  // A child is nested only when its parent is in this listing. Otherwise it is a
+  // root: the store can hold a child whose parent was deleted, and a row that
+  // vanished from the sidebar would look like data loss.
+  const present = new Set(sessions.map((session) => session.agent_id));
+  const isNested = (session: SessionInfo): boolean =>
+    session.subagent === true &&
+    typeof session.parent_agent_id === 'string' &&
+    session.parent_agent_id !== session.agent_id &&
+    present.has(session.parent_agent_id);
+
+  // Depth-first, with a seen set so a malformed store cannot make a cycle into
+  // an infinite tree. A repeated agent id is dropped from the deeper copy.
+  const nestChildren = (agentId: string, seen: ReadonlySet<string>): SessionRow[] => {
+    const children = childrenOf.get(agentId) ?? [];
+    return sortSessionsByRecency(children)
+      .filter((child) => !seen.has(child.agent_id))
+      .map((child) => {
+        const next = new Set(seen);
+        next.add(child.agent_id);
+        return sessionRow(child, options, nestChildren(child.agent_id, next));
+      });
+  };
+
+  const roots = sortSessionsByRecency(sessions.filter((session) => !isNested(session)));
+  const rootRow = (session: SessionInfo): SessionRow =>
+    sessionRow(session, options, nestChildren(session.agent_id, new Set([session.agent_id])));
+
+  const dated = sessions.some((session) => timestampOf(session) !== undefined);
   // With nothing to group by, headings would be decoration: one bucket labelled
-  // "Undated" over every session says less than the sessions do.
-  if (!dated) return sorted.map((session) => sessionRow(session, options));
+  // "Undated" over every session says less than the sessions do. Buckets are
+  // taken over roots only: a child's recency is its parent's story.
+  if (!dated) return roots.map(rootRow);
 
   const bounds = boundsFor(options.now);
   const entries: SessionNode[] = [];
   for (const [id, label] of GROUP_LABELS) {
-    const inBucket = sorted.filter((session) => bucketOf(timestampOf(session), bounds) === id);
+    const inBucket = roots.filter((session) => bucketOf(timestampOf(session), bounds) === id);
     if (inBucket.length === 0) continue;
     entries.push({
       kind: 'group',
       id: `group:${id}`,
       label,
-      rows: inBucket.map((session) => sessionRow(session, options)),
+      rows: inBucket.map(rootRow),
     });
   }
   return entries;
+}
+
+/** The sessions each agent spawned, whether or not the parent is present. */
+function childrenByParent(sessions: readonly SessionInfo[]): Map<string, SessionInfo[]> {
+  const byParent = new Map<string, SessionInfo[]>();
+  for (const session of sessions) {
+    const parent = session.subagent === true ? session.parent_agent_id : undefined;
+    if (typeof parent !== 'string' || parent === '' || parent === session.agent_id) continue;
+    const list = byParent.get(parent);
+    if (list) list.push(session);
+    else byParent.set(parent, [session]);
+  }
+  return byParent;
 }
 
 /** One of the states in which the sidebar has no sessions to list. */
@@ -255,7 +304,22 @@ function runs(count: number): string {
   return `${count} run${count === 1 ? '' : 's'}`;
 }
 
-function sessionRow(session: SessionInfo, options: SessionViewOptions): SessionRow {
+/**
+ * The label a row shows. A subagent is named by the description its spawn call
+ * gave the task — that is the name the person saw when they started it — and
+ * falls back to the stored title for a child with no task description, which is
+ * a child started by a build that predates them.
+ */
+function rowLabel(session: SessionInfo): string {
+  const task = session.subagent === true ? session.task_title?.trim() : undefined;
+  return task ? task : sessionLabel(session);
+}
+
+function sessionRow(
+  session: SessionInfo,
+  options: SessionViewOptions,
+  children: SessionRow[],
+): SessionRow {
   const agentId = session.agent_id;
   const running = options.runningAgentIds?.includes(agentId) === true;
   const current = options.openAgentIds?.includes(agentId) === true;
@@ -276,7 +340,8 @@ function sessionRow(session: SessionInfo, options: SessionViewOptions): SessionR
   return {
     kind: 'session',
     id: agentId,
-    label: sessionLabel(session),
+    label: rowLabel(session),
+    children,
     title: title ? title : undefined,
     lastRunId: lastRunId ? lastRunId : undefined,
     description: parts.join(' · '),
@@ -290,6 +355,11 @@ function sessionRow(session: SessionInfo, options: SessionViewOptions): SessionR
 /** Plain text, not Markdown: the lines include paths, which are not markup. */
 function tooltipFor(session: SessionInfo, flags: { running: boolean; current: boolean }): string {
   const lines = [`Agent ${session.agent_id}`];
+  if (session.subagent === true) {
+    if (session.parent_agent_id) lines.push(`Subagent of ${session.parent_agent_id}`);
+    const task = session.task_title?.trim();
+    if (task) lines.push(`Task ${task}`);
+  }
   if (flags.running) lines.push('A turn is running.');
   else if (flags.current) lines.push('Open in a chat tab.');
   if (session.cwd) lines.push(`Workspace ${session.cwd}`);

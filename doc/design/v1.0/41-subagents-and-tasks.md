@@ -276,6 +276,11 @@ The webview groups child events under the spawn card, which becomes an expandabl
 the child's assistant text, its tool cards and its terminal status. It renders with the same
 `textContent`-only rules as the parent transcript; a child event is not a second renderer.
 
+`session_id` stays the root session's id on every event, including a child's and including a
+background child's after the parent's turn has ended. The event stream is the session's, and
+`parent_tool_call_id` — not a second session id — is what places a child's steps; that is also
+why the editor's existing per-session routing works unchanged.
+
 Replay is honest about the limit: the parent's stored transcript contains the spawn call and its
 final result, not the child's steps. A resumed tab draws the spawn card from those two records and
 offers **Open subagent transcript**, which loads the child's own store file through
@@ -346,6 +351,11 @@ func (a *Agent) CancelTask(taskID string) (TaskInfo, error)
 
 `TaskOutput` carries `Text`, `NextOffset`, `FirstOffset`, `Truncated` and `More` — the same
 window `task_output` reads, including whether bytes remain after the chunk.
+
+The wire form of `TaskInfo` (`proto.go`) makes `EndedAt` a `*time.Time` and omits it while the
+task runs. The SDK type keeps the zero `time.Time` — an embedder reads it in-process — but a JSON
+zero would be year 1, and a client cannot tell that from a date. `StartedAt` is a plain
+timestamp, because a task always has one.
 
 `TaskInfo` is a snapshot, not a subscription. `SubagentOptions.OnTask func(TaskInfo)` is called
 when a task starts and when it ends, which is what the host turns into a `task` notification; it
@@ -419,7 +429,7 @@ composer command, and both are projections of the same host state.
 | Method | Params | Result |
 |---|---|---|
 | `tasks.list` | `{session_id}` | `{tasks: TaskInfo[]}` — the session's whole tree |
-| `tasks.output` | `{session_id, task_id, offset?, limit?}` | `{status, exit_code, output, next_offset, truncated}` |
+| `tasks.output` | `{session_id, task_id, offset?, limit?}` | `{status, exit_code, output, next_offset, first_offset, truncated}` |
 | `tasks.cancel` | `{session_id, task_id}` | `{task: TaskInfo}` after the cancel |
 
 A new notification, `task`, carries `{session_id, task}` whenever a task starts, ends, or changes
@@ -437,17 +447,21 @@ child's final message once, then an empty chunk with `next_offset` at the end �
 ### The surface
 
 - **A Tasks panel** (`anvil.tasks` webview, one per window, revealed like the permissions
-  manager): a row per task with kind icon, title, status, elapsed time and actions — *Open
-  transcript* for an agent task, *View output* for a shell task, *Cancel* while running. It polls
-  `tasks.list` on the `task` notification and on a slow timer while it is visible, and never on a
-  hidden panel.
+  manager): a row per task with kind label, title, status, elapsed time and actions — *Open
+  transcript* for an agent task, *View output* for a shell task, *Cancel* while running. It
+  re-lists `tasks.list` on the `task` notification, on opening, and on an explicit Refresh, and
+  never on a hidden panel. There is deliberately no timer: elapsed time is arithmetic on the two
+  timestamps the row already has, and a poll that only refreshed it would be a host round trip
+  per second to redraw a clock.
 - **A `/tasks` composer command.** Typing `/tasks` in the composer opens the panel; the command is
   handled by the extension and never becomes a user message, because sending the literal word
   "tasks" to the model is not what the person meant. The composer's slash list gains `/tasks` with
   its one-line description, which is also how the command is discoverable.
-- **A status-bar item** (`$(tasklist) 2`) whenever the session has running tasks, clickable to the
-  panel. The existing status bar already shows a running turn; the two are different facts and
-  are drawn separately: a turn can be idle while two background jobs run.
+- **A status-bar item** (`$(tasklist) 2`) whenever the window has running tasks, clickable to the
+  panel. The count is across the window's live sessions, because the panel is: a task belongs to
+  an agent tree, and the person looking at the status bar is looking at the window. The existing
+  status bar already shows a running turn; the two are different facts and are drawn separately:
+  a turn can be idle while two background jobs run.
 - **Session tree nesting.** A child session appears under its parent, collapsed; opening it opens
   its transcript in a tab. The tree's delete action on a parent deletes its children, and the
   confirmation says how many.
