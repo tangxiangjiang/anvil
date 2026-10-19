@@ -115,9 +115,20 @@ func TestE2EConfigureJoinJobModels(t *testing.T) {
 
 	waitNodes(t, appAddr, 1)
 
-	llm, ok := srv.RunnerLLM()
-	if !ok || llm.APIKey != "gw-token" || llm.BaseURL != gw.URL+"/v1" {
-		t.Fatalf("agentd llm not provisioned: ok=%v %+v", ok, llm)
+	// join_ok LLM apply races registration: hub lists the node before the edge
+	// finishes ApplyClusterLLM, so wait rather than assert immediately.
+	var llm daemon.LLMConfig
+	deadline = time.Now().Add(2 * time.Second)
+	for {
+		var ok bool
+		llm, ok = srv.RunnerLLM()
+		if ok && llm.APIKey == "gw-token" && llm.BaseURL == gw.URL+"/v1" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("agentd llm not provisioned: ok=%v %+v", ok, llm)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 
 	models := getJSON(t, appAddr, "/v1/models")
