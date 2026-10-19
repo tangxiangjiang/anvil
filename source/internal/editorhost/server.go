@@ -1251,6 +1251,8 @@ func (s *Server) permissionHookForMode(mode string, sess *session, timeout time.
 	switch mode {
 	case ModeBypass:
 		return s.bypassHook(sess, timeout)
+	case ModeAuto:
+		return s.autoHook(sess, timeout)
 	case ModeDontAsk:
 		return s.dontAskHook(sess)
 	default:
@@ -1372,6 +1374,32 @@ func (s *Server) bypassHook(sess *session, timeout time.Duration) anvil.Permissi
 			return ask(ctx, req)
 		}
 		return anvil.PermissionDecision{Allow: true}, nil
+	}
+}
+
+// autoHook is what ModeAuto installs: it answers the calls the SDK can prove
+// harmless, and asks about the rest.
+//
+// The classifier is anvil.AutoApproveCall, and it sits in the SDK for the same
+// reason the rule matcher does: it reads the facts a rule is matched on, so the
+// explanation for an auto-approved call and for a rule-approved call cannot
+// disagree. A rule of effect "ask" is a written statement about this one tool,
+// so it opens the card even here — the same precedence bypass uses. A rule of
+// effect "allow" never reaches this function at all, because the registry
+// decides it first, and a "deny" never reaches it either.
+//
+// Everything not proved harmless goes to the ordinary hook rather than a
+// refusal: auto is a mode that skips some asking, not one that answers no.
+func (s *Server) autoHook(sess *session, timeout time.Duration) anvil.PermissionFunc {
+	ask := s.permissionHook(sess, timeout)
+	return func(ctx context.Context, req anvil.PermissionRequest) (anvil.PermissionDecision, error) {
+		if req.Rule != nil && req.Rule.Effect == anvil.PermissionEffectAsk {
+			return ask(ctx, req)
+		}
+		if anvil.AutoApproveCall(req.ToolName, req.Args) {
+			return anvil.PermissionDecision{Allow: true}, nil
+		}
+		return ask(ctx, req)
 	}
 }
 

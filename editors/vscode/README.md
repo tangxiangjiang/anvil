@@ -333,16 +333,22 @@ references a file or folder for the next prompt.
 ## Permission modes and rules
 
 The **mode** decides only whether a call stops to ask; the **rules** decide what it may do.
-The select in the composer has five modes and one entry that is not a mode:
+The select in the composer has six modes and one entry that is not a mode:
 
 | Mode | What it does |
 | --- | --- |
 | **Ask** | Every gated call waits for you |
 | **Accept edits** | In-workspace edits apply without asking; shell, verify, egress and external tools still ask |
+| **Auto** | Runs what it can prove harmless — read-only commands, in-workspace edits, your configured test/build commands — and asks about everything else |
 | **Plan** | The workspace-changing tools are withheld and the agent is told to plan |
 | **No asking** | For a run with nobody watching: only calls the rules already allow run, and nothing ever prompts |
 | **Bypass** | Nothing prompts — but a rule you wrote that says `ask` still does, and a `deny` still refuses |
 | **Workspace default** | No opinion: the mode is whatever `.anvil/permissions.json` declares, or `ask` |
+
+**Auto** classifies a call with the same facts a rule matches on and the same shell analyzer
+behind the `readonly` rule pattern — it makes no model call and reads no file. A command the
+analyzer cannot prove non-mutating asks, and so do egress, MCP and plugin tools. A rule you
+wrote that says `ask` opens its card here too.
 
 The mode is remembered per workspace; **Workspace default** gives that memory up, and the
 entry's label then shows the mode actually in force (*Workspace default (Plan)*). A mode that

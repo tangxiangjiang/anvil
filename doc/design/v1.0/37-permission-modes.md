@@ -22,6 +22,7 @@ below is reachable through `Options` the SDK already documents — `PermissionGr
 |---|---|---|---|---|
 | Ask | `ask` | the default six | the client | Ask about every gated call |
 | Accept edits | `accept_edits` | default minus `write`, `edit` | the client | Edits are fine; shell, verify, egress and external tools still ask |
+| Auto | `auto` | the default six | **classifier, then the client** | Prove the call harmless — read-only shell, in-workspace edit, configured test/build — and run it; ask otherwise |
 | Plan | `plan` | the default six | the client | The workspace-changing tools are withheld and the model is told to plan |
 | Don't ask | `dont_ask` | the default six | **always no** | Run only what the rules already allow, and never prompt |
 | Bypass | `bypass` | none — the mutating built-ins | **always yes**, except for a rule that asked | Do not ask; the rules still hold |
@@ -35,6 +36,12 @@ one means answering three questions — what it gates, who answers, and what it 
 answers no. Two of those answers live in one function each (`groupsForMode`,
 `permissionHookForMode`) so that a mode cannot be added to one and forgotten in the other;
 `TestEveryModeResolvesToAHook` is what keeps that true.
+
+`auto` is the one row whose "who answers" is not the person: its callback approves a call only
+when `anvil.AutoApproveCall` can prove it harmless, and otherwise delegates to the ordinary
+card. The classifier is deterministic — it reads the facts a rule matches on and the same shell
+analyzer the `readonly` pattern uses — and chapter [40](40-permission-auto-and-manager.md) is
+where that decision, and what it deliberately does not prove, is written down.
 
 What a mode does **not** do: it does not change the model, it does not change the rules, and
 it does not remove tools (except `plan`, which withholds them through `Options.DisallowedTools`

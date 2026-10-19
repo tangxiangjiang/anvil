@@ -256,6 +256,7 @@ const MODE_KEY = 'anvil.permissionMode';
 const MODE_LABELS: Record<PermissionMode, string> = {
   ask: 'Ask',
   accept_edits: 'Accept edits',
+  auto: 'Auto',
   plan: 'Plan',
   dont_ask: 'No asking',
   bypass: 'Bypass',
@@ -270,6 +271,8 @@ function modeNotice(mode: PermissionMode | undefined): string {
   switch (mode) {
     case undefined:
       return 'Mode: whatever this workspace declares in .anvil/permissions.json.';
+    case 'auto':
+      return 'Auto: read-only commands and edits inside this workspace run without asking. Everything else still asks.';
     case 'bypass':
       return 'Bypass is on: tool calls run without asking. Nothing will be shown for approval.';
     case 'dont_ask':
@@ -2025,6 +2028,7 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
           <option value="">Workspace default</option>
           <option value="ask">Ask before changes</option>
           <option value="accept_edits">Accept edits</option>
+          <option value="auto">Auto: safe actions</option>
           <option value="plan">Plan only</option>
           <option value="dont_ask">Only what the rules allow</option>
           <option value="bypass">Bypass approvals</option>

@@ -321,7 +321,7 @@ composer does with a mode it did not choose.
 - **"No opinion" is a choice the select has to be able to show.** The mode select gained a
   leading *Workspace default* entry, and it is the only way back to letting the file decide —
   the client's stored choice is a per-workspace habit, and clearing it is not expressible as
-  any of the five modes. In that state the client sends **no** `permission_mode` key at all:
+  any of the ladder's modes. In that state the client sends **no** `permission_mode` key at all:
   sending `""` would be a mode the host has to reject, and the whole point is that this client
   has nothing to say. The stored choice lives in `workspaceState` under `anvil.permissionMode`,
   and choosing the empty entry deletes the key rather than storing the empty string.

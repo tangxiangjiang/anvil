@@ -403,6 +403,14 @@ const (
 	// that path-taking tools stay inside the workspace, so "in workspace" needs
 	// no extra check here.
 	ModeAcceptEdits = "accept_edits"
+	// ModeAuto installs a classifier that approves the calls it can prove
+	// harmless and leaves the rest to the ordinary card. It is a deterministic
+	// classifier — anvil.AutoApproveCall — rather than a model call: read-only
+	// shell lines (proved by the same analyzer the "readonly" rule uses),
+	// in-workspace writes and edits, and the operator-configured test/build
+	// commands run without asking; egress, MCP, plugins and anything unknown
+	// still do. A rule of effect "ask" opens the card, as it does in bypass.
+	ModeAuto = "auto"
 	// ModePlan removes the tools that can change the workspace, so the model
 	// produces a plan and stops.
 	ModePlan = "plan"
@@ -427,7 +435,7 @@ const (
 // select renders — test/unit/permissionModes.test.ts reads this and protocol.ts
 // and the panel's markup as text, because a mode this side has and the client
 // does not is a silent hole in what a person can choose.
-var PermissionModes = []string{ModeAsk, ModeAcceptEdits, ModePlan, ModeDontAsk, ModeBypass}
+var PermissionModes = []string{ModeAsk, ModeAcceptEdits, ModeAuto, ModePlan, ModeDontAsk, ModeBypass}
 
 // DefaultPermissionGroups is what ModeAsk and ModeAcceptEdits gate when the
 // client names no groups. It closes the historical gap: before 0.35 only

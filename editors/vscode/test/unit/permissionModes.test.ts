@@ -49,7 +49,7 @@ test('the ladder is the same list, in the same order, on both sides', () => {
   const modes = hostModes();
   // Pinned rather than derived: this is the milestone's whole content, and a
   // mode appearing or disappearing without a docs change is what the pin is for.
-  assert.deepEqual(modes, ['ask', 'accept_edits', 'plan', 'dont_ask', 'bypass']);
+  assert.deepEqual(modes, ['ask', 'accept_edits', 'auto', 'plan', 'dont_ask', 'bypass']);
   assert.deepEqual(clientModes(), modes);
 });
 

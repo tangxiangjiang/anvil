@@ -332,7 +332,7 @@ export interface RememberOption {
  * reads both as text, because a mode the Go side adds and this line does not have
  * is one nobody can choose.
  */
-export const PermissionModes = ['ask', 'accept_edits', 'plan', 'dont_ask', 'bypass'] as const;
+export const PermissionModes = ['ask', 'accept_edits', 'auto', 'plan', 'dont_ask', 'bypass'] as const;
 export type PermissionMode = (typeof PermissionModes)[number];
 
 /** Decisions the host accepts, in the order a prompt should offer them. */

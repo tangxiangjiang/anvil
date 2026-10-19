@@ -1554,6 +1554,7 @@
   const modeLabels = {
     ask: 'Ask',
     accept_edits: 'Accept edits',
+    auto: 'Auto',
     plan: 'Plan',
     dont_ask: 'No asking',
     bypass: 'Bypass',
