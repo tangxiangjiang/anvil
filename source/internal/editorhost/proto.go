@@ -222,6 +222,31 @@ type SessionParams struct {
 	// a prompt carrying attachments to a session that did not opt in is
 	// refused, so a client never gets a run that quietly ignores the image.
 	Vision bool `json:"vision,omitempty"`
+
+	// WebSearch turns on the SDK's web tools for this session. Absent means
+	// off, and off means the tools are not registered at all: a tool the model
+	// can see but cannot authenticate is worse than no tool, because the model
+	// will find it and fail.
+	//
+	// The key is deliberately not here. It reaches the host through the child
+	// environment as ANVIL_WEB_SEARCH_API_KEY, the same discipline the model
+	// key follows: credentials do not cross the pipe.
+	WebSearch *WebSearchParams `json:"web_search,omitempty"`
+}
+
+// WebSearchParams configures the web tools. Presence is the switch — a client
+// that wants them off omits the field rather than sending enabled=false, so a
+// host that predates the field and a client that does not want it agree.
+type WebSearchParams struct {
+	// Provider is "http" (the default when empty) or "mcp". The second
+	// registers no built-in tools and expects the workspace's MCP servers to
+	// supply web_search.
+	Provider string `json:"provider,omitempty"`
+	// BaseURL is the JSON search endpoint, required for the http provider.
+	BaseURL string `json:"base_url,omitempty"`
+	// MaxResults is the per-search result count (0 uses the SDK default of 5,
+	// and the SDK caps it at 10).
+	MaxResults int `json:"max_results,omitempty"`
 }
 
 // SessionResult is the identity of a live session.

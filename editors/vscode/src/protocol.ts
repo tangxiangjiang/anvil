@@ -164,6 +164,25 @@ export interface SessionParams {
    * `Vision.Enabled` is what makes it accept one at all.
    */
   vision?: boolean;
+  /**
+   * Turn on the web tools. Absent means off; there is no `enabled` field
+   * because a host that predates the field and a client that does not want the
+   * tools should agree about absence.
+   *
+   * No key travels here. The host reads `ANVIL_WEB_SEARCH_API_KEY` from the
+   * environment the extension spawns it with.
+   */
+  web_search?: WebSearchParams;
+}
+
+/** Configuration for `web_search` / `fetch_url`; presence is the switch. */
+export interface WebSearchParams {
+  /** `http` (default) uses the SDK's JSON adapter; `mcp` registers no builtins. */
+  provider?: string;
+  /** The JSON search endpoint. Required for the http provider. */
+  base_url?: string;
+  /** Results per search; 0 uses the SDK default of 5. */
+  max_results?: number;
 }
 
 export interface SessionResult {

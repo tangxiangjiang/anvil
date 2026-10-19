@@ -11,7 +11,7 @@ import * as vscode from 'vscode';
 import { HostClient, LogFn } from './hostClient';
 import { ChatSession, SessionConfig, SessionState } from './session';
 import { SessionRouter } from './router';
-import { childEnv, readApiKey, readSettings } from './settings';
+import { childEnv, readApiKey, readSettings, readWebSearchKey } from './settings';
 import { describeHost, hostFixHint, resolveHost, verifyHost, versionDrift } from './hostBundle';
 import {
   ApprovalRequest,
@@ -168,7 +168,12 @@ export class HostManager {
     // should hold even if a caller forgets to ask.
     HostManager.assertTrusted();
     const settings = readSettings();
-    const apiKey = await readApiKey(this.context);
+    // Both credentials are read before the spawn and only ever travel through
+    // the child environment.
+    const [apiKey, webSearchKey] = await Promise.all([
+      readApiKey(this.context),
+      readWebSearchKey(this.context),
+    ]);
     const folder = vscode.workspace.workspaceFolders?.[0];
     if (!folder) throw new Error('open a folder to use Anvil');
     const cwd = folder.uri.fsPath;
@@ -191,7 +196,7 @@ export class HostManager {
     const client = new HostClient({
       command: host.command,
       cwd,
-      env: childEnv(apiKey),
+      env: childEnv({ apiKey, webSearchKey }),
       log: this.log,
       onExit: (info) => this.onHostExit(info),
     });

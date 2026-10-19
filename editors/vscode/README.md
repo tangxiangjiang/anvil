@@ -119,12 +119,19 @@ names both sides and stops rather than failing later inside a tool call.
 | `anvil.permissions` | Read the workspace's `.anvil/permissions.json`; on by default. Off means the session ignores the file — the rules **and** the `defaultMode` it may declare — and an approval card has nothing to offer under "always allow", because a rule written into a file this session does not read would not be in force |
 | `anvil.mcp.project` | Load `.cursor/mcp.json` from the workspace; on by default. The file can start processes, which is why it is read only from a folder you trust |
 | `anvil.mcp.user` | Also load `~/.cursor/mcp.json`; off by default. It is shared by every project, so reading it is opted into; project entries win over user entries with the same name |
+| `anvil.webSearch.enabled` | Give the session `web_search` and `fetch_url`; off by default. Off means the tools are not registered at all, so the model never sees one it cannot use. Calls stay behind the `web` permission group |
+| `anvil.webSearch.provider` | `http` (default) calls the endpoint in `anvil.webSearch.baseUrl`; `mcp` registers no built-ins and expects a search server from `.cursor/mcp.json` |
+| `anvil.webSearch.baseUrl` | The JSON search endpoint for the `http` provider. Required with that provider — the session refuses to open without it, naming the setting |
+| `anvil.webSearch.maxResults` | Results per search, 1–10; `0` uses the provider default of 5 |
 | `anvil.hostPath` | The sidecar to spawn; empty uses the bundled one, then `PATH` |
 
 The API key is **not** a setting. Run **Anvil: Set API Key**; it goes into VS
 Code's `SecretStorage` and from there into the child process environment
 (`ANVIL_API_KEY`). It is never written to a settings file, an output channel, or
-a log line.
+a log line. The web-search key follows the same rule: **Anvil: Set Web Search
+Key** stores it and it reaches the host as `ANVIL_WEB_SEARCH_API_KEY` — the only
+place a key is ever read from. Both commands restart the host, because a child
+keeps the environment it was spawned with.
 
 ## What it will and will not do
 
@@ -161,7 +168,11 @@ a log line.
   host can only report what a file says; a green dot from that would mean "the
   file mentioned it", not "it works". A file that will not parse is reported as
   an error, since an empty list would hide the one thing you can fix. Calls
-  through MCP tools stay behind the `mcp` permission group.
+  through MCP tools stay behind the `mcp` permission group. When the web tools
+  are on, the tab adds one row saying so and whether a key is stored — present
+  or absent, never the value; when they are off there is no row at all. With
+  the `mcp` provider it says what that really means: no built-in tools are
+  registered, and search has to come from a server the workspace declares.
 - **Typesets the reply, and shows the thinking when the provider sends it.** A
   reply is rendered as Markdown — paragraphs, headings, lists, quotes, fenced
   code — by a parser that returns a tree of plain objects and nothing else: the

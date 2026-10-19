@@ -56,7 +56,8 @@ import {
   SessionTranscriptResult,
 } from './protocol';
 import { RunFailure } from './errors';
-import { readSettings } from './settings';
+import { readSettings, readWebSearchKey } from './settings';
+import { webSearchNeedsKey } from './webSearch';
 
 /** A message from the webview. */
 type Inbound =
@@ -173,6 +174,12 @@ type Outbound =
    * observe one.
    */
   | { type: 'mcp'; servers: McpServerInfo[]; notes: string[]; error?: string }
+  /**
+   * The web tools this session was given. Posted only when enabled — the row's
+   * absence is the "off" answer, not a row that says so. `key` is whether a
+   * credential is stored for the one provider that needs one.
+   */
+  | { type: 'webSearch'; provider: string; key: boolean }
   | { type: 'session'; agentId: string; started: boolean }
   /**
    * The agent this tab is showing, for the document to remember across a
@@ -567,12 +574,13 @@ export class ChatPanel implements HostListener {
       // because it is the only part that can take a moment — everything above
       // is already on the wire by the time the host is asked anything.
       //
-      // The MCP card follows it rather than racing it: a restored tab should
-      // show its conversation first, and the card is about the workspace, not
-      // about any one turn in it.
+      // The MCP card and the web-tools row follow it rather than racing it: a
+      // restored tab should show its conversation first, and both describe the
+      // session's configuration rather than any one turn in it.
       void this.reattach()
         .catch(() => undefined)
-        .then(() => this.reportMcp());
+        .then(() => this.reportMcp())
+        .then(() => this.reportWebSearch());
       return;
     }
 
@@ -1133,6 +1141,28 @@ export class ChatPanel implements HostListener {
       // fail too, and saying so once is honest: there is no listing to show.
       this.post({ type: 'mcp', servers: [], notes: [], error: (err as Error).message });
     }
+  }
+
+  /**
+   * Reports the web tools this session was given.
+   *
+   * Only when enabled: a row on every conversation saying the web tools are off
+   * is noise, and the setting is already the answer. The key is reported as
+   * present or absent and in no other form — its value never leaves
+   * SecretStorage, so the webview could not render it even if it wanted to.
+   */
+  private async reportWebSearch(): Promise<void> {
+    const { webSearch } = readSettings();
+    if (!webSearch.enabled) return;
+    const provider = webSearch.provider.trim().toLowerCase() === 'mcp' ? 'mcp' : 'http';
+    const stored = webSearchNeedsKey(webSearch)
+      ? await readWebSearchKey(this.context)
+      : undefined;
+    this.post({
+      type: 'webSearch',
+      provider,
+      key: stored !== undefined && stored.trim() !== '',
+    });
   }
 
   /** Answers an approval, and closes the review it was answered from. */

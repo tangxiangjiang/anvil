@@ -1518,6 +1518,46 @@
     endRound();
   }
 
+  // --- web search -----------------------------------------------------------
+
+  /**
+   * The web tools this session was given, and whether a key is stored for them.
+   *
+   * Posted only when the setting is on, so the row's absence is the "off"
+   * answer. The mcp provider is drawn as what it is: no built-in tools, and
+   * whatever search a workspace MCP server supplies.
+   */
+  function showWebSearch(msg) {
+    const card = el('div', 'commands websearch');
+    card.appendChild(el('div', 'head', 'Web tools'));
+    const provider = msg.provider === 'mcp' ? 'mcp' : 'http';
+    if (provider === 'mcp') {
+      card.appendChild(
+        el(
+          'div',
+          'command muted',
+          'No built-in web tools: search is expected from an MCP server this workspace declares.',
+        ),
+      );
+      append(card);
+      endRound();
+      return;
+    }
+    const row = el('div', 'command');
+    row.appendChild(el('span', 'cmd', 'web_search, fetch_url'));
+    const hasKey = msg.key === true;
+    row.appendChild(el('span', 'desc', hasKey ? 'API key is set' : 'no API key is set'));
+    if (!hasKey) row.classList.add('failed');
+    card.appendChild(row);
+    if (!hasKey) {
+      card.appendChild(
+        el('div', 'command muted', 'Run "Anvil: Set Web Search Key" to store one for the search endpoint.'),
+      );
+    }
+    append(card);
+    endRound();
+  }
+
   function showSession(msg) {
     const line = el('div', 'msg session');
     const label = msg.started !== true
@@ -1882,6 +1922,9 @@
       }
       case 'mcp':
         showMcp(msg);
+        return;
+      case 'webSearch':
+        showWebSearch(msg);
         return;
       case 'session':
         showSession(msg);

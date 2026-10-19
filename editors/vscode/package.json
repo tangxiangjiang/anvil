@@ -122,6 +122,16 @@
         "category": "Anvil"
       },
       {
+        "command": "anvil.setWebSearchKey",
+        "title": "Anvil: Set Web Search Key",
+        "category": "Anvil"
+      },
+      {
+        "command": "anvil.clearWebSearchKey",
+        "title": "Anvil: Clear Web Search Key",
+        "category": "Anvil"
+      },
+      {
         "command": "anvil.restartHost",
         "title": "Anvil: Restart Host",
         "category": "Anvil"
@@ -279,6 +289,32 @@
           "type": "boolean",
           "default": false,
           "markdownDescription": "Also read `~/.cursor/mcp.json` and load the servers it declares. Off by default: a home-directory file is shared by every project, so turning it on is a wider act than reading the workspace's own file. Project entries win over user entries with the same name."
+        },
+        "anvil.webSearch.enabled": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Give the session the web tools: `web_search`, and `fetch_url` for pages it finds. Off by default, and off means the tools are not registered at all — a tool the model can see but cannot authenticate is worse than one it never finds. Calls stay behind the `web` permission group. The key is set with **Anvil: Set Web Search Key** and stored in SecretStorage, never in settings."
+        },
+        "anvil.webSearch.provider": {
+          "type": "string",
+          "enum": [
+            "http",
+            "mcp"
+          ],
+          "default": "http",
+          "markdownDescription": "How a search runs. `http` calls the JSON endpoint in `anvil.webSearch.baseUrl` with the stored key. `mcp` registers no built-in tools and expects a web-search MCP server from this workspace's `.cursor/mcp.json` to provide one."
+        },
+        "anvil.webSearch.baseUrl": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "The search endpoint for the `http` provider, for example `https://gateway.example.com/v1/web/search`. A request is a JSON `POST` with `{\"query\", \"max_results\"}` and a bearer token from the stored key. Required when the provider is `http`; the session refuses to open without it."
+        },
+        "anvil.webSearch.maxResults": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "maximum": 10,
+          "description": "Results per search, 1–10. 0 uses the provider default (5)."
         }
       }
     }

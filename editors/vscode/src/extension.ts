@@ -16,7 +16,12 @@ import { SessionInfo } from './protocol';
 import { SessionNode, SessionRow } from './sessionList';
 import { SessionChoice, filterSessions, sessionChoices } from './sessionSearch';
 import { SessionTreeProvider } from './sessionTree';
-import { clearApiKey, promptForApiKey } from './settings';
+import {
+  clearApiKey,
+  clearWebSearchKey,
+  promptForApiKey,
+  promptForWebSearchKey,
+} from './settings';
 
 /** The window's shared half, so `deactivate` can kill the child. */
 let active: Hub | undefined;
@@ -213,6 +218,23 @@ export function activate(context: vscode.ExtensionContext): void {
       await clearApiKey(context);
       await hub.restart();
       vscode.window.showInformationMessage('Anvil: API key cleared.');
+    }),
+
+    // The web-search key follows the same discipline as the model key: it is
+    // stored in SecretStorage and reaches the host only through the child
+    // environment. The restart is what makes a new key take effect, because a
+    // running process keeps the environment it was spawned with.
+    vscode.commands.registerCommand('anvil.setWebSearchKey', async () => {
+      const saved = await promptForWebSearchKey(context);
+      if (!saved) return;
+      await hub.restart();
+      vscode.window.showInformationMessage('Anvil: web search API key saved.');
+    }),
+
+    vscode.commands.registerCommand('anvil.clearWebSearchKey', async () => {
+      await clearWebSearchKey(context);
+      await hub.restart();
+      vscode.window.showInformationMessage('Anvil: web search API key cleared.');
     }),
 
     // The context keys the title-bar stop buttons hang off, and the one the

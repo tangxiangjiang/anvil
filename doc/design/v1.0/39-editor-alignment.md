@@ -218,7 +218,16 @@ and a key that follows the same discipline as the model key — VS Code SecretSt
 protocol. `AllowPrivateURLs` stays off; a client setting is not the place to relax a fetch policy.
 
 The tools appear only when enabled. A tool that exists but cannot authenticate is worse than one
-that is absent, because the model will find it and fail.
+that is absent, because the model will find it and fail. The session field is therefore present or
+absent, never `enabled: false`: a host that predates the field and a client that does not want the
+tools agree about what an omitted field means. The host turns it into `Options.WebSearch` and
+refuses an http provider with no endpoint, naming `web_search.base_url` — the SDK's own
+"BaseURL is required" does not tell a person which setting to fill in.
+
+The panel's row is the honest half. It is posted only when the setting is on, says whether a key is
+stored (never the value), and for the `mcp` provider says what that provider actually does: register
+no built-in tools and leave search to a server the workspace declares. A row claiming built-ins for
+that provider would be the same false green light the MCP card refuses to draw.
 
 ## Usage
 

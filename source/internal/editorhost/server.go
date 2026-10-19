@@ -1055,6 +1055,11 @@ func (s *Server) buildOptions(p SessionParams, sess *session) (anvil.Options, *R
 		return opts, rpcErr
 	}
 	opts.Local.SettingSources = sources
+	web, rpcErr := webSearchFrom(p.WebSearch)
+	if rpcErr != nil {
+		return opts, rpcErr
+	}
+	opts.WebSearch = web
 	if sess.mode == ModePlan {
 		// Plan mode removes the tools that can change the workspace, so the
 		// model produces a plan instead of acting on it. The instruction that
@@ -1085,6 +1090,48 @@ func settingSourcesFrom(values []string) ([]anvil.SettingSource, *RPCError) {
 		}
 	}
 	return out, nil
+}
+
+// webSearchKeyEnv is where the SDK looks for the search credential. It is a
+// constant rather than a client field: which environment variable a credential
+// lives in is part of the spawn contract, and a session that could rename it
+// would be a session that could point the host at anything in its environment.
+const webSearchKeyEnv = "ANVIL_WEB_SEARCH_API_KEY"
+
+// webSearchFrom turns the session's request field into SDK options.
+//
+// Presence is the switch, so nil is off and the tools are never registered. An
+// endpoint is required for the http provider here rather than left to
+// session.new's SDK error: the message names the setting the user has to fill
+// in, which the SDK's "BaseURL is required" does not.
+func webSearchFrom(p *WebSearchParams) (anvil.WebSearchOptions, *RPCError) {
+	if p == nil {
+		return anvil.WebSearchOptions{}, nil
+	}
+	provider := strings.ToLower(strings.TrimSpace(p.Provider))
+	switch provider {
+	case "", "http":
+		if strings.TrimSpace(p.BaseURL) == "" {
+			return anvil.WebSearchOptions{}, errInvalidParams("web_search.base_url is required when the provider is http")
+		}
+	case "mcp":
+	default:
+		return anvil.WebSearchOptions{}, errInvalidParams("unknown web_search.provider: " + p.Provider)
+	}
+	if p.MaxResults < 0 {
+		return anvil.WebSearchOptions{}, errInvalidParams("web_search.max_results cannot be negative")
+	}
+	return anvil.WebSearchOptions{
+		Enabled:    true,
+		Provider:   provider,
+		BaseURL:    p.BaseURL,
+		APIKeyEnv:  webSearchKeyEnv,
+		MaxResults: p.MaxResults,
+		// The phase is search and fetch: a session that says yes to the web
+		// tools gets both. AllowPrivateURLs stays false — a client setting is
+		// not the place to relax a fetch policy.
+		AllowFetchURL: true,
+	}, nil
 }
 
 // boolOr reads a tri-state request field: absent means the default the host
