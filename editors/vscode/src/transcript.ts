@@ -26,7 +26,7 @@
  *    design chapter says that is the one thing that does not come back.
  */
 
-import { DoneParams, HostEvent, TranscriptEntry } from './protocol';
+import { DoneParams, HostEvent, TodoItem, TranscriptEntry } from './protocol';
 
 /**
  * One thing to put on the screen, in order. The panel turns each into the
@@ -106,6 +106,21 @@ export function replayOf(entries: TranscriptEntry[], sessionId = ''): ReplayStep
             args: call.args,
           },
         });
+        // A checklist has no record of its own: it is an ordinary tool call,
+        // and the arguments are the whole list. Synthesising the live `todo`
+        // event here gives the webview one renderer for both paths. A call
+        // whose arguments the tool would have refused yields nothing, because
+        // the same validation is applied below — so a failed call does not
+        // replay as a list that was never accepted.
+        if (call.name === 'todo_write') {
+          const items = todoItemsOf(call.args);
+          if (items) {
+            steps.push({
+              kind: 'event',
+              event: { session_id: sessionId, run_id: runId, type: 'todo', items },
+            });
+          }
+        }
       }
       continue;
     }
@@ -126,4 +141,30 @@ export function replayOf(entries: TranscriptEntry[], sessionId = ''): ReplayStep
   }
 
   return steps;
+}
+
+const TODO_STATUSES = new Set(['pending', 'in_progress', 'done']);
+
+/**
+ * The task list a stored `todo_write` call carries, or undefined when it could
+ * not have been accepted.
+ *
+ * The check mirrors the tool's: every row needs text and one of the three
+ * statuses, and text is trimmed because that is what the tool stored. Reading
+ * the arguments leniently would let a call the host refused replay as a list
+ * the panel never showed live, which is the one thing a replay must not do.
+ */
+function todoItemsOf(args: unknown): TodoItem[] | undefined {
+  if (!args || typeof args !== 'object') return undefined;
+  const rows = (args as { items?: unknown }).items;
+  if (!Array.isArray(rows)) return undefined;
+  const items: TodoItem[] = [];
+  for (const row of rows) {
+    if (!row || typeof row !== 'object') return undefined;
+    const { text, status } = row as { text?: unknown; status?: unknown };
+    if (typeof text !== 'string' || text.trim() === '') return undefined;
+    if (typeof status !== 'string' || !TODO_STATUSES.has(status)) return undefined;
+    items.push({ text: text.trim(), status: status as TodoItem['status'] });
+  }
+  return items;
 }

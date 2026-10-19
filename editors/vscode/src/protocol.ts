@@ -724,7 +724,14 @@ export type EventType =
    * replay, so a resumed session shows none. A host that predates it simply
    * never emits the value, which is why this did not move the protocol version.
    */
-  | 'reasoning';
+  | 'reasoning'
+  /**
+   * The model's complete task list, in `items` (0.40.9). It follows the
+   * `todo_write` call that wrote it; an empty list clears the panel. A replay
+   * synthesises the same event from the stored call's arguments, so the webview
+   * has one path for both.
+   */
+  | 'todo';
 
 /** One streamed unit of a run. */
 export interface HostEvent {
@@ -753,6 +760,18 @@ export interface HostEvent {
    * rule decided it, which is not the same as "some rule allowed it".
    */
   rule?: RuleInfo;
+  /**
+   * The complete task list on a `todo` event (0.40.9). Present as [] when a
+   * call cleared it — which is different from the field being absent on every
+   * other event, and is why the host writes a pointer rather than omitting it.
+   */
+  items?: TodoItem[];
+}
+
+/** One row of the model's plan, as `todo_write` wrote it. */
+export interface TodoItem {
+  text: string;
+  status: 'pending' | 'in_progress' | 'done';
 }
 
 /** Run status values, mirroring `anvil.Status*`. */

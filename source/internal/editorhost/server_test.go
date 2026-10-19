@@ -435,6 +435,57 @@ func TestProjectEventCarriesUsageOnATerminalEvent(t *testing.T) {
 	}
 }
 
+// TestProjectEventCarriesTodoItems checks the checklist across the wire. An
+// empty list has to reach the client as [] rather than null or an absent field:
+// [] is how a call says "nothing is planned now", and the first two would read
+// as "this event has no list" — which the client cannot distinguish from a
+// dropped message.
+func TestProjectEventCarriesTodoItems(t *testing.T) {
+	got, ok := projectEvent("s", "r", anvil.Event{
+		Type: anvil.EventTodo,
+		Items: []anvil.TodoItem{
+			{Text: "a", Status: anvil.TodoPending},
+			{Text: "b", Status: anvil.TodoDone},
+		},
+	})
+	if !ok || got.Items == nil || len(*got.Items) != 2 {
+		t.Fatalf("todo projection lost items: %+v", got)
+	}
+	if (*got.Items)[1].Status != anvil.TodoDone {
+		t.Fatalf("status %q", (*got.Items)[1].Status)
+	}
+	raw, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"items":[{"text":"a","status":"pending"}`) {
+		t.Fatalf("wire shape: %s", raw)
+	}
+
+	got, ok = projectEvent("s", "r", anvil.Event{Type: anvil.EventTodo})
+	if !ok || got.Items == nil || len(*got.Items) != 0 {
+		t.Fatalf("empty todo projection: %+v", got)
+	}
+	raw, err = json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"items":[]`) {
+		t.Fatalf("an empty list must marshal as []: %s", raw)
+	}
+
+	// Every other event omits the field, so a client that predates it reads the
+	// payload it always read.
+	got, _ = projectEvent("s", "r", anvil.Event{Type: anvil.EventAssistant, Text: "hi"})
+	if got.Items != nil {
+		t.Fatalf("items appeared off a todo event: %+v", got)
+	}
+	raw, _ = json.Marshal(got)
+	if strings.Contains(string(raw), `"items"`) {
+		t.Fatalf("nil items reached the wire: %s", raw)
+	}
+}
+
 // TestProjectDoneFallsBackToRunID covers a Wait that returns no result.
 func TestProjectDoneFallsBackToRunID(t *testing.T) {
 	got := projectDone("s", "run-1", nil, errShutdown)

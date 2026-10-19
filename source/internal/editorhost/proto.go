@@ -934,6 +934,16 @@ type EventParams struct {
 	// is how a call that ran without a prompt says why it did not need one: nil
 	// means no rule decided it, which is not the same as "some rule allowed it".
 	Rule *RuleInfo `json:"rule,omitempty"`
+	// Items is the complete task list on a `todo` event (0.40.9). It is a
+	// pointer so that an empty list reaches the client as [] — clearing the
+	// panel — while every other event omits the field entirely.
+	Items *[]TodoItem `json:"items,omitempty"`
+}
+
+// TodoItem is one row of the model's plan.
+type TodoItem struct {
+	Text   string `json:"text"`
+	Status string `json:"status"`
 }
 
 // DoneParams is the terminal envelope of a run, projected from anvil.RunResult.

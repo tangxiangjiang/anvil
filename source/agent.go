@@ -949,6 +949,20 @@ func usageInfo(u *llm.Usage) *Usage {
 	return &Usage{InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, TotalTokens: u.TotalTokens}
 }
 
+// todoItemsInfo projects the model's task list onto the public type. A nil list
+// stays nil — no call wrote one — while an empty non-nil list stays empty, which
+// is how a call clears the panel.
+func todoItemsInfo(items []tools.TodoItem) []TodoItem {
+	if items == nil {
+		return nil
+	}
+	out := make([]TodoItem, len(items))
+	for i, it := range items {
+		out[i] = TodoItem{Text: it.Text, Status: it.Status}
+	}
+	return out
+}
+
 func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseFunc, wall time.Duration, run *Run, message string, history []llm.Message, userParts []llm.ContentPart) {
 	defer func() {
 		// The run is over, so its pre-images stop being written: a tool call made
@@ -1007,6 +1021,7 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 			Code:       Code(ev.Code),
 			Rule:       permissionRuleMatch(ev.Rule),
 			Usage:      usageInfo(ev.Usage),
+			Items:      todoItemsInfo(ev.Items),
 		})
 	})
 

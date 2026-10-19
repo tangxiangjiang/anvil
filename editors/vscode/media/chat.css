@@ -646,6 +646,54 @@ button:disabled {
   text-align: right;
 }
 
+/* --- the model's task list ------------------------------------------------ */
+
+/*
+ * Below the composer, because it is about the work in flight rather than the
+ * conversation's history: the transcript stays the record, and the plan is the
+ * one thing that is replaced as it changes instead of appended to. Capped and
+ * scrollable so a long plan cannot take the panel from the conversation.
+ */
+.todos {
+  margin-top: 6px;
+  padding: 0 calc(var(--anvil-gap) + 1px);
+  max-height: 9em;
+  overflow-y: auto;
+  font-size: 0.88em;
+  color: var(--vscode-descriptionForeground);
+}
+
+.todo-row {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  line-height: 1.5;
+}
+
+.todo-mark {
+  flex: 0 0 auto;
+  width: 1em;
+  text-align: center;
+}
+
+.todo-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Done is struck through rather than hidden: the list is the plan, and what
+ * was finished is part of it. The dimming keeps the remaining rows readable. */
+.todo-row[data-status='done'] .todo-text {
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+
+/* The row being worked on is the one the reader looks for, so it is drawn in
+ * the normal foreground rather than the muted description colour. */
+.todo-row[data-status='in_progress'] {
+  color: var(--vscode-foreground);
+}
+
 /* --- the floating composer ------------------------------------------------ */
 
 /*

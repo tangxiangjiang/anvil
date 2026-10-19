@@ -40,6 +40,10 @@ type Event struct {
 	// nil when no rule did — including when the call was allowed by a callback or
 	// ran ungated.
 	Rule *permissions.Decision
+	// Items is the model's complete task list, on the `todo` event that follows
+	// a successful todo_write call. It is the whole list rather than a change:
+	// a client replaces what it shows, and an empty list clears it.
+	Items []tools.TodoItem
 }
 
 // DefaultMaxSteps is deprecated: MaxSteps 0 means unlimited. Kept as 0 for callers.
@@ -327,6 +331,12 @@ func runToolCalls(
 			// card it explains is the one keyed by this call id.
 			Rule: results[i].Rule,
 		})
+		// A checklist is a statement about the session, not about this call, so
+		// it is its own event rather than a field on the result: a client draws
+		// one block, replaced on each call, not one block per card.
+		if tc.Name == tools.TodoToolName && !results[i].IsError {
+			emit(Event{Type: "todo", Items: results[i].Todos})
+		}
 		toolMsg := llm.Message{
 			Role:       llm.RoleTool,
 			Content:    content,

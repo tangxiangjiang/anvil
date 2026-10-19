@@ -268,6 +268,21 @@ rather than connects:
 It is a small tool with a small contract on purpose. It exists because a visible plan is part of
 the interaction being aligned, not because the runtime needs one.
 
+Three details make the contract hold:
+
+1. **The list is the whole list.** `Event.Items` carries every row on every call; the panel
+   replaces its block rather than appending, so moving an item to `done` cannot leave the previous
+   `pending` row on screen. An empty list is a statement — nothing is planned — and the wire sends
+   it as `[]` rather than omitting the field, because an absent field would be indistinguishable
+   from an event that carried no list at all.
+2. **The tool is not gated.** It touches no path and runs no process, so it is exempt from the
+   permission gate even when a permission group names it. A workspace rule that denies it
+   explicitly still wins: the gate is what a mode controls, and a written rule is a decision.
+3. **A replay validates like the tool did.** Failure is not stored, so the replay reads the stored
+   arguments and applies the tool's own rule — non-empty text, one of the three statuses. A call
+   the host refused therefore replays as a card with no list, which is what it was, instead of a
+   plan the model never managed to send.
+
 ## Input
 
 The remaining items are small and independent: Escape in the composer cancels the running turn
@@ -289,6 +304,9 @@ Nothing in this milestone changes the trust boundary:
 ## What this changes for existing callers
 
 - `anvil.Event` gains an optional `Usage`; a consumer that ignores it behaves as before.
+- `anvil.Event` gains `EventTodo` and optional `Items`, and the built-in set gains `todo_write`;
+  a caller that allow-lists built-in tools can name it, and one that does not never sees the
+  event.
 - `anvil.Record` gains an optional `Title`; an older file without one reads exactly as today.
 - `store.Summarize` learns to read a title field; derivation from the first user message is
   unchanged when no meta title exists.

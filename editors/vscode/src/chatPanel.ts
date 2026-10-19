@@ -1849,6 +1849,13 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
         <button id="send" type="submit" class="primary">Send</button>
       </div>
     </form>
+    <!--
+      The model's own plan, below the composer: it is about the work in flight,
+      not about the conversation, so it does not belong in the transcript. Every
+      todo event carries the whole list and replaces this block; an empty list
+      hides it.
+    -->
+    <div id="todos" class="todos" hidden aria-label="Task list"></div>
   </div>
   <!--
     The Markdown parser first, because it is a plain script assigning a global

@@ -165,6 +165,85 @@ test('an entry kind this build does not know is skipped, and a missing field is 
   assert.equal(out.event.content, '');
 });
 
+test('a stored todo_write replays as the checklist it left on screen', () => {
+  // The checklist has no record of its own: the call's arguments are the whole
+  // list, and the live path shows the same thing through the `todo` event. The
+  // replay synthesises that event so the webview has one renderer for both.
+  const entries: TranscriptEntry[] = [
+    {
+      kind: 'message',
+      run_id: 'r1',
+      role: 'assistant',
+      tool_calls: [
+        {
+          id: 't1',
+          name: 'todo_write',
+          args: { items: [{ text: ' read it ', status: 'done' }, { text: 'fix it', status: 'in_progress' }] },
+        },
+      ],
+    },
+    { kind: 'message', run_id: 'r1', role: 'tool', tool_call_id: 't1', name: 'todo_write', content: '2 items' },
+  ];
+
+  const steps = replayOf(entries, 's1');
+  assert.deepEqual(kinds(steps), ['event', 'event', 'event']);
+  const todo = steps[1];
+  assert.ok(todo.kind === 'event');
+  assert.equal(todo.event.type, 'todo');
+  assert.equal(todo.event.session_id, 's1');
+  // Trimmed like the tool stored it, so a replayed row reads exactly as it did.
+  assert.deepEqual(todo.event.items, [
+    { text: 'read it', status: 'done' },
+    { text: 'fix it', status: 'in_progress' },
+  ]);
+});
+
+test('a todo_write the tool would have refused replays as no list', () => {
+  // Failure is not recorded, so the replay has to decide from the arguments —
+  // and it applies the tool's own rule. Drawing a list the host rejected would
+  // show a plan the model never managed to send.
+  for (const items of [
+    [{ text: 'a', status: 'blocked' }],
+    [{ text: '   ', status: 'pending' }],
+    [{ status: 'pending' }],
+  ]) {
+    const steps = replayOf(
+      [
+        {
+          kind: 'message',
+          run_id: 'r1',
+          role: 'assistant',
+          tool_calls: [{ id: 't1', name: 'todo_write', args: { items } }],
+        },
+      ],
+      's1',
+    );
+    assert.deepEqual(kinds(steps), ['event'], JSON.stringify(items));
+    const only = steps[0];
+    assert.ok(only.kind === 'event');
+    assert.equal(only.event.type, 'tool_call');
+  }
+});
+
+test('an empty todo_write replays as an empty list, which is how a call clears it', () => {
+  const steps = replayOf(
+    [
+      {
+        kind: 'message',
+        run_id: 'r1',
+        role: 'assistant',
+        tool_calls: [{ id: 't1', name: 'todo_write', args: { items: [] } }],
+      },
+    ],
+    's1',
+  );
+  assert.deepEqual(kinds(steps), ['event', 'event']);
+  const todo = steps[1];
+  assert.ok(todo.kind === 'event');
+  assert.equal(todo.event.type, 'todo');
+  assert.deepEqual(todo.event.items, []);
+});
+
 test('a run boundary that never said how it ended replays as one that finished', () => {
   // The status decides a word on screen, and there is always one: an absent
   // status would otherwise print "undefined" over the middle of a transcript.

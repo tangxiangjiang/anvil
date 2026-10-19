@@ -28,6 +28,24 @@ const (
 	// It rides in Text, like EventAssistant, and is display-only: it is not part
 	// of RunResult, is not stored, and has no replay.
 	EventReasoning EventType = "reasoning"
+	// EventTodo carries the model's complete task list (0.40.9), emitted when a
+	// todo_write call succeeds. The call is also an ordinary tool message, so a
+	// replayed conversation rebuilds the list from the stored arguments; this
+	// event is what a live reader receives.
+	EventTodo EventType = "todo"
+)
+
+// TodoItem is one row of the model's plan.
+type TodoItem struct {
+	Text   string
+	Status string
+}
+
+// Task-list statuses. A todo_write call names one of these for every row.
+const (
+	TodoPending    = "pending"
+	TodoInProgress = "in_progress"
+	TodoDone       = "done"
 )
 
 // Usage holds optional token counts from the provider.
@@ -82,4 +100,8 @@ type Event struct {
 	// read, a call the mode gate allowed untouched, or one a callback approved —
 	// so a client shows "allowed by rule 2" only where a rule is really why.
 	Rule *PermissionRuleMatch
+	// Items is the model's task list, set on EventTodo (0.40.9) and nil on every
+	// other event. It is the complete list the call wrote, not a change: a
+	// client replaces its checklist, and an empty list means the call cleared it.
+	Items []TodoItem
 }

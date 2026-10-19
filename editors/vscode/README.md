@@ -181,6 +181,13 @@ keeps the environment it was spawned with.
   that window. With it unset there is no percentage: no catalogue in the
   repository defines a window, and a guess from a model name would make the
   fraction a number about Anvil rather than about the model.
+- **Shows the plan as a checklist.** The built-in `todo_write` tool lets the
+  model publish its task list, and the panel draws it below the composer — one
+  row per item, with the current one in the normal text colour and finished ones
+  struck through. Each call carries the whole list and replaces the block; an
+  empty list removes it. The call is an ordinary tool card too, so a reopened
+  conversation shows the checklist it ended with, rebuilt from the stored
+  arguments.
 - **Typesets the reply, and shows the thinking when the provider sends it.** A
   reply is rendered as Markdown — paragraphs, headings, lists, quotes, fenced
   code — by a parser that returns a tree of plain objects and nothing else: the
@@ -248,12 +255,15 @@ keeps the environment it was spawned with.
   was built with, verified against the checksum recorded at build time before it
   is run. The API key is not in the package: it is in VS Code's SecretStorage,
   and from there in the child process environment.
-- **Does not have checkpoints, rewind or forking.** A transcript is a record,
-  not a cursor: replaying a conversation cannot be resumed from, edited, or
-  branched. Reasoning is the one part of a turn that does not come back — it was
-  never persisted — and a round whose record had not landed when the tab
-  re-attached mid-run is in neither the replay nor the stream. See
-  `doc/roadmaps/v1.0/m_0.38/`.
+- **Can go back, and can branch.** A run that edited files captures their
+  pre-images, and restoring that run puts them back — deleting files the run
+  created, because the manifest records that they were absent. A session can be
+  forked at a finished run's boundary, and the fork opens in a new tab carrying
+  the records up to that point. What is still not possible is editing or
+  resuming *inside* a transcript: a replay is a record, not a cursor. Reasoning
+  is the one part of a turn that does not come back — it was never persisted —
+  and a round whose record had not landed when the tab re-attached mid-run is in
+  neither the replay nor the stream. See `doc/roadmaps/v1.0/m_0.40/`.
 
 ## Sessions
 

@@ -35,6 +35,7 @@
   const palette = document.getElementById('palette');
   const dock = document.getElementById('composerDock');
   const meter = document.getElementById('meter');
+  const todoBlock = document.getElementById('todos');
 
   /**
    * The meter's arithmetic, from `media/meter.js`. It is a plain script that
@@ -164,6 +165,7 @@
     statusLine.textContent = '';
     statusLine.hidden = true;
     resetUsage();
+    setTodos([]);
     transcript.textContent = '';
     // The node survives the clear — only the reference to it in the document
     // does not — so putting it back is what makes a cleared conversation look
@@ -1638,6 +1640,38 @@
     meter.hidden = text === '';
   }
 
+  /** The mark a status draws. An unknown status gets a plain one, not a guess. */
+  const todoMarks = { pending: '○', in_progress: '◐', done: '✓' };
+
+  /**
+   * Replaces the task list under the composer.
+   *
+   * It replaces rather than appends because every call carries the whole list:
+   * appending would show the plan's history as separate blocks, and the model
+   * moving an item to done would leave the old pending row on screen. An empty
+   * list hides the block entirely, which is how a call clears it.
+   */
+  function setTodos(items) {
+    if (!todoBlock) return;
+    const list = Array.isArray(items) ? items : [];
+    todoBlock.textContent = '';
+    if (list.length === 0) {
+      todoBlock.hidden = true;
+      return;
+    }
+    for (const item of list) {
+      const text = item && typeof item.text === 'string' ? item.text : '';
+      if (text === '') continue;
+      const status = item && typeof item.status === 'string' ? item.status : '';
+      const row = el('div', 'todo-row');
+      if (todoMarks[status]) row.dataset.status = status;
+      row.appendChild(el('span', 'todo-mark', todoMarks[status] || '·'));
+      row.appendChild(el('span', 'todo-text', text));
+      todoBlock.appendChild(row);
+    }
+    todoBlock.hidden = todoBlock.childNodes.length === 0;
+  }
+
   /**
    * What a finished run is worth saying: how many steps, and what it cost. One
    * function because two places say it — the status line for the run in flight,
@@ -1911,6 +1945,7 @@
         else if (e.type === 'reasoning') addReasoning(e.text || '');
         else if (e.type === 'tool_call') addToolCall(e, msg.reviewable === true);
         else if (e.type === 'tool_result') addToolResult(e);
+        else if (e.type === 'todo') setTodos(e.items);
         else if (e.type === 'error') addNotice(e.text || 'The run reported an error.');
         else if (e.type === 'progress' && e.text) {
           statusLine.textContent = e.text;

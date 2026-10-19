@@ -53,6 +53,10 @@ type Result struct {
 	// and puts it on the tool_result, so a card can say which rule allowed a call
 	// that never asked.
 	Rule *permissions.Decision
+	// Todos is the list a todo_write call left behind. It is read only from a
+	// successful call named that: an empty slice is a list that was cleared,
+	// which is a different statement from a call that wrote none.
+	Todos []TodoItem
 }
 
 // Tool is an executable tool.
@@ -120,6 +124,7 @@ func NewRegistry(cwd string, allowShell bool) *Registry {
 	r.register(&gitStatusTool{r: r})
 	r.register(&gitDiffTool{r: r})
 	r.register(&gitLogTool{r: r})
+	r.register(&todoWriteTool{r: r})
 	if allowShell {
 		r.register(&shellTool{r: r})
 	}
@@ -277,6 +282,12 @@ func IsMutating(name string) bool {
 
 // gated reports whether the permission hook applies to this call.
 func (r *Registry) gated(name string, t Tool) bool {
+	// todo_write writes nothing a permission could protect: its only effect is
+	// an in-memory list and a count in the transcript. A gate on it could only
+	// stop the model from showing its plan.
+	if name == TodoToolName {
+		return false
+	}
 	if len(r.permGroups) == 0 {
 		return IsMutating(name)
 	}

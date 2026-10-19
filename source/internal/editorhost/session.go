@@ -143,9 +143,17 @@ func (s *session) waitRun(timeout time.Duration) bool {
 func projectEvent(sessionID, runID string, ev anvil.Event) (EventParams, bool) {
 	switch ev.Type {
 	case anvil.EventProgress, anvil.EventAssistant, anvil.EventReasoning,
-		anvil.EventToolCall, anvil.EventToolResult, anvil.EventError:
+		anvil.EventToolCall, anvil.EventToolResult, anvil.EventError, anvil.EventTodo:
 	default:
 		return EventParams{}, false
+	}
+	var items *[]TodoItem
+	if ev.Type == anvil.EventTodo {
+		list := make([]TodoItem, len(ev.Items))
+		for i, it := range ev.Items {
+			list[i] = TodoItem{Text: it.Text, Status: it.Status}
+		}
+		items = &list
 	}
 	return EventParams{
 		SessionID:  sessionID,
@@ -162,6 +170,7 @@ func projectEvent(sessionID, runID string, ev anvil.Event) (EventParams, bool) {
 		Code:       string(ev.Code),
 		Rule:       ruleInfo(ev.Rule),
 		Usage:      usageWire(ev.Usage),
+		Items:      items,
 	}, true
 }
 
