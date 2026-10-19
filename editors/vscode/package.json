@@ -77,6 +77,11 @@
         "category": "Anvil"
       },
       {
+        "command": "anvil.openSessionInNewTab",
+        "title": "Anvil: Open Session in New Tab",
+        "category": "Anvil"
+      },
+      {
         "command": "anvil.stop",
         "title": "Anvil: Stop",
         "category": "Anvil",
@@ -121,16 +126,27 @@
           "group": "navigation@3"
         }
       ],
+      "view/item/context": [
+        {
+          "command": "anvil.openSessionInNewTab",
+          "when": "view == anvil.sessions && viewItem =~ /^session/",
+          "group": "inline@1"
+        }
+      ],
       "editor/title": [
         {
           "command": "anvil.stop",
-          "when": "activeWebviewPanelId == anvil.chat && anvil.busy",
+          "when": "activeWebviewPanelId == anvil.chat && anvil.activeBusy",
           "group": "navigation"
         }
       ],
       "commandPalette": [
         {
           "command": "anvil.openSession",
+          "when": "false"
+        },
+        {
+          "command": "anvil.openSessionInNewTab",
           "when": "false"
         }
       ]

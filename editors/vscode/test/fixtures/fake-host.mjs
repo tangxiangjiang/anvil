@@ -103,7 +103,15 @@ let sessionSeq = 0;
 let runSeq = 0;
 /** Pending approval responders, by request id. */
 const approvals = new Map();
-let activeRun = null;
+/**
+ * The run in flight for each session, by session id.
+ *
+ * Per session and not one per process: the whole point of the multi-tab tests is
+ * two conversations running at once over one child. A single global run would
+ * make the second tab's prompt fail with the same `-32003` the real host uses
+ * for *one session's* second turn, which is a different rule.
+ */
+const activeRuns = new Map();
 
 /**
  * The mode the workspace's own file declares, and whether the host would honour
@@ -222,7 +230,7 @@ function event(session, run, body) {
 }
 
 function finish(session, run, body) {
-  activeRun = null;
+  activeRuns.delete(session.session_id);
   notify('done', { session_id: session.session_id, run_id: run, ...body });
 }
 
@@ -240,11 +248,12 @@ async function runScript(session, run, message) {
 
   if (scenario === 'slow') {
     event(session, run, { type: 'assistant', text: 'working' });
-    activeRun = { session, run, cancelled: false, cancelledPromise: null };
-    activeRun.cancelledPromise = new Promise((resolve) => {
-      activeRun.markCancelled = resolve;
+    const slow = { session, run, cancelled: false, cancelledPromise: null };
+    activeRuns.set(session.session_id, slow);
+    slow.cancelledPromise = new Promise((resolve) => {
+      slow.markCancelled = resolve;
     });
-    await activeRun.cancelledPromise;
+    await slow.cancelledPromise;
     finish(session, run, { status: 'cancelled', steps: 1 });
     return;
   }
@@ -622,26 +631,30 @@ async function handle(msg) {
         fail(msg.id, -32001, 'no such session');
         return;
       }
-      if (activeRun) {
+      if (activeRuns.has(session.session_id)) {
         fail(msg.id, -32003, 'a run is already in progress');
         return;
       }
       runSeq += 1;
       const run = `r${runSeq}`;
       echo('prompt', msg.params || {});
-      activeRun = { session, run, cancelled: false };
+      activeRuns.set(session.session_id, { session, run, cancelled: false });
       ok(msg.id, { session_id: session.session_id, run_id: run, agent_id: session.agent_id });
       const message = (msg.params && msg.params.message) || '';
       void runScript(session, run, message);
       return;
     }
     case 'cancel': {
-      if (!activeRun) {
+      // Named by session, like every other notification: one tab's Stop must
+      // never cancel the turn running next door.
+      const sessionId = msg.params && msg.params.session_id;
+      const active = sessionId ? activeRuns.get(sessionId) : undefined;
+      if (!active) {
         fail(msg.id, -32002, 'no run in progress');
         return;
       }
-      activeRun.cancelled = true;
-      if (activeRun.markCancelled) activeRun.markCancelled();
+      active.cancelled = true;
+      if (active.markCancelled) active.markCancelled();
       ok(msg.id, { cancelled: true });
       return;
     }

@@ -26,16 +26,20 @@ import { SessionInfo } from './protocol';
 export interface SessionSource {
   /** This workspace's stored agents, via the host. */
   listSessions(): Promise<SessionInfo[]>;
-  /** The agent the chat tab is showing. */
-  currentAgentId(): string | undefined;
-  /** The agent with a turn in flight. */
-  runningAgentId(): string | undefined;
+  /** The agents with a chat tab open. */
+  openAgentIds(): string[];
+  /** The agents with a turn in flight. */
+  runningAgentIds(): string[];
   /** Whether a host child is already live, so a redraw need not start one. */
   isHostUp(): boolean;
-  /** Continues a stored agent in the chat tab. */
+  /** Reveals the tab already showing a stored agent. */
   openSession(agentId: string): Promise<void>;
+  /** Continues a stored agent in a new chat tab. */
+  openSessionInNewTab(agentId: string): Promise<void>;
   /** Fires when the list or the markers on it could have changed. */
   onSessionsChanged(listener: () => void): vscode.Disposable;
+  /** Fires when a tab opened, closed, or changed which agent it shows. */
+  onTabsChanged(listener: () => void): vscode.Disposable;
 }
 
 /** How long to wait for a burst of state changes to settle before re-listing. */
@@ -53,8 +57,12 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionNode>
   private failure: string | undefined;
   private loading = false;
   private timer: ReturnType<typeof setTimeout> | undefined;
+  /** A tab opening or closing changes only the markers, so it is a redraw. */
+  private readonly tabWatch: vscode.Disposable;
 
-  constructor(private readonly source: SessionSource) {}
+  constructor(private readonly source: SessionSource) {
+    this.tabWatch = source.onTabsChanged(() => this.changed.fire(undefined));
+  }
 
   getTreeItem(node: SessionNode): vscode.TreeItem {
     if (node.kind === 'note') return noteItem(node);
@@ -124,6 +132,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionNode>
 
   dispose(): void {
     if (this.timer) clearTimeout(this.timer);
+    this.tabWatch.dispose();
     this.changed.dispose();
   }
 
@@ -145,8 +154,8 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionNode>
   private view(): SessionNode[] {
     const options: SessionViewOptions = {
       now: Date.now(),
-      currentAgentId: this.source.currentAgentId(),
-      runningAgentId: this.source.runningAgentId(),
+      openAgentIds: this.source.openAgentIds(),
+      runningAgentIds: this.source.runningAgentIds(),
     };
     return buildSessionView(this.cached ?? [], options);
   }

@@ -1662,6 +1662,12 @@
       case 'session':
         showSession(msg);
         return;
+      case 'agent':
+        // The one thing this document must remember for a reload: the
+        // serializer hands it back and the tab comes up on the same
+        // conversation. It is not drawn — a new session is not news.
+        vscode.setState({ agentId: msg.agentId || undefined });
+        return;
       case 'reset':
         clearTranscript();
         return;

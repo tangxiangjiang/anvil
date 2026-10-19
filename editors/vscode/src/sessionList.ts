@@ -53,10 +53,15 @@ export type SessionNode = SessionRow | SessionGroup | SessionNote;
 export interface SessionViewOptions {
   /** The clock, injected so the recency buckets are testable. */
   now: number;
-  /** The agent the chat tab is showing, if any. */
-  currentAgentId?: string;
-  /** The agent with a turn in flight, if any. */
-  runningAgentId?: string;
+  /**
+   * The agents with a chat tab open, and the agents with a turn in flight.
+   *
+   * Lists rather than one id: several tabs may be open, so the same agent can
+   * only be marked once but any number of the rows can be marked at the same
+   * time.
+   */
+  openAgentIds?: readonly string[];
+  runningAgentIds?: readonly string[];
 }
 
 /** Longest agent id shown as a label; the tooltip always carries the whole one. */
@@ -231,8 +236,8 @@ function runs(count: number): string {
 
 function sessionRow(session: SessionInfo, options: SessionViewOptions): SessionRow {
   const agentId = session.agent_id;
-  const running = options.runningAgentId !== undefined && options.runningAgentId === agentId;
-  const current = options.currentAgentId !== undefined && options.currentAgentId === agentId;
+  const running = options.runningAgentIds?.includes(agentId) === true;
+  const current = options.openAgentIds?.includes(agentId) === true;
 
   // The icon carries the last status, so the description does not repeat it;
   // it carries what the row cannot show as a glyph — the model and the size of
@@ -261,7 +266,7 @@ function sessionRow(session: SessionInfo, options: SessionViewOptions): SessionR
 function tooltipFor(session: SessionInfo, flags: { running: boolean; current: boolean }): string {
   const lines = [`Agent ${session.agent_id}`];
   if (flags.running) lines.push('A turn is running.');
-  else if (flags.current) lines.push('Open in the chat tab.');
+  else if (flags.current) lines.push('Open in a chat tab.');
   if (session.cwd) lines.push(`Workspace ${session.cwd}`);
   if (session.provider || session.model) {
     lines.push(`Model ${[session.provider, session.model].filter(Boolean).join('/')}`);
