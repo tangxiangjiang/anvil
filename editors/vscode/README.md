@@ -204,7 +204,11 @@ spawned with.
   opens the child's stored conversation, which is a session like any other;
   replay shows the spawn call's brief and result, not steps the store never
   wrote. With `background: true` the call returns a task id instead of waiting,
-  and the same table that lists shell jobs lists the child.
+  and the same table that lists shell jobs lists the child. `run_workflow` is
+  the same child agent, declared as a small DAG: steps, dependencies, literal
+  `{{step.result}}` substitution and one level of `for_each`, with one result
+  block listing every step's status. It is orchestration, not a scripting
+  language; a background workflow is one row in the Tasks panel.
 - **Shows work that outlived the call.** A background `shell` or subagent is a
   row in the Tasks panel: kind, title, status, elapsed, and the actions that
   apply — **View output** for a shell task, **Open transcript** for an agent

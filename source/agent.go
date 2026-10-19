@@ -580,11 +580,15 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 	// because it needs the agent executing it. A child at the last depth has no
 	// such tool: the limit is enforced by absence, not by a runtime check.
 	if opts.Subagents.Enabled && opts.depth+1 < subagentMaxDepth(opts.Subagents) {
-		if err := reg.Register(subagentTool(reg)); err != nil {
-			if lspSup != nil {
-				lspSup.Close()
+		// run_workflow orchestrates the same children spawn_agent creates, so it
+		// shares the depth rule: a workflow cannot be used to get around it.
+		for _, tool := range []*tools.FuncTool{subagentTool(reg), workflowTool(reg)} {
+			if err := reg.Register(tool); err != nil {
+				if lspSup != nil {
+					lspSup.Close()
+				}
+				return nil, nil, nil, nil, nil, newError(err.Error(), false, nil)
 			}
-			return nil, nil, nil, nil, nil, newError(err.Error(), false, nil)
 		}
 	}
 	// A read-only child has no shell, but it can still read the tree's

@@ -61,7 +61,7 @@ func main() {
 
 ## Status
 
-Product is at **0.41 delivered** — the editor reaches Claude-class ground with parallel tabs, session administration, per-hunk acceptance, checkpoints, fork, MCP, web tools and a task list, and the permission line now has a rung between *accept edits* and *nothing asks* plus a form for the rules themselves. 0.35–0.38 are the editor line (VS Code extension, tool permissions, permission modes, session identity); **0.39** is the Delivery execute/test campaign loop, **0.40** is the editor alignment, and **0.41** is auto mode and the permissions manager. Full per-milestone index: [`doc/roadmaps/v1.0/README.md`](doc/roadmaps/v1.0/README.md).
+Product is at **0.42 delivered** — an agent can hand a task to a second agent, work can outlive the call that started it, one `/tasks` surface lists shell commands and subagents together, and `run_workflow` evaluates a declarative DAG of subagents without an interpreter. 0.35–0.38 are the editor line (VS Code extension, tool permissions, permission modes, session identity); **0.39** is the Delivery execute/test campaign loop, **0.40** is the editor alignment, **0.41** is auto mode and the permissions manager, and **0.42** is subagents, background tasks and workflows. Full per-milestone index: [`doc/roadmaps/v1.0/README.md`](doc/roadmaps/v1.0/README.md).
 
 | Era | Milestones | What |
 |-----|-----------|------|
@@ -74,6 +74,7 @@ Product is at **0.41 delivered** — the editor reaches Claude-class ground with
 | Session identity & replay | 0.38 | A session named by its first message, a reviewable change on every tool card, and a transcript that survives a reload — [design 38](doc/design/v1.0/38-session-identity-and-replay.md) |
 | Editor alignment | 0.40 | Parallel tabs, rename/delete/search, per-hunk acceptance, checkpoints, fork, MCP and web tools switched on, live usage, a task list — [design 39](doc/design/v1.0/39-editor-alignment.md) |
 | Auto & rules manager | 0.41 | An `auto` rung that runs what the analyzer can prove and asks about the rest, and a structured manager for `.anvil/permissions.json` — [design 40](doc/design/v1.0/40-permission-auto-and-manager.md) |
+| Subagents & workflows | 0.42 | `spawn_agent` creates a child agent with inherited permissions, background shell and subagents share one task table, `/tasks` draws it in the editor, and `run_workflow` evaluates a declarative DAG — [design 41](doc/design/v1.0/41-subagents-and-tasks.md) |
 
 ### VS Code extension (0.35)
 

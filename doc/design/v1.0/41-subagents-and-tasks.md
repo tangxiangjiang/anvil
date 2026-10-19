@@ -489,7 +489,8 @@ is a **declarative DAG of subagents**, evaluated deterministically by the runtim
 The contract:
 
 - Every step has an `id` unique within the workflow, a `prompt`, and optional `tools`, `model`,
-  `max_steps`, `depends_on` and `for_each`. Unknown fields are refused, not ignored.
+  `max_steps`, `depends_on` and `for_each`. A workflow has 1–32 steps; `max_parallel` is 1–8 and
+  defaults to 3. Unknown fields are refused, not ignored.
 - A step runs when every id in `depends_on` has finished. Ready steps run concurrently, bounded
   by the workflow's `max_parallel` (default 3); the document's order decides which ready step
   starts first and how the result is listed. A cycle, a dependency on an unknown id, a duplicate
@@ -497,13 +498,20 @@ The contract:
   fails at call time, not after spending two agents.
 - `{{step_id.result}}` in a prompt is replaced with that step's final message. Substitution is
   literal and happens once, in the prompt string the child receives; the SDK does not evaluate
-  expressions, so a model's output cannot become a template that expands further.
+  expressions, so a model's output cannot become a template that expands further. A reference is
+  also a dependency: the step waits for every step it reads even when `depends_on` omits it,
+  because otherwise the substitution would race the answer it is reading.
 - `for_each: {"from": "step_id", "path": "files"}` fans a step out over a JSON array that a
-  previous step's result must contain. Each item becomes `{{item}}` and `{{index}}`. Fan-out is
-  bounded by `max_parallel` (default 3) and by the tree's remaining agent budget; a step whose
-  target is not a JSON array fails that step rather than silently running zero or one child.
+  previous step's result must contain. `path` is a key, or a dotted key path into nested objects.
+  Each item becomes `{{item}}` and `{{index}}`. Fan-out is bounded by the step's `max_parallel`
+  (default: the workflow's, itself default 3), by the workflow's own bound, and by the tree's
+  remaining agent budget; a step whose target is not a JSON array fails that step rather than
+  silently running zero or one child. One child per item is created, described as
+  `<workflow name> / <step id> #<index>` so the session tree can tell them apart.
 - A failed step fails the workflow. Later steps that depend on it do not run; independent steps
-  that are already running finish. The tool result lists every step's status and every failure.
+  that are already running finish. The tool result lists every step's status and every failure;
+  a finished step's final message is carried up to 2000 characters, with the rest named by the
+  child's agent id so the store file is one click away.
 
 `run_workflow` is a tool in the `agent` group and returns a workflow result; `run_workflow` with
 `"background": true` files the whole workflow in the task table as one `agent` task whose title is
