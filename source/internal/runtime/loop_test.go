@@ -15,6 +15,42 @@ import (
 	"github.com/anvil-dev/anvil/internal/tools"
 )
 
+func TestLoopPutsUsageOnTheTerminalEvent(t *testing.T) {
+	dir := t.TempDir()
+	reg := tools.NewRegistry(dir, false)
+	var done *runtime.Event
+	res := runtime.Loop(context.Background(), usageCompleter{}, reg, runtime.Config{
+		CWD:     dir,
+		Model:   "m",
+		UserMsg: "hi",
+	}, func(ev runtime.Event) {
+		if ev.Type == "done" {
+			e := ev
+			done = &e
+		}
+	})
+	if res.Status != "finished" {
+		t.Fatalf("status=%s err=%s", res.Status, res.Err)
+	}
+	if done == nil || done.Usage == nil {
+		t.Fatalf("done event usage=%+v", done)
+	}
+	if done.Usage.TotalTokens != 7 || done.Usage.InputTokens != 4 || done.Usage.OutputTokens != 3 {
+		t.Fatalf("done usage=%+v", done.Usage)
+	}
+}
+
+type usageCompleter struct{}
+
+func (usageCompleter) Complete(ctx context.Context, req llm.Request) (*llm.Response, error) {
+	_ = ctx
+	_ = req
+	return &llm.Response{
+		Message: llm.Message{Role: llm.RoleAssistant, Content: "ok"},
+		Usage:   &llm.Usage{InputTokens: 4, OutputTokens: 3, TotalTokens: 7},
+	}, nil
+}
+
 type scriptCompleter struct {
 	n int
 }

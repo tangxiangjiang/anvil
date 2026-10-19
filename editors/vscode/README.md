@@ -112,6 +112,7 @@ names both sides and stops rather than failing later inside a tool call.
 | `anvil.model` | Model id; empty uses the host's default |
 | `anvil.baseUrl` | OpenAI-compatible base URL; empty uses the provider default |
 | `anvil.maxSteps` | Step limit per turn; `0` uses the host's default |
+| `anvil.contextWindow` | The window the token meter measures the last run against, in tokens. `0` (the default) means unknown, and the composer then shows counts only — Anvil does not guess a window from a model name |
 | `anvil.store` | `jsonl`, `sqlite`, or empty for the host's default |
 | `anvil.vision` | Accept pasted images; off by default |
 | `anvil.rules` | Load `AGENTS.md` and `.anvil/rules/*.md`; on by default |
@@ -173,6 +174,13 @@ keeps the environment it was spawned with.
   or absent, never the value; when they are off there is no row at all. With
   the `mcp` provider it says what that really means: no built-in tools are
   registered, and search has to come from a server the workspace declares.
+- **Counts what the session spent.** A line under the composer adds up the input
+  and output tokens of every finished run — live, or replayed from a stored
+  `run_end` — and it resets when the tab moves to a new conversation. With
+  `anvil.contextWindow` set it also draws the last run's total as a share of
+  that window. With it unset there is no percentage: no catalogue in the
+  repository defines a window, and a guess from a model name would make the
+  fraction a number about Anvil rather than about the model.
 - **Typesets the reply, and shows the thinking when the provider sends it.** A
   reply is rendered as Markdown — paragraphs, headings, lists, quotes, fenced
   code — by a parser that returns a tree of plain objects and nothing else: the

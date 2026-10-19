@@ -939,6 +939,16 @@ func (a *Agent) Reload(ctx context.Context) error {
 	return nil
 }
 
+// usageInfo projects the runtime's usage onto the public type. It is nil in,
+// nil out: a provider that reported no counts must not become a zero row that
+// a client draws as a run that cost nothing.
+func usageInfo(u *llm.Usage) *Usage {
+	if u == nil {
+		return nil
+	}
+	return &Usage{InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, TotalTokens: u.TotalTokens}
+}
+
 func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseFunc, wall time.Duration, run *Run, message string, history []llm.Message, userParts []llm.ContentPart) {
 	defer func() {
 		// The run is over, so its pre-images stop being written: a tool call made
@@ -996,6 +1006,7 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 			MaxSteps:   ev.MaxSteps,
 			Code:       Code(ev.Code),
 			Rule:       permissionRuleMatch(ev.Rule),
+			Usage:      usageInfo(ev.Usage),
 		})
 	})
 
@@ -1008,15 +1019,9 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 		Status: RunStatus(result.Status),
 		Result: result.Result,
 		Steps:  result.Steps,
+		Usage:  usageInfo(result.Usage),
 		Err:    result.Err,
 		Code:   Code(result.Code),
-	}
-	if result.Usage != nil {
-		rr.Usage = &Usage{
-			InputTokens:  result.Usage.InputTokens,
-			OutputTokens: result.Usage.OutputTokens,
-			TotalTokens:  result.Usage.TotalTokens,
-		}
 	}
 	if rr.ID == "" {
 		rr.ID = run.id

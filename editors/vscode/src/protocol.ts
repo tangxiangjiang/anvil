@@ -741,6 +741,13 @@ export interface HostEvent {
   max_steps?: number;
   code?: string;
   /**
+   * The run's token usage so far, on a terminal event the host forwards (an
+   * `error`), when the provider reported any (0.40.8+). Absent elsewhere and
+   * absent when unknown — which is not the same as zero. The authoritative
+   * end-of-run usage is the `done` notification's `usage`.
+   */
+  usage?: Usage;
+  /**
    * The workspace rule that decided this tool result, when one did. It is how a
    * call that ran without a prompt says why it did not need one; absent means no
    * rule decided it, which is not the same as "some rule allowed it".

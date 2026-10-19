@@ -633,6 +633,19 @@ button:disabled {
   color: var(--vscode-descriptionForeground);
 }
 
+/*
+ * The session's token meter. It is separate from the status line because the
+ * two answer different questions: status describes the run that just ended and
+ * is cleared when the next one starts, the meter describes the whole session
+ * and survives every run in it.
+ */
+.meter {
+  padding: 0 calc(var(--anvil-gap) + 1px) 6px;
+  font-size: 0.88em;
+  color: var(--vscode-descriptionForeground);
+  text-align: right;
+}
+
 /* --- the floating composer ------------------------------------------------ */
 
 /*

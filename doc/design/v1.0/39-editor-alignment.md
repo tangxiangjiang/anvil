@@ -232,13 +232,26 @@ that provider would be the same false green light the MCP card refuses to draw.
 ## Usage
 
 `RunResult.Usage` exists and is final; the event stream carries no usage at all, which is why the
-panel can show tokens only after a run. 0.40.8 adds `Usage` to the terminal event, and the host
-forwards it — a field on a payload that already exists, so `ProtocolVersion` does not move.
+panel can show tokens only after a run. 0.40.8 adds `Usage` to the terminal event — `done` or
+`error`, and no other: a count is a fact about a completed exchange, not a running estimate — and
+the host forwards it on the events it carries, so a failed run reports what it spent before it
+failed. The wire field is additive and omitted when unknown, so `ProtocolVersion` does not move and
+a client that ignores it reads the payload it always read.
+
+The authoritative end-of-run number stays the `done` notification, which already carries the
+`RunResult` usage: the SDK's `done` event is still deliberately not forwarded (chapter 38's rule),
+and the client counts each run exactly once, from the terminal envelope it receives — a live `done`
+or a replayed `run_end`. Counting events as well would count an errored run twice, because the
+`done` that follows it carries the same total.
 
 A percentage needs a context window, and nothing in the repo defines one: `ModelInfo` has no such
 field and inventing a per-model table would be a guess that goes stale. `anvil.contextWindow` is a
 number with a default of zero, meaning unknown. At zero the composer shows cumulative input and
-output tokens; above zero it also shows the fraction of the window the last run consumed.
+output tokens; above zero it also shows the fraction of the window the last run consumed. The
+cumulative figure is the sum of the session's finished runs and is cleared with the transcript,
+which is also the session change — so a reload that replays stored runs reconstructs the meter
+rather than starting it at zero, and a new conversation starts it at zero rather than inheriting
+the previous one.
 
 ## The task list
 

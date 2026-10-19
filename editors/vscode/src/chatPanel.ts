@@ -143,6 +143,12 @@ type Outbound =
   | { type: 'done'; done: DoneParams; failure: RunFailure }
   | { type: 'mentions'; paths: string[] }
   | { type: 'vision'; enabled: boolean }
+  /**
+   * The context window the token meter measures the last run against, or 0
+   * when it is unknown. The window is display arithmetic only and never travels
+   * to the host.
+   */
+  | { type: 'context'; window: number }
   | { type: 'changes'; files: Array<Pick<ChangedFile, 'path' | 'kind'>> }
   /**
    * A finished run that captured pre-images, so it can be undone. Posted only
@@ -561,6 +567,7 @@ export class ChatPanel implements HostListener {
       // any open prompt.
       this.post({ type: 'trust', trusted: vscode.workspace.isTrusted });
       this.post({ type: 'vision', enabled: readSettings().session.vision === true });
+      this.reportContext();
       this.postAgentId();
       this.postMode();
       if (this.rules.length > 0) this.post({ type: 'rules', files: this.rules });
@@ -1163,6 +1170,17 @@ export class ChatPanel implements HostListener {
       provider,
       key: stored !== undefined && stored.trim() !== '',
     });
+  }
+
+  /**
+   * Tells the document the window the token meter measures against.
+   *
+   * Public because a settings change restarts the host without reloading any
+   * tab, and `Hub.restart` calls this on each one so the number on screen is
+   * the one the setting now says. 0 is "unknown" and means counts only.
+   */
+  reportContext(): void {
+    this.post({ type: 'context', window: readSettings().contextWindow });
   }
 
   /** Answers an approval, and closes the review it was answered from. */
@@ -1801,6 +1819,7 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
   -->
   <div id="composerDock" class="dock">
     <div id="status" class="status" hidden></div>
+    <div id="meter" class="meter" hidden></div>
     <div id="bypass" class="bypass" hidden>Bypass is on. Tool calls run without asking.</div>
     <div id="dontAsk" class="dont-ask" hidden>No asking. Only calls this workspace's rules allow will run.</div>
     <form id="composer" class="composer">
@@ -1839,6 +1858,7 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     requirement; it is written this way so a reader can see the dependency.
   -->
   <script nonce="${nonce}" src="${asset('markdown.js')}"></script>
+  <script nonce="${nonce}" src="${asset('meter.js')}"></script>
   <script nonce="${nonce}" src="${asset('chat.js')}"></script>
 </body>
 </html>`;

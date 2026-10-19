@@ -925,6 +925,11 @@ type EventParams struct {
 	Step       int             `json:"step,omitempty"`
 	MaxSteps   int             `json:"max_steps,omitempty"`
 	Code       string          `json:"code,omitempty"`
+	// Usage is the run's token usage so far on a terminal event (an error the
+	// host forwards), when the provider reported any (0.40.8+). It is absent
+	// elsewhere, so a client that predates the field reads exactly what it did.
+	// The authoritative end-of-run usage is still the `done` notification.
+	Usage *Usage `json:"usage,omitempty"`
 	// Rule is the workspace rule that decided this tool result, when one did. It
 	// is how a call that ran without a prompt says why it did not need one: nil
 	// means no rule decided it, which is not the same as "some rule allowed it".

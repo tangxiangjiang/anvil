@@ -47,6 +47,13 @@ export interface ResolvedSettings {
    * the child was started with.
    */
   webSearch: WebSearchSettings;
+  /**
+   * The context window the meter measures the last run against, or 0 when it is
+   * unknown. This is display arithmetic, not a session option: it never travels
+   * to the host, and nothing here derives it from a model name — a guessed
+   * window would make the percentage a guess too.
+   */
+  contextWindow: number;
 }
 
 /** Reads the workspace configuration into a session config. */
@@ -100,12 +107,16 @@ export function readSettings(): ResolvedSettings {
   };
   const web = webSearchParams(webSearch);
   if (web) session.web_search = web;
+  // A window of zero, or a nonsense value, means the user has not told the
+  // panel one: the meter then shows counts and no fraction.
+  const window = cfg.get<number>('contextWindow', 0) ?? 0;
   return {
     hostPath: (cfg.get<string>('hostPath', '') ?? '').trim(),
     session,
     rules: { load_project: loadProject, load_cursor_rules: loadCursor },
     mcp,
     webSearch,
+    contextWindow: Number.isFinite(window) && window > 0 ? Math.floor(window) : 0,
   };
 }
 

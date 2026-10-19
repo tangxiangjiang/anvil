@@ -185,6 +185,9 @@ export class Hub {
     this.catalogue = undefined;
     this.rulesCache = undefined;
     await this.manager.restart();
+    // The context window is client-side arithmetic, so a tab still on screen
+    // learns the new value without being reloaded.
+    for (const panel of this.panels) panel.reportContext();
     this.runningChanged.fire();
     this.sessionsChanged.fire();
   }

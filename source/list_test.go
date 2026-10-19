@@ -135,6 +135,41 @@ func TestRunResultUsageFromMock(t *testing.T) {
 	}
 }
 
+// The run's usage reaches the event stream, not only Wait's result: a client
+// reading events is entitled to the same count as one reading the result, and
+// the terminal event is the only place it can say so.
+func TestTerminalEventCarriesUsage(t *testing.T) {
+	dir := t.TempDir()
+	a, err := Create(context.Background(), Options{
+		APIKey: "k", Model: Model{ID: "m"}, Local: LocalOptions{CWD: dir},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	a.complete = usageCompleter{}
+	run, err := a.Send(context.Background(), "hi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var done *Event
+	for ev := range run.Stream(context.Background()) {
+		if ev.Type == EventDone {
+			e := ev
+			done = &e
+		}
+	}
+	if _, err := run.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if done == nil {
+		t.Fatal("the stream carried no done event")
+	}
+	if done.Usage == nil || done.Usage.TotalTokens != 7 {
+		t.Fatalf("done usage=%+v want total 7", done.Usage)
+	}
+}
+
 type usageCompleter struct{}
 
 func (usageCompleter) Complete(ctx context.Context, req llm.Request) (*llm.Response, error) {

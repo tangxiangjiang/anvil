@@ -34,6 +34,20 @@
   const permissionsButton = document.getElementById('permissions');
   const palette = document.getElementById('palette');
   const dock = document.getElementById('composerDock');
+  const meter = document.getElementById('meter');
+
+  /**
+   * The meter's arithmetic, from `media/meter.js`. It is a plain script that
+   * assigns a global rather than a module, like the Markdown parser, and it is
+   * included before this file for that reason.
+   */
+  const meterMath = self.anvilMeter;
+
+  /**
+   * The same shorthand the meter uses for a token count, so a run's own summary
+   * and the session meter can never give one number two spellings.
+   */
+  const count = meterMath.short;
 
   /** Run in flight, if any. */
   let running = false;
@@ -78,6 +92,18 @@
   let images = [];
   /** Whether the session was created with vision on. Images need it. */
   let vision = false;
+  /**
+   * The context window from settings, or 0 when nobody configured one. There is
+   * no per-model table here: a guessed window would turn the meter into a
+   * number about Anvil rather than about the model.
+   */
+  let contextWindow = 0;
+  /**
+   * What this session has spent, and what its last run spent. Reset with the
+   * transcript, because the two describe the same conversation: a meter outliving
+   * the conversation it counted would be a number about nobody.
+   */
+  let usageTotals = meterMath.empty();
   /** The slash catalogue, once the extension has sent it. */
   let catalogue = null;
   /** Rule files the last session reported, kept so the card can be reopened. */
@@ -137,6 +163,7 @@
     closePalette();
     statusLine.textContent = '';
     statusLine.hidden = true;
+    resetUsage();
     transcript.textContent = '';
     // The node survives the clear — only the reference to it in the document
     // does not — so putting it back is what makes a cleared conversation look
@@ -1582,9 +1609,33 @@
     if (!running) input.focus();
   }
 
-  function count(value) {
-    if (typeof value !== 'number' || !isFinite(value) || value <= 0) return '';
-    return value >= 1000 ? (value / 1000).toFixed(value >= 10000 ? 0 : 1) + 'k' : String(value);
+  /**
+   * Adds one finished run to the session's totals and redraws the meter.
+   *
+   * The run's own usage is the only honest input: an `error` event may carry
+   * usage, but the `done` that follows it is authoritative and arrives once,
+   * so counting both would count the same run twice.
+   */
+  function recordUsage(done) {
+    meterMath.add(usageTotals, done);
+    renderMeter();
+  }
+
+  /** Forgets the session's totals, for a session that is replacing this one. */
+  function resetUsage() {
+    usageTotals = meterMath.empty();
+    renderMeter();
+  }
+
+  /**
+   * Draws the one line under the composer. Counts always, and the last run's
+   * share of the window only when a window was configured.
+   */
+  function renderMeter() {
+    if (!meter) return;
+    const text = meterMath.label(usageTotals, contextWindow);
+    meter.textContent = text;
+    meter.hidden = text === '';
   }
 
   /**
@@ -1621,6 +1672,7 @@
     // in flight forever reads as a stuck turn rather than as a lost event.
     stopRunningCards();
     const parts = runSummary(done);
+    recordUsage(done);
     statusLine.textContent = parts.join(' · ');
     statusLine.hidden = parts.length === 0;
     // "Stopped." is not a failure, but it is still something the user asked
@@ -1641,6 +1693,7 @@
   function addRunEnd(done) {
     endRound();
     stopRunningCards();
+    recordUsage(done);
     const status = done && done.status;
     const word = status === 'error' ? 'Run failed' : status === 'cancelled' ? 'Run stopped' : 'Run finished';
     const line = el('div', 'msg run-end');
@@ -1934,6 +1987,12 @@
         // serializer hands it back and the tab comes up on the same
         // conversation. It is not drawn — a new session is not news.
         vscode.setState({ agentId: msg.agentId || undefined });
+        return;
+      case 'context':
+        // 0 is "unknown", the same value the setting's absence means, so a
+        // missing or malformed field falls back to counts only.
+        contextWindow = typeof msg.window === 'number' ? msg.window : 0;
+        renderMeter();
         return;
       case 'reset':
         clearTranscript();

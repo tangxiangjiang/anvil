@@ -250,6 +250,12 @@
           "minimum": 0,
           "description": "Maximum agent steps per turn. 0 uses the host default."
         },
+        "anvil.contextWindow": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "markdownDescription": "The context window the token meter measures the last run against, in tokens. 0 means unknown: the composer then shows cumulative input and output counts with no fraction. Anvil does not guess a window from the model name, so a percentage appears only when this is set."
+        },
         "anvil.store": {
           "type": "string",
           "enum": [

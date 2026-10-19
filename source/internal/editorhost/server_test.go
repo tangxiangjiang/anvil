@@ -4,6 +4,7 @@
 package editorhost
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -402,6 +403,35 @@ func TestProjectEventDropsSDKDone(t *testing.T) {
 	got, ok = projectEvent("s", "r", anvil.Event{Type: anvil.EventReasoning, Text: "hmm"})
 	if !ok || got.Type != "reasoning" || got.Text != "hmm" {
 		t.Fatalf("reasoning projection lost fields: %+v", got)
+	}
+}
+
+// TestProjectEventCarriesUsageOnATerminalEvent checks the one event that can
+// carry usage across the wire. The SDK's done is not forwarded (the `done`
+// notification, which already has usage, is the authoritative end of a run),
+// so an error is where a client reading only events learns what the run spent
+// before it failed.
+func TestProjectEventCarriesUsageOnATerminalEvent(t *testing.T) {
+	got, ok := projectEvent("s", "r", anvil.Event{
+		Type:  anvil.EventError,
+		Text:  "boom",
+		Usage: &anvil.Usage{InputTokens: 4, OutputTokens: 3, TotalTokens: 7},
+	})
+	if !ok || got.Usage == nil || got.Usage.TotalTokens != 7 {
+		t.Fatalf("error projection lost usage: %+v", got)
+	}
+	// Absent stays absent, and the wire omits the key entirely: a client that
+	// predates the field must see the payload it always saw.
+	got, ok = projectEvent("s", "r", anvil.Event{Type: anvil.EventError, Text: "boom"})
+	if !ok || got.Usage != nil {
+		t.Fatalf("usage appeared with none set: %+v", got)
+	}
+	raw, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), `"usage"`) {
+		t.Fatalf("nil usage reached the wire: %s", raw)
 	}
 }
 
