@@ -169,6 +169,8 @@ func (s *Server) dispatch(ctx context.Context, req *Request) (any, *RPCError) {
 		return s.handleSessionRename(ctx, req.Params)
 	case MethodSessionDelete:
 		return s.handleSessionDelete(ctx, req.Params)
+	case MethodSessionFork:
+		return s.handleSessionFork(ctx, req.Params)
 	case MethodCheckpointList:
 		return s.handleCheckpointList(ctx, req.Params)
 	case MethodCheckpointRestore:
@@ -406,6 +408,31 @@ func (s *Server) handleSessionDelete(ctx context.Context, params json.RawMessage
 	}
 	s.logf("session.delete agent=%s", p.AgentID)
 	return SessionDeleteResult{AgentID: p.AgentID, Deleted: true}, nil
+}
+
+// handleSessionFork branches a stored session at a run boundary.
+//
+// The fork is not opened here. The client opens it in a tab, which is the step
+// that turns an id into a conversation — and a client forking from the sidebar
+// has no tab to open it in yet, so it is returned rather than resumed.
+func (s *Server) handleSessionFork(ctx context.Context, params json.RawMessage) (any, *RPCError) {
+	p, err := decode[SessionForkParams](params)
+	if err != nil {
+		return nil, errInvalidParams("session.fork: " + err.Error())
+	}
+	if p.AgentID == "" {
+		return nil, errInvalidParams("session.fork: agent_id is required")
+	}
+	if p.RunID == "" {
+		return nil, errInvalidParams("session.fork: run_id is required")
+	}
+	opts := anvil.ListOptions{Local: anvil.LocalOptions{CWD: s.cwdPath(), Store: p.Store}}
+	newID, err := anvil.ForkAgent(ctx, p.AgentID, p.RunID, opts)
+	if err != nil {
+		return nil, errHost(err)
+	}
+	s.logf("session.fork agent=%s run=%s fork=%s", p.AgentID, p.RunID, newID)
+	return SessionForkResult{AgentID: newID}, nil
 }
 
 // ---------------------------------------------------------------------------

@@ -284,3 +284,18 @@ test('the tooltip reports only what the store actually returned', () => {
   });
   assert.doesNotMatch(rowFor(bare, 'b').tooltip, /Tokens/);
 });
+
+test('a row carries the run a fork would copy through, when there is one', () => {
+  const nodes = buildSessionView(
+    [
+      session({ agent_id: 'a', updated_at: at(2026, 9, 16, 8), last_run_id: 'run-7' }),
+      session({ agent_id: 'b', updated_at: at(2026, 9, 16, 8) }),
+    ],
+    { now: NOW },
+  );
+  // The branch point is the run the row itself reports ending; a session with
+  // no finished run has none, and the command says so rather than guessing at
+  // the newest line in the file.
+  assert.equal(rowFor(nodes, 'a').lastRunId, 'run-7');
+  assert.equal(rowFor(nodes, 'b').lastRunId, undefined);
+});

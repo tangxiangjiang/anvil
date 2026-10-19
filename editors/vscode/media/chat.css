@@ -928,6 +928,25 @@ kbd {
   color: var(--vscode-errorForeground, #f85149);
 }
 
+/* --- fork ----------------------------------------------------------------- */
+
+/*
+ * A finished run's own row. It is deliberately quiet — the conversation is the
+ * content — but it belongs at the run boundary, because that is where a fork
+ * copies through, and "from here" is only honest where "here" is visible.
+ */
+.run-actions {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.run-actions .outcome.failed {
+  font-size: 0.85em;
+  color: var(--vscode-errorForeground, #f85149);
+}
+
 /* --- mode select ---------------------------------------------------------- */
 
 /*

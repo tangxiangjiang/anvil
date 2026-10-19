@@ -94,6 +94,12 @@
         "icon": "$(trash)"
       },
       {
+        "command": "anvil.forkSession",
+        "title": "Anvil: Duplicate Conversation",
+        "category": "Anvil",
+        "icon": "$(git-branch)"
+      },
+      {
         "command": "anvil.searchSessions",
         "title": "Anvil: Search Sessions",
         "category": "Anvil",
@@ -156,9 +162,14 @@
           "group": "inline@1"
         },
         {
-          "command": "anvil.renameSession",
+          "command": "anvil.forkSession",
           "when": "view == anvil.sessions && viewItem =~ /^session/",
           "group": "1_modification@1"
+        },
+        {
+          "command": "anvil.renameSession",
+          "when": "view == anvil.sessions && viewItem =~ /^session/",
+          "group": "1_modification@2"
         },
         {
           "command": "anvil.deleteSession",
@@ -188,6 +199,10 @@
         },
         {
           "command": "anvil.deleteSession",
+          "when": "false"
+        },
+        {
+          "command": "anvil.forkSession",
           "when": "false"
         }
       ]

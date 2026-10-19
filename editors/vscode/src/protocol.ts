@@ -38,6 +38,12 @@ export const Method = {
   /** Removes a stored session's records. */
   SessionDelete: 'session.delete',
   /**
+   * Branches a stored conversation at a finished run, answering the new agent
+   * id. Additive: a host that predates it answers `-32601`, and the client then
+   * offers no fork rather than a button that fails.
+   */
+  SessionFork: 'session.fork',
+  /**
    * Lists the runs of a session that captured a pre-image, newest first.
    * Additive: a host that predates it answers `-32601`, and the panel then
    * offers no restore rather than an error.
@@ -528,6 +534,24 @@ export interface SessionDeleteParams {
 export interface SessionDeleteResult {
   agent_id: string;
   deleted: boolean;
+}
+
+// --- session.fork ------------------------------------------------------------
+
+/**
+ * The conversation and the run ending the part to keep. Both are required: a
+ * fork copies records only through a `run_end`, so a run that never finished
+ * has no boundary to name.
+ */
+export interface SessionForkParams {
+  agent_id: string;
+  run_id: string;
+  store?: string;
+}
+
+/** The new conversation. Opening it is the client's next step. */
+export interface SessionForkResult {
+  agent_id: string;
 }
 
 // --- checkpoint.list / checkpoint.restore ------------------------------------

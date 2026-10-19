@@ -289,6 +289,21 @@ export class Hub {
   }
 
   /**
+   * Branches a conversation at a finished run and opens the branch in a new tab.
+   *
+   * A fork is a new conversation, so it always gets its own tab — even when the
+   * session it came from is on screen. The source tab is not touched: it keeps
+   * the conversation it had, which is what makes the branch useful.
+   */
+  async forkSession(agentId: string, runId: string): Promise<string> {
+    const result = await this.manager.forkSession(agentId, runId);
+    const newId = result.agent_id;
+    this.sessionsChanged.fire();
+    this.openTab(newId);
+    return newId;
+  }
+
+  /**
    * Forgets a stored session, closing every tab that has it open first.
    *
    * The close is not tidiness. A session that stayed open would hold the agent

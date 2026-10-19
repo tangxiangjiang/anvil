@@ -122,6 +122,26 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     }),
 
+    // A branch of a stored conversation. It copies through the last run the
+    // session finished, so the row's whole history is what the new tab shows;
+    // nothing about the conversation it came from is touched.
+    vscode.commands.registerCommand('anvil.forkSession', async (arg: unknown) => {
+      const agentId = agentIdOf(arg);
+      if (agentId === undefined) return;
+      const runId = sessionRowOf(arg)?.lastRunId;
+      if (runId === undefined) {
+        void vscode.window.showInformationMessage(
+          'Anvil: this session has no finished run to branch from.',
+        );
+        return;
+      }
+      try {
+        await hub.forkSession(agentId, runId);
+      } catch (err) {
+        void vscode.window.showErrorMessage(`Anvil: could not fork the session: ${(err as Error).message}`);
+      }
+    }),
+
     // A filter over the stored list rather than the sidebar's scrollbar: titles
     // repeat and ids are long, and the person looking for one already knows a
     // word in it.

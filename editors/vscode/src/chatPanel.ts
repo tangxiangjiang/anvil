@@ -83,6 +83,11 @@ type Inbound =
    */
   | { type: 'restoreCheckpoint'; runId: string }
   /**
+   * "Branch the conversation from this run", from a finished run's row. The new
+   * conversation opens in its own tab; this one stays exactly as it is.
+   */
+  | { type: 'forkSession'; runId: string }
+  /**
    * "Show me what that call changed", from a finished tool card. The call's
    * facts travel with the click because this is the only place they still
    * exist: the card already holds the arguments, and keeping a copy of every
@@ -151,6 +156,11 @@ type Outbound =
       deleted?: number;
       error?: string;
     }
+  /**
+   * What became of a fork the run's button asked for. Exactly one of the two
+   * endings: the new agent's id, or why the copy could not be made.
+   */
+  | { type: 'forked'; runId: string; agentId?: string; error?: string }
   | { type: 'commands'; commands: SlashCommand[] }
   | { type: 'help'; commands: SlashCommand[] }
   | { type: 'mode'; mode: PermissionMode | ''; resolved: PermissionMode; source: PermissionModeSource }
@@ -599,6 +609,9 @@ export class ChatPanel implements HostListener {
         return;
       case 'restoreCheckpoint':
         await this.restoreCheckpoint(msg.runId);
+        return;
+      case 'forkSession':
+        await this.forkSession(msg.runId);
         return;
       case 'reviewCall':
         await this.openCallReview(msg);
@@ -1523,6 +1536,25 @@ export class ChatPanel implements HostListener {
       this.post({ type: 'checkpointRestored', runId, restored, deleted });
     } catch (err) {
       this.post({ type: 'checkpointRestored', runId, error: (err as Error).message });
+    }
+  }
+
+  /**
+   * Branches this conversation at a finished run, in a new tab.
+   *
+   * The hub opens the tab; this tab is not touched, because the point of a fork
+   * is that the conversation continues in two directions from the same history.
+   * The button disabled itself when pressed, so both endings are reported: a
+   * branch that could not be made has to be possible to ask for again.
+   */
+  private async forkSession(runId: string): Promise<void> {
+    const agentId = this.currentAgentId();
+    if (!agentId || !runId) return;
+    try {
+      const newId = await this.hub.forkSession(agentId, runId);
+      this.post({ type: 'forked', runId, agentId: newId });
+    } catch (err) {
+      this.post({ type: 'forked', runId, error: (err as Error).message });
     }
   }
 

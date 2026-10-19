@@ -45,6 +45,10 @@ const (
 	MethodSessionRename = "session.rename"
 	// MethodSessionDelete removes a stored session's records.
 	MethodSessionDelete = "session.delete"
+	// MethodSessionFork copies a stored conversation up to a finished run into a
+	// new agent, and answers its id. Additive: a host without it answers -32601,
+	// which a client reads as "no fork here".
+	MethodSessionFork = "session.fork"
 	// MethodCheckpointList lists the runs of a stored session that captured a
 	// pre-image, so a client can offer to put those files back. Additive: a host
 	// without it answers -32601, which a client reads as "no checkpoints here".
@@ -562,6 +566,25 @@ type SessionDeleteParams struct {
 type SessionDeleteResult struct {
 	AgentID string `json:"agent_id"`
 	Deleted bool   `json:"deleted"`
+}
+
+// SessionForkParams names the conversation and the run ending the part to keep.
+//
+// Both are required. A fork copies records only up to a `run_end`, so a run id
+// that never ended — one still going, or one whose end was never written — is
+// refused rather than approximated.
+type SessionForkParams struct {
+	AgentID string `json:"agent_id"`
+	RunID   string `json:"run_id"`
+	// Store selects the session backend to read and write: "jsonl" (default) or
+	// "sqlite".
+	Store string `json:"store,omitempty"`
+}
+
+// SessionForkResult is the id of the new conversation. The host does not open
+// it: the client does, in a new tab, which is what makes the fork usable.
+type SessionForkResult struct {
+	AgentID string `json:"agent_id"`
 }
 
 // ---------------------------------------------------------------------------

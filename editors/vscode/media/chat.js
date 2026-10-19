@@ -67,6 +67,11 @@
    * restore's answer can settle the one it belongs to and no other.
    */
   const checkpointBlocks = new Map();
+  /**
+   * Fork buttons by run id. A run's row is drawn once, but the answer can arrive
+   * after the transcript has been replaced, so the map is cleared with it.
+   */
+  const forkBlocks = new Map();
   /** Referenced workspace paths, in the order they were picked. */
   let mentions = [];
   /** Pasted images, as data URLs. */
@@ -125,6 +130,7 @@
     callFacts.clear();
     approvals.clear();
     checkpointBlocks.clear();
+    forkBlocks.clear();
     mentions = [];
     images = [];
     renderChips();
@@ -1247,6 +1253,48 @@
     );
   }
 
+  // --- fork -----------------------------------------------------------------
+
+  /**
+   * The one action a finished run offers on its own.
+   *
+   * A fork copies the conversation through a `run_end`, so the row is drawn at
+   * the boundary itself rather than at the bottom of the panel: "from here" has
+   * to mean the place it is written. The extension creates the new tab; this
+   * side only asks, and the button waits for the answer because a fork that
+   * failed has to be possible to try again.
+   */
+  function showRunActions(runId) {
+    if (typeof runId !== 'string' || runId === '' || forkBlocks.has(runId)) return;
+    const row = el('div', 'run-actions');
+    const button = el('button', 'ghost', 'Fork from here');
+    button.type = 'button';
+    button.title = 'Copy this conversation up to this run into a new tab';
+    button.addEventListener('click', () => {
+      if (button.disabled) return;
+      button.disabled = true;
+      button.textContent = 'Forking…';
+      vscode.postMessage({ type: 'forkSession', runId: runId });
+    });
+    row.appendChild(button);
+    forkBlocks.set(runId, { row: row, button: button });
+    append(row);
+  }
+
+  /** Settles the run's fork button: the new tab opened, or it did not. */
+  function settleFork(msg) {
+    const entry = forkBlocks.get(msg.runId);
+    if (!entry) return;
+    if (typeof msg.error === 'string' && msg.error !== '') {
+      entry.button.disabled = false;
+      entry.button.textContent = 'Fork from here';
+      entry.row.appendChild(el('span', 'outcome failed', 'Not forked: ' + msg.error));
+      return;
+    }
+    entry.button.disabled = true;
+    entry.button.textContent = 'Forked';
+  }
+
   // --- mode -----------------------------------------------------------------
 
   /**
@@ -1496,6 +1544,7 @@
     // "Stopped." is not a failure, but it is still something the user asked
     // for and should see once: a run that ends silently reads as a hang.
     if (failure && failure.message) addNotice(failure.message);
+    showRunActions(done && done.run_id);
   }
 
   /**
@@ -1515,6 +1564,7 @@
     const line = el('div', 'msg run-end');
     line.appendChild(el('div', 'body', [word].concat(runSummary(done)).join(' · ')));
     append(line);
+    showRunActions(done && done.run_id);
   }
 
   /**
@@ -1759,6 +1809,9 @@
         return;
       case 'checkpointRestored':
         settleCheckpoint(msg);
+        return;
+      case 'forked':
+        settleFork(msg);
         return;
       case 'commands':
         catalogue = Array.isArray(msg.commands) ? msg.commands : [];

@@ -346,6 +346,28 @@ func titleOf(content string) string {
 	return string(out)
 }
 
+// TitleWithSuffix appends suffix to a title and keeps the result within
+// titleLimit runes.
+//
+// The room is made in the title, not in the listing: appending past the limit
+// and letting the next Summarize cut the string would remove the suffix first,
+// and a suffixed title exists precisely to stay distinguishable from the one it
+// was made from.
+func TitleWithSuffix(title, suffix string) string {
+	if title == "" || suffix == "" {
+		return title
+	}
+	base := []rune(title)
+	room := titleLimit - len([]rune(suffix))
+	if room < 0 {
+		room = 0
+	}
+	if len(base) <= room {
+		return title + suffix
+	}
+	return string(base[:room]) + suffix
+}
+
 func safeID(agentID string) error {
 	if agentID == "" {
 		return errors.New("agent id is required")

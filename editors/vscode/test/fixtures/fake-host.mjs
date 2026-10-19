@@ -91,6 +91,11 @@ const checkpointPaths = (process.env.FAKE_HOST_CHECKPOINT || '')
   .filter((path) => path !== '');
 /** Checkpointed runs by agent id, newest first. */
 const checkpoints = new Map();
+/**
+ * The runs each agent finished, oldest first. A fork copies through one of
+ * them, so this is what `session.fork` validates a run id against.
+ */
+const finishedRuns = new Map();
 /** Its rules, as a session that appended them would have them. */
 const rules = [];
 /** Where the parse error is reported: the place, not a line for the file. */
@@ -251,6 +256,9 @@ function event(session, run, body) {
 
 function finish(session, run, body) {
   activeRuns.delete(session.session_id);
+  const finished = finishedRuns.get(session.agent_id) || [];
+  finished.push(run);
+  finishedRuns.set(session.agent_id, finished);
   if (checkpointPaths.length > 0) {
     // The real host captures pre-images as tools run; here each finished run is
     // recorded as having changed the paths the test named.
@@ -679,6 +687,35 @@ async function handle(msg) {
       storedIds = storedIds.filter((id) => id !== agentId);
       titles.delete(agentId);
       ok(msg.id, { agent_id: agentId, deleted: true });
+      return;
+    }
+    case 'session.fork': {
+      echo('session.fork', msg.params || {});
+      const agentId = msg.params && msg.params.agent_id;
+      const runId = msg.params && msg.params.run_id;
+      const live = [...sessions.values()].some((s) => s.agent_id === agentId);
+      const stored = storedIds.includes(agentId);
+      if (!agentId || (!live && !stored)) {
+        fail(msg.id, -32000, `agent not found: ${agentId}`);
+        return;
+      }
+      // A stored conversation's fixture history is one finished run, r1 — the
+      // boundary `storedTranscript` reports. A live agent's boundaries are the
+      // runs this process watched end.
+      const finished = finishedRuns.get(agentId) || [];
+      if (!finished.includes(runId) && !(stored && runId === 'r1')) {
+        fail(msg.id, -32000, `run not found: ${runId}`);
+        return;
+      }
+      // The real host copies the records and answers a fresh agent id; here the
+      // fork is one more stored row, which is what the client's new tab
+      // resumes and what a listing then shows.
+      sessionSeq += 1;
+      const forkedId = `a${sessionSeq}`;
+      storedIds.push(forkedId);
+      const base = titles.get(agentId) ?? process.env.FAKE_HOST_TITLE;
+      if (base) titles.set(forkedId, `${base} (fork)`);
+      ok(msg.id, { agent_id: forkedId });
       return;
     }
     case 'session.close': {

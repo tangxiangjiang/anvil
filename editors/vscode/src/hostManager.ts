@@ -31,6 +31,7 @@ import {
   RuleFileInfo,
   RuleSpec,
   SessionDeleteResult,
+  SessionForkResult,
   SessionInfo,
   SessionRenameResult,
   SessionResult,
@@ -331,6 +332,19 @@ export class HostManager {
   async deleteSession(agentId: string): Promise<SessionDeleteResult> {
     const client = await this.startClient();
     return client.request<SessionDeleteResult>(Method.SessionDelete, { agent_id: agentId });
+  }
+
+  /**
+   * Branches a stored conversation at a finished run.
+   *
+   * The host copies the records and answers the new agent id; it does not open
+   * it, because the client is what turns an id into a tab. A run id that never
+   * ended is rejected rather than approximated — the server has no boundary to
+   * copy to, and a half-run fork would resume from a turn that never finished.
+   */
+  async forkSession(agentId: string, runId: string): Promise<SessionForkResult> {
+    const client = await this.startClient();
+    return client.request<SessionForkResult>(Method.SessionFork, { agent_id: agentId, run_id: runId });
   }
 
   /**

@@ -32,6 +32,12 @@ export interface SessionRow {
    * fallback as if it were the name.
    */
   title?: string;
+  /**
+   * The last run the session ended, when it has ended one. It is where
+   * "Duplicate conversation" branches: a fork copies through a finished run,
+   * and the newest one is the whole conversation the row describes.
+   */
+  lastRunId?: string;
 }
 
 /** A recency heading over rows. */
@@ -266,11 +272,13 @@ function sessionRow(session: SessionInfo, options: SessionViewOptions): SessionR
   else if (current) parts.push('open');
 
   const title = session.title?.trim();
+  const lastRunId = session.last_run_id?.trim();
   return {
     kind: 'session',
     id: agentId,
     label: sessionLabel(session),
     title: title ? title : undefined,
+    lastRunId: lastRunId ? lastRunId : undefined,
     description: parts.join(' · '),
     tooltip: tooltipFor(session, { running, current }),
     icon: running ? 'sync~spin' : STATUS_ICONS[session.last_status ?? ''] ?? 'history',
