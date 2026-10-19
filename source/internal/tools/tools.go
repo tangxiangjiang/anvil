@@ -97,6 +97,11 @@ type Registry struct {
 	// capture off, so a bare Registry stays unaffected.
 	cpAgent string
 	cpRun   string
+	// agentID and depth identify the agent this registry executes for, so a
+	// permission request can say which agent is asking and how deep it is
+	// nested. Set once at creation; runID comes from SetRunContext.
+	agentID string
+	depth   int
 }
 
 // PreExecFunc runs before every tool (hooks like beforeMCP / beforeRead).
@@ -160,6 +165,54 @@ func (r *Registry) SetRunContext(agentID, runID string) {
 		r.cpAgent = agentID
 		r.cpRun = runID
 	}
+}
+
+// SetIdentity names the agent this registry serves and its nesting depth. It is
+// called once, when the agent is created; a permission request carries both so a
+// client can say which subagent is asking.
+func (r *Registry) SetIdentity(agentID string, depth int) {
+	if r != nil {
+		r.agentID = agentID
+		r.depth = depth
+	}
+}
+
+// Identity returns the agent this registry executes for and its depth.
+func (r *Registry) Identity() (string, int) {
+	if r == nil {
+		return "", 0
+	}
+	return r.agentID, r.depth
+}
+
+// RunID returns the run currently executing, or "" outside one. It is the same
+// value capture is scoped to, read here so a permission request can name the run
+// that asked rather than the one a session happens to have active.
+func (r *Registry) RunID() string {
+	if r == nil {
+		return ""
+	}
+	return r.cpRun
+}
+
+// callIDKey is the context key for the executing tool call id.
+type callIDKey struct{}
+
+// WithCallID tags ctx with the tool call id the runtime is executing. A tool
+// that starts work on another agent's behalf (spawn_agent) reads it so the events
+// it bridges land under the card for that call.
+func WithCallID(ctx context.Context, id string) context.Context {
+	if id == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, callIDKey{}, id)
+}
+
+// CallID returns the tool call id in ctx, or "" when the call did not come from
+// the runtime's tool loop.
+func CallID(ctx context.Context) string {
+	id, _ := ctx.Value(callIDKey{}).(string)
+	return id
 }
 
 func (r *Registry) register(t Tool) {

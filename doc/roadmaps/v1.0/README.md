@@ -1,6 +1,6 @@
 # Roadmaps v1.0 (cutoff)
 
-Versioned delivery for Anvil through product **0.41**. Design cutoff: [`doc/design/v1.0/`](../../design/v1.0/).
+Versioned delivery for Anvil through product **0.42**. Design cutoff: [`doc/design/v1.0/`](../../design/v1.0/).
 
 ## Version index
 
@@ -47,6 +47,7 @@ Versioned delivery for Anvil through product **0.41**. Design cutoff: [`doc/desi
 | 0.39 | Execute + Test campaign loop | done | [m_0.39_execute.md](m_0.39_execute.md) | [33](../../design/v1.0/33-delivery-ui.md) + vision §2 / §4.4 |
 | 0.40 | Editor alignment (Claude-class VS Code client) | done | [m_0.40_editor_alignment.md](m_0.40_editor_alignment.md) | [39](../../design/v1.0/39-editor-alignment.md) |
 | 0.41 | Auto mode + permissions manager | done | [m_0.41_permission_auto_and_manager.md](m_0.41_permission_auto_and_manager.md) | [40](../../design/v1.0/40-permission-auto-and-manager.md) |
+| 0.42 | Subagents, background tasks, and workflows | in_progress | [m_0.42_subagents_and_tasks.md](m_0.42_subagents_and_tasks.md) | [41](../../design/v1.0/41-subagents-and-tasks.md) |
 
 ## Naming
 

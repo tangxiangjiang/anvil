@@ -43,6 +43,11 @@ type Agent struct {
 	cwd    string
 	closed bool
 
+	// depth is 0 for the session's own agent and grows with each spawn; the
+	// budget is shared by every agent in one root run's tree (0.42+).
+	depth  int
+	budget *subagentBudget
+
 	store store.Backend
 
 	mu           sync.Mutex
@@ -60,6 +65,12 @@ type Agent struct {
 
 // Create validates options and returns a new local agent (no LLM call).
 func Create(ctx context.Context, opts Options) (*Agent, error) {
+	return createAgent(ctx, opts, subagentIdentity{})
+}
+
+// createAgent is Create with the identity a subagent has. A top-level caller
+// passes the zero value and writes exactly the meta record it wrote before.
+func createAgent(ctx context.Context, opts Options, ident subagentIdentity) (*Agent, error) {
 	opts, cwd, err := normalizeOptions(opts)
 	if err != nil {
 		return nil, err
@@ -68,9 +79,24 @@ func Create(ctx context.Context, opts Options) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	completer, err := newCompleter(opts)
-	if err != nil {
-		return nil, err
+	if opts.skipFileMCP {
+		opts.MCPServers = nil
+	}
+	// A child reuses the parent's client; only a top-level agent builds one.
+	completer := opts.completer
+	if completer == nil {
+		completer, err = newCompleter(opts)
+		if err != nil {
+			return nil, err
+		}
+	}
+	// The id is chosen before the registry is built so the registry can name the
+	// agent in every permission request it forwards (0.42+).
+	agentID := "agent-" + id.New()
+	opts.agentID = agentID
+	opts.depth = ident.Depth
+	if opts.budget == nil {
+		opts.budget = newSubagentBudget(opts.Subagents.MaxAgents)
 	}
 	reg, sessions, plugMgr, hookFile, lspSup, err := buildRegistry(ctx, cwd, opts)
 	if err != nil {
@@ -82,12 +108,11 @@ func Create(ctx context.Context, opts Options) (*Agent, error) {
 		cleanupRegistry(sessions, plugMgr, lspSup)
 		return nil, newError("open store", false, err)
 	}
-	agentID := "agent-" + id.New()
 	// An agent's history is trimmed when it opens, so the bound is honoured even
 	// by embedders that never list checkpoints.
 	pruneCheckpoints(cwd, agentID, opts.Checkpoints)
 	allowShell := opts.Local.AllowShellEnabled()
-	if err := st.Append(agentID, store.Record{
+	meta := store.Record{
 		Type:       store.TypeMeta,
 		AgentID:    agentID,
 		CWD:        cwd,
@@ -95,7 +120,17 @@ func Create(ctx context.Context, opts Options) (*Agent, error) {
 		Model:      opts.Model.ID,
 		MaxSteps:   opts.MaxSteps,
 		AllowShell: &allowShell,
-	}); err != nil {
+
+		ParentAgentID:    ident.ParentAgentID,
+		ParentRunID:      ident.ParentRunID,
+		ParentToolCallID: ident.ParentToolCallID,
+		Depth:            ident.Depth,
+		TaskTitle:        ident.TaskTitle,
+	}
+	if ident.ParentAgentID != "" {
+		meta.Kind = "subagent"
+	}
+	if err := st.Append(agentID, meta); err != nil {
 		_ = st.Close()
 		cleanupRegistry(sessions, plugMgr, lspSup)
 		return nil, newError("persist agent meta", false, err)
@@ -110,6 +145,8 @@ func Create(ctx context.Context, opts Options) (*Agent, error) {
 		id:           agentID,
 		opts:         opts,
 		cwd:          cwd,
+		depth:        opts.depth,
+		budget:       opts.budget,
 		store:        st,
 		complete:     completer,
 		registry:     reg,
@@ -158,6 +195,13 @@ func Resume(ctx context.Context, agentID string, opts Options) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Resume does not know a depth until it has read the file, and the registry is
+	// built first; a resumed session is a top-level conversation (a child is
+	// resumed through its parent's transcript or not at all).
+	opts.agentID = agentID
+	if opts.budget == nil {
+		opts.budget = newSubagentBudget(opts.Subagents.MaxAgents)
+	}
 	reg, sessions, plugMgr, hookFile, lspSup, err := buildRegistry(ctx, cwd, opts)
 	if err != nil {
 		cleanupRegistry(sessions, plugMgr, lspSup)
@@ -188,6 +232,8 @@ func Resume(ctx context.Context, agentID string, opts Options) (*Agent, error) {
 		id:           agentID,
 		opts:         opts,
 		cwd:          cwd,
+		depth:        opts.depth,
+		budget:       opts.budget,
 		store:        st,
 		complete:     completer,
 		registry:     reg,
@@ -331,6 +377,9 @@ func toPluginPolicy(p *PluginPolicy) *plugin.Policy {
 
 func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Registry, []*mcp.Session, *plugin.Manager, *hooks.File, *lsp.Supervisor, error) {
 	reg := tools.NewRegistry(cwd, opts.Local.AllowShellEnabled())
+	// Every call this registry executes belongs to one agent; saying which lets a
+	// permission prompt point at a child instead of the session (0.42+).
+	reg.SetIdentity(opts.agentID, opts.depth)
 	if opts.Checkpoints != nil {
 		// Capture is named but not yet scoped to a run: SetRunContext in
 		// executeRun is what turns a call from "no pre-image" into one.
@@ -408,6 +457,7 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 	// preExec now, so that a rule that allows a call cannot skip them.
 	if perm := opts.Permission; perm != nil {
 		reg.SetPermission(func(ctx context.Context, call tools.GatedCall) (json.RawMessage, error) {
+			agentID, depth := reg.Identity()
 			dec, err := perm(ctx, PermissionRequest{
 				ToolName: call.Name,
 				Args:     call.Args,
@@ -415,6 +465,11 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 				// Which rule asked, when one did. A client shows it, so a prompt
 				// never appears without a reason the user can act on.
 				Rule: permissionRuleMatch(call.Rule),
+				// Who is asking: a subagent's call is decided by the same callback
+				// as its parent's, and the card must be able to say whose it is.
+				AgentID: agentID,
+				RunID:   reg.RunID(),
+				Depth:   depth,
 			})
 			if err != nil {
 				return nil, err
@@ -491,6 +546,17 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 			Parameters:  spec.Parameters,
 			Handler:     spec.Handler,
 		}); err != nil {
+			if lspSup != nil {
+				lspSup.Close()
+			}
+			return nil, nil, nil, nil, nil, newError(err.Error(), false, nil)
+		}
+	}
+	// spawn_agent is a tool the runtime ships but implements as a function,
+	// because it needs the agent executing it. A child at the last depth has no
+	// such tool: the limit is enforced by absence, not by a runtime check.
+	if opts.Subagents.Enabled && opts.depth+1 < subagentMaxDepth(opts.Subagents) {
+		if err := reg.Register(subagentTool(reg)); err != nil {
 			if lspSup != nil {
 				lspSup.Close()
 			}
@@ -984,6 +1050,13 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 		loopCtx, wallCancel = context.WithTimeoutCause(ctx, wall, runtime.ErrMaxWallTime)
 		defer wallCancel()
 	}
+	// The tools that act for the agent find it here; the registry is shared by
+	// the agent's runs, and a back-reference would be a cycle for no gain.
+	loopCtx = withAgent(loopCtx, a)
+	if a.depth == 0 {
+		// One root run is one tree: the agent budget begins again with it.
+		a.budget.reset()
+	}
 
 	a.persist(store.Record{Type: store.TypeRunStart, RunID: run.id})
 
@@ -1008,7 +1081,7 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 		ParallelToolsMax:  a.opts.ParallelToolsMax,
 		Sink:              func(m llm.Message) { a.persistMessage(run.id, m) },
 	}, func(ev runtime.Event) {
-		run.emit(Event{
+		out := Event{
 			Type:       EventType(ev.Type),
 			Text:       ev.Text,
 			ToolCallID: ev.ToolCallID,
@@ -1022,7 +1095,23 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 			Rule:       permissionRuleMatch(ev.Rule),
 			Usage:      usageInfo(ev.Usage),
 			Items:      todoItemsInfo(ev.Items),
-		})
+		}
+		run.emit(out)
+		// A child's events travel to whoever asked for the child, tagged with the
+		// call that started it. They do not travel through the parent's stream:
+		// the parent's conversation never sees them, and neither should its card.
+		if origin, ok := subagentOriginFromContext(loopCtx); ok {
+			if on := a.opts.Subagents.OnEvent; on != nil {
+				on(SubagentEvent{
+					ParentAgentID: origin.parentAgentID,
+					ParentRunID:   origin.parentRunID,
+					ToolCallID:    origin.toolCallID,
+					AgentID:       a.id,
+					RunID:         run.id,
+					Event:         out,
+				})
+			}
+		}
 	})
 
 	a.mu.Lock()

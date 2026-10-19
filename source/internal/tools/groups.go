@@ -24,6 +24,10 @@ var groupTools = map[string][]string{
 	"verify": {"run_tests", "build"},
 	"vision": {"read_image"},
 	"mcp":    {mcpSentinel},
+	// agent covers the tools that create or manage other agents. They are gateable
+	// like any other built-in so a session can require a card before it spends
+	// tokens on a subagent; see doc/design/v1.0/41-subagents-and-tasks.md.
+	"agent": {"spawn_agent", "run_workflow", "task_list", "task_output", "task_cancel"},
 }
 
 // mcpSentinel marks "every tool whose name starts with mcp_".
@@ -95,11 +99,12 @@ func GroupOf(name string) (string, bool) {
 // runtime: an MCP server, a plugin, or a caller-supplied Options.Tools entry.
 //
 // Every such tool is registered as a *FuncTool, while each tool the runtime
-// ships is a concrete type. That is what lets the permission gate decide
+// ships is either a concrete type or a FuncTool marked Builtin (the tools that
+// need the surrounding agent). That is what lets the permission gate decide
 // whether a tool has a group at all — external tools do not, so once a caller
 // opts into group gating they are gated unconditionally rather than silently
 // exempted.
 func IsExternalTool(t Tool) bool {
-	_, isFunc := t.(*FuncTool)
-	return isFunc
+	f, isFunc := t.(*FuncTool)
+	return isFunc && !f.Builtin
 }

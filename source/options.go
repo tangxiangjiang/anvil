@@ -7,6 +7,8 @@ import (
 	"context"
 	"encoding/json"
 	"time"
+
+	"github.com/anvil-dev/anvil/internal/llm"
 )
 
 // Provider selects the LLM wire protocol.
@@ -141,6 +143,63 @@ type Options struct {
 	// be put back (0.40+). Nil means off, which is what an embedder that does
 	// not offer an undo gets: nothing is read and nothing is written.
 	Checkpoints *CheckpointOptions
+
+	// Subagents enables agent-in-agent execution (0.42+). Off by default: a tool
+	// that creates agents and spends tokens is an opt-in, like WebSearch.
+	Subagents SubagentOptions
+
+	// agentID, depth and budget are set by Create before the registry is built.
+	// They are unexported because an embedder asks for a child with spawn_agent,
+	// not by handing the runtime an id: identity is the runtime's to assign.
+	agentID string
+	depth   int
+	budget  *subagentBudget
+	// skipFileMCP tells Create to discard servers loaded from .cursor/mcp.json.
+	// A child without the mcp selector inherits SettingSources (they also carry
+	// rules and hooks) but must not start the file's servers.
+	skipFileMCP bool
+	// completer is the provider client a child runs with. It is the parent's,
+	// not a new one: every agent in a tree talks through the same client, which
+	// is also what lets a test script a parent and its children together.
+	completer llm.Completer
+}
+
+// SubagentOptions configures the spawn_agent built-in and the work its children
+// start. Zero values are the defaults (see the field comments); Enabled is the
+// only switch, and it is false unless set.
+type SubagentOptions struct {
+	// Enabled registers spawn_agent. A child at the last depth has no such tool.
+	Enabled bool
+	// MaxDepth bounds nesting. 0 means 2: a root (depth 0) and one level of
+	// children (depth 1). A child at depth+1 >= MaxDepth cannot spawn again.
+	MaxDepth int
+	// MaxAgents bounds how many agents one root run tree may create. 0 means 8.
+	// The counter resets with each top-level run.
+	MaxAgents int
+	// MaxBackground bounds concurrent background tasks in the tree. 0 means 4.
+	MaxBackground int
+	// OnEvent, when set, receives every event a child emits, tagged with the
+	// parent's identity and the spawn call so a client can draw it under the
+	// card that started it.
+	OnEvent func(SubagentEvent)
+	// OnTask, when set, is called when a task starts and when it ends. It is a
+	// table-change callback, not a progress stream.
+	OnTask func(TaskInfo)
+}
+
+// SubagentEvent is one event a child agent emitted, with the identity needed to
+// place it under the parent's card.
+type SubagentEvent struct {
+	// ParentAgentID and ParentRunID name the agent whose tool call created the
+	// child and the run that call belongs to.
+	ParentAgentID string
+	ParentRunID   string
+	// ToolCallID is the spawn_agent (or run_workflow) call.
+	ToolCallID string
+	// AgentID and RunID name the child and the run that emitted Event.
+	AgentID string
+	RunID   string
+	Event   Event
 }
 
 // CheckpointOptions says where run pre-images are kept and how many survive.
@@ -330,6 +389,14 @@ type PermissionRequest struct {
 	// (0.36+). It is nil when the mode gate alone is the reason the client is
 	// being asked, so a prompt can always say why it appeared.
 	Rule *PermissionRuleMatch
+	// AgentID and RunID name the agent whose call is being decided and the run it
+	// belongs to (0.42+). For a child agent, AgentID is the child — which is what
+	// lets an approval card say that a subagent is asking. Empty only for a
+	// callback installed outside Create/Resume.
+	AgentID string
+	RunID   string
+	// Depth is 0 for the session's own agent, 1 for its child, and so on.
+	Depth int
 }
 
 // ToolPreview is a description of a pending tool call's effect.

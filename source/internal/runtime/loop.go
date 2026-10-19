@@ -296,7 +296,7 @@ func runToolCalls(
 	parallel := cfg.ParallelTools && len(calls) > 1 && !batchHasMutating(calls)
 	if !parallel {
 		for i, tc := range calls {
-			results[i] = registry.Execute(ctx, tc.Name, tc.Args)
+			results[i] = registry.Execute(tools.WithCallID(ctx, tc.ID), tc.Name, tc.Args)
 		}
 	} else {
 		maxConc := cfg.ParallelToolsMax
@@ -312,7 +312,7 @@ func runToolCalls(
 				defer wg.Done()
 				sem <- struct{}{}
 				defer func() { <-sem }()
-				results[i] = registry.Execute(ctx, tc.Name, tc.Args)
+				results[i] = registry.Execute(tools.WithCallID(ctx, tc.ID), tc.Name, tc.Args)
 			}()
 		}
 		wg.Wait()

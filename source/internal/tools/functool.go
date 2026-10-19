@@ -16,6 +16,11 @@ type FuncTool struct {
 	Description string
 	Parameters  json.RawMessage
 	Handler     func(ctx context.Context, args json.RawMessage) (string, error)
+	// Builtin marks a tool the runtime itself ships but implements as a function
+	// because it needs the surrounding agent (spawn_agent, run_workflow). It is
+	// what keeps such a tool out of IsExternalTool, so the group table and the
+	// tool filters treat it like any other built-in.
+	Builtin bool
 }
 
 // Def implements Tool.
