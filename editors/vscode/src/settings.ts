@@ -1,18 +1,21 @@
 /**
  * Settings and secrets.
  *
- * The API key lives in SecretStorage and is passed to the child through its
- * environment, matching the protocol's rule that credentials never cross the
- * pipe. Nothing here ever writes the key to a setting, a log, or an error
- * message — the settings written to disk are exactly the ones the user typed.
+ * The API key is passed to the child through its environment, matching the
+ * protocol's rule that credentials never cross the pipe. It is not a setting:
+ * nothing here writes it to settings.json, a log, or an error message. It is
+ * kept in SecretStorage and in the extension's global state, so a restart
+ * still has it when the system secret store comes back empty.
  */
 
 import * as vscode from 'vscode';
+import { ApiKeyStore, applyApiKeyEnv, forgetApiKey, loadApiKey, saveApiKey } from './apiKeyStore';
 import { SessionConfig } from './session';
 
 const SECTION = 'anvil';
 const SECRET_KEY = 'anvil.apiKey';
-const ENV_KEY = 'ANVIL_API_KEY';
+/** Global state only. Not registered with `setKeysForSync`, so it stays on this machine. */
+const SAVED_KEY = 'anvil.apiKey';
 
 export interface ResolvedSettings {
   /**
@@ -78,40 +81,45 @@ function emptyToUndefined(value: string | undefined): string | undefined {
  * user's own environment; provider / model / base URL travel in `session.new`,
  * where the host also accepts them per session.
  *
- * The key is read from SecretStorage by the caller and handed straight to the
- * spawn, so it never lands in a settings file, a log line, or an error object.
+ * The key is read by the caller and handed straight to the spawn, so it never
+ * lands in a settings file, a log line, or an error object. With no saved key,
+ * `ANVIL_API_KEY` already on this process is left alone.
  */
 export function childEnv(apiKey: string | undefined): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  if (apiKey && apiKey.trim() !== '') {
-    env[ENV_KEY] = apiKey;
-  } else {
-    delete env[ENV_KEY];
-  }
-  return env;
+  return applyApiKeyEnv(process.env, apiKey);
+}
+
+function keyStore(context: vscode.ExtensionContext): ApiKeyStore {
+  return {
+    getSecret: () => Promise.resolve(context.secrets.get(SECRET_KEY)),
+    setSecret: (value) => Promise.resolve(context.secrets.store(SECRET_KEY, value)),
+    deleteSecret: () => Promise.resolve(context.secrets.delete(SECRET_KEY)),
+    getSaved: () => context.globalState.get<string>(SAVED_KEY),
+    setSaved: (value) => Promise.resolve(context.globalState.update(SAVED_KEY, value)),
+  };
 }
 
 /** Reads the stored key, or undefined when the user has not set one. */
 export async function readApiKey(context: vscode.ExtensionContext): Promise<string | undefined> {
-  return context.secrets.get(SECRET_KEY);
+  return loadApiKey(keyStore(context));
 }
 
 /** Prompts for a key and stores it. Returns false when the user cancels. */
 export async function promptForApiKey(context: vscode.ExtensionContext): Promise<boolean> {
   const value = await vscode.window.showInputBox({
     title: 'Anvil API key',
-    prompt: 'Stored in VS Code SecretStorage and passed to the host process environment.',
+    prompt: 'Remembered on this machine and passed to the host process environment. You only need to set it once.',
     password: true,
     ignoreFocusOut: true,
     validateInput: (input) => (input.trim() === '' ? 'The key cannot be empty.' : undefined),
   });
   if (value === undefined) return false;
-  await context.secrets.store(SECRET_KEY, value.trim());
+  await saveApiKey(keyStore(context), value);
   return true;
 }
 
 /** Removes the stored key. */
 export async function clearApiKey(context: vscode.ExtensionContext): Promise<void> {
-  await context.secrets.delete(SECRET_KEY);
+  await forgetApiKey(keyStore(context));
 }
 

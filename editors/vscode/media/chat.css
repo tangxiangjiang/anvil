@@ -58,6 +58,14 @@ body {
   align-items: flex-start;
 }
 
+/*
+ * `display: flex` above beats the user-agent rule for the hidden attribute, so
+ * setting `hidden` left the bar on screen and the dismiss button did nothing.
+ */
+.banner[hidden] {
+  display: none !important;
+}
+
 .banner[data-level='info'] {
   border-left-color: var(--vscode-focusBorder);
   background: var(--vscode-editorWidget-background);
@@ -504,16 +512,53 @@ body {
   word-break: break-word;
 }
 
-.approval .diff .add {
+.approval .diff .add,
+.tool .diff .add {
   color: var(--vscode-gitDecoration-addedResourceForeground, #3fb950);
 }
 
-.approval .diff .del {
+.approval .diff .del,
+.tool .diff .del {
   color: var(--vscode-gitDecoration-deletedResourceForeground, #f85149);
 }
 
-.approval .diff .hunk {
+.approval .diff .hunk,
+.tool .diff .ctx {
   color: var(--vscode-descriptionForeground);
+}
+
+.tool .edit-diff {
+  margin: 0 0 8px;
+}
+
+.tool .edit-diff .path {
+  font-family: var(--vscode-editor-font-family, monospace);
+  word-break: break-all;
+  margin-bottom: 4px;
+}
+
+.tool .edit-diff .diff {
+  margin: 0;
+  max-height: 16em;
+  overflow: auto;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.92em;
+  white-space: pre;
+}
+
+.tool .diff.numbered .ln {
+  display: inline-block;
+  width: 3.2em;
+  margin-right: 0.75em;
+  text-align: right;
+  color: var(--vscode-editorLineNumber-foreground, var(--vscode-descriptionForeground));
+  user-select: none;
+}
+
+.tool .edit-diff .more-note {
+  margin-top: 4px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.9em;
 }
 
 .approval .buttons {
@@ -710,6 +755,29 @@ button:disabled {
 
 .composer .actions .spacer {
   flex: 1;
+}
+
+.composer button.icon {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.composer button.icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.composer button.icon .icon-stop,
+.composer button.icon.running .icon-send {
+  display: none;
+}
+
+.composer button.icon.running .icon-stop {
+  display: block;
 }
 
 kbd {

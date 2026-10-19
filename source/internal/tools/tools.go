@@ -6,6 +6,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -946,14 +947,24 @@ func (t *globTool) Execute(ctx context.Context, args json.RawMessage) Result {
 
 type shellTool struct{ r *Registry }
 
+const (
+	defaultShellTimeout = 60 * time.Second
+	minShellTimeout     = time.Second
+	maxShellTimeout     = 120 * time.Second
+)
+
 func (t *shellTool) Def() llm.ToolDef {
 	return llm.ToolDef{
-		Name:        "shell",
-		Description: "Run a shell command in the workspace cwd. Prefer targeted commands.",
+		Name: "shell",
+		Description: "Run a shell command in the workspace cwd. Prefer targeted commands. " +
+			"Set timeout_seconds from how long this command should need (1–120, default 60). " +
+			"When that time elapses, or the turn is stopped, the command and the processes it started are killed and this call returns. " +
+			"Use a short timeout for anything that might wait forever.",
 		Parameters: mustSchema(`{
 			"type":"object",
 			"properties":{
-				"command":{"type":"string"}
+				"command":{"type":"string"},
+				"timeout_seconds":{"type":"integer","minimum":1,"maximum":120,"description":"Kill the command and its child processes after this many seconds. Default 60."}
 			},
 			"required":["command"]
 		}`),
@@ -962,7 +973,8 @@ func (t *shellTool) Def() llm.ToolDef {
 
 func (t *shellTool) Execute(ctx context.Context, args json.RawMessage) Result {
 	var in struct {
-		Command string `json:"command"`
+		Command        string `json:"command"`
+		TimeoutSeconds int    `json:"timeout_seconds"`
 	}
 	if err := json.Unmarshal(args, &in); err != nil {
 		return Result{Content: err.Error(), IsError: true}
@@ -970,7 +982,14 @@ func (t *shellTool) Execute(ctx context.Context, args json.RawMessage) Result {
 	if in.Command == "" {
 		return Result{Content: "command is required", IsError: true}
 	}
-	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	timeout := defaultShellTimeout
+	if in.TimeoutSeconds != 0 {
+		if in.TimeoutSeconds < 1 || in.TimeoutSeconds > int(maxShellTimeout/time.Second) {
+			return Result{Content: "timeout_seconds must be between 1 and 120", IsError: true}
+		}
+		timeout = time.Duration(in.TimeoutSeconds) * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	var cmd *exec.Cmd
@@ -980,10 +999,18 @@ func (t *shellTool) Execute(ctx context.Context, args json.RawMessage) Result {
 		cmd = exec.CommandContext(ctx, "sh", "-c", in.Command)
 	}
 	cmd.Dir = t.r.cwd
+	configureShellCommand(cmd)
 	out, err := cmd.CombinedOutput()
 	content := string(out)
 	if err != nil {
-		if content == "" {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			note := fmt.Sprintf("command killed after %s", timeout)
+			if content == "" {
+				content = note
+			} else {
+				content = content + "\n" + note
+			}
+		} else if content == "" {
 			content = err.Error()
 		} else {
 			content = content + "\n" + err.Error()

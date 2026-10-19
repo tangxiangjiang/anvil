@@ -19,7 +19,7 @@ reports. The protocol between the two is chapter 35 of the design docs
 Download or build the VSIX for your platform and install it:
 
 ```bash
-code --install-extension anvil-vscode-0.38.3-win32-x64.vsix
+code --install-extension anvil-vscode-0.38.4-win32-x64.vsix
 ```
 
 Nothing else is needed: the `anvil-host` sidecar for that platform travels
@@ -58,7 +58,7 @@ The sidecar is found in this order, and the first hit wins:
 npm run package:vsix                 # this machine's platform
 npm run package:vsix -- --target linux-x64
 npm run package:all                  # one VSIX per target, in sequence
-npm run smoke:vsix -- --vsix anvil-vscode-0.38.3-win32-x64.vsix
+npm run smoke:vsix -- --vsix anvil-vscode-0.38.4-win32-x64.vsix
 ```
 
 Targets: `win32-x64`, `win32-arm64`, `linux-x64`, `linux-arm64`, `darwin-x64`,
@@ -119,10 +119,13 @@ names both sides and stops rather than failing later inside a tool call.
 | `anvil.permissions` | Read the workspace's `.anvil/permissions.json`; on by default. Off means the session ignores the file — the rules **and** the `defaultMode` it may declare — and an approval card has nothing to offer under "always allow", because a rule written into a file this session does not read would not be in force |
 | `anvil.hostPath` | The sidecar to spawn; empty uses the bundled one, then `PATH` |
 
-The API key is **not** a setting. Run **Anvil: Set API Key**; it goes into VS
-Code's `SecretStorage` and from there into the child process environment
-(`ANVIL_API_KEY`). It is never written to a settings file, an output channel, or
-a log line.
+The API key is **not** a setting. If the VS Code process already has
+`ANVIL_API_KEY`, that is enough and **Anvil: Set API Key** is unnecessary. A
+key saved with that command overrides the variable and is kept for later
+launches (VS Code's secret storage, and a local copy in the extension's own
+state when that store comes back empty). It is never written to a settings
+file, an output channel, or a log line. **Anvil: Clear API Key** removes both
+copies and falls back to `ANVIL_API_KEY` when the process has one.
 
 ## What it will and will not do
 

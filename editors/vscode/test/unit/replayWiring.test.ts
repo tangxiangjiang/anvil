@@ -150,6 +150,20 @@ test('a run says what it cost the same way in both places', () => {
   assert.match(bodyOf(CHAT_JS, 'addRunEnd'), /runSummary\(done\)/);
 });
 
+test('Enter during an IME composition does not send the message', () => {
+  // Confirming a candidate — an English word typed through a Chinese IME, or a
+  // Chinese word — is an Enter. That key has to land the word in the box. The
+  // keydown that follows compositionend often reports isComposing as false, so
+  // the composition itself has to swallow it.
+  const wiring = CHAT_JS.slice(CHAT_JS.indexOf("input.addEventListener('compositionstart'"));
+  assert.match(wiring, /event\.isComposing \|\| event\.keyCode === 229 \|\| composing/);
+  assert.match(wiring, /compositionend/);
+  assert.match(wiring, /confirmEnter/);
+  const guard = wiring.indexOf('event.isComposing');
+  const send = wiring.indexOf("composer.dispatchEvent(new Event('submit'");
+  assert.ok(guard >= 0 && send > guard, 'the composition check runs before submit');
+});
+
 test('the new transcript lines are built, not written', () => {
   // The webview's whole security story is that model output arrives as text.
   // The note is the one that most tempts a shortcut, because the text it draws

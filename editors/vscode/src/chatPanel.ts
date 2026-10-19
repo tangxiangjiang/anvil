@@ -21,7 +21,7 @@ import { randomBytes } from 'node:crypto';
 import { dirname } from 'node:path';
 import * as vscode from 'vscode';
 import { ChangesTracker, ChangedFile } from './changes';
-import { PreImage, planReview, reviewOf } from './editDiff';
+import { EditAnchor, PreImage, locateEdit, planReview, reviewOf } from './editDiff';
 import { buildPromptContext, pickMentions } from './editorContext';
 import { attachmentsFromDataUrls } from './attachments';
 import { HostListener, HostManager } from './hostManager';
@@ -99,7 +99,7 @@ type Outbound =
       agentId?: string;
       mode?: PermissionMode;
     }
-  | { type: 'event'; event: HostEvent; reviewable?: boolean }
+  | { type: 'event'; event: HostEvent; reviewable?: boolean; edit?: EditAnchor }
   | { type: 'approval'; request: ApprovalRequest }
   | { type: 'approvalWithdrawn'; requestId: string }
   /**
@@ -760,7 +760,7 @@ export class ChatPanel implements HostListener {
       if (step.kind === 'user') this.post({ type: 'user', text: step.text });
       else if (step.kind === 'notice') this.post({ type: 'note', text: step.text });
       else if (step.kind === 'runEnd') this.post({ type: 'runEnd', done: step.done });
-      else this.postEvent(step.event);
+      else await this.postEvent(step.event);
     }
     if (this.dropped(result) > 0) {
       this.post({
@@ -1194,11 +1194,15 @@ export class ChatPanel implements HostListener {
   onEvent = (event: HostEvent): void => {
     // The tool call is the last moment the file it names still holds its old
     // contents, and it arrives whether or not the call is gated — which is what
-    // makes the changed-files list work in accept_edits and bypass too.
-    if (event.type === 'tool_call') {
-      void this.changes.snapshotToolCall(event.name, event.args);
-    }
-    this.postEvent(event);
+    // makes the changed-files list work in accept_edits and bypass too. The
+    // read is awaited before the card is drawn, so the line number comes from
+    // the file the call found rather than from the file after it wrote.
+    void (async () => {
+      if (event.type === 'tool_call') {
+        await this.changes.snapshotToolCall(event.name, event.args);
+      }
+      await this.postEvent(event, 'snapshot');
+    })();
   };
 
   /**
@@ -1211,9 +1215,29 @@ export class ChatPanel implements HostListener {
    * in front of the user — a live event, and a replayed one — comes through
    * here, so the answer cannot be missing from one path and present on another.
    */
-  private postEvent(event: HostEvent): void {
+  private async postEvent(event: HostEvent, source: 'snapshot' | 'disk' = 'disk'): Promise<void> {
     const reviewable = event.type === 'tool_call' && reviewOf(event.name, event.args) !== undefined;
-    this.post({ type: 'event', event, reviewable });
+    const edit = await this.editAnchor(event, source);
+    this.post({ type: 'event', event, reviewable, edit });
+  }
+
+  /**
+   * Where an edit sits, so the card can number the lines around it.
+   *
+   * A live call uses the pre-image just taken: that is the file the `old_string`
+   * was found in. A replay has no pre-image — taking one now would record the
+   * file as it is today under this turn — so it reads the file as it stands and
+   * looks for the text the call wrote.
+   */
+  private async editAnchor(event: HostEvent, source: 'snapshot' | 'disk'): Promise<EditAnchor | undefined> {
+    if (event.type !== 'tool_call') return undefined;
+    const review = reviewOf(event.name, event.args);
+    if (!review || review.kind !== 'edit') return undefined;
+    const text = source === 'snapshot' ? this.changes.preImage(review.path) : await this.changes.read(review.path);
+    if (text === undefined) return undefined;
+    const first = source === 'snapshot' ? review.before : review.after;
+    const second = source === 'snapshot' ? review.after : review.before;
+    return locateEdit(text, first) ?? locateEdit(text, second);
   }
 
   onApproval = (request: ApprovalRequest): void => {
@@ -1419,7 +1443,7 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
   <div id="transcript" class="transcript" role="log" aria-live="polite">
     <div id="empty" class="empty">
       <p>Ask for a change. Anvil reads, edits, and runs commands in this workspace.</p>
-      <p class="hint">Mutating calls stop for your approval. <kbd>Stop</kbd> interrupts a turn.</p>
+      <p class="hint">Mutating calls stop for your approval. The button sends, and stops a turn while one is running.</p>
       <p class="hint"><kbd>/</kbd> lists commands, <kbd>@</kbd> references a file.</p>
       <p class="hint">Past conversations are in the Anvil view in the activity bar.</p>
     </div>
@@ -1456,8 +1480,15 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
         <button id="permissions" type="button" class="ghost" title="Open .anvil/permissions.json: what runs without asking, and what is refused">Permissions</button>
         <span class="spacer"></span>
         <button id="attach" type="button" class="secondary" title="Reference a file or folder">@</button>
-        <button id="stop" type="button" class="secondary" hidden>Stop</button>
-        <button id="send" type="submit" class="primary">Send</button>
+        <button id="send" type="button" class="primary icon" aria-label="Send" title="Send">
+          <svg class="icon-send" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M22 2 11 13"/>
+            <path d="m22 2-7 20-4-9-9-4 20-7z"/>
+          </svg>
+          <svg class="icon-stop" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="7" y="7" width="10" height="10" rx="1.5" fill="currentColor"/>
+          </svg>
+        </button>
       </div>
     </form>
   </div>

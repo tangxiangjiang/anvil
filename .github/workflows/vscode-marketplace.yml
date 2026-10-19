@@ -1,0 +1,73 @@
+# Publishes editors/vscode to the Visual Studio Marketplace.
+#
+# Runs when a tag named vscode-v<version> is pushed, and that version must
+# match editors/vscode/package.json. It can also be started by hand from the
+# Actions tab, which publishes whatever version is in package.json.
+#
+# The only repository secret is VSCE_PAT: an Azure DevOps personal access token
+# whose organization is "All accessible organizations" and whose Marketplace
+# scope is Manage. vsce reads it from the environment. It is never written
+# into the repository.
+
+name: Publish VS Code extension
+
+on:
+  push:
+    tags:
+      - "vscode-v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    if: github.repository == 'tangxiangjiang/anvil'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: source/go.mod
+          cache-dependency-path: source/go.sum
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install extension dependencies
+        working-directory: editors/vscode
+        run: npm install
+
+      - name: Check the tag against the extension version
+        if: github.event_name == 'push'
+        working-directory: editors/vscode
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          tag="${GITHUB_REF_NAME#vscode-v}"
+          if [ "$tag" != "$version" ]; then
+            echo "tag ${GITHUB_REF_NAME} does not match editors/vscode/package.json version ${version}"
+            echo "push vscode-v${version}, or change the version in package.json first"
+            exit 1
+          fi
+
+      - name: Package every platform
+        working-directory: editors/vscode
+        run: |
+          # vsce refuses to publish a package marked private. The field stays
+          # in git; only this checkout, which is thrown away, loses it.
+          node -e 'const fs=require("fs"); const p="package.json"; const j=JSON.parse(fs.readFileSync(p,"utf8")); delete j.private; fs.writeFileSync(p, JSON.stringify(j,null,2)+"\n")'
+          node scripts/package-vsix.mjs --all
+
+      - name: Publish to the Marketplace
+        working-directory: editors/vscode
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          if [ -z "$VSCE_PAT" ]; then
+            echo "Missing the VSCE_PAT repository secret."
+            echo "Create an Azure DevOps token with Marketplace Manage, then add it under Settings, Secrets and variables, Actions."
+            exit 1
+          fi
+          node node_modules/@vscode/vsce/vsce publish --packagePath anvil-vscode-*.vsix
