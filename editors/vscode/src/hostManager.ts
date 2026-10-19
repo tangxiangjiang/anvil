@@ -26,7 +26,9 @@ import {
   PermissionsResult,
   RuleFileInfo,
   RuleSpec,
+  SessionDeleteResult,
   SessionInfo,
+  SessionRenameResult,
   SessionResult,
   SessionTranscriptParams,
   SessionTranscriptResult,
@@ -300,6 +302,31 @@ export class HostManager {
     const params: SessionTranscriptParams = { agent_id: agentId };
     if (limit !== undefined) params.limit = limit;
     return client.request<SessionTranscriptResult>(Method.SessionTranscript, params);
+  }
+
+  /**
+   * Gives a stored session a name of its own.
+   *
+   * It is an append, not an edit: nothing already in the file is rewritten, so a
+   * resume reads the same history it did before. The title in the listing is the
+   * last one written, which is what makes a second rename replace the first.
+   */
+  async renameSession(agentId: string, title: string): Promise<SessionRenameResult> {
+    const client = await this.startClient();
+    return client.request<SessionRenameResult>(Method.SessionRename, { agent_id: agentId, title });
+  }
+
+  /**
+   * Forgets a stored session.
+   *
+   * A live session holding the same agent is not closed here — the caller does
+   * that, because it is the tab that would write the file back on its next
+   * prompt. Deleting an agent that is not there rejects with a host error rather
+   * than succeeding, so a stale sidebar row reports that it was already gone.
+   */
+  async deleteSession(agentId: string): Promise<SessionDeleteResult> {
+    const client = await this.startClient();
+    return client.request<SessionDeleteResult>(Method.SessionDelete, { agent_id: agentId });
   }
 
   /**

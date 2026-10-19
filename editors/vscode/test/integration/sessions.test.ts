@@ -137,6 +137,47 @@ test('a prompted session is listed under the first thing that was typed', async 
   assert.equal(row.title, '看一下这是个什么工程');
 });
 
+test('renaming and deleting are agent-keyed, and the listing follows both', async (t) => {
+  const { echo, harness } = await host(t, {}, { FAKE_HOST_STORED: 'agent-stored-1' });
+  await harness.session.send('anything');
+  await waitFor(() => harness.dones.length === 1, 'the run to finish');
+  const agent = harness.session.agent;
+  assert.ok(agent);
+
+  const renamed = await harness.client.request<{ agent_id: string; title: string }>(
+    Method.SessionRename,
+    { agent_id: agent, title: '  Target work  ' },
+  );
+  assert.deepEqual(renamed, { agent_id: agent, title: 'Target work' });
+  // Rename is keyed by agent, like the listing and the transcript: the session
+  // need not be open for the conversation it names to be renamed.
+  const recorded = readEcho(echo).find((record) => record.method === 'session.rename');
+  assert.deepEqual(recorded?.params, { agent_id: agent, title: '  Target work  ' });
+
+  let listing = await harness.client.request<{ sessions: Array<{ agent_id: string; title?: string }> }>(
+    Method.SessionList,
+    {},
+  );
+  assert.equal(listing.sessions.find((row) => row.agent_id === agent)?.title, 'Target work');
+
+  await harness.client.request(Method.SessionDelete, { agent_id: 'agent-stored-1' });
+  listing = await harness.client.request<{ sessions: Array<{ agent_id: string }> }>(
+    Method.SessionList,
+    {},
+  );
+  assert.equal(
+    listing.sessions.some((row) => row.agent_id === 'agent-stored-1'),
+    false,
+    'the deleted session is still listed',
+  );
+  // The live session next to it is untouched: a delete names one agent.
+  assert.ok(listing.sessions.some((row) => row.agent_id === agent));
+
+  // Deleting what is not there is an error, not a silent success: a stale row
+  // has to be told it was already gone.
+  await assert.rejects(harness.client.request(Method.SessionDelete, { agent_id: 'agent-stored-1' }));
+});
+
 test('skills.list turns into commands the composer can honour', async (t) => {
   const { harness } = await host(t);
 

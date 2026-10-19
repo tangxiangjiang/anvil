@@ -165,6 +165,10 @@ func (s *Server) dispatch(ctx context.Context, req *Request) (any, *RPCError) {
 		return s.handleSessionTranscript(ctx, req.Params)
 	case MethodSessionClose:
 		return s.handleSessionClose(req.Params)
+	case MethodSessionRename:
+		return s.handleSessionRename(ctx, req.Params)
+	case MethodSessionDelete:
+		return s.handleSessionDelete(ctx, req.Params)
 	case MethodPrompt:
 		return s.handlePrompt(ctx, req.Params)
 	case MethodCancel:
@@ -353,6 +357,48 @@ func (s *Server) handleSessionList(ctx context.Context, params json.RawMessage) 
 		out.Sessions = out.Sessions[:p.Limit]
 	}
 	return out, nil
+}
+
+// handleSessionRename names a stored session, as an appended `meta` record.
+func (s *Server) handleSessionRename(ctx context.Context, params json.RawMessage) (any, *RPCError) {
+	p, err := decode[SessionRenameParams](params)
+	if err != nil {
+		return nil, errInvalidParams("session.rename: " + err.Error())
+	}
+	if p.AgentID == "" {
+		return nil, errInvalidParams("session.rename: agent_id is required")
+	}
+	if strings.TrimSpace(p.Title) == "" {
+		return nil, errInvalidParams("session.rename: title is required")
+	}
+	opts := anvil.ListOptions{Local: anvil.LocalOptions{CWD: s.cwdPath(), Store: p.Store}}
+	if err := anvil.RenameAgent(ctx, p.AgentID, p.Title, opts); err != nil {
+		return nil, errHost(err)
+	}
+	s.logf("session.rename agent=%s", p.AgentID)
+	return SessionRenameResult{AgentID: p.AgentID, Title: strings.TrimSpace(p.Title)}, nil
+}
+
+// handleSessionDelete forgets a stored session.
+//
+// A live session holding the same agent is not closed here: closing is the
+// client's decision, and a tab that is still open would write the file again on
+// its next prompt. The client closes the owning tab first, which is what makes
+// the deletion stick.
+func (s *Server) handleSessionDelete(ctx context.Context, params json.RawMessage) (any, *RPCError) {
+	p, err := decode[SessionDeleteParams](params)
+	if err != nil {
+		return nil, errInvalidParams("session.delete: " + err.Error())
+	}
+	if p.AgentID == "" {
+		return nil, errInvalidParams("session.delete: agent_id is required")
+	}
+	opts := anvil.ListOptions{Local: anvil.LocalOptions{CWD: s.cwdPath(), Store: p.Store}}
+	if err := anvil.DeleteAgent(ctx, p.AgentID, opts); err != nil {
+		return nil, errHost(err)
+	}
+	s.logf("session.delete agent=%s", p.AgentID)
+	return SessionDeleteResult{AgentID: p.AgentID, Deleted: true}, nil
 }
 
 // handleSessionTranscript replays a stored conversation.

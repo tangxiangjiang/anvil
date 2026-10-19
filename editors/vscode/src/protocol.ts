@@ -28,6 +28,15 @@ export const Method = {
    */
   SessionTranscript: 'session.transcript',
   SessionClose: 'session.close',
+  /**
+   * Names a stored session. Additive: it appends a `meta` record rather than
+   * rewriting the file, so a resume replays exactly the history it did before.
+   * A host that predates it answers `-32601`, which the client reads as "no
+   * rename here".
+   */
+  SessionRename: 'session.rename',
+  /** Removes a stored session's records. */
+  SessionDelete: 'session.delete',
   Prompt: 'prompt',
   Cancel: 'cancel',
   ModelsList: 'models.list',
@@ -488,6 +497,29 @@ export interface SessionTranscriptResult {
    * rather than implying the conversation started there.
    */
   dropped?: number;
+}
+
+// --- session.rename / session.delete -----------------------------------------
+
+export interface SessionRenameParams {
+  agent_id: string;
+  title: string;
+  store?: string;
+}
+
+export interface SessionRenameResult {
+  agent_id: string;
+  title: string;
+}
+
+export interface SessionDeleteParams {
+  agent_id: string;
+  store?: string;
+}
+
+export interface SessionDeleteResult {
+  agent_id: string;
+  deleted: boolean;
 }
 
 // --- skills.list / rules.list ------------------------------------------------

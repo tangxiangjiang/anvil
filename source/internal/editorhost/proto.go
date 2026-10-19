@@ -39,11 +39,17 @@ const (
 	// its window and knows which agent it was talking to.
 	MethodSessionTranscript = "session.transcript"
 	MethodSessionClose      = "session.close"
-	MethodPrompt            = "prompt"
-	MethodCancel            = "cancel"
-	MethodModelsList        = "models.list"
-	MethodSkillsList        = "skills.list"
-	MethodRulesList         = "rules.list"
+	// MethodSessionRename appends a title to a stored session. Additive: it
+	// changes no record that is already on disk, and a host without it answers
+	// -32601, which the client reads as "no rename here".
+	MethodSessionRename = "session.rename"
+	// MethodSessionDelete removes a stored session's records.
+	MethodSessionDelete = "session.delete"
+	MethodPrompt        = "prompt"
+	MethodCancel        = "cancel"
+	MethodModelsList    = "models.list"
+	MethodSkillsList    = "skills.list"
+	MethodRulesList     = "rules.list"
 	// MethodPermissionsGet reads the workspace rule file — the effective policy
 	// for this workspace, and the place to put a squiggle when it will not
 	// compile.
@@ -515,6 +521,41 @@ type SessionTranscriptParams struct {
 	Limit int `json:"limit,omitempty"`
 	// Store selects the session backend to read: "jsonl" (default) or "sqlite".
 	Store string `json:"store,omitempty"`
+}
+
+// ---------------------------------------------------------------------------
+// session.rename / session.delete
+// ---------------------------------------------------------------------------
+
+// SessionRenameParams names the session and the title to give it. Both are
+// agent-keyed, like session.list and session.transcript: a session can be named
+// before it is ever opened in this window, and after the window that ran it is
+// gone.
+type SessionRenameParams struct {
+	AgentID string `json:"agent_id"`
+	Title   string `json:"title"`
+	// Store selects the session backend to write: "jsonl" (default) or "sqlite".
+	Store string `json:"store,omitempty"`
+}
+
+// SessionRenameResult confirms what was written, so a client can show the name
+// it will actually see in the list rather than the one it typed.
+type SessionRenameResult struct {
+	AgentID string `json:"agent_id"`
+	Title   string `json:"title"`
+}
+
+// SessionDeleteParams names the session to forget.
+type SessionDeleteParams struct {
+	AgentID string `json:"agent_id"`
+	// Store selects the session backend to write: "jsonl" (default) or "sqlite".
+	Store string `json:"store,omitempty"`
+}
+
+// SessionDeleteResult confirms the deletion.
+type SessionDeleteResult struct {
+	AgentID string `json:"agent_id"`
+	Deleted bool   `json:"deleted"`
 }
 
 // SessionTranscriptResult is a stored conversation, oldest first.

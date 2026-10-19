@@ -92,6 +92,28 @@ func (s *SQLite) Append(agentID string, rec Record) error {
 	return err
 }
 
+// Delete removes every record for agentID.
+func (s *SQLite) Delete(agentID string) error {
+	if s == nil {
+		return errors.New("nil store")
+	}
+	if err := safeID(agentID); err != nil {
+		return err
+	}
+	res, err := s.db.Exec(`DELETE FROM records WHERE agent_id = ?`, agentID)
+	if err != nil {
+		return fmt.Errorf("delete records: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("delete records: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: %s", ErrNotFound, agentID)
+	}
+	return nil
+}
+
 // Load returns records for agentID in insertion order.
 func (s *SQLite) Load(agentID string) ([]Record, error) {
 	if s == nil {

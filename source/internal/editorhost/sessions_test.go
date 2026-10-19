@@ -273,6 +273,103 @@ func TestSessionTranscriptReplaysAPersistedConversation(t *testing.T) {
 	}
 }
 
+// A rename is a name, not a rewrite: the listing shows the new title, and the
+// conversation the transcript replays is exactly the one that was there before.
+// That second half is what makes it safe to append a meta record rather than
+// editing the session file.
+func TestSessionRenameNamesTheSessionWithoutTouchingItsHistory(t *testing.T) {
+	llm := newStubLLM(t, textTurn("noted."))
+	h, _ := initHost(t, llm.baseURL())
+
+	sess := resultOf(t, h.callOK(MethodSessionNew, SessionParams{}))
+	sessionID, _ := sess["session_id"].(string)
+	agentID, _ := sess["agent_id"].(string)
+	promptRun(t, h, sessionID, "read the note", autoApprove)
+	h.callOK(MethodSessionClose, SessionRefParams{SessionID: sessionID})
+
+	renamed := resultOf(t, h.callOK(MethodSessionRename, SessionRenameParams{
+		AgentID: agentID, Title: "  Note reading  ",
+	}))
+	if renamed["agent_id"] != agentID || renamed["title"] != "Note reading" {
+		t.Fatalf("rename result = %v", renamed)
+	}
+
+	listing := resultOf(t, h.callOK(MethodSessionList, SessionListParams{}))
+	sessions, _ := listing["sessions"].([]any)
+	if len(sessions) != 1 {
+		t.Fatalf("session.list returned %d rows want 1: %v", len(sessions), listing)
+	}
+	row, _ := sessions[0].(map[string]any)
+	if row["title"] != "Note reading" {
+		t.Fatalf("listed title=%v want the rename", row["title"])
+	}
+
+	replay := resultOf(t, h.callOK(MethodSessionTranscript, SessionTranscriptParams{AgentID: agentID}))
+	entries, _ := replay["entries"].([]any)
+	if len(entries) != 3 {
+		t.Fatalf("the rename changed the stored history: %v", replay)
+	}
+	first, _ := entries[0].(map[string]any)
+	if first["kind"] != "message" || first["content"] != "read the note" {
+		t.Fatalf("first entry = %v", first)
+	}
+}
+
+func TestSessionRenameRefusesAnEmptyOrUnknownSession(t *testing.T) {
+	llm := newStubLLM(t, textTurn("ok"))
+	h, _ := initHost(t, llm.baseURL())
+	sess := resultOf(t, h.callOK(MethodSessionNew, SessionParams{}))
+	agentID, _ := sess["agent_id"].(string)
+
+	empty := h.call(MethodSessionRename, SessionRenameParams{AgentID: agentID, Title: "   "})
+	if rpcErr, ok := rpcErrorOf(empty); !ok || rpcErr.Code != CodeInvalidParams {
+		t.Fatalf("want invalid params for an empty title, got %v", empty)
+	}
+
+	missing := h.call(MethodSessionRename, SessionRenameParams{AgentID: "agent-nope", Title: "name"})
+	rpcErr, ok := rpcErrorOf(missing)
+	if !ok || rpcErr.Code != CodeHostError {
+		t.Fatalf("want a host error, got %v", missing)
+	}
+	if !strings.Contains(rpcErr.Message, "not found") {
+		t.Fatalf("want a not-found message, got %q", rpcErr.Message)
+	}
+}
+
+// Deleting a session removes it from the listing and from the store. The
+// host does not close a live session that holds the agent: that is the
+// client's move, and the client closes the tab first.
+func TestSessionDeleteForgetsTheSession(t *testing.T) {
+	llm := newStubLLM(t, textTurn("ok"))
+	h, _ := initHost(t, llm.baseURL())
+	sess := resultOf(t, h.callOK(MethodSessionNew, SessionParams{}))
+	sessionID, _ := sess["session_id"].(string)
+	agentID, _ := sess["agent_id"].(string)
+	promptRun(t, h, sessionID, "hello", autoApprove)
+	h.callOK(MethodSessionClose, SessionRefParams{SessionID: sessionID})
+
+	deleted := resultOf(t, h.callOK(MethodSessionDelete, SessionDeleteParams{AgentID: agentID}))
+	if deleted["agent_id"] != agentID || deleted["deleted"] != true {
+		t.Fatalf("delete result = %v", deleted)
+	}
+	listing := resultOf(t, h.callOK(MethodSessionList, SessionListParams{}))
+	if sessions, _ := listing["sessions"].([]any); len(sessions) != 0 {
+		t.Fatalf("the session is still listed: %v", listing)
+	}
+	if m := h.call(MethodSessionTranscript, SessionTranscriptParams{AgentID: agentID}); m["result"] != nil {
+		t.Fatalf("the transcript still answers: %v", m)
+	}
+
+	again := h.call(MethodSessionDelete, SessionDeleteParams{AgentID: agentID})
+	if rpcErr, ok := rpcErrorOf(again); !ok || rpcErr.Code != CodeHostError {
+		t.Fatalf("want a host error on a second delete, got %v", again)
+	}
+	empty := h.call(MethodSessionDelete, SessionDeleteParams{})
+	if rpcErr, ok := rpcErrorOf(empty); !ok || rpcErr.Code != CodeInvalidParams {
+		t.Fatalf("want invalid params for an empty agent id, got %v", empty)
+	}
+}
+
 // An agent the workspace does not have is a host error, not an empty
 // conversation: the panel tells "this session is gone" from "this session had
 // nothing in it", and only the first one clears the remembered id.

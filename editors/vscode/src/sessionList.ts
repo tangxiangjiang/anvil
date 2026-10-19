@@ -26,6 +26,12 @@ export interface SessionRow {
   icon: string;
   contextValue: string;
   agentId: string;
+  /**
+   * The stored name, when there is one. The label falls back to the id for a
+   * session nobody has named, and a rename box must not start out holding that
+   * fallback as if it were the name.
+   */
+  title?: string;
 }
 
 /** A recency heading over rows. */
@@ -88,7 +94,7 @@ export function buildSessionView(
 ): SessionNode[] {
   if (sessions.length === 0) return [sessionNote('empty')];
 
-  const sorted = [...sessions].sort(byRecency);
+  const sorted = sortSessionsByRecency(sessions);
   const dated = sorted.some((session) => timestampOf(session) !== undefined);
   // With nothing to group by, headings would be decoration: one bucket labelled
   // "Undated" over every session says less than the sessions do.
@@ -205,7 +211,16 @@ function timestampOf(session: SessionInfo): number | undefined {
   return undefined;
 }
 
-/** Newest first, and the undated last rather than at the top. */
+/**
+ * Newest first, and the undated last rather than at the top.
+ *
+ * Exported because the search picker lists rows with no headings, and the order
+ * a person expects there is the same one the sidebar uses.
+ */
+export function sortSessionsByRecency(sessions: readonly SessionInfo[]): SessionInfo[] {
+  return [...sessions].sort(byRecency);
+}
+
 function byRecency(left: SessionInfo, right: SessionInfo): number {
   const a = timestampOf(left);
   const b = timestampOf(right);
@@ -225,7 +240,7 @@ function shortId(agentId: string): string {
  * session nobody prompted, or one whose first message was only whitespace —
  * falls back to the id rather than to a placeholder.
  */
-function sessionLabel(session: SessionInfo): string {
+export function sessionLabel(session: SessionInfo): string {
   const title = session.title?.trim();
   return title ? title : shortId(session.agent_id);
 }
@@ -250,10 +265,12 @@ function sessionRow(session: SessionInfo, options: SessionViewOptions): SessionR
   if (running) parts.push('running');
   else if (current) parts.push('open');
 
+  const title = session.title?.trim();
   return {
     kind: 'session',
     id: agentId,
     label: sessionLabel(session),
+    title: title ? title : undefined,
     description: parts.join(' · '),
     tooltip: tooltipFor(session, { running, current }),
     icon: running ? 'sync~spin' : STATUS_ICONS[session.last_status ?? ''] ?? 'history',

@@ -12,6 +12,9 @@ import * as vscode from 'vscode';
 import { ChatPanel } from './chatPanel';
 import { Hub } from './hub';
 import { PreviewDocuments } from './review';
+import { SessionInfo } from './protocol';
+import { SessionNode, SessionRow } from './sessionList';
+import { SessionChoice, filterSessions, sessionChoices } from './sessionSearch';
 import { SessionTreeProvider } from './sessionTree';
 import { clearApiKey, promptForApiKey } from './settings';
 
@@ -67,13 +70,87 @@ export function activate(context: vscode.ExtensionContext): void {
 
     // A click on a stored session: reveal the tab already showing it, or open
     // one. One conversation in two tabs would be two runs on one file.
-    vscode.commands.registerCommand('anvil.openSession', async (agentId: string) => {
-      await hub.openSession(agentId);
+    vscode.commands.registerCommand('anvil.openSession', async (arg: unknown) => {
+      const agentId = agentIdOf(arg);
+      if (agentId !== undefined) await hub.openSession(agentId);
     }),
 
-    vscode.commands.registerCommand('anvil.openSessionInNewTab', async (agentId: string) => {
-      if (typeof agentId !== 'string' || agentId === '') return;
-      hub.openTab(agentId);
+    vscode.commands.registerCommand('anvil.openSessionInNewTab', async (arg: unknown) => {
+      const agentId = agentIdOf(arg);
+      if (agentId !== undefined) hub.openTab(agentId);
+    }),
+
+    // A rename is an appended record, so the conversation underneath it is the
+    // same one. The box starts from the name the session has: for a session
+    // nobody named, that is the first message the store derived it from.
+    vscode.commands.registerCommand('anvil.renameSession', async (arg: unknown) => {
+      const agentId = agentIdOf(arg);
+      if (agentId === undefined) return;
+      const current = sessionRowOf(arg);
+      const title = await vscode.window.showInputBox({
+        prompt: 'Name this session',
+        placeHolder: 'A name you will recognise in the sidebar',
+        value: current?.title ?? '',
+        validateInput: (value) => (value.trim() === '' ? 'A session needs a name.' : undefined),
+      });
+      if (title === undefined) return;
+      try {
+        await hub.renameSession(agentId, title);
+      } catch (err) {
+        void vscode.window.showErrorMessage(`Anvil: could not rename the session: ${(err as Error).message}`);
+      }
+    }),
+
+    vscode.commands.registerCommand('anvil.deleteSession', async (arg: unknown) => {
+      const agentId = agentIdOf(arg);
+      if (agentId === undefined) return;
+      const label = sessionRowOf(arg)?.label ?? agentId;
+      const answer = await vscode.window.showWarningMessage(
+        `Delete “${label}”?`,
+        {
+          modal: true,
+          detail:
+            'Its stored conversation is removed from this workspace. Files it changed are left as they are. This cannot be undone.',
+        },
+        'Delete',
+      );
+      if (answer !== 'Delete') return;
+      try {
+        await hub.deleteSession(agentId);
+      } catch (err) {
+        void vscode.window.showErrorMessage(`Anvil: could not delete the session: ${(err as Error).message}`);
+      }
+    }),
+
+    // A filter over the stored list rather than the sidebar's scrollbar: titles
+    // repeat and ids are long, and the person looking for one already knows a
+    // word in it.
+    vscode.commands.registerCommand('anvil.searchSessions', async () => {
+      let sessions: SessionInfo[];
+      try {
+        sessions = await hub.listSessions();
+      } catch (err) {
+        void vscode.window.showErrorMessage(`Anvil: could not list sessions: ${(err as Error).message}`);
+        return;
+      }
+      if (sessions.length === 0) {
+        void vscode.window.showInformationMessage('Anvil: no sessions in this workspace yet.');
+        return;
+      }
+      const pick = vscode.window.createQuickPick<SessionChoice>();
+      pick.title = 'Search sessions';
+      pick.placeholder = 'A word from the title, or the agent id';
+      pick.items = sessionChoices(sessions);
+      pick.onDidChangeValue((value) => {
+        pick.items = sessionChoices(filterSessions(sessions, value));
+      });
+      pick.onDidAccept(() => {
+        const chosen = pick.selectedItems[0];
+        pick.hide();
+        if (chosen) void hub.openSession(chosen.agentId);
+      });
+      pick.onDidHide(() => pick.dispose());
+      pick.show();
     }),
 
     vscode.commands.registerCommand('anvil.newSession', async () => {
@@ -162,6 +239,26 @@ export function deactivate(): void {
   const hub = active;
   active = undefined;
   if (hub) void hub.dispose();
+}
+
+/**
+ * The agent id behind a command argument.
+ *
+ * A row's own click passes the id as a string, because that is what its
+ * `TreeItem.command` was given; a context-menu entry passes the tree element
+ * instead. Both arrive here, so no command has to care which one invoked it.
+ */
+function agentIdOf(arg: unknown): string | undefined {
+  if (typeof arg === 'string') return arg === '' ? undefined : arg;
+  const row = sessionRowOf(arg);
+  return row?.agentId;
+}
+
+/** The row, when the argument is a session element rather than a bare id. */
+function sessionRowOf(arg: unknown): SessionRow | undefined {
+  if (arg === null || typeof arg !== 'object') return undefined;
+  const node = arg as SessionNode;
+  return node.kind === 'session' ? node : undefined;
 }
 
 function setContext(key: string, value: unknown): Thenable<unknown> {

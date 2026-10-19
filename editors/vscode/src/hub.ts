@@ -269,6 +269,28 @@ export class Hub {
     return this.manager.transcript(agentId, limit);
   }
 
+  /** Gives a stored session a name, then redraws every list that shows it. */
+  async renameSession(agentId: string, title: string): Promise<void> {
+    await this.manager.renameSession(agentId, title);
+    this.sessionsChanged.fire();
+  }
+
+  /**
+   * Forgets a stored session, closing every tab that has it open first.
+   *
+   * The close is not tidiness. A session that stayed open would hold the agent
+   * and write the store file again on its next prompt, so the delete would look
+   * like it worked and come undone on the next turn. Every tab is closed, not
+   * just the first one: two tabs can resume one conversation.
+   */
+  async deleteSession(agentId: string): Promise<void> {
+    for (const panel of [...this.panels]) {
+      if (panel.currentAgentId() === agentId) await panel.close();
+    }
+    await this.manager.deleteSession(agentId);
+    this.sessionsChanged.fire();
+  }
+
   /** The rule files that apply to this workspace, fetched once. */
   async rules(): Promise<RuleFileInfo[]> {
     if (this.rulesCache) return this.rulesCache;

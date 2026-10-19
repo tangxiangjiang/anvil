@@ -82,6 +82,24 @@
         "category": "Anvil"
       },
       {
+        "command": "anvil.renameSession",
+        "title": "Anvil: Rename Session",
+        "category": "Anvil",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "anvil.deleteSession",
+        "title": "Anvil: Delete Session",
+        "category": "Anvil",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "anvil.searchSessions",
+        "title": "Anvil: Search Sessions",
+        "category": "Anvil",
+        "icon": "$(search)"
+      },
+      {
         "command": "anvil.stop",
         "title": "Anvil: Stop",
         "category": "Anvil",
@@ -116,14 +134,19 @@
           "group": "navigation@1"
         },
         {
-          "command": "anvil.refreshSessions",
+          "command": "anvil.searchSessions",
           "when": "view == anvil.sessions",
           "group": "navigation@2"
         },
         {
+          "command": "anvil.refreshSessions",
+          "when": "view == anvil.sessions",
+          "group": "navigation@3"
+        },
+        {
           "command": "anvil.stop",
           "when": "view == anvil.sessions && anvil.busy",
-          "group": "navigation@3"
+          "group": "navigation@4"
         }
       ],
       "view/item/context": [
@@ -131,6 +154,16 @@
           "command": "anvil.openSessionInNewTab",
           "when": "view == anvil.sessions && viewItem =~ /^session/",
           "group": "inline@1"
+        },
+        {
+          "command": "anvil.renameSession",
+          "when": "view == anvil.sessions && viewItem =~ /^session/",
+          "group": "1_modification@1"
+        },
+        {
+          "command": "anvil.deleteSession",
+          "when": "view == anvil.sessions && viewItem =~ /^session/",
+          "group": "2_dangerous@1"
         }
       ],
       "editor/title": [
@@ -147,6 +180,14 @@
         },
         {
           "command": "anvil.openSessionInNewTab",
+          "when": "false"
+        },
+        {
+          "command": "anvil.renameSession",
+          "when": "false"
+        },
+        {
+          "command": "anvil.deleteSession",
           "when": "false"
         }
       ]

@@ -65,10 +65,18 @@ const rulesBroken = process.env.FAKE_HOST_RULES_BROKEN === '1';
 /** Whether this host knows session.transcript at all. Off means a 0.37 host. */
 const servesTranscript = process.env.FAKE_HOST_TRANSCRIPT === '1';
 /** Agents the store holds that this process never opened. */
-const storedIds = (process.env.FAKE_HOST_STORED || '')
+let storedIds = (process.env.FAKE_HOST_STORED || '')
   .split(',')
   .map((id) => id.trim())
   .filter((id) => id !== '');
+/**
+ * The names sessions have been given, by agent id.
+ *
+ * A rename is an appended `meta` record in the real store; here it is this map,
+ * which is enough to make the next `session.list` carry the new name — the one
+ * thing the client reads back.
+ */
+const titles = new Map();
 /** The workspace rule file, which `permissions.get/add` are about. */
 const rulesPath = join(process.env.FAKE_HOST_CWD || process.cwd(), '.anvil', 'permissions.json');
 /** Its rules, as a session that appended them would have them. */
@@ -169,7 +177,7 @@ function newSession(params) {
     // list and its /resume picker have something to render. The title is the
     // first user message, and a run with no title is a session nobody prompted
     // — the shape a client falls back to the agent id for.
-    title: process.env.FAKE_HOST_TITLE,
+    title: titles.get(params.agent_id) ?? process.env.FAKE_HOST_TITLE,
     created_at: '2026-01-02T03:04:05Z',
     updated_at: '2026-01-02T03:05:06Z',
     last_status: 'finished',
@@ -499,7 +507,7 @@ async function handle(msg) {
             cwd: process.env.FAKE_HOST_CWD || process.cwd(),
             provider: 'openai',
             model: 'fake-model',
-            title: process.env.FAKE_HOST_TITLE,
+            title: titles.get(agentId) ?? process.env.FAKE_HOST_TITLE,
             updated_at: '2026-01-02T03:05:06Z',
             last_status: 'finished',
             runs: 1,
@@ -555,6 +563,41 @@ async function handle(msg) {
         files.push({ path: '.cursor/rules/huge.mdc', bytes: 40960, included: false, truncated: false });
       }
       ok(msg.id, { files });
+      return;
+    }
+    case 'session.rename': {
+      echo('session.rename', msg.params || {});
+      const agentId = msg.params && msg.params.agent_id;
+      const title = ((msg.params && msg.params.title) || '').trim();
+      const known = sessions.values().some((s) => s.agent_id === agentId) || storedIds.includes(agentId);
+      if (!agentId || !known) {
+        fail(msg.id, -32000, `agent not found: ${agentId}`);
+        return;
+      }
+      if (title === '') {
+        fail(msg.id, -32602, 'session.rename: title is required');
+        return;
+      }
+      titles.set(agentId, title);
+      for (const session of sessions.values()) {
+        if (session.agent_id === agentId) session.title = title;
+      }
+      ok(msg.id, { agent_id: agentId, title });
+      return;
+    }
+    case 'session.delete': {
+      echo('session.delete', msg.params || {});
+      const agentId = msg.params && msg.params.agent_id;
+      const live = [...sessions.values()].filter((s) => s.agent_id === agentId);
+      const stored = storedIds.includes(agentId);
+      if (!agentId || (live.length === 0 && !stored)) {
+        fail(msg.id, -32000, `agent not found: ${agentId}`);
+        return;
+      }
+      for (const session of live) sessions.delete(session.session_id);
+      storedIds = storedIds.filter((id) => id !== agentId);
+      titles.delete(agentId);
+      ok(msg.id, { agent_id: agentId, deleted: true });
       return;
     }
     case 'session.close': {

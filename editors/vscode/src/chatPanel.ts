@@ -358,6 +358,20 @@ export class ChatPanel implements HostListener {
     this.updateTitle();
   }
 
+  /**
+   * Closes this tab's document, ending the session behind it.
+   *
+   * It awaits the teardown because the caller may be about to delete the
+   * conversation on disk: a session still holding the agent could write the file
+   * back on its next prompt. Disposing the document fires the same handler the
+   * user's close button does, and `dispose` is idempotent, so this is the one
+   * way that settles both paths.
+   */
+  async close(): Promise<void> {
+    this.panel?.dispose();
+    await this.dispose();
+  }
+
   /** Brings this tab to the front, opening it first when it has no document. */
   reveal(): void {
     if (!this.panel) {
