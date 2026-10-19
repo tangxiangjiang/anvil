@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/anvil-dev/anvil/internal/llm"
+	"github.com/anvil-dev/anvil/internal/tasks"
 )
 
 // Provider selects the LLM wire protocol.
@@ -162,6 +163,10 @@ type Options struct {
 	// not a new one: every agent in a tree talks through the same client, which
 	// is also what lets a test script a parent and its children together.
 	completer llm.Completer
+	// taskMgr is the agent tree's background task table. The root creates it in
+	// buildRegistry; a child inherits the parent's, so one tree has one table
+	// however deep the work goes.
+	taskMgr *tasks.Manager
 }
 
 // SubagentOptions configures the spawn_agent built-in and the work its children

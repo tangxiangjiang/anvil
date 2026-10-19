@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/anvil-dev/anvil/internal/tasks"
 	"github.com/anvil-dev/anvil/internal/tools"
 )
 
@@ -184,9 +185,7 @@ func spawnAgent(ctx context.Context, reg *tools.Registry, raw json.RawMessage) (
 		return "", errors.New("description is required")
 	}
 	if in.Background {
-		// Implemented by p_0.42.2; refusing with a sentence is better than a card
-		// that says it started something it did not.
-		return "", errors.New("background subagents are not available in this build")
+		return spawnBackground(ctx, reg, parent, in)
 	}
 	selectors, err := resolveSubagentSelectors(reg, in.Tools)
 	if err != nil {
@@ -235,6 +234,73 @@ func spawnAgent(ctx context.Context, reg *tools.Registry, raw json.RawMessage) (
 	default:
 		return "", fmt.Errorf("%s failed: %s", child.AgentID(), firstNonEmpty(res.Err, res.Result))
 	}
+}
+
+// spawnBackground starts the same child the foreground path builds, but hands
+// it to the tree's task table and returns at once. The child is not tied to the
+// parent run's context: stopping the turn leaves it working, and only
+// task_cancel (or closing the session) stops it.
+func spawnBackground(ctx context.Context, reg *tools.Registry, parent *Agent, in spawnParams) (string, error) {
+	mgr := reg.TaskManager()
+	if mgr == nil {
+		return "", errors.New("background tasks are not available in this session")
+	}
+	selectors, err := resolveSubagentSelectors(reg, in.Tools)
+	if err != nil {
+		return "", err
+	}
+	if err := parent.budget.take(); err != nil {
+		return "", err
+	}
+	depth := parent.depth + 1
+	opts := parent.childOptions(in, selectors, depth)
+	ident := subagentIdentity{
+		ParentAgentID:    parent.id,
+		ParentRunID:      parent.currentRunID(),
+		ParentToolCallID: tools.CallID(ctx),
+		TaskTitle:        strings.TrimSpace(in.Description),
+		Depth:            depth,
+	}
+	prompt := in.Prompt
+	info, err := mgr.StartAgent(tasks.AgentSpec{
+		Title:   "subagent " + ident.TaskTitle,
+		AgentID: parent.id,
+		Run: func(taskCtx context.Context) (string, string, error) {
+			callCtx := withSubagentOrigin(taskCtx, ident.ParentAgentID, ident.ParentRunID, ident.ParentToolCallID)
+			child, err := createSubagent(callCtx, opts, ident)
+			if err != nil {
+				return "error", "", fmt.Errorf("start subagent: %w", err)
+			}
+			defer child.Close()
+			run, err := child.Send(callCtx, prompt)
+			if err != nil {
+				return "error", "", fmt.Errorf("start subagent: %w", err)
+			}
+			res, waitErr := run.Wait(callCtx)
+			if waitErr != nil && res == nil {
+				return "error", "", fmt.Errorf("%s did not finish: %w", child.AgentID(), waitErr)
+			}
+			if res == nil {
+				return "error", "", fmt.Errorf("%s returned no result", child.AgentID())
+			}
+			switch res.Status {
+			case StatusFinished:
+				if res.Result == "" {
+					return string(res.Status), fmt.Sprintf("%s finished in %d steps without a message.", child.AgentID(), res.Steps), nil
+				}
+				return string(res.Status), res.Result, nil
+			case StatusCancelled:
+				return string(res.Status), firstNonEmpty(res.Err, "the run stopped"), nil
+			default:
+				return string(res.Status), firstNonEmpty(res.Err, res.Result, "the run failed"), nil
+			}
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s started in the background: subagent %s\nRead it with task_output, stop it with task_cancel.",
+		info.ID, ident.TaskTitle), nil
 }
 
 // resolveSubagentSelectors validates the caller's tool list against the session
@@ -313,6 +379,7 @@ func (a *Agent) childOptions(in spawnParams, selectors []string, depth int) Opti
 		Subagents:        a.opts.Subagents,
 		completer:        a.complete,
 		budget:           a.budget,
+		taskMgr:          a.taskMgr,
 		depth:            depth,
 		Local: LocalOptions{
 			CWD:             a.cwd,

@@ -297,7 +297,9 @@ because they need one surface:
 
 `internal/tasks` (a new package) owns a `Manager`: a mutex-guarded table of tasks, each with an
 id (`task-<id>`), kind, title, status (`running`, `finished`, `failed`, `cancelled`), start and end
-times, an owning agent id, and — for shell tasks — a bounded output ring and an exit code.
+times, an owning agent id, and — for shell tasks — a bounded output ring and an exit code. For an
+agent task the owning id is the agent whose tool call started it: the child does not exist yet
+when its row is created.
 
 - **Output** is kept in a ring of at most 1 MiB per task with a monotonically increasing byte
   offset; `Output(offset)` returns the bytes from that offset plus the next offset. A full ring
@@ -305,15 +307,19 @@ times, an owning agent id, and — for shell tasks — a bounded output ring and
   never silently receives a gap.
 - **Cancellation** is a `context.CancelCauseFunc` per task. A shell task's context is the one the
   process was started with, so cancelling it kills the process tree through the existing
-  `configureShellCommand` path; an agent task's context is the child run's.
+  `configureShellCommand` path; an agent task's context is the child run's, so a cancel stops the
+  child instead of only detaching from it. A cancelled shell task's output ends with
+  `command cancelled` (or `command stopped when the session closed` when `Close` was the cause),
+  so a reader is not left wondering why the bytes stop mid-line.
 - **The manager is owned by the root agent's tree.** A child's shell job is filed in the same
   table, tagged with the child's agent id, so `Agent.Tasks()` on any agent in the tree lists the
   whole tree's work and `/tasks` is one list, not one per nesting level.
-- **Close stops the tree.** `Agent.Close` cancels every running task in its tree and waits up to
-  two seconds for the processes to exit, then returns. It does not leave a shell job writing into
-  a workspace whose conversation is gone. `session.close` therefore stops background work, and
-  the task list says *"stopped when the session closed"* rather than showing a job that
-  disappeared.
+- **Close stops the tree.** The root agent's `Close` cancels every running task in its tree and
+  waits up to two seconds for the processes to exit, then returns. It does not leave a shell job
+  writing into a workspace whose conversation is gone. A child's own `Close` does not touch the
+  table: a foreground child closes when its turn ends, and cancelling the tree from there would
+  take its siblings' work with it. `session.close` therefore stops background work, and the task
+  list says *"stopped when the session closed"* rather than showing a job that disappeared.
 
 `Agent` gains:
 
@@ -333,9 +339,13 @@ type TaskInfo struct {
 }
 
 func (a *Agent) Tasks() []TaskInfo
-func (a *Agent) TaskOutput(taskID string, offset int) (TaskOutput, error)
-func (a *Agent) CancelTask(taskID string) error
+func (a *Agent) TaskOutput(taskID string, offset, limit int) (TaskOutput, error)
+// CancelTask returns the status after the cancel, exactly as task_cancel does.
+func (a *Agent) CancelTask(taskID string) (TaskInfo, error)
 ```
+
+`TaskOutput` carries `Text`, `NextOffset`, `FirstOffset`, `Truncated` and `More` — the same
+window `task_output` reads, including whether bytes remain after the chunk.
 
 `TaskInfo` is a snapshot, not a subscription. `SubagentOptions.OnTask func(TaskInfo)` is called
 when a task starts and when it ends, which is what the host turns into a `task` notification; it
@@ -365,8 +375,8 @@ Three task tools are registered beside it whenever `shell` or `spawn_agent` is:
 
 | Tool | Arguments | Result |
 |---|---|---|
-| `task_list` | — | one line per task: id, kind, status, title, age |
-| `task_output` | `{task_id, offset?, limit?}` | status, exit code, the output chunk, the next offset |
+| `task_list` | — | one line per task: id, kind, status, age, owning agent, title |
+| `task_output` | `{task_id, offset?, limit?}` | status, exit code (shell tasks), the output chunk, the next offset |
 | `task_cancel` | `{task_id}` | the task's status after the cancel |
 
 `task_output` is how the model reads a background job without a second process; it is also the

@@ -28,6 +28,7 @@ import (
 	"github.com/anvil-dev/anvil/internal/runtime"
 	"github.com/anvil-dev/anvil/internal/skills"
 	"github.com/anvil-dev/anvil/internal/store"
+	"github.com/anvil-dev/anvil/internal/tasks"
 	"github.com/anvil-dev/anvil/internal/tools"
 	"github.com/anvil-dev/anvil/internal/verify"
 	"github.com/anvil-dev/anvil/internal/vision"
@@ -47,6 +48,9 @@ type Agent struct {
 	// budget is shared by every agent in one root run's tree (0.42+).
 	depth  int
 	budget *subagentBudget
+	// taskMgr is the tree's background table. A child shares its parent's, so
+	// one tree has one table; closing the root cancels what is still running.
+	taskMgr *tasks.Manager
 
 	store store.Backend
 
@@ -103,6 +107,9 @@ func createAgent(ctx context.Context, opts Options, ident subagentIdentity) (*Ag
 		cleanupRegistry(sessions, plugMgr, lspSup)
 		return nil, err
 	}
+	// Keep the table on the options too: childOptions hands the same pointer to
+	// every child, which is what makes the tree's table one table.
+	opts.taskMgr = reg.TaskManager()
 	st, err := store.Open(cwd, opts.Local.Store)
 	if err != nil {
 		cleanupRegistry(sessions, plugMgr, lspSup)
@@ -147,6 +154,7 @@ func createAgent(ctx context.Context, opts Options, ident subagentIdentity) (*Ag
 		cwd:          cwd,
 		depth:        opts.depth,
 		budget:       opts.budget,
+		taskMgr:      opts.taskMgr,
 		store:        st,
 		complete:     completer,
 		registry:     reg,
@@ -207,6 +215,7 @@ func Resume(ctx context.Context, agentID string, opts Options) (*Agent, error) {
 		cleanupRegistry(sessions, plugMgr, lspSup)
 		return nil, err
 	}
+	opts.taskMgr = reg.TaskManager()
 	st, err := store.Open(cwd, opts.Local.Store)
 	if err != nil {
 		cleanupRegistry(sessions, plugMgr, lspSup)
@@ -234,6 +243,7 @@ func Resume(ctx context.Context, agentID string, opts Options) (*Agent, error) {
 		cwd:          cwd,
 		depth:        opts.depth,
 		budget:       opts.budget,
+		taskMgr:      opts.taskMgr,
 		store:        st,
 		complete:     completer,
 		registry:     reg,
@@ -380,6 +390,20 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 	// Every call this registry executes belongs to one agent; saying which lets a
 	// permission prompt point at a child instead of the session (0.42+).
 	reg.SetIdentity(opts.agentID, opts.depth)
+	// One table per agent tree. The root creates it; a child inherits it through
+	// opts.taskMgr, so a child's shell job and a grandchild's subagent are rows
+	// in the same list. The limit is written only where the table is created.
+	mgr := opts.taskMgr
+	if mgr == nil {
+		mgr = tasks.NewManager()
+		if n := opts.Subagents.MaxBackground; n > 0 {
+			mgr.Limit = n
+		}
+	}
+	if on := opts.Subagents.OnTask; on != nil {
+		mgr.SetOnChange(func(info tasks.Info) { on(toTaskInfo(info)) })
+	}
+	reg.SetTaskManager(mgr)
 	if opts.Checkpoints != nil {
 		// Capture is named but not yet scoped to a run: SetRunContext in
 		// executeRun is what turns a call from "no pre-image" into one.
@@ -562,6 +586,11 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 			}
 			return nil, nil, nil, nil, nil, newError(err.Error(), false, nil)
 		}
+	}
+	// A read-only child has no shell, but it can still read the tree's
+	// background work; the task tools are how the model polls it.
+	if opts.Subagents.Enabled {
+		reg.EnsureTaskTools()
 	}
 	var sessions []*mcp.Session
 	for name, cfg := range opts.MCPServers {
@@ -1215,8 +1244,18 @@ func (a *Agent) Close() error {
 	a.plugins = nil
 	lspSup := a.lsp
 	a.lsp = nil
+	taskMgr := a.taskMgr
+	a.taskMgr = nil
 	a.mu.Unlock()
 
+	// Background work ends first: a closed conversation must not leave a process
+	// or a child agent writing into the workspace. The grace is short because a
+	// task that ignores it is not worth holding the close open for; the rows
+	// stay in the table as cancelled. Only the root owns the tree's table: a
+	// child closing when its turn ends must not cancel its siblings' work.
+	if taskMgr != nil && a.depth == 0 {
+		taskMgr.Close(2 * time.Second)
+	}
 	if st != nil {
 		_ = st.Close()
 	}
