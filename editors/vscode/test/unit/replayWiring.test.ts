@@ -86,9 +86,10 @@ test('a window asks to come back only when it has something to come back to', ()
   assert.match(ready, /void this\.reattach\(\)/);
 
   const body = methodOf(CHAT_PANEL, 'private async reattach');
-  // Keyed by the id the host gave, from the workspace's own state — not from
-  // anything the tab holds, which is exactly what a reload took away.
-  assert.match(body, /this\.context\.workspaceState\.get<string>\(SessionAgentKey\)/);
+  // Keyed by the id the host gave, from the tab's own state — restored by the
+  // serializer from the document's `vscode.setState`, which is the only memory
+  // that survives a reload. It is per tab, so two tabs come back to two agents.
+  assert.match(body, /const stored = this\.agentId;/);
   assert.match(body, /if \(!stored\) return;/);
   // The three endings, and the middle one has to forget: an id whose agent is
   // gone would otherwise be resumed on every reload, and fail every time.
@@ -97,7 +98,7 @@ test('a window asks to come back only when it has something to come back to', ()
   assert.match(body, /case 'clear':/);
   assert.match(body, /await this\.forgetAgent\(\)/);
   // A live session needs no resuming — only the transcript its document lost.
-  assert.match(body, /this\.manager\?\.state\(\)\.agentId === stored/);
+  assert.match(body, /this\.session\?\.agent === stored/);
   // A listing that could not be read is `undefined`, and must reach the decision
   // as such rather than as an empty list.
   assert.match(body, /let listed: SessionInfo\[\] \| undefined;/);
@@ -109,8 +110,10 @@ test('the agent the tab is showing is remembered and forgotten where it changes'
   // composed at each call site from what was asked for.
   const session = CHAT_PANEL.slice(CHAT_PANEL.indexOf('onSession = (result: SessionResult)'));
   assert.match(session, /this\.rememberAgent\(result\.agent_id\)/);
+  // The document is told, because the document is what a reload keeps: the
+  // extension host does not survive one, so anything held only here is gone.
   const remember = methodOf(CHAT_PANEL, 'private rememberAgent');
-  assert.match(remember, /workspaceState\.update\(SessionAgentKey, agentId\)/);
+  assert.match(remember, /this\.postAgentId\(\)/);
 
   const clear = methodOf(CHAT_PANEL, 'private async clearConversation');
   assert.match(clear, /await this\.forgetAgent\(\)/);

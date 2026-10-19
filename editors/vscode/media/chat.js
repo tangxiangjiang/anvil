@@ -26,6 +26,7 @@
   const banner = document.getElementById('banner');
   const chipsBar = document.getElementById('chips');
   const attachButton = document.getElementById('attach');
+  const imageButton = document.getElementById('image');
   const modeSelect = document.getElementById('mode');
   const bypassStrip = document.getElementById('bypass');
   const dontAskStrip = document.getElementById('dontAsk');
@@ -33,6 +34,32 @@
   const permissionsButton = document.getElementById('permissions');
   const palette = document.getElementById('palette');
   const dock = document.getElementById('composerDock');
+  const meter = document.getElementById('meter');
+  const todoBlock = document.getElementById('todos');
+
+  /**
+   * The meter's arithmetic, from `media/meter.js`. It is a plain script that
+   * assigns a global rather than a module, like the Markdown parser, and it is
+   * included before this file for that reason.
+   */
+  const meterMath = self.anvilMeter;
+
+  /**
+   * The same shorthand the meter uses for a token count, so a run's own summary
+   * and the session meter can never give one number two spellings.
+   */
+  const count = meterMath.short;
+
+  /** Prompt recall, from `media/history.js` — another plain global script. */
+  const historyMath = self.anvilHistory;
+  const history = historyMath.create();
+  /**
+   * The value the history last put in the box, or null. It is how the input
+   * handler tells the user editing a recalled prompt from the walk itself
+   * writing one, which is the difference between starting over at the newest
+   * entry and continuing down the list.
+   */
+  let placed = null;
 
   /** Run in flight, if any. */
   let running = false;
@@ -61,12 +88,34 @@
   const callFacts = new Map();
   /** Approval cards by request_id. */
   const approvals = new Map();
+  /**
+   * Undo cards by run id: the card and the button that was pressed, so the
+   * restore's answer can settle the one it belongs to and no other.
+   */
+  const checkpointBlocks = new Map();
+  /**
+   * Fork buttons by run id. A run's row is drawn once, but the answer can arrive
+   * after the transcript has been replaced, so the map is cleared with it.
+   */
+  const forkBlocks = new Map();
   /** Referenced workspace paths, in the order they were picked. */
   let mentions = [];
   /** Pasted images, as data URLs. */
   let images = [];
   /** Whether the session was created with vision on. Images need it. */
   let vision = false;
+  /**
+   * The context window from settings, or 0 when nobody configured one. There is
+   * no per-model table here: a guessed window would turn the meter into a
+   * number about Anvil rather than about the model.
+   */
+  let contextWindow = 0;
+  /**
+   * What this session has spent, and what its last run spent. Reset with the
+   * transcript, because the two describe the same conversation: a meter outliving
+   * the conversation it counted would be a number about nobody.
+   */
+  let usageTotals = meterMath.empty();
   /** The slash catalogue, once the extension has sent it. */
   let catalogue = null;
   /** Rule files the last session reported, kept so the card can be reopened. */
@@ -118,12 +167,20 @@
     toolCards.clear();
     callFacts.clear();
     approvals.clear();
+    checkpointBlocks.clear();
+    forkBlocks.clear();
     mentions = [];
     images = [];
     renderChips();
     closePalette();
+    // The history belongs to the conversation the transcript showed; a replaced
+    // transcript gets its prompts back from the replay, not from memory.
+    historyMath.clear(history);
+    placed = null;
     statusLine.textContent = '';
     statusLine.hidden = true;
+    resetUsage();
+    setTodos([]);
     transcript.textContent = '';
     // The node survives the clear — only the reference to it in the document
     // does not — so putting it back is what makes a cleared conversation look
@@ -167,7 +224,40 @@
    */
   function endRound() {
     if (round && round.think && !round.thinkPinned) round.think.open = false;
+    // Every ending gets the action — a text block, a tool call, the run's end —
+    // because the bubble is complete the moment it stops growing, and a Copy
+    // that only appeared after the whole turn would refuse to copy the answer
+    // the reader is looking at while the agent works on the next step.
+    if (round && round.text.trim() !== '') addCopy(round.wrap, round.text);
     round = null;
+  }
+
+  /**
+   * The copy action on a finished answer.
+   *
+   * The text is the raw Markdown that arrived, not the rendered prose: what a
+   * reader wants to paste elsewhere is the source, and a copy that lost its
+   * fences and links would be a second rendering rather than a copy.
+   *
+   * It goes through the host because the clipboard is the editor's: a webview's
+   * `navigator.clipboard` access depends on permissions this document does not
+   * control, and a Copy button that sometimes silently does nothing is worse
+   * than one that takes a round trip.
+   */
+  function addCopy(wrap, text) {
+    const button = el('button', 'copy', 'Copy');
+    button.type = 'button';
+    button.title = 'Copy this answer';
+    button.addEventListener('click', () => {
+      vscode.postMessage({ type: 'copy', text });
+      button.textContent = 'Copied';
+      button.disabled = true;
+      setTimeout(() => {
+        button.textContent = 'Copy';
+        button.disabled = false;
+      }, 1200);
+    });
+    wrap.appendChild(button);
   }
 
   /**
@@ -943,6 +1033,18 @@
         open.title = 'Open this change as a diff before deciding';
         open.addEventListener('click', () => vscode.postMessage({ type: 'review', requestId: request.request_id }));
         box.appendChild(open);
+        // A change that is one file's text can be kept in parts. The extension
+        // proves it before opening anything; this is only the offer, and it is
+        // made for the two tools whose arguments carry exactly those bodies.
+        if (request.tool === 'write_file' || request.tool === 'edit_file') {
+          const partial = el('button', 'review', 'Review changes…');
+          partial.type = 'button';
+          partial.title = 'Keep only some of this change';
+          partial.addEventListener('click', () =>
+            vscode.postMessage({ type: 'reviewPartial', requestId: request.request_id }),
+          );
+          box.appendChild(partial);
+        }
       } else if (preview.truncated === true) {
         box.appendChild(el('div', 'why', 'This change is too large to open in a diff editor. The diff below is the whole change.'));
       }
@@ -1146,6 +1248,31 @@
     card.appendChild(el('div', 'why', 'This request is no longer pending.'));
   }
 
+  /**
+   * An approval the review panel answered. The card settles on this rather than
+   * on a click of its own, and a partial acceptance says how much was kept:
+   * "Allowed." over a change that was half applied would misstate the thing the
+   * reviewer just chose.
+   */
+  function settleFromReview(msg) {
+    const card = approvals.get(msg.requestId);
+    if (!card) return;
+    approvals.delete(msg.requestId);
+    card.classList.add('resolved');
+    for (const button of card.querySelectorAll('button')) button.disabled = true;
+    if (msg.decision === 'deny') {
+      card.appendChild(el('div', 'why', 'Denied.'));
+      return;
+    }
+    const kept = typeof msg.kept === 'number' ? msg.kept : NaN;
+    const total = typeof msg.total === 'number' ? msg.total : NaN;
+    const text =
+      kept >= 0 && total > 0 && kept < total
+        ? 'Allowed, keeping ' + kept + ' of ' + total + ' parts.'
+        : 'Allowed.';
+    card.appendChild(el('div', 'why', text));
+  }
+
   // --- composer chips -------------------------------------------------------
 
   /** Redraws the row of chips above the textarea. */
@@ -1180,7 +1307,7 @@
     const chip = el('span', 'chip image');
     const thumb = el('img');
     thumb.src = images[index];
-    thumb.alt = 'pasted image';
+    thumb.alt = 'attached image';
     chip.appendChild(thumb);
     chip.appendChild(
       removeChip('Remove this image', () => {
@@ -1201,22 +1328,35 @@
   }
 
   /**
-   * Reads a pasted image into a data URL. The bytes never touch the disk: the
-   * host takes base64 straight from the prompt and hands it to the model, so a
-   * paste leaves nothing behind in the workspace.
+   * Reads an image into a data URL, for a paste or a drop. The bytes never
+   * touch the disk: the host takes base64 straight from the prompt and hands it
+   * to the model, so an attachment leaves nothing behind in the workspace.
+   * (The picker reads its files on the host side and posts the same URL.)
    */
   function readImage(file) {
     const reader = new FileReader();
     reader.onload = () => {
       if (typeof reader.result !== 'string') return;
-      images.push(reader.result);
-      renderChips();
-      if (!vision) {
-        showBanner('warn', 'Images are off for this session. Turn on "anvil.vision" and reload the host to use them.');
-      }
+      addImage(reader.result);
     };
     reader.onerror = () => showBanner('error', 'That image could not be read.');
     reader.readAsDataURL(file);
+  }
+
+  /**
+   * Adds one image, as a data URL, to what the composer will send.
+   *
+   * A paste and the picker both arrive here, and the host answers the picker
+   * with data URLs for exactly that reason: one representation means one chip,
+   * one send, and one conversion on the extension side.
+   */
+  function addImage(dataUrl) {
+    if (typeof dataUrl !== 'string' || dataUrl.indexOf('data:image/') !== 0) return;
+    images.push(dataUrl);
+    renderChips();
+    if (!vision) {
+      showBanner('warn', 'Images are off for this session. Turn on "anvil.vision" and reload the host to use them.');
+    }
   }
 
   function askForMentions() {
@@ -1253,6 +1393,122 @@
     }
     append(card);
     endRound();
+  }
+
+  // --- undo -----------------------------------------------------------------
+
+  /**
+   * Offers the undo of a finished run.
+   *
+   * The button is the only route to a write: it asks the extension, which asks
+   * the user in a modal before anything on disk changes. The paths are shown
+   * because "restore the workspace" is too broad a promise for a card to make —
+   * these files, no others.
+   */
+  function showCheckpoint(msg) {
+    const runId = typeof msg.runId === 'string' ? msg.runId : '';
+    if (!runId || checkpointBlocks.has(runId)) return;
+    const files = Array.isArray(msg.files) ? msg.files.filter((path) => typeof path === 'string') : [];
+    if (files.length === 0) return;
+    const card = el('div', 'checkpoint');
+    card.appendChild(el('div', 'head', 'Undo this run'));
+    card.appendChild(
+      el(
+        'div',
+        'hint',
+        'Put ' + files.length + ' file' + (files.length === 1 ? '' : 's') +
+          ' back as they were before this run. Files a shell command wrote are not covered.',
+      ),
+    );
+    const shown = files.slice(0, 8).join(', ') + (files.length > 8 ? ', …' : '');
+    card.appendChild(el('div', 'paths', shown));
+
+    const button = el('button', 'restore', 'Restore files…');
+    button.type = 'button';
+    button.title = 'Put these files back to their content before this run';
+    button.addEventListener('click', () => {
+      if (button.disabled) return;
+      button.disabled = true;
+      button.textContent = 'Waiting for confirmation…';
+      vscode.postMessage({ type: 'restoreCheckpoint', runId: runId });
+    });
+    card.appendChild(button);
+
+    checkpointBlocks.set(runId, { card: card, button: button });
+    append(card);
+    endRound();
+  }
+
+  /** Settles the card whose restore was answered: cancelled, failed, or done. */
+  function settleCheckpoint(msg) {
+    const entry = checkpointBlocks.get(msg.runId);
+    if (!entry) return;
+    const button = entry.button;
+    if (msg.cancelled === true) {
+      button.disabled = false;
+      button.textContent = 'Restore files…';
+      return;
+    }
+    if (typeof msg.error === 'string' && msg.error !== '') {
+      button.disabled = false;
+      button.textContent = 'Try again';
+      entry.card.appendChild(el('div', 'outcome failed', 'Not restored: ' + msg.error));
+      return;
+    }
+    button.disabled = true;
+    button.textContent = 'Restored';
+    const parts = [];
+    if (typeof msg.restored === 'number' && msg.restored > 0) {
+      parts.push('put back ' + msg.restored + ' file' + (msg.restored === 1 ? '' : 's'));
+    }
+    if (typeof msg.deleted === 'number' && msg.deleted > 0) {
+      parts.push('deleted ' + msg.deleted + ' file' + (msg.deleted === 1 ? '' : 's') + ' the run created');
+    }
+    entry.card.appendChild(
+      el('div', 'outcome done', parts.length > 0 ? 'Restored: ' + parts.join(', ') + '.' : 'Nothing to restore.'),
+    );
+  }
+
+  // --- fork -----------------------------------------------------------------
+
+  /**
+   * The one action a finished run offers on its own.
+   *
+   * A fork copies the conversation through a `run_end`, so the row is drawn at
+   * the boundary itself rather than at the bottom of the panel: "from here" has
+   * to mean the place it is written. The extension creates the new tab; this
+   * side only asks, and the button waits for the answer because a fork that
+   * failed has to be possible to try again.
+   */
+  function showRunActions(runId) {
+    if (typeof runId !== 'string' || runId === '' || forkBlocks.has(runId)) return;
+    const row = el('div', 'run-actions');
+    const button = el('button', 'ghost', 'Fork from here');
+    button.type = 'button';
+    button.title = 'Copy this conversation up to this run into a new tab';
+    button.addEventListener('click', () => {
+      if (button.disabled) return;
+      button.disabled = true;
+      button.textContent = 'Forking…';
+      vscode.postMessage({ type: 'forkSession', runId: runId });
+    });
+    row.appendChild(button);
+    forkBlocks.set(runId, { row: row, button: button });
+    append(row);
+  }
+
+  /** Settles the run's fork button: the new tab opened, or it did not. */
+  function settleFork(msg) {
+    const entry = forkBlocks.get(msg.runId);
+    if (!entry) return;
+    if (typeof msg.error === 'string' && msg.error !== '') {
+      entry.button.disabled = false;
+      entry.button.textContent = 'Fork from here';
+      entry.row.appendChild(el('span', 'outcome failed', 'Not forked: ' + msg.error));
+      return;
+    }
+    entry.button.disabled = true;
+    entry.button.textContent = 'Forked';
   }
 
   // --- mode -----------------------------------------------------------------
@@ -1436,6 +1692,88 @@
     endRound();
   }
 
+  // --- mcp ------------------------------------------------------------------
+
+  /**
+   * What the enabled MCP layers will load, and from which file.
+   *
+   * It deliberately says nothing about whether a server connected: the host
+   * reports configuration only, so a green dot here would mean "the file
+   * mentioned it" — which is not the thing a person cares about.
+   */
+  function showMcp(msg) {
+    const card = el('div', 'commands mcp');
+    card.appendChild(el('div', 'head', 'MCP servers'));
+    const error = typeof msg.error === 'string' ? msg.error : '';
+    if (error !== '') {
+      card.appendChild(el('div', 'command failed', 'Could not read the MCP configuration: ' + error));
+      append(card);
+      endRound();
+      return;
+    }
+    const servers = Array.isArray(msg.servers) ? msg.servers : [];
+    for (const server of servers) {
+      const row = el('div', 'command');
+      row.appendChild(el('span', 'cmd', typeof server.name === 'string' ? server.name : ''));
+      row.appendChild(el('span', 'desc', typeof server.source === 'string' ? server.source : ''));
+      if (typeof server.transport === 'string' && server.transport !== '') {
+        row.appendChild(el('span', 'tag', server.transport));
+      }
+      card.appendChild(row);
+    }
+    if (servers.length === 0) {
+      card.appendChild(el('div', 'command muted', 'No MCP servers are configured.'));
+    }
+    // Layers that are enabled but have no file. The path is the one the host
+    // resolved, so it can be opened or created as printed.
+    const notes = Array.isArray(msg.notes) ? msg.notes : [];
+    for (const note of notes) {
+      if (typeof note === 'string' && note !== '') card.appendChild(el('div', 'command muted', note));
+    }
+    append(card);
+    endRound();
+  }
+
+  // --- web search -----------------------------------------------------------
+
+  /**
+   * The web tools this session was given, and whether a key is stored for them.
+   *
+   * Posted only when the setting is on, so the row's absence is the "off"
+   * answer. The mcp provider is drawn as what it is: no built-in tools, and
+   * whatever search a workspace MCP server supplies.
+   */
+  function showWebSearch(msg) {
+    const card = el('div', 'commands websearch');
+    card.appendChild(el('div', 'head', 'Web tools'));
+    const provider = msg.provider === 'mcp' ? 'mcp' : 'http';
+    if (provider === 'mcp') {
+      card.appendChild(
+        el(
+          'div',
+          'command muted',
+          'No built-in web tools: search is expected from an MCP server this workspace declares.',
+        ),
+      );
+      append(card);
+      endRound();
+      return;
+    }
+    const row = el('div', 'command');
+    row.appendChild(el('span', 'cmd', 'web_search, fetch_url'));
+    const hasKey = msg.key === true;
+    row.appendChild(el('span', 'desc', hasKey ? 'API key is set' : 'no API key is set'));
+    if (!hasKey) row.classList.add('failed');
+    card.appendChild(row);
+    if (!hasKey) {
+      card.appendChild(
+        el('div', 'command muted', 'Run "Anvil: Set Web Search Key" to store one for the search endpoint.'),
+      );
+    }
+    append(card);
+    endRound();
+  }
+
   function showSession(msg) {
     const line = el('div', 'msg session');
     const label = msg.started !== true
@@ -1457,6 +1795,7 @@
     sendButton.title = running ? 'Stop' : 'Send';
     input.disabled = running;
     attachButton.disabled = running;
+    if (imageButton) imageButton.disabled = running;
     // The mode is a session option, so the extension refuses a change mid-turn
     // rather than applying it half way. Saying so by disabling is honest about
     // that; the extension's own check is what enforces it.
@@ -1464,9 +1803,65 @@
     if (!running) input.focus();
   }
 
-  function count(value) {
-    if (typeof value !== 'number' || !isFinite(value) || value <= 0) return '';
-    return value >= 1000 ? (value / 1000).toFixed(value >= 10000 ? 0 : 1) + 'k' : String(value);
+  /**
+   * Adds one finished run to the session's totals and redraws the meter.
+   *
+   * The run's own usage is the only honest input: an `error` event may carry
+   * usage, but the `done` that follows it is authoritative and arrives once,
+   * so counting both would count the same run twice.
+   */
+  function recordUsage(done) {
+    meterMath.add(usageTotals, done);
+    renderMeter();
+  }
+
+  /** Forgets the session's totals, for a session that is replacing this one. */
+  function resetUsage() {
+    usageTotals = meterMath.empty();
+    renderMeter();
+  }
+
+  /**
+   * Draws the one line under the composer. Counts always, and the last run's
+   * share of the window only when a window was configured.
+   */
+  function renderMeter() {
+    if (!meter) return;
+    const text = meterMath.label(usageTotals, contextWindow);
+    meter.textContent = text;
+    meter.hidden = text === '';
+  }
+
+  /** The mark a status draws. An unknown status gets a plain one, not a guess. */
+  const todoMarks = { pending: '○', in_progress: '◐', done: '✓' };
+
+  /**
+   * Replaces the task list under the composer.
+   *
+   * It replaces rather than appends because every call carries the whole list:
+   * appending would show the plan's history as separate blocks, and the model
+   * moving an item to done would leave the old pending row on screen. An empty
+   * list hides the block entirely, which is how a call clears it.
+   */
+  function setTodos(items) {
+    if (!todoBlock) return;
+    const list = Array.isArray(items) ? items : [];
+    todoBlock.textContent = '';
+    if (list.length === 0) {
+      todoBlock.hidden = true;
+      return;
+    }
+    for (const item of list) {
+      const text = item && typeof item.text === 'string' ? item.text : '';
+      if (text === '') continue;
+      const status = item && typeof item.status === 'string' ? item.status : '';
+      const row = el('div', 'todo-row');
+      if (todoMarks[status]) row.dataset.status = status;
+      row.appendChild(el('span', 'todo-mark', todoMarks[status] || '·'));
+      row.appendChild(el('span', 'todo-text', text));
+      todoBlock.appendChild(row);
+    }
+    todoBlock.hidden = todoBlock.childNodes.length === 0;
   }
 
   /**
@@ -1503,11 +1898,13 @@
     // in flight forever reads as a stuck turn rather than as a lost event.
     stopRunningCards();
     const parts = runSummary(done);
+    recordUsage(done);
     statusLine.textContent = parts.join(' · ');
     statusLine.hidden = parts.length === 0;
     // "Stopped." is not a failure, but it is still something the user asked
     // for and should see once: a run that ends silently reads as a hang.
     if (failure && failure.message) addNotice(failure.message);
+    showRunActions(done && done.run_id);
   }
 
   /**
@@ -1522,11 +1919,13 @@
   function addRunEnd(done) {
     endRound();
     stopRunningCards();
+    recordUsage(done);
     const status = done && done.status;
     const word = status === 'error' ? 'Run failed' : status === 'cancelled' ? 'Run stopped' : 'Run finished';
     const line = el('div', 'msg run-end');
     line.appendChild(el('div', 'body', [word].concat(runSummary(done)).join(' · ')));
     append(line);
+    showRunActions(done && done.run_id);
   }
 
   /**
@@ -1612,6 +2011,10 @@
     // optimistic echo below is the record of it either way.
     const sentMentions = mentions.slice();
     const sentImages = images.slice();
+    // Recorded before the box is emptied: the prompt is what the user typed,
+    // and the walk below must not depend on the composer still holding it.
+    historyMath.record(history, text);
+    placed = null;
     input.value = '';
     growInput();
     mentions = [];
@@ -1672,11 +2075,42 @@
         return;
       }
     }
+    if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+      if (recall(event.key === 'ArrowUp' ? -1 : 1)) {
+        event.preventDefault();
+        return;
+      }
+    }
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
       composer.dispatchEvent(new Event('submit', { cancelable: true }));
     }
   });
+
+  /**
+   * Walks the prompts sent in this conversation, when the key is the history's
+   * rather than the textarea's.
+   *
+   * Up only recalls from the first line and Down only from the last, so moving
+   * the caret through a multi-line draft stays the textarea's business. Once a
+   * recalled prompt is on screen the caret is put at its end, and Up keeps
+   * walking from there rather than requiring the caret to be at the top.
+   */
+  function recall(delta) {
+    if (delta < 0 && history.cursor === null && !(input.selectionStart === 0 && input.selectionEnd === 0)) {
+      return false;
+    }
+    if (delta > 0 && !(input.selectionStart === input.value.length && input.selectionEnd === input.value.length)) {
+      return false;
+    }
+    const value = historyMath.walk(history, delta, input.value);
+    if (value === null) return false;
+    input.value = value;
+    placed = value;
+    growInput();
+    input.setSelectionRange(value.length, value.length);
+    return true;
+  }
 
   /*
    * "@" opens the reference picker. It is watched on `input` rather than
@@ -1684,6 +2118,13 @@
    * question, and `key` is "Digit2" on the layouts where "@" needs Shift.
    */
   input.addEventListener('input', () => {
+    // An edit to a recalled prompt ends the walk: `placed` is the value the
+    // history put there, so anything else came from the keyboard, and the next
+    // Up should start again from the newest prompt rather than overwrite this.
+    if (placed !== null && input.value !== placed) {
+      historyMath.edited(history);
+      placed = null;
+    }
     growInput();
     if (input.value.endsWith('@')) {
       input.value = input.value.slice(0, -1);
@@ -1733,10 +2174,107 @@
 
   attachButton.addEventListener('click', askForMentions);
 
+  if (imageButton) {
+    // The picker is the editor's: the webview can read a `File` it was given,
+    // but it cannot open a dialog, and a picked path is then read by the same
+    // side that reads an attachment. The host answers with data URLs, so the
+    // composer ends up with exactly what a paste puts there.
+    imageButton.addEventListener('click', () => vscode.postMessage({ type: 'pickImages' }));
+  }
+
+  /**
+   * Asks the host to stop the turn. Shared by the send button — which is the
+   * stop button while a turn runs — and Escape, so the two cannot drift.
+   */
+  function requestStop() {
+    sendButton.disabled = true;
+    vscode.postMessage({ type: 'cancel' });
+  }
+
+  /*
+   * Escape interrupts a turn, from anywhere in the panel.
+   *
+   * On the window rather than on the textarea because the textarea is disabled
+   * while a turn runs — which is exactly when Escape matters. An idle Escape is
+   * left alone entirely: there is nothing to interrupt, and the composer's own
+   * handler still uses it to close the palette, while the draft stays put.
+   */
+  window.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape' || !running) return;
+    event.preventDefault();
+    requestStop();
+  });
+
+  // --- dropping files onto the panel ---------------------------------------
+
+  /** Whether a drag is carrying files at all, rather than a text selection. */
+  function carriesFiles(event) {
+    const types = (event.dataTransfer && event.dataTransfer.types) || [];
+    return (
+      Array.prototype.indexOf.call(types, 'Files') !== -1 ||
+      Array.prototype.indexOf.call(types, 'text/uri-list') !== -1 ||
+      Array.prototype.indexOf.call(types, 'application/vnd.code.uri-list') !== -1
+    );
+  }
+
+  document.addEventListener('dragover', (event) => {
+    // Only a file drag is ours. Preventing the default for everything would
+    // swallow a text selection dropped on the transcript, which has no meaning
+    // here but should still not look accepted.
+    if (!carriesFiles(event) || running) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+    document.body.classList.add('drop-target');
+  });
+
+  document.addEventListener('dragleave', (event) => {
+    // `dragleave` also fires when the pointer crosses into a child, so only a
+    // departure from the document itself ends the highlight.
+    if (event.relatedTarget === null) document.body.classList.remove('drop-target');
+  });
+
+  document.addEventListener('drop', (event) => {
+    document.body.classList.remove('drop-target');
+    if (!carriesFiles(event) || running) return;
+    event.preventDefault();
+    const transfer = event.dataTransfer;
+    if (!transfer) return;
+    const files = Array.prototype.slice.call(transfer.files || []);
+    const paths = [];
+    const uris = [];
+    for (const file of files) {
+      if (file.type && file.type.indexOf('image/') === 0) {
+        // An image is an attachment, not a reference: the mention path reads
+        // files as text, and an image is not text.
+        readImage(file);
+        continue;
+      }
+      // Electron used to expose the dropped file's path on the `File`; newer
+      // versions do not, so the URI list is the other way to learn it.
+      if (typeof file.path === 'string' && file.path !== '') paths.push(file.path);
+    }
+    // A drag from the editor's own explorer carries the real paths here; an OS
+    // drag carries them on the `File` when it can.
+    const uriList = (transfer.getData('text/uri-list') || transfer.getData('application/vnd.code.uri-list') || '').split(/\r?\n/);
+    for (const uri of uriList) {
+      const trimmed = uri.trim();
+      if (trimmed !== '' && trimmed.charAt(0) !== '#') uris.push(trimmed);
+    }
+    if (paths.length > 0 || uris.length > 0) {
+      // Resolved on the host: the workspace root is the extension's to know,
+      // and a path outside it is not a mention.
+      vscode.postMessage({ type: 'dropFiles', paths, uris });
+    } else if (files.length > 0) {
+      showBanner('warn', 'That file could not be referenced. Use @ to pick it instead.');
+    }
+  });
+
+  // The send button is also the stop button: one control, because the two
+  // states are exclusive and a second button only appears when the first one
+  // has just stopped being the thing you want.
   sendButton.addEventListener('click', () => {
     if (running) {
-      sendButton.disabled = true;
-      vscode.postMessage({ type: 'cancel' });
+      requestStop();
       return;
     }
     composer.dispatchEvent(new Event('submit', { cancelable: true }));
@@ -1751,6 +2289,7 @@
           input.disabled = true;
           sendButton.disabled = true;
           attachButton.disabled = true;
+          if (imageButton) imageButton.disabled = true;
         }
         return;
       case 'state':
@@ -1763,6 +2302,7 @@
         else if (e.type === 'reasoning') addReasoning(e.text || '');
         else if (e.type === 'tool_call') addToolCall(e, msg.reviewable === true, msg.edit);
         else if (e.type === 'tool_result') addToolResult(e);
+        else if (e.type === 'todo') setTodos(e.items);
         else if (e.type === 'error') addNotice(e.text || 'The run reported an error.');
         else if (e.type === 'progress' && e.text) {
           statusLine.textContent = e.text;
@@ -1776,17 +2316,35 @@
       case 'approvalWithdrawn':
         withdrawApproval(msg.requestId);
         return;
+      case 'approvalSettled':
+        settleFromReview(msg);
+        return;
       case 'rememberResult':
         resolveRemember(msg);
         return;
       case 'mentions':
         addMentions(msg.paths || []);
         return;
+      case 'images':
+        // The picker's answer: data URLs in exactly the shape a paste leaves in
+        // `images`, so everything downstream — the chips, the send, the host's
+        // conversion — has one kind of input rather than two.
+        for (const dataUrl of Array.isArray(msg.images) ? msg.images : []) addImage(dataUrl);
+        return;
       case 'vision':
         vision = msg.enabled === true;
         return;
       case 'changes':
         showChanges(msg.files);
+        return;
+      case 'checkpoint':
+        showCheckpoint(msg);
+        return;
+      case 'checkpointRestored':
+        settleCheckpoint(msg);
+        return;
+      case 'forked':
+        settleFork(msg);
         return;
       case 'commands':
         catalogue = Array.isArray(msg.commands) ? msg.commands : [];
@@ -1813,8 +2371,26 @@
         if (rules.some((file) => file.included !== true || file.truncated === true)) showRules(rules);
         return;
       }
+      case 'mcp':
+        showMcp(msg);
+        return;
+      case 'webSearch':
+        showWebSearch(msg);
+        return;
       case 'session':
         showSession(msg);
+        return;
+      case 'agent':
+        // The one thing this document must remember for a reload: the
+        // serializer hands it back and the tab comes up on the same
+        // conversation. It is not drawn — a new session is not news.
+        vscode.setState({ agentId: msg.agentId || undefined });
+        return;
+      case 'context':
+        // 0 is "unknown", the same value the setting's absence means, so a
+        // missing or malformed field falls back to counts only.
+        contextWindow = typeof msg.window === 'number' ? msg.window : 0;
+        renderMeter();
         return;
       case 'reset':
         clearTranscript();
@@ -1823,6 +2399,9 @@
         // A replayed turn. The composer does this for a live one, and it is not
         // involved here, so the replay asks for it directly.
         addUser(msg.text || '');
+        // It is also a prompt this conversation has shown, which is what the
+        // recall list holds.
+        historyMath.record(history, msg.text || '');
         return;
       case 'note':
         addNote(msg.text || '');

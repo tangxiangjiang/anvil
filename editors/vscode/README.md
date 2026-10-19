@@ -19,7 +19,7 @@ reports. The protocol between the two is chapter 35 of the design docs
 Download or build the VSIX for your platform and install it:
 
 ```bash
-code --install-extension anvil-vscode-0.38.4-win32-x64.vsix
+code --install-extension anvil-vscode-0.40.10-win32-x64.vsix
 ```
 
 Nothing else is needed: the `anvil-host` sidecar for that platform travels
@@ -58,7 +58,7 @@ The sidecar is found in this order, and the first hit wins:
 npm run package:vsix                 # this machine's platform
 npm run package:vsix -- --target linux-x64
 npm run package:all                  # one VSIX per target, in sequence
-npm run smoke:vsix -- --vsix anvil-vscode-0.38.4-win32-x64.vsix
+npm run smoke:vsix -- --vsix anvil-vscode-0.40.10-win32-x64.vsix
 ```
 
 Targets: `win32-x64`, `win32-arm64`, `linux-x64`, `linux-arm64`, `darwin-x64`,
@@ -112,20 +112,32 @@ names both sides and stops rather than failing later inside a tool call.
 | `anvil.model` | Model id; empty uses the host's default |
 | `anvil.baseUrl` | OpenAI-compatible base URL; empty uses the provider default |
 | `anvil.maxSteps` | Step limit per turn; `0` uses the host's default |
+| `anvil.contextWindow` | The window the token meter measures the last run against, in tokens. `0` (the default) means unknown, and the composer then shows counts only — Anvil does not guess a window from a model name |
 | `anvil.store` | `jsonl`, `sqlite`, or empty for the host's default |
 | `anvil.vision` | Accept pasted images; off by default |
 | `anvil.rules` | Load `AGENTS.md` and `.anvil/rules/*.md`; on by default |
 | `anvil.cursorRules` | Also load `.cursor/rules/*.md|.mdc`; on by default |
 | `anvil.permissions` | Read the workspace's `.anvil/permissions.json`; on by default. Off means the session ignores the file — the rules **and** the `defaultMode` it may declare — and an approval card has nothing to offer under "always allow", because a rule written into a file this session does not read would not be in force |
+| `anvil.mcp.project` | Load `.cursor/mcp.json` from the workspace; on by default. The file can start processes, which is why it is read only from a folder you trust |
+| `anvil.mcp.user` | Also load `~/.cursor/mcp.json`; off by default. It is shared by every project, so reading it is opted into; project entries win over user entries with the same name |
+| `anvil.webSearch.enabled` | Give the session `web_search` and `fetch_url`; off by default. Off means the tools are not registered at all, so the model never sees one it cannot use. Calls stay behind the `web` permission group |
+| `anvil.webSearch.provider` | `http` (default) calls the endpoint in `anvil.webSearch.baseUrl`; `mcp` registers no built-ins and expects a search server from `.cursor/mcp.json` |
+| `anvil.webSearch.baseUrl` | The JSON search endpoint for the `http` provider. Required with that provider — the session refuses to open without it, naming the setting |
+| `anvil.webSearch.maxResults` | Results per search, 1–10; `0` uses the provider default of 5 |
 | `anvil.hostPath` | The sidecar to spawn; empty uses the bundled one, then `PATH` |
 
 The API key is **not** a setting. If the VS Code process already has
 `ANVIL_API_KEY`, that is enough and **Anvil: Set API Key** is unnecessary. A
 key saved with that command overrides the variable and is kept for later
 launches (VS Code's secret storage, and a local copy in the extension's own
-state when that store comes back empty). It is never written to a settings
-file, an output channel, or a log line. **Anvil: Clear API Key** removes both
-copies and falls back to `ANVIL_API_KEY` when the process has one.
+state when that store comes back empty); **Anvil: Clear API Key** removes both
+copies and falls back to `ANVIL_API_KEY` when the process has one. The
+web-search key follows the same rule: **Anvil: Set Web Search Key** stores it
+and it reaches the host as `ANVIL_WEB_SEARCH_API_KEY` — the only place that key
+is ever read from, and **Anvil: Clear Web Search Key** removes it. Neither key
+is written to a settings file, an output channel, or a log line. Every one of
+those commands restarts the host, because a child keeps the environment it was
+spawned with.
 
 ## What it will and will not do
 
@@ -156,6 +168,48 @@ copies and falls back to `ANVIL_API_KEY` when the process has one.
 - **Tells you what it read.** The tab reports which rule files this workspace
   loaded — `AGENTS.md`, `.anvil/rules/*.md`, and optionally `.cursor/rules/*` —
   and says so plainly when one was skipped or cut short by the size budget.
+  It does the same for MCP: a card lists the servers the enabled `mcp.json`
+  layers declare — name, transport, source file — and names a layer whose file
+  is not there. It says nothing about whether a server connected, because the
+  host can only report what a file says; a green dot from that would mean "the
+  file mentioned it", not "it works". A file that will not parse is reported as
+  an error, since an empty list would hide the one thing you can fix. Calls
+  through MCP tools stay behind the `mcp` permission group. When the web tools
+  are on, the tab adds one row saying so and whether a key is stored — present
+  or absent, never the value; when they are off there is no row at all. With
+  the `mcp` provider it says what that really means: no built-in tools are
+  registered, and search has to come from a server the workspace declares.
+- **Counts what the session spent.** A line under the composer adds up the input
+  and output tokens of every finished run — live, or replayed from a stored
+  `run_end` — and it resets when the tab moves to a new conversation. With
+  `anvil.contextWindow` set it also draws the last run's total as a share of
+  that window. With it unset there is no percentage: no catalogue in the
+  repository defines a window, and a guess from a model name would make the
+  fraction a number about Anvil rather than about the model.
+- **Shows the plan as a checklist.** The built-in `todo_write` tool lets the
+  model publish its task list, and the panel draws it below the composer — one
+  row per item, with the current one in the normal text colour and finished ones
+  struck through. Each call carries the whole list and replaces the block; an
+  empty list removes it. The call is an ordinary tool card too, so a reopened
+  conversation shows the checklist it ended with, rebuilt from the stored
+  arguments.
+- **Takes the keyboard and the files.** <kbd>Escape</kbd> interrupts a running
+  turn from anywhere in the panel (an idle Escape keeps its other meanings and
+  never touches the draft). Files dropped on the panel become `@` references —
+  resolved against the workspace by the extension, so a file outside it is
+  refused with a reason — and dropped images become attachments. The **Image**
+  button next to `@` opens a picker for the same attachments a paste produces.
+  <kbd>↑</kbd>/<kbd>↓</kbd> at the edges of the input walk the prompts this
+  conversation has shown, draft included: leaving the list restores what you
+  were typing, and the list is cleared with the transcript rather than outliving
+  the conversation it describes.
+- **Copies an answer, and shows the run from anywhere.** A finished answer has a
+  quiet **Copy** that puts the raw Markdown on the editor's clipboard. One
+  status-bar item describes the window rather than a tab: idle, working, or
+  waiting for an approval — which outranks working, so a question asked in a
+  tab you are not looking at still reaches you. Clicking it goes to the tab that
+  is asking, else the one in front, else any open tab, and only opens a new one
+  when there is none.
 - **Typesets the reply, and shows the thinking when the provider sends it.** A
   reply is rendered as Markdown — paragraphs, headings, lists, quotes, fenced
   code — by a parser that returns a tree of plain objects and nothing else: the
@@ -223,12 +277,15 @@ copies and falls back to `ANVIL_API_KEY` when the process has one.
   was built with, verified against the checksum recorded at build time before it
   is run. The API key is not in the package: it is in VS Code's SecretStorage,
   and from there in the child process environment.
-- **Does not have checkpoints, rewind or forking.** A transcript is a record,
-  not a cursor: replaying a conversation cannot be resumed from, edited, or
-  branched. Reasoning is the one part of a turn that does not come back — it was
-  never persisted — and a round whose record had not landed when the tab
-  re-attached mid-run is in neither the replay nor the stream. See
-  `doc/roadmaps/v1.0/m_0.38/`.
+- **Can go back, and can branch.** A run that edited files captures their
+  pre-images, and restoring that run puts them back — deleting files the run
+  created, because the manifest records that they were absent. A session can be
+  forked at a finished run's boundary, and the fork opens in a new tab carrying
+  the records up to that point. What is still not possible is editing or
+  resuming *inside* a transcript: a replay is a record, not a cursor. Reasoning
+  is the one part of a turn that does not come back — it was never persisted —
+  and a round whose record had not landed when the tab re-attached mid-run is in
+  neither the replay nor the stream. See `doc/roadmaps/v1.0/m_0.40/`.
 
 ## Sessions
 

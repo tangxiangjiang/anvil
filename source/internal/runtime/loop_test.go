@@ -15,6 +15,114 @@ import (
 	"github.com/anvil-dev/anvil/internal/tools"
 )
 
+func TestLoopPutsUsageOnTheTerminalEvent(t *testing.T) {
+	dir := t.TempDir()
+	reg := tools.NewRegistry(dir, false)
+	var done *runtime.Event
+	res := runtime.Loop(context.Background(), usageCompleter{}, reg, runtime.Config{
+		CWD:     dir,
+		Model:   "m",
+		UserMsg: "hi",
+	}, func(ev runtime.Event) {
+		if ev.Type == "done" {
+			e := ev
+			done = &e
+		}
+	})
+	if res.Status != "finished" {
+		t.Fatalf("status=%s err=%s", res.Status, res.Err)
+	}
+	if done == nil || done.Usage == nil {
+		t.Fatalf("done event usage=%+v", done)
+	}
+	if done.Usage.TotalTokens != 7 || done.Usage.InputTokens != 4 || done.Usage.OutputTokens != 3 {
+		t.Fatalf("done usage=%+v", done.Usage)
+	}
+}
+
+type todoCompleter struct {
+	n    int
+	args string
+}
+
+func (c *todoCompleter) Complete(ctx context.Context, req llm.Request) (*llm.Response, error) {
+	_ = ctx
+	_ = req
+	c.n++
+	if c.n == 1 {
+		return &llm.Response{Message: llm.Message{
+			Role: llm.RoleAssistant,
+			ToolCalls: []llm.ToolCall{{
+				ID:   "1",
+				Name: tools.TodoToolName,
+				Args: json.RawMessage(c.args),
+			}},
+		}}, nil
+	}
+	return &llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Content: "planned"}}, nil
+}
+
+func TestLoopEmitsTheTodoList(t *testing.T) {
+	dir := t.TempDir()
+	reg := tools.NewRegistry(dir, false)
+	var todos []runtime.Event
+	res := runtime.Loop(context.Background(), &todoCompleter{
+		args: `{"items":[{"text":"a","status":"pending"},{"text":"b","status":"done"}]}`,
+	}, reg, runtime.Config{
+		CWD:     dir,
+		Model:   "m",
+		UserMsg: "plan",
+	}, func(ev runtime.Event) {
+		if ev.Type == "todo" {
+			todos = append(todos, ev)
+		}
+	})
+	if res.Status != "finished" {
+		t.Fatalf("status=%s err=%s", res.Status, res.Err)
+	}
+	if len(todos) != 1 || len(todos[0].Items) != 2 {
+		t.Fatalf("todo events %+v", todos)
+	}
+	if todos[0].Items[0].Text != "a" || todos[0].Items[1].Status != "done" {
+		t.Fatalf("items %+v", todos[0].Items)
+	}
+}
+
+// A refused call must not draw a list: the panel keeps the one it had.
+func TestLoopDoesNotEmitTodosForAFailedCall(t *testing.T) {
+	dir := t.TempDir()
+	reg := tools.NewRegistry(dir, false)
+	var todos int
+	res := runtime.Loop(context.Background(), &todoCompleter{
+		args: `{"items":[{"text":"a","status":"blocked"}]}`,
+	}, reg, runtime.Config{
+		CWD:     dir,
+		Model:   "m",
+		UserMsg: "plan",
+	}, func(ev runtime.Event) {
+		if ev.Type == "todo" {
+			todos++
+		}
+	})
+	if res.Status != "finished" {
+		t.Fatalf("status=%s err=%s", res.Status, res.Err)
+	}
+	if todos != 0 {
+		t.Fatalf("a failed call emitted %d todo events", todos)
+	}
+}
+
+type usageCompleter struct{}
+
+func (usageCompleter) Complete(ctx context.Context, req llm.Request) (*llm.Response, error) {
+	_ = ctx
+	_ = req
+	return &llm.Response{
+		Message: llm.Message{Role: llm.RoleAssistant, Content: "ok"},
+		Usage:   &llm.Usage{InputTokens: 4, OutputTokens: 3, TotalTokens: 7},
+	}, nil
+}
+
 type scriptCompleter struct {
 	n int
 }

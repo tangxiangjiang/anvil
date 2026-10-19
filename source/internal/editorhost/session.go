@@ -143,9 +143,17 @@ func (s *session) waitRun(timeout time.Duration) bool {
 func projectEvent(sessionID, runID string, ev anvil.Event) (EventParams, bool) {
 	switch ev.Type {
 	case anvil.EventProgress, anvil.EventAssistant, anvil.EventReasoning,
-		anvil.EventToolCall, anvil.EventToolResult, anvil.EventError:
+		anvil.EventToolCall, anvil.EventToolResult, anvil.EventError, anvil.EventTodo:
 	default:
 		return EventParams{}, false
+	}
+	var items *[]TodoItem
+	if ev.Type == anvil.EventTodo {
+		list := make([]TodoItem, len(ev.Items))
+		for i, it := range ev.Items {
+			list[i] = TodoItem{Text: it.Text, Status: it.Status}
+		}
+		items = &list
 	}
 	return EventParams{
 		SessionID:  sessionID,
@@ -161,7 +169,23 @@ func projectEvent(sessionID, runID string, ev anvil.Event) (EventParams, bool) {
 		MaxSteps:   ev.MaxSteps,
 		Code:       string(ev.Code),
 		Rule:       ruleInfo(ev.Rule),
+		Usage:      usageWire(ev.Usage),
+		Items:      items,
 	}, true
+}
+
+// usageWire projects public usage onto the wire shape. It is nil in, nil out:
+// a provider that reported no counts must not become a zero the panel draws as
+// a run that cost nothing.
+func usageWire(u *anvil.Usage) *Usage {
+	if u == nil {
+		return nil
+	}
+	return &Usage{
+		InputTokens:  u.InputTokens,
+		OutputTokens: u.OutputTokens,
+		TotalTokens:  u.TotalTokens,
+	}
 }
 
 // ruleInfo projects a deciding rule onto the wire shape. It is nil in, nil out:
@@ -199,13 +223,7 @@ func projectDone(sessionID, runID string, res *anvil.RunResult, runErr error) Do
 		out.Steps = res.Steps
 		out.Err = res.Err
 		out.Code = string(res.Code)
-		if res.Usage != nil {
-			out.Usage = &Usage{
-				InputTokens:  res.Usage.InputTokens,
-				OutputTokens: res.Usage.OutputTokens,
-				TotalTokens:  res.Usage.TotalTokens,
-			}
-		}
+		out.Usage = usageWire(res.Usage)
 	}
 	if out.Err == "" && runErr != nil {
 		out.Err = runErr.Error()

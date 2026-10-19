@@ -61,7 +61,7 @@ func main() {
 
 ## Status
 
-Product is at **0.38 delivered** — a session a person can recognise and come back to: it is named by its first message, every finished tool card opens the change it made, and a reloaded window re-attaches to its session and draws the stored conversation back. 0.35–0.38 are the editor line (VS Code extension, tool permissions, permission modes, session identity); **0.39** is in progress on the Delivery side (execute bind + test campaign loop). Full per-milestone index: [`doc/roadmaps/v1.0/README.md`](doc/roadmaps/v1.0/README.md).
+Product is at **0.38 delivered** — a session a person can recognise and come back to: it is named by its first message, every finished tool card opens the change it made, and a reloaded window re-attaches to its session and draws the stored conversation back. 0.35–0.38 are the editor line (VS Code extension, tool permissions, permission modes, session identity); **0.39** is in progress on the Delivery side (execute bind + test campaign loop), and **0.40** is in progress on the editor side — parallel tabs, session administration, partial acceptance, checkpoints and fork, plus the SDK capabilities the client never turned on. Full per-milestone index: [`doc/roadmaps/v1.0/README.md`](doc/roadmaps/v1.0/README.md).
 
 | Era | Milestones | What |
 |-----|-----------|------|
@@ -71,6 +71,8 @@ Product is at **0.38 delivered** — a session a person can recognise and come b
 | Editor client | 0.35 | VS Code extension + `anvil-host` sidecar, packaged as per-platform VSIX — [design 35](doc/design/v1.0/35-vscode-extension.md) |
 | Tool permissions | 0.36 | `.anvil/permissions.json` rule set, a shell analyzer that proves read-only, the loading switch that makes `.anvil/hooks.json` real, and an approval card that remembers the pattern rather than the tool — [design 36](doc/design/v1.0/36-tool-permissions.md) |
 | Permission modes | 0.37 | A complete mode ladder — `dont_ask` runs only what the rules allow and `bypass` no longer overrules a written `ask` rule — plus `"defaultMode"` in the same workspace file, resolved by the host and reported to the composer — [design 37](doc/design/v1.0/37-permission-modes.md) |
+| Session identity & replay | 0.38 | A session named by its first message, a reviewable change on every tool card, and a transcript that survives a reload — [design 38](doc/design/v1.0/38-session-identity-and-replay.md) |
+| Editor alignment | 0.40 | Parallel tabs, rename/delete/search, per-hunk acceptance, checkpoints, fork, MCP and web tools switched on, live usage, a task list — [design 39](doc/design/v1.0/39-editor-alignment.md) |
 
 ### VS Code extension (0.35)
 

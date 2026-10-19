@@ -65,6 +65,10 @@ type Record struct {
 	Model      string `json:"model,omitempty"`
 	MaxSteps   int    `json:"max_steps,omitempty"`
 	AllowShell *bool  `json:"allow_shell,omitempty"`
+	// Title is a name the user gave the session. It is written only by a rename,
+	// as a new meta record, so the store stays append-only and the records that
+	// came before it are untouched.
+	Title string `json:"title,omitempty"`
 
 	// message
 	Role       string     `json:"role,omitempty"`
@@ -140,6 +144,28 @@ func (s *Store) Append(agentID string, rec Record) error {
 	}
 	if err := f.Sync(); err != nil {
 		return fmt.Errorf("sync record: %w", err)
+	}
+	return nil
+}
+
+// Delete removes the file that holds agentID's records.
+//
+// It is the one non-append operation the store offers, and it exists because a
+// person asking to stop keeping a conversation is a request about the file, not
+// about its contents: rewriting the records to hide them would keep the bytes
+// the user asked to be rid of.
+func (s *Store) Delete(agentID string) error {
+	if s == nil {
+		return errors.New("nil store")
+	}
+	if err := safeID(agentID); err != nil {
+		return err
+	}
+	if err := os.Remove(s.Path(agentID)); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("%w: %s", ErrNotFound, agentID)
+		}
+		return fmt.Errorf("delete store file: %w", err)
 	}
 	return nil
 }
@@ -251,6 +277,13 @@ func Summarize(records []Record) Summary {
 			if sum.Model == "" {
 				sum.Model = rec.Model
 			}
+			// A rename replaces whatever the session was called: the derived
+			// title from the first message, or an earlier rename. Records are
+			// chronological, so the last one written wins — which is what a
+			// person expects from naming something twice.
+			if rec.Title != "" {
+				sum.Title = titleOf(rec.Title)
+			}
 		case TypeMessage:
 			// The first thing a person typed is what the session is about. A
 			// later message is a follow-up, not a better name, and a session
@@ -311,6 +344,28 @@ func titleOf(content string) string {
 		}
 	}
 	return string(out)
+}
+
+// TitleWithSuffix appends suffix to a title and keeps the result within
+// titleLimit runes.
+//
+// The room is made in the title, not in the listing: appending past the limit
+// and letting the next Summarize cut the string would remove the suffix first,
+// and a suffixed title exists precisely to stay distinguishable from the one it
+// was made from.
+func TitleWithSuffix(title, suffix string) string {
+	if title == "" || suffix == "" {
+		return title
+	}
+	base := []rune(title)
+	room := titleLimit - len([]rune(suffix))
+	if room < 0 {
+		room = 0
+	}
+	if len(base) <= room {
+		return title + suffix
+	}
+	return string(base[:room]) + suffix
 }
 
 func safeID(agentID string) error {

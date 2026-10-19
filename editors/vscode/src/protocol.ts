@@ -28,11 +28,40 @@ export const Method = {
    */
   SessionTranscript: 'session.transcript',
   SessionClose: 'session.close',
+  /**
+   * Names a stored session. Additive: it appends a `meta` record rather than
+   * rewriting the file, so a resume replays exactly the history it did before.
+   * A host that predates it answers `-32601`, which the client reads as "no
+   * rename here".
+   */
+  SessionRename: 'session.rename',
+  /** Removes a stored session's records. */
+  SessionDelete: 'session.delete',
+  /**
+   * Branches a stored conversation at a finished run, answering the new agent
+   * id. Additive: a host that predates it answers `-32601`, and the client then
+   * offers no fork rather than a button that fails.
+   */
+  SessionFork: 'session.fork',
+  /**
+   * Lists the runs of a session that captured a pre-image, newest first.
+   * Additive: a host that predates it answers `-32601`, and the panel then
+   * offers no restore rather than an error.
+   */
+  CheckpointList: 'checkpoint.list',
+  /** Puts one run's captured files back. */
+  CheckpointRestore: 'checkpoint.restore',
   Prompt: 'prompt',
   Cancel: 'cancel',
   ModelsList: 'models.list',
   SkillsList: 'skills.list',
   RulesList: 'rules.list',
+  /**
+   * The MCP servers the enabled file layers declare. Additive: a host that
+   * predates it answers `-32601`, and the panel then shows no card rather than
+   * an error.
+   */
+  McpList: 'mcp.list',
   PermissionsGet: 'permissions.get',
   PermissionsAdd: 'permissions.add',
   Shutdown: 'shutdown',
@@ -135,6 +164,25 @@ export interface SessionParams {
    * `Vision.Enabled` is what makes it accept one at all.
    */
   vision?: boolean;
+  /**
+   * Turn on the web tools. Absent means off; there is no `enabled` field
+   * because a host that predates the field and a client that does not want the
+   * tools should agree about absence.
+   *
+   * No key travels here. The host reads `ANVIL_WEB_SEARCH_API_KEY` from the
+   * environment the extension spawns it with.
+   */
+  web_search?: WebSearchParams;
+}
+
+/** Configuration for `web_search` / `fetch_url`; presence is the switch. */
+export interface WebSearchParams {
+  /** `http` (default) uses the SDK's JSON adapter; `mcp` registers no builtins. */
+  provider?: string;
+  /** The JSON search endpoint. Required for the http provider. */
+  base_url?: string;
+  /** Results per search; 0 uses the SDK default of 5. */
+  max_results?: number;
 }
 
 export interface SessionResult {
@@ -490,6 +538,89 @@ export interface SessionTranscriptResult {
   dropped?: number;
 }
 
+// --- session.rename / session.delete -----------------------------------------
+
+export interface SessionRenameParams {
+  agent_id: string;
+  title: string;
+  store?: string;
+}
+
+export interface SessionRenameResult {
+  agent_id: string;
+  title: string;
+}
+
+export interface SessionDeleteParams {
+  agent_id: string;
+  store?: string;
+}
+
+export interface SessionDeleteResult {
+  agent_id: string;
+  deleted: boolean;
+}
+
+// --- session.fork ------------------------------------------------------------
+
+/**
+ * The conversation and the run ending the part to keep. Both are required: a
+ * fork copies records only through a `run_end`, so a run that never finished
+ * has no boundary to name.
+ */
+export interface SessionForkParams {
+  agent_id: string;
+  run_id: string;
+  store?: string;
+}
+
+/** The new conversation. Opening it is the client's next step. */
+export interface SessionForkResult {
+  agent_id: string;
+}
+
+// --- checkpoint.list / checkpoint.restore ------------------------------------
+
+/** Names the session whose run checkpoints to read. */
+export interface CheckpointListParams {
+  agent_id: string;
+}
+
+export interface CheckpointListResult {
+  runs: CheckpointRun[];
+}
+
+/** One run's captured pre-images. */
+export interface CheckpointRun {
+  run_id: string;
+  created_at?: string;
+  files: CheckpointFile[];
+}
+
+export interface CheckpointFile {
+  /** Workspace-relative, slash-separated. */
+  path: string;
+  /** False means the run created the file; restoring deletes it. */
+  existed: boolean;
+  size?: number;
+}
+
+export interface CheckpointRestoreParams {
+  agent_id: string;
+  run_id: string;
+}
+
+/** What the restore actually did, rather than what it was asked to do. */
+export interface CheckpointRestoreResult {
+  run_id: string;
+  files: RestoredFile[];
+}
+
+export interface RestoredFile {
+  path: string;
+  deleted: boolean;
+}
+
 // --- skills.list / rules.list ------------------------------------------------
 
 /**
@@ -537,6 +668,38 @@ export interface RulesResult {
   files: RuleFileInfo[];
 }
 
+// --- mcp.list ----------------------------------------------------------------
+
+/**
+ * One server a config file declares. It says what would be launched, not
+ * whether it launched: the host reports no connection state, so there is no
+ * field here to mistake for one.
+ */
+export interface McpServerInfo {
+  name: string;
+  /** stdio | http | sse. Empty for an entry naming neither command nor URL. */
+  transport?: string;
+  /** The config file that declared it. */
+  source: string;
+}
+
+/** One config file the listing looked at. */
+export interface McpSourceInfo {
+  source: string;
+  path: string;
+  /** False when the file is not there; a note, not an error. */
+  exists: boolean;
+}
+
+export interface McpListParams {
+  setting_sources?: string[];
+}
+
+export interface McpListResult {
+  servers: McpServerInfo[];
+  sources: McpSourceInfo[];
+}
+
 // --- models.list -------------------------------------------------------------
 
 export interface ModelEntry {
@@ -561,7 +724,14 @@ export type EventType =
    * replay, so a resumed session shows none. A host that predates it simply
    * never emits the value, which is why this did not move the protocol version.
    */
-  | 'reasoning';
+  | 'reasoning'
+  /**
+   * The model's complete task list, in `items` (0.40.9). It follows the
+   * `todo_write` call that wrote it; an empty list clears the panel. A replay
+   * synthesises the same event from the stored call's arguments, so the webview
+   * has one path for both.
+   */
+  | 'todo';
 
 /** One streamed unit of a run. */
 export interface HostEvent {
@@ -578,11 +748,30 @@ export interface HostEvent {
   max_steps?: number;
   code?: string;
   /**
+   * The run's token usage so far, on a terminal event the host forwards (an
+   * `error`), when the provider reported any (0.40.8+). Absent elsewhere and
+   * absent when unknown — which is not the same as zero. The authoritative
+   * end-of-run usage is the `done` notification's `usage`.
+   */
+  usage?: Usage;
+  /**
    * The workspace rule that decided this tool result, when one did. It is how a
    * call that ran without a prompt says why it did not need one; absent means no
    * rule decided it, which is not the same as "some rule allowed it".
    */
   rule?: RuleInfo;
+  /**
+   * The complete task list on a `todo` event (0.40.9). Present as [] when a
+   * call cleared it — which is different from the field being absent on every
+   * other event, and is why the host writes a pointer rather than omitting it.
+   */
+  items?: TodoItem[];
+}
+
+/** One row of the model's plan, as `todo_write` wrote it. */
+export interface TodoItem {
+  text: string;
+  status: 'pending' | 'in_progress' | 'done';
 }
 
 /** Run status values, mirroring `anvil.Status*`. */

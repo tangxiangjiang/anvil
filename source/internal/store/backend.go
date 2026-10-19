@@ -20,6 +20,10 @@ type Backend interface {
 	Load(agentID string) ([]Record, error)
 	ListIDs() ([]string, error)
 	Exists(agentID string) bool
+	// Delete forgets an agent's records. It reports ErrNotFound when there is
+	// nothing to forget, rather than succeeding on a no-op: a caller that names
+	// the wrong id should hear about it.
+	Delete(agentID string) error
 	Close() error
 }
 

@@ -31,10 +31,19 @@ type Event struct {
 	Step       int
 	MaxSteps   int // 0 = unlimited
 	Code       string
+	// Usage is what the run has consumed so far, set on the terminal event
+	// (done or error) when the provider reported any counts. It is absent on
+	// every other event: a token count is a fact about a completed exchange,
+	// not a running estimate, and a per-chunk number would be invented.
+	Usage *llm.Usage
 	// Rule is the workspace rule that decided a tool call, on tool_result. It is
 	// nil when no rule did — including when the call was allowed by a callback or
 	// ran ungated.
 	Rule *permissions.Decision
+	// Items is the model's complete task list, on the `todo` event that follows
+	// a successful todo_write call. It is the whole list rather than a change:
+	// a client replaces what it shows, and an empty list clears it.
+	Items []tools.TodoItem
 }
 
 // DefaultMaxSteps is deprecated: MaxSteps 0 means unlimited. Kept as 0 for callers.
@@ -144,7 +153,7 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 	for step := 0; ; step++ {
 		if cfg.MaxSteps > 0 && step >= cfg.MaxSteps {
 			msg := fmt.Sprintf("%s (%d)", MaxStepsExceededPrefix, cfg.MaxSteps)
-			emit(Event{Type: "error", Text: msg, Code: CodeMaxSteps})
+			emit(Event{Type: "error", Text: msg, Code: CodeMaxSteps, Usage: usageAcc})
 			return Result{ID: runID, Status: "error", Steps: cfg.MaxSteps, Usage: usageAcc, Err: msg, Code: CodeMaxSteps, Messages: messages}
 		}
 		if err := ctx.Err(); err != nil {
@@ -201,7 +210,7 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 				return cancelledResult(ctx, runID, step, usageAcc, messages, ctx.Err(), emit)
 			}
 			msg := err.Error()
-			emit(Event{Type: "error", Text: msg, Code: CodeProvider})
+			emit(Event{Type: "error", Text: msg, Code: CodeProvider, Usage: usageAcc})
 			return Result{ID: runID, Status: "error", Steps: step, Usage: usageAcc, Err: msg, Code: CodeProvider, Messages: messages}
 		}
 		if resp.Usage != nil {
@@ -224,7 +233,7 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 		sink(assistant)
 
 		if len(assistant.ToolCalls) == 0 {
-			emit(Event{Type: "done", Text: assistant.Content})
+			emit(Event{Type: "done", Text: assistant.Content, Usage: usageAcc})
 			return Result{
 				ID:       runID,
 				Status:   "finished",
@@ -255,7 +264,7 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 			emit(Event{Type: "assistant", Text: inj.Content, Code: CodeLoopDetected})
 		case loopStop:
 			msg := fmt.Sprintf("%s: %s", LoopDetectedPrefix, reason)
-			emit(Event{Type: "error", Text: msg, Code: CodeLoopDetected})
+			emit(Event{Type: "error", Text: msg, Code: CodeLoopDetected, Usage: usageAcc})
 			return Result{
 				ID: runID, Status: "error", Steps: step + 1, Usage: usageAcc,
 				Err: msg, Code: CodeLoopDetected, Messages: messages,
@@ -322,6 +331,12 @@ func runToolCalls(
 			// card it explains is the one keyed by this call id.
 			Rule: results[i].Rule,
 		})
+		// A checklist is a statement about the session, not about this call, so
+		// it is its own event rather than a field on the result: a client draws
+		// one block, replaced on each call, not one block per card.
+		if tc.Name == tools.TodoToolName && !results[i].IsError {
+			emit(Event{Type: "todo", Items: results[i].Todos})
+		}
 		toolMsg := llm.Message{
 			Role:       llm.RoleTool,
 			Content:    content,
@@ -360,7 +375,7 @@ func IsContextDeadline(errText string) bool {
 
 func cancelledResult(ctx context.Context, runID string, steps int, usage *llm.Usage, messages []llm.Message, err error, emit Emitter) Result {
 	code, msg := classifyCancel(ctx, err)
-	emit(Event{Type: "error", Text: msg, Code: code})
+	emit(Event{Type: "error", Text: msg, Code: code, Usage: usage})
 	return Result{ID: runID, Status: "cancelled", Steps: steps, Usage: usage, Err: msg, Code: code, Messages: messages}
 }
 

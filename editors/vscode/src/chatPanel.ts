@@ -1,63 +1,63 @@
 /**
- * The conversation: a webview in an editor tab, fed by one `HostManager`.
+ * One conversation: a webview in an editor tab, and the session behind it.
  *
  * The webview is a rendering surface only. Everything with a decision in it —
- * spawning, sessions, approvals, context composition, review tabs — happens on
- * this side of the message port, so the untrusted-ish HTML never holds state
- * the host needs and never names a path the host will act on without this side
- * having decided that it should.
+ * sessions, approvals, context composition, review tabs — happens on this side
+ * of the message port, so the untrusted-ish HTML never holds state the host
+ * needs and never names a path the host will act on without this side having
+ * decided that it should.
  *
- * The tab is a document, which sets two rules this class exists to keep. Closing
- * it is not stopping the turn: the session and the host child outlive the view,
- * and messages that arrive with no view attached are dropped rather than queued.
- * And reopening it re-announces everything, because a fresh document knows
- * nothing — the `ready` path. What it cannot re-announce is the conversation
- * itself, which happened before the document existed and left no record in this
- * process; that is replayed from the store, and re-attaching to the session
- * first is how the window finds out which conversation that was.
+ * A panel is a tab is a conversation. Several may be open at once; they share
+ * one host child (`Hub`) and nothing else. Nothing a tab says or is told may
+ * reach another tab, which is what the router in `router.ts` enforces on the
+ * wire and what this class keeps true in its own fields.
+ *
+ * The tab is a document, which sets two rules this class exists to keep. A
+ * closed tab takes its session with it — a run nobody can see is a run nobody
+ * can stop — and messages that arrive with no view attached are dropped rather
+ * than queued. And reopening it re-announces everything, because a fresh
+ * document knows nothing — the `ready` path. What it cannot re-announce is the
+ * conversation itself, which happened before the document existed and left no
+ * record in this process; that is replayed from the store, and re-attaching to
+ * the session first is how the window finds out which conversation that was.
  */
 
 import { randomBytes } from 'node:crypto';
-import { dirname } from 'node:path';
 import * as vscode from 'vscode';
 import { ChangesTracker, ChangedFile } from './changes';
 import { EditAnchor, PreImage, locateEdit, planReview, reviewOf } from './editDiff';
+import { PartialDiff, applyAccepted, partialDiff, rewriteArgs } from './hunks';
+import { ReviewPanels } from './reviewPanel';
 import { buildPromptContext, pickMentions } from './editorContext';
-import { attachmentsFromDataUrls } from './attachments';
-import { HostListener, HostManager } from './hostManager';
+import { attachmentsFromDataUrls, dataUrlFromBytes, mimeForImagePath } from './attachments';
+import type { Hub } from './hub';
+import { HostListener, HostManager, ResolvedMode } from './hostManager';
+import { ChatSession, SessionConfig, SessionState } from './session';
 import { PreviewDocuments } from './review';
-import { SessionState } from './session';
-import { dedupeMentions } from './mentions';
-import { SessionAgentKey, shouldReattach } from './reattach';
+import { dedupeMentions, relativeMention } from './mentions';
+import { mcpEnabled, missingMcpSources, settingSourcesFor } from './mcp';
+import { shouldReattach } from './reattach';
 import { replayOf } from './transcript';
-import {
-  CommandAction,
-  SlashCommand,
-  commandCatalogue,
-  parseSlash,
-  route,
-} from './commands';
+import { CommandAction, SlashCommand, parseSlash, route } from './commands';
 import {
   ApprovalRequest,
   Decision,
   DoneParams,
   HostEvent,
+  McpServerInfo,
   PermissionMode,
   PermissionModeSource,
   PermissionModes,
-  PermissionsResult,
   RuleFileInfo,
   RuleInfo,
-  RuleProblem,
   RuleSpec,
   SessionInfo,
   SessionResult,
   SessionTranscriptResult,
-  SkillEntry,
 } from './protocol';
 import { RunFailure } from './errors';
-import { readSettings } from './settings';
-import { describeProblem, emptyRulesFile, problemPosition } from './rulesFile';
+import { readSettings, readWebSearchKey } from './settings';
+import { webSearchNeedsKey } from './webSearch';
 
 /** A message from the webview. */
 type Inbound =
@@ -76,7 +76,20 @@ type Inbound =
   | { type: 'commands' }
   | { type: 'mode'; mode: string }
   | { type: 'review'; requestId: string }
+  /** "Let me keep only some of this", from an approval card's diff preview. */
+  | { type: 'reviewPartial'; requestId: string }
   | { type: 'reviewChange'; path: string }
+  /**
+   * "Put the files back the way they were before that run". The extension asks
+   * for confirmation before touching anything: the restore happens on disk, and
+   * there is no second undo for it.
+   */
+  | { type: 'restoreCheckpoint'; runId: string }
+  /**
+   * "Branch the conversation from this run", from a finished run's row. The new
+   * conversation opens in its own tab; this one stays exactly as it is.
+   */
+  | { type: 'forkSession'; runId: string }
   /**
    * "Show me what that call changed", from a finished tool card. The call's
    * facts travel with the click because this is the only place they still
@@ -86,7 +99,21 @@ type Inbound =
    */
   | { type: 'reviewCall'; toolCallId: string; runId?: string; name?: string; args?: unknown }
   /** A link the transcript rendered. The URL is re-checked before it is opened. */
-  | { type: 'openLink'; url: string };
+  | { type: 'openLink'; url: string }
+  /**
+   * "Put this answer on the clipboard." The text is the raw Markdown the bubble
+   * holds; the host writes it, because the clipboard belongs to the editor.
+   */
+  | { type: 'copy'; text: string }
+  /** The composer's image button: the extension's own open dialog. */
+  | { type: 'pickImages' }
+  /**
+   * Files dropped on the panel. `paths` are plain absolute paths (Electron's
+   * old `File.path`), `uris` are `file:` URIs (the editor's drag payload); both
+   * are resolved against the workspace here, because only this side knows the
+   * root.
+   */
+  | { type: 'dropFiles'; paths?: string[]; uris?: string[] };
 
 /** A message to the webview. */
 type Outbound =
@@ -103,6 +130,18 @@ type Outbound =
   | { type: 'approval'; request: ApprovalRequest }
   | { type: 'approvalWithdrawn'; requestId: string }
   /**
+   * An approval the review panel answered. The card settles on this rather than
+   * on its own button, and says how much was kept when it was not all of it —
+   * "Allowed." over a change that was half applied would be a lie of degree.
+   */
+  | {
+      type: 'approvalSettled';
+      requestId: string;
+      decision: Decision;
+      kept?: number;
+      total?: number;
+    }
+  /**
    * What became of a "remember this" choice. Exactly one of the three endings:
    * the host settled the card (`approved`), the rule was written but does not
    * decide this call (`decidedBy`), or nothing was written (`error`).
@@ -117,13 +156,62 @@ type Outbound =
     }
   | { type: 'done'; done: DoneParams; failure: RunFailure }
   | { type: 'mentions'; paths: string[] }
+  /**
+   * Images the picker read, as data URLs — the same shape a paste leaves in
+   * the composer, so the webview has one representation to draw and one path to
+   * send.
+   */
+  | { type: 'images'; images: string[] }
   | { type: 'vision'; enabled: boolean }
+  /**
+   * The context window the token meter measures the last run against, or 0
+   * when it is unknown. The window is display arithmetic only and never travels
+   * to the host.
+   */
+  | { type: 'context'; window: number }
   | { type: 'changes'; files: Array<Pick<ChangedFile, 'path' | 'kind'>> }
+  /**
+   * A finished run that captured pre-images, so it can be undone. Posted only
+   * when the run changed something: an undo that would do nothing is not a
+   * button worth showing.
+   */
+  | { type: 'checkpoint'; runId: string; files: string[] }
+  /** What the restore did, or that it was cancelled or failed. */
+  | {
+      type: 'checkpointRestored';
+      runId: string;
+      cancelled?: boolean;
+      restored?: number;
+      deleted?: number;
+      error?: string;
+    }
+  /**
+   * What became of a fork the run's button asked for. Exactly one of the two
+   * endings: the new agent's id, or why the copy could not be made.
+   */
+  | { type: 'forked'; runId: string; agentId?: string; error?: string }
   | { type: 'commands'; commands: SlashCommand[] }
   | { type: 'help'; commands: SlashCommand[] }
   | { type: 'mode'; mode: PermissionMode | ''; resolved: PermissionMode; source: PermissionModeSource }
   | { type: 'rules'; files: RuleFileInfo[] }
+  /**
+   * What the enabled MCP layers declare, and which of their files are missing.
+   * Configuration only: there is no connected field, because the host cannot
+   * observe one.
+   */
+  | { type: 'mcp'; servers: McpServerInfo[]; notes: string[]; error?: string }
+  /**
+   * The web tools this session was given. Posted only when enabled — the row's
+   * absence is the "off" answer, not a row that says so. `key` is whether a
+   * credential is stored for the one provider that needs one.
+   */
+  | { type: 'webSearch'; provider: string; key: boolean }
   | { type: 'session'; agentId: string; started: boolean }
+  /**
+   * The agent this tab is showing, for the document to remember across a
+   * reload. Empty means a conversation that has not started yet.
+   */
+  | { type: 'agent'; agentId: string }
   /**
    * Empties the transcript. The tab is a singleton pointed at one conversation
    * at a time, so adopting another agent has to take the old one off the
@@ -212,11 +300,38 @@ export class ChatPanel implements HostListener {
   private listening = false;
   /** Messages held until it does. See `post`. */
   private pending: Outbound[] = [];
-  private manager: HostManager | undefined;
-  /** Fires when the host comes up or goes away, for the title-bar stop button. */
-  private readonly runningChanged = new vscode.EventEmitter<void>();
-  /** Fires when the session list, or the markers on it, could have changed. */
-  private readonly sessionsChanged = new vscode.EventEmitter<void>();
+  /**
+   * This tab's conversation, and nothing else's.
+   *
+   * It is created on the first thing that needs a host and kept across
+   * re-opens (a mode or model change closes the session and resumes the same
+   * agent). A crash drops it; the agent id below is what brings it back.
+   */
+  private session: ChatSession | undefined;
+  /** A session being built, so two messages sent at once cannot build two. */
+  private opening: Promise<ChatSession> | undefined;
+  /**
+   * The agent this tab is showing.
+   *
+   * It outlives the session handle and is what a reload restores: the document
+   * remembers it with `vscode.setState`, the serializer hands it back, and the
+   * panel resumes it. Empty means the tab is showing a conversation that has
+   * not started yet.
+   */
+  private agentId: string | undefined;
+  /**
+   * This tab's session options, until a session exists to carry them.
+   *
+   * Per tab rather than per window: chapter 37 makes the mode a session option,
+   * so two tabs may run different ones, and a change here must not reach the
+   * conversation next door.
+   */
+  private overrides: Partial<SessionConfig> = {};
+  /** The mode the live session resolved, which is not always the one asked for. */
+  private resolvedMode: ResolvedMode | undefined;
+  /** Whether this is the tab in front, for the one command that means "this one". */
+  private active = false;
+  private disposed = false;
   /** Pre-images for the current turn, so the changed-files list can show diffs. */
   private readonly changes = new ChangesTracker();
   /**
@@ -231,11 +346,8 @@ export class ChatPanel implements HostListener {
   };
   /** Review tabs opened for an approval, closed when it is answered. */
   private readonly reviews = new Map<string, vscode.Uri[]>();
-  /**
-   * The slash catalogue: built-ins plus the workspace's skills. Fetched once per
-   * host, because it costs a round trip and only changes when the process does.
-   */
-  private catalogue: SlashCommand[] | undefined;
+  /** The per-hunk review documents, one per pending approval that can be split. */
+  private readonly partialReviews: ReviewPanels;
   /** The rule files the last session reported, re-announced to a reloaded view. */
   private rules: RuleFileInfo[] = [];
   /**
@@ -252,23 +364,21 @@ export class ChatPanel implements HostListener {
    * was refused" are different things to say.
    */
   private announcedMode = '';
-  /**
-   * A rule file that will not compile, reported against the file itself rather
-   * than only as a failed session. Created on first use: a window that never
-   * looks at a rules file never makes a diagnostics collection.
-   */
-  private diagnostics: vscode.DiagnosticCollection | undefined;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly log: (line: string) => void,
     private readonly previews: PreviewDocuments,
+    private readonly hub: Hub,
+    agentId?: string,
   ) {
     this.mode = readMode(context);
+    this.agentId = agentId === '' ? undefined : agentId;
+    this.partialReviews = new ReviewPanels(context.extensionUri);
   }
 
   /**
-   * Opens the conversation tab, or reveals the one that is already open.
+   * Opens this tab, or reveals it when its document is already up.
    *
    * `ViewColumn.Active` puts it where the user is looking, which is the least
    * surprising answer for a command they ran from wherever they were. A reveal
@@ -316,8 +426,12 @@ export class ChatPanel implements HostListener {
     };
     panel.webview.html = renderHtml(panel.webview, this.context.extensionUri);
     panel.webview.onDidReceiveMessage((msg: Inbound) => void this.onMessage(msg));
+    this.active = panel.active;
     panel.onDidChangeViewState((event) => {
-      if (event.webviewPanel.active) this.post({ type: 'focus' });
+      this.active = event.webviewPanel.active;
+      if (this.active) this.post({ type: 'focus' });
+      // The front tab changed, and Stop means the tab in front of the user.
+      this.hub.notifyRunning();
     });
     panel.onDidDispose(() => {
       // Guarded: `deactivate` disposes the panel too, and a stale disposal must
@@ -326,32 +440,136 @@ export class ChatPanel implements HostListener {
       this.panel = undefined;
       this.listening = false;
       this.pending = [];
+      this.active = false;
+      // A closed tab is a closed conversation. The agent stays on disk, so the
+      // sidebar can open it again — but a session behind a document nobody can
+      // see would be a run nobody can stop or watch.
+      void this.dispose();
     });
     this.updateTitle();
   }
 
   /**
-   * Creates the manager lazily: no host work happens at activation, and the two
-   * things that can ask for a host are both user actions — a prompt in the tab,
-   * or the session view being opened.
+   * Closes this tab's document, ending the session behind it.
+   *
+   * It awaits the teardown because the caller may be about to delete the
+   * conversation on disk: a session still holding the agent could write the file
+   * back on its next prompt. Disposing the document fires the same handler the
+   * user's close button does, and `dispose` is idempotent, so this is the one
+   * way that settles both paths.
    */
-  private ensureManager(): HostManager {
-    if (!this.manager) {
-      this.manager = new HostManager(this.context, this.log, this);
-      // The mode is remembered per workspace, so it has to be in force before the
-      // session that will carry it is created. This only records the choice; a
-      // session is not opened to hold it.
-      //
-      // Nothing is recorded when the workspace has no stored choice, and that is
-      // the point of the guard: sending `permission_mode: undefined` would travel
-      // as no key at all, but recording an override for it would still make this
-      // client look like it had an opinion — and it is the client having none that
-      // lets the workspace's file decide.
-      if (this.mode !== undefined) {
-        void this.manager.applyOptions({ permission_mode: this.mode });
-      }
+  async close(): Promise<void> {
+    this.panel?.dispose();
+    await this.dispose();
+  }
+
+  /** Brings this tab to the front, opening it first when it has no document. */
+  reveal(): void {
+    if (!this.panel) {
+      this.open();
+      return;
     }
-    return this.manager;
+    this.panel.reveal(this.panel.viewColumn, false);
+  }
+
+  /** Whether this is the tab the user is looking at. */
+  isActive(): boolean {
+    return this.active;
+  }
+
+  /** Posts a banner line to this tab, from the window-level half. */
+  notice(level: 'info' | 'warn' | 'error', message: string): void {
+    this.post({ type: 'notice', level, message });
+  }
+
+  /**
+   * This tab's session, built on the first thing that needs one.
+   *
+   * No host work happens at activation, and the things that can ask for a host
+   * are user actions — a prompt in the tab, or the session view being opened.
+   * A restored tab is not one of them: it is built here and opened by the
+   * resume the reattach path performs.
+   *
+   * The mode the workspace last chose travels with it. Nothing is recorded when
+   * the workspace has no stored choice, and that is the point of the guard:
+   * sending `permission_mode: undefined` would travel as no key at all, but
+   * recording an override for it would still make this tab look like it had an
+   * opinion — and it is the client having none that lets the workspace's file
+   * decide.
+   */
+  private ensureSession(): Promise<ChatSession> {
+    if (this.session) return Promise.resolve(this.session);
+    if (this.opening) return this.opening;
+    const config: SessionConfig = { ...readSettings().session, ...this.overrides };
+    if (this.mode !== undefined) config.permission_mode = this.mode;
+    this.opening = this.hub.manager.open(config, this).then(
+      async (session) => {
+        this.opening = undefined;
+        if (this.disposed) {
+          // The tab closed while the host was being started. Nothing may
+          // outlive the document that asked for it.
+          await session.close().catch(() => undefined);
+          throw new Error('this chat tab was closed');
+        }
+        this.session = session;
+        return session;
+      },
+      (err: unknown) => {
+        this.opening = undefined;
+        throw err;
+      },
+    );
+    return this.opening;
+  }
+
+  /**
+   * The session to talk through, pointed at the agent this tab shows.
+   *
+   * After a crash the handle is gone but the agent is not: the next prompt
+   * resumes it, or the conversation would silently restart from nothing.
+   */
+  private async liveSession(): Promise<ChatSession> {
+    const session = await this.ensureSession();
+    if (this.agentId && session.agent !== this.agentId) {
+      await session.continueWith(this.agentId);
+    }
+    return session;
+  }
+
+  /**
+   * Applies options to this tab's conversation, and records them for the next
+   * session it opens.
+   *
+   * Mode, model and skills are fixed when the SDK builds its options, so a live
+   * session is re-opened under them — same agent, so the history and the
+   * transcript both stay. Returns false when there was nothing live to change:
+   * a choice made before the first prompt is simply the config that prompt will
+   * use, and opening a session to hold it would be work nobody asked for.
+   */
+  private async applyOptions(changes: Partial<SessionConfig>): Promise<boolean> {
+    this.overrides = { ...this.overrides, ...changes };
+    const session = this.session;
+    if (!session) return false;
+    const result = await session.reopen(changes);
+    if (result) this.noteResolvedMode(result);
+    return true;
+  }
+
+  /** Turns a skill on for this conversation. False when it was already on. */
+  private async useSkill(skillId: string): Promise<boolean> {
+    const current = this.session?.settings.skills ?? this.overrides.skills ?? [];
+    if (current.includes(skillId)) return false;
+    await this.applyOptions({ skills: [...current, skillId] });
+    return true;
+  }
+
+  /** Keeps what the host resolved for the live session, and tells the view. */
+  private noteResolvedMode(result: SessionResult): void {
+    this.resolvedMode = {
+      mode: result.permission_mode,
+      source: result.permission_mode_source,
+      refused: result.permission_mode_refused,
+    };
   }
 
   private async onMessage(msg: Inbound): Promise<void> {
@@ -369,9 +587,11 @@ export class ChatPanel implements HostListener {
       // any open prompt.
       this.post({ type: 'trust', trusted: vscode.workspace.isTrusted });
       this.post({ type: 'vision', enabled: readSettings().session.vision === true });
+      this.reportContext();
+      this.postAgentId();
       this.postMode();
       if (this.rules.length > 0) this.post({ type: 'rules', files: this.rules });
-      if (this.manager) this.post({ type: 'state', ...this.manager.state() });
+      this.postState();
       for (const request of this.pendingApprovals()) {
         this.post({ type: 'approval', request });
       }
@@ -380,7 +600,14 @@ export class ChatPanel implements HostListener {
       // does either. Coming back to the session is the last thing done here,
       // because it is the only part that can take a moment — everything above
       // is already on the wire by the time the host is asked anything.
-      void this.reattach();
+      //
+      // The MCP card and the web-tools row follow it rather than racing it: a
+      // restored tab should show its conversation first, and both describe the
+      // session's configuration rather than any one turn in it.
+      void this.reattach()
+        .catch(() => undefined)
+        .then(() => this.reportMcp())
+        .then(() => this.reportWebSearch());
       return;
     }
 
@@ -396,7 +623,9 @@ export class ChatPanel implements HostListener {
         await this.sendTurn(msg.text, msg.mentions ?? [], msg.images ?? []);
         return;
       case 'cancel':
-        await this.ensureManager().cancel();
+        // Nothing running is nothing to cancel: a Stop on an idle tab is not a
+        // reason to start a host.
+        await this.session?.cancel();
         return;
       case 'answer':
         await this.answer(msg.requestId, msg.decision, msg.scope);
@@ -405,7 +634,7 @@ export class ChatPanel implements HostListener {
         await this.remember(msg.requestId, msg.rule);
         return;
       case 'openPermissions':
-        await this.openPermissionRules();
+        await this.hub.openPermissionRules();
         return;
       case 'pickMention':
         // The picker is the editor's, not the webview's: it searches the real
@@ -421,14 +650,32 @@ export class ChatPanel implements HostListener {
       case 'review':
         await this.openReview(msg.requestId);
         return;
+      case 'reviewPartial':
+        await this.openPartialReview(msg.requestId);
+        return;
       case 'reviewChange':
         await this.openChangeReview(msg.path);
+        return;
+      case 'restoreCheckpoint':
+        await this.restoreCheckpoint(msg.runId);
+        return;
+      case 'forkSession':
+        await this.forkSession(msg.runId);
         return;
       case 'reviewCall':
         await this.openCallReview(msg);
         return;
       case 'openLink':
         await this.openLink(msg.url);
+        return;
+      case 'copy':
+        await this.copy(msg.text);
+        return;
+      case 'pickImages':
+        await this.pickImages();
+        return;
+      case 'dropFiles':
+        this.dropFiles(msg.paths, msg.uris);
         return;
       default:
         return;
@@ -456,28 +703,120 @@ export class ChatPanel implements HostListener {
     await vscode.env.openExternal(vscode.Uri.parse(trimmed));
   }
 
-  // --- commands ---------------------------------------------------------------
+  /**
+   * Puts an answer on the clipboard.
+   *
+   * The webview could try `navigator.clipboard`, but a webview's access to it
+   * depends on permissions this document does not control, and a Copy that
+   * silently does nothing is worse than a round trip. `vscode.env.clipboard` is
+   * the editor's own, and it needs no permission. Only a string is written: the
+   * text of a bubble the user asked to copy, not anything derived from it.
+   */
+  private async copy(text: unknown): Promise<void> {
+    if (typeof text !== 'string' || text === '') return;
+    await vscode.env.clipboard.writeText(text);
+  }
 
   /**
-   * The catalogue, fetched once. Built-ins need no host, so they are always
-   * available; the skills are the reason it is a round trip at all.
+   * Opens the editor's image picker and posts what was chosen.
+   *
+   * A webview cannot open a file dialog, so the composer's button asks here.
+   * The files are read on this side and answered as `data:` URLs — the same
+   * shape a paste leaves in the composer — so the webview has one kind of
+   * attachment to draw and one path to send, whatever produced it.
    */
-  private async commandCatalogue(): Promise<SlashCommand[]> {
-    if (this.catalogue) return this.catalogue;
-    let skills: SkillEntry[] = [];
-    try {
-      skills = await this.ensureManager().skills();
-    } catch (err) {
-      // A missing or broken host must not cost the user the built-ins.
-      this.log(`could not list skills: ${(err as Error).message}`);
+  private async pickImages(): Promise<void> {
+    const picked = await vscode.window.showOpenDialog({
+      canSelectMany: true,
+      title: 'Attach images',
+      openLabel: 'Attach',
+      filters: { Images: ['png', 'jpg', 'jpeg', 'gif', 'webp'] },
+    });
+    if (!picked || picked.length === 0) return;
+    const images: string[] = [];
+    const errors: string[] = [];
+    for (const uri of picked) {
+      try {
+        const bytes = await vscode.workspace.fs.readFile(uri);
+        const result = dataUrlFromBytes(bytes, mimeForImagePath(uri.path));
+        if (result.dataUrl) images.push(result.dataUrl);
+        else if (result.error) errors.push(`${uri.path}: ${result.error}`);
+      } catch (err) {
+        errors.push(`${uri.path}: ${(err as Error).message}`);
+      }
+    }
+    if (images.length > 0) this.post({ type: 'images', images });
+    if (errors.length > 0) {
       this.post({
         type: 'notice',
         level: 'warn',
-        message: `Skill commands are unavailable: ${(err as Error).message}`,
+        message: `Some images were not attached: ${errors.join('; ')}`,
       });
     }
-    this.catalogue = commandCatalogue(skills);
-    return this.catalogue;
+  }
+
+  /**
+   * Turns dropped files into mentions of the ones inside the workspace.
+   *
+   * The webview posts whatever the drag carried — plain paths and/or `file:`
+   * URIs, because which of the two exists depends on how the drag started —
+   * and this side answers the one question that matters: is the file inside the
+   * workspace? A path outside it is not a mention, and saying so now is better
+   * than letting the host refuse the prompt later.
+   */
+  private dropFiles(paths: unknown, uris: unknown): void {
+    const folder = vscode.workspace.workspaceFolders?.[0];
+    if (!folder) {
+      this.post({
+        type: 'notice',
+        level: 'warn',
+        message: 'No workspace folder is open, so a dropped file has nothing to be relative to.',
+      });
+      return;
+    }
+    const candidates: string[] = [];
+    for (const value of Array.isArray(paths) ? paths : []) {
+      if (typeof value === 'string' && value !== '') candidates.push(value);
+    }
+    for (const value of Array.isArray(uris) ? uris : []) {
+      if (typeof value !== 'string' || value === '') continue;
+      // A drag payload can carry comment lines and blank ones; `Uri.parse`
+      // accepts almost anything, so the scheme is what decides.
+      let uri: vscode.Uri;
+      try {
+        uri = vscode.Uri.parse(value);
+      } catch {
+        continue;
+      }
+      if (uri.scheme !== 'file') continue;
+      candidates.push(uri.fsPath);
+    }
+    const mentions: string[] = [];
+    let outside = 0;
+    for (const candidate of candidates) {
+      const relative = relativeMention(folder.uri.fsPath, candidate);
+      if (relative === undefined) outside++;
+      else mentions.push(relative);
+    }
+    const unique = dedupeMentions(mentions);
+    if (unique.length > 0) this.post({ type: 'mentions', paths: unique });
+    if (outside > 0) {
+      this.post({
+        type: 'notice',
+        level: 'warn',
+        message:
+          outside === 1
+            ? 'A dropped file is outside this workspace, so it was not added.'
+            : `${outside} dropped files are outside this workspace, so they were not added.`,
+      });
+    }
+  }
+
+  // --- commands ---------------------------------------------------------------
+
+  /** The catalogue, fetched once per host by the hub. */
+  private commandCatalogue(): Promise<SlashCommand[]> {
+    return this.hub.commandCatalogue();
   }
 
   private async sendCatalogue(): Promise<void> {
@@ -485,9 +824,10 @@ export class ChatPanel implements HostListener {
   }
 
   /**
-   * Applies a permission mode to the conversation. The mode is a session
+   * Applies a permission mode to this tab's conversation. The mode is a session
    * option, so the session is re-opened under it — same agent, so the history
-   * and the transcript both stay.
+   * and the transcript both stay. Another tab's session is not touched: the
+   * mode belongs to the conversation, not to the window.
    *
    * The empty string is not a mode and not a mistake: it is the composer's
    * "Workspace default" entry, which clears the stored choice so that the
@@ -503,28 +843,27 @@ export class ChatPanel implements HostListener {
     }
     const chosen: PermissionMode | undefined = mode === '' ? undefined : mode;
     if (chosen === this.mode) return;
-    const manager = this.ensureManager();
     // Checked here rather than left to the re-open, so the refusal is reported
     // as a refusal. `reopen` would throw the same thing, but by then the chosen
     // mode is already recorded as an override and would silently take effect on
     // the *next* session — a mode the user was told had been refused.
-    if (manager.state().state === 'running') {
+    if (this.session?.currentState === 'running') {
       this.post({ type: 'notice', level: 'warn', message: 'Stop the turn before changing the mode.' });
       this.postMode();
       return;
     }
-    // false means either "nothing was open to re-open" (the ordinary case
-    // before the first prompt: the choice is simply recorded) or "it refused".
-    // A live session that did not take the change is the second one.
-    const applied = await manager.applyOptions({ permission_mode: chosen });
-    if (!applied && manager.running) {
+    try {
+      await this.applyOptions({ permission_mode: chosen });
+    } catch (err) {
+      this.post({ type: 'notice', level: 'error', message: `Could not change the mode: ${(err as Error).message}` });
       this.postMode();
       return;
     }
     this.mode = chosen;
     // Clearing the key rather than storing the empty string: `readMode` treats
     // both the same, and an absent key is what a workspace that never chose
-    // anything has.
+    // anything has. It is the *stored* choice a new tab starts from; live tabs
+    // keep the mode their own session resolved.
     await this.context.workspaceState.update(MODE_KEY, chosen);
     this.postMode();
     this.postState();
@@ -535,10 +874,9 @@ export class ChatPanel implements HostListener {
 
   /** Opens a past agent from this workspace as the current conversation. */
   private async pickResume(): Promise<void> {
-    const manager = this.ensureManager();
-    let sessions: Awaited<ReturnType<HostManager['listSessions']>> = [];
+    let sessions: SessionInfo[] = [];
     try {
-      sessions = await manager.listSessions();
+      sessions = await this.hub.listSessions();
     } catch (err) {
       this.post({ type: 'notice', level: 'error', message: `Could not list sessions: ${(err as Error).message}` });
       return;
@@ -563,9 +901,10 @@ export class ChatPanel implements HostListener {
     await this.resumeAgent(picked.session.agent_id);
   }
 
-  /** Ends the conversation. The host stays up; the next prompt starts fresh. */
+  /** Ends this tab's conversation. The host stays up; the next prompt starts fresh. */
   private async clearConversation(): Promise<void> {
-    await this.ensureManager().clearConversation();
+    const session = this.session;
+    if (session) await session.reset();
     await this.forgetAgent();
     this.changes.begin();
     this.forgetChanges();
@@ -573,51 +912,36 @@ export class ChatPanel implements HostListener {
     this.post({ type: 'session', agentId: '', started: false });
     this.postState();
     this.updateTitle();
-    this.sessionsChanged.fire();
+    this.hub.notifySessions();
   }
 
-  // --- the session sidebar's view of this -------------------------------------
-
-  /** The agents this workspace has stored. Starts a host if none is live. */
-  async listSessions(): Promise<SessionInfo[]> {
-    return this.ensureManager().listSessions();
-  }
+  // --- what the hub and the sidebar ask about this tab -------------------------
 
   /** The agent the tab is showing, whether or not a turn is in flight. */
   currentAgentId(): string | undefined {
-    return this.manager?.state().agentId;
+    return this.session?.agent ?? this.agentId;
   }
 
   /** The agent with a turn in flight. */
   runningAgentId(): string | undefined {
-    const state = this.manager?.state();
-    return state?.state === 'running' ? state.agentId : undefined;
+    return this.session?.currentState === 'running' ? this.currentAgentId() : undefined;
   }
 
-  /** Whether a host child is live, so a redraw need not start one. */
-  isHostUp(): boolean {
-    return this.manager?.running ?? false;
+  /** Whether a turn is in flight in this tab. */
+  get busy(): boolean {
+    return this.session?.currentState === 'running';
   }
 
   /**
-   * Continues a stored agent, from the sidebar. The tab is opened first: the
-   * resume reports its outcome as a message to the panel, and a message with no
-   * document behind it is dropped — the failure would be silent.
+   * Whether this tab is holding a question the user has to answer.
+   *
+   * It is the front tab that is asked, and the tab behind keeps its own cards:
+   * the window's status bar says "waiting" when any tab is, because a run
+   * blocked on an approval in a tab nobody is looking at is exactly the state a
+   * window-level indicator exists to surface.
    */
-  async openSession(agentId: string): Promise<void> {
-    this.open();
-    await this.resumeAgent(agentId);
-  }
-
-  /** Starts a fresh conversation, from the sidebar. */
-  async newSession(): Promise<void> {
-    this.open();
-    await this.clearConversation();
-  }
-
-  /** Subscribes to changes in the session list, or in the markers on it. */
-  onSessionsChanged(listener: () => void): vscode.Disposable {
-    return this.sessionsChanged.event(listener);
+  awaitingApproval(): boolean {
+    return this.pendingApprovals().length > 0;
   }
 
   /** Composes and sends one turn, with whatever context the editor has. */
@@ -677,9 +1001,9 @@ export class ChatPanel implements HostListener {
         this.postState();
         return;
       case 'skill': {
-        // The manager says so itself when the skill is already on; a second
+        // The session says so itself when the skill is already on; a second
         // notice here would be the same sentence twice.
-        const added = await this.ensureManager().useSkill(action.skillId);
+        const added = await this.useSkill(action.skillId);
         if (added) {
           this.post({
             type: 'notice',
@@ -705,7 +1029,8 @@ export class ChatPanel implements HostListener {
   /** Adopts a named agent, for `/resume <id>` typed rather than picked. */
   private async resumeAgent(agentId: string): Promise<void> {
     try {
-      await this.ensureManager().resumeSession(agentId);
+      const session = await this.ensureSession();
+      await session.continueWith(agentId);
     } catch (err) {
       this.post({
         type: 'notice',
@@ -715,6 +1040,8 @@ export class ChatPanel implements HostListener {
       this.postState();
       return;
     }
+    this.agentId = agentId;
+    this.postAgentId();
     // Cleared before the marker, never after: the transcript that was on screen
     // belonged to the agent that was current a moment ago, and the marker is
     // the first line of the conversation that replaced it.
@@ -722,7 +1049,8 @@ export class ChatPanel implements HostListener {
     this.post({ type: 'session', agentId, started: true });
     this.postState();
     this.updateTitle();
-    this.sessionsChanged.fire();
+    this.hub.notifyTabs();
+    this.hub.notifySessions();
     await this.reportRules();
     // Last, so the two never stack: the reset has taken the old conversation off
     // the screen, and the marker is the first line of the new one.
@@ -747,13 +1075,13 @@ export class ChatPanel implements HostListener {
     if (!agentId || !this.panel) return;
     let result: SessionTranscriptResult;
     try {
-      result = await this.ensureManager().transcript(agentId);
+      result = await this.hub.transcript(agentId);
     } catch (err) {
       this.log(`no replay for ${agentId}: ${(err as Error).message}`);
       return;
     }
 
-    const sessionId = this.manager?.state().sessionId ?? '';
+    const sessionId = this.session?.id ?? '';
     const steps = replayOf(result.entries ?? [], sessionId);
     if (steps.length === 0) return;
     for (const step of steps) {
@@ -781,29 +1109,32 @@ export class ChatPanel implements HostListener {
   }
 
   /**
-   * Comes back to the session this workspace was talking to, if it still has one.
+   * Comes back to the conversation this tab was showing, if it still has one.
    *
-   * Three endings, and the middle one is why the agent list is consulted rather
-   * than the memory being trusted: an id the workspace no longer stores has to be
-   * forgotten, or every reload would try to resume an agent that is gone and say
-   * so. A listing that could not be read is not evidence of that — it is no
-   * evidence at all, so the memory stays and nothing happens.
+   * The id comes from the document, which is where VS Code keeps a tab's state
+   * across a reload — the extension host does not survive one, so there is
+   * nowhere else it could have been. Three endings, and the middle one is why
+   * the agent list is consulted rather than the memory being trusted: an id the
+   * workspace no longer stores has to be forgotten, or every reload would try
+   * to resume an agent that is gone and say so. A listing that could not be
+   * read is not evidence of that — it is no evidence at all, so the memory
+   * stays and nothing happens.
    */
   private async reattach(): Promise<void> {
-    const stored = this.context.workspaceState.get<string>(SessionAgentKey);
+    const stored = this.agentId;
     if (!stored) return;
 
-    // A session that is already live needs no resuming — the manager survived
-    // because this document, not the window, is what went away. The transcript
-    // is still what the document lost, and that is what it gets.
-    if (this.manager?.state().agentId === stored) {
+    // A session that is already live needs no resuming — it survived because
+    // this document, not the window, is what went away. The transcript is still
+    // what the document lost, and that is what it gets.
+    if (this.session?.agent === stored) {
       await this.replay(stored);
       return;
     }
 
     let listed: SessionInfo[] | undefined;
     try {
-      listed = await this.ensureManager().listSessions();
+      listed = await this.hub.listSessions();
     } catch (err) {
       this.log(`could not check whether ${stored} is still stored: ${(err as Error).message}`);
     }
@@ -821,20 +1152,41 @@ export class ChatPanel implements HostListener {
   }
 
   /**
-   * Remembers which agent the tab is showing, so a reloaded window can find it.
+   * Remembers which agent the tab is showing.
    *
    * Written here rather than at each place a session opens: this side hears
    * about every one of them — new, resumed, re-opened for a model change — and
    * the id is the host's answer, not something composed from what was asked.
+   * The document is told separately (`vscode.setState`), because it is the one
+   * that survives a reload.
    */
   private rememberAgent(agentId: string): void {
-    if (!agentId) return;
-    void this.context.workspaceState.update(SessionAgentKey, agentId);
+    if (!agentId || agentId === this.agentId) return;
+    this.agentId = agentId;
+    this.postAgentId();
+    this.updateTitle();
+    this.hub.notifyTabs();
   }
 
   /** Forgets it. Called when the conversation is ended, and when it is gone. */
   private async forgetAgent(): Promise<void> {
-    await this.context.workspaceState.update(SessionAgentKey, undefined);
+    if (this.agentId === undefined) return;
+    this.agentId = undefined;
+    this.postAgentId();
+    this.updateTitle();
+    this.hub.notifyTabs();
+  }
+
+  /**
+   * Tells the document which agent to remember, so a reload can restore this
+   * tab onto the same conversation.
+   *
+   * It is its own message rather than a field on `state`: this is the one thing
+   * the document must persist, and it changes at moments that are not state
+   * changes. `vscode.setState` is the document's only durable memory.
+   */
+  private postAgentId(): void {
+    this.post({ type: 'agent', agentId: this.agentId ?? '' });
   }
 
   /** Names the tab after the conversation in it, so a tab strip is readable. */
@@ -846,12 +1198,16 @@ export class ChatPanel implements HostListener {
 
   /** Applies a model to the conversation, from an argument or a picker. */
   private async pickModel(given: string): Promise<void> {
-    const manager = this.ensureManager();
     let model = given;
     if (model === '') {
-      let entries: Awaited<ReturnType<HostManager['listModels']>> = [];
+      let entries: Awaited<ReturnType<Hub['listModels']>> = [];
       try {
-        entries = await manager.listModels();
+        // This tab's provider, not the window's: a conversation pointed at one
+        // endpoint should list that endpoint's models.
+        entries = await this.hub.listModels({
+          provider: this.overrides.provider,
+          base_url: this.overrides.base_url,
+        });
       } catch (err) {
         this.post({
           type: 'notice',
@@ -876,7 +1232,7 @@ export class ChatPanel implements HostListener {
       if (!picked) return;
       model = picked.id;
     }
-    await manager.applyOptions({ model });
+    await this.applyOptions({ model });
     this.post({ type: 'notice', level: 'info', message: `Model: ${model}. The conversation continues.` });
     this.postState();
   }
@@ -892,8 +1248,8 @@ export class ChatPanel implements HostListener {
     // so the tracker is reset here rather than when the first write arrives.
     this.changes.begin();
     this.forgetChanges();
-    await this.ensureManager()
-      .send(text, { context, attachments })
+    await this.liveSession()
+      .then((session) => session.send(text, { context, attachments }))
       .catch(() => undefined);
     // The session exists now, so what it loaded can be reported. This is the
     // first moment the rules are a fact about a session rather than a guess.
@@ -906,10 +1262,8 @@ export class ChatPanel implements HostListener {
    * asking the host.
    */
   private async reportRules(): Promise<void> {
-    const manager = this.manager;
-    if (!manager) return;
     try {
-      const files = await manager.rules();
+      const files = await this.hub.rules();
       const key = JSON.stringify(files);
       if (key === JSON.stringify(this.rules)) return;
       this.rules = files;
@@ -919,10 +1273,74 @@ export class ChatPanel implements HostListener {
     }
   }
 
+  /**
+   * Reports the MCP servers this workspace's enabled files declare.
+   *
+   * Asked once per document: the layers are session config, so a tab in this
+   * workspace loads the same set until the window reloads, and the settings are
+   * where a different set is chosen. Nothing is posted when both layers are
+   * off — a card on every conversation saying MCP is off is noise, and the
+   * setting is already the answer.
+   */
+  private async reportMcp(): Promise<void> {
+    const { mcp } = readSettings();
+    if (!mcpEnabled(mcp)) return;
+    try {
+      const listing = await this.hub.mcpServers(settingSourcesFor(mcp));
+      this.post({
+        type: 'mcp',
+        servers: listing.servers ?? [],
+        notes: missingMcpSources(listing.sources ?? []),
+      });
+    } catch (err) {
+      // A malformed file is the interesting failure, and an empty card would
+      // hide the one thing the user can fix. The hosts that predate the method
+      // fail too, and saying so once is honest: there is no listing to show.
+      this.post({ type: 'mcp', servers: [], notes: [], error: (err as Error).message });
+    }
+  }
+
+  /**
+   * Reports the web tools this session was given.
+   *
+   * Only when enabled: a row on every conversation saying the web tools are off
+   * is noise, and the setting is already the answer. The key is reported as
+   * present or absent and in no other form — its value never leaves
+   * SecretStorage, so the webview could not render it even if it wanted to.
+   */
+  private async reportWebSearch(): Promise<void> {
+    const { webSearch } = readSettings();
+    if (!webSearch.enabled) return;
+    const provider = webSearch.provider.trim().toLowerCase() === 'mcp' ? 'mcp' : 'http';
+    const stored = webSearchNeedsKey(webSearch)
+      ? await readWebSearchKey(this.context)
+      : undefined;
+    this.post({
+      type: 'webSearch',
+      provider,
+      key: stored !== undefined && stored.trim() !== '',
+    });
+  }
+
+  /**
+   * Tells the document the window the token meter measures against.
+   *
+   * Public because a settings change restarts the host without reloading any
+   * tab, and `Hub.restart` calls this on each one so the number on screen is
+   * the one the setting now says. 0 is "unknown" and means counts only.
+   */
+  reportContext(): void {
+    this.post({ type: 'context', window: readSettings().contextWindow });
+  }
+
   /** Answers an approval, and closes the review it was answered from. */
   private async answer(requestId: string, decision: Decision, scope?: string): Promise<void> {
-    await this.ensureManager().respond(requestId, decision, { scope });
+    await this.session?.respond(requestId, decision, { scope });
     await this.closeReview(requestId);
+    // `respond` drops the request from the session's map itself, so no
+    // withdrawal notification follows it — the hub has to be told here or the
+    // status bar would keep saying "waiting" for a question already answered.
+    this.hub.notifyRunning();
   }
 
   /**
@@ -936,10 +1354,14 @@ export class ChatPanel implements HostListener {
    * the button and could not be more different to the user.
    */
   private async remember(requestId: string, rule: RuleSpec): Promise<void> {
-    const manager = this.ensureManager();
     try {
-      const result = await manager.addPermissionRule(rule, requestId);
+      const result = await this.hub.addPermissionRule(rule, requestId);
       await this.closeReview(requestId);
+      // A rule that decided this call answered it on the host, and the client
+      // heard that only as this result — without this the tab would keep
+      // claiming a question that is already answered.
+      if (result.approved === true) this.session?.forgetApproval(requestId);
+      this.hub.notifyRunning();
       this.log(
         `wrote ${result.path} rule ${result.index}` +
           (result.decided_by ? ` (decided by ${result.decided_by.describe || 'a rule'})` : ''),
@@ -959,94 +1381,8 @@ export class ChatPanel implements HostListener {
     }
   }
 
-  /**
-   * Shows the workspace rule file where it lives, creating it when this
-   * workspace has written no rules yet.
-   *
-   * A file that will not compile is opened at the place the parser objected to,
-   * reported against the file in the Problems panel, and said in the panel: it
-   * is the one failure of this feature the user cannot see coming, so "the
-   * session would not start" would leave them looking for which bracket. The
-   * session itself reports the same problem as a failure to open, and this is
-   * the way to it.
-   */
-  async openPermissionRules(): Promise<void> {
-    let state: PermissionsResult;
-    try {
-      state = await this.ensureManager().permissionRules();
-    } catch (err) {
-      this.post({
-        type: 'notice',
-        level: 'error',
-        message: `Could not read the permission rules: ${(err as Error).message}`,
-      });
-      return;
-    }
-    const uri = vscode.Uri.file(state.path);
-    if (!state.exists) {
-      const create = 'Create it';
-      const answer = await vscode.window.showInformationMessage(
-        'This workspace has no permission rules. Nothing is allowed or refused by rule yet.',
-        { modal: false, detail: state.path },
-        create,
-      );
-      if (answer !== create) return;
-      try {
-        await vscode.workspace.fs.createDirectory(vscode.Uri.file(dirname(state.path)));
-        await vscode.workspace.fs.writeFile(uri, Buffer.from(emptyRulesFile(), 'utf8'));
-      } catch (err) {
-        this.post({
-          type: 'notice',
-          level: 'error',
-          message: `Could not create ${state.path}: ${(err as Error).message}`,
-        });
-        return;
-      }
-    }
-    const document = await vscode.workspace.openTextDocument(uri);
-    const editor = await vscode.window.showTextDocument(document);
-    this.reportProblem(state.path, state.problem);
-    // A file the session does not read is a file whose rules do nothing. The
-    // setting is what turns it off, so saying which setting is the whole help
-    // a user needs — the alternative is editing a rule and watching it be
-    // ignored, which reads as the feature being broken.
-    if (readSettings().session.load_permissions === false) {
-      this.post({
-        type: 'notice',
-        level: 'warn',
-        message: `anvil.permissions is off, so ${state.path} is not read: its rules decide nothing.`,
-      });
-    }
-    if (!state.problem) return;
-    const position = problemPosition(state.problem);
-    const at = new vscode.Position(position.line, position.column);
-    editor.selection = new vscode.Selection(at, at);
-    editor.revealRange(new vscode.Range(at, at), vscode.TextEditorRevealType.InCenter);
-    this.post({ type: 'notice', level: 'warn', message: describeProblem(state.path, state.problem) });
-  }
-
-  /** Reports a rule file that will not compile against the file itself. */
-  private reportProblem(path: string, problem: RuleProblem | undefined): void {
-    if (!problem) {
-      this.diagnostics?.delete(vscode.Uri.file(path));
-      return;
-    }
-    if (!this.diagnostics) this.diagnostics = vscode.languages.createDiagnosticCollection('anvil');
-    const position = problemPosition(problem);
-    const at = new vscode.Position(position.line, position.column);
-    // A zero-width range at the exact place the parser stopped: the file is
-    // being edited by hand, so pointing at a character beats underlining a line.
-    const diagnostic = new vscode.Diagnostic(
-      new vscode.Range(at, at),
-      problem.message,
-      vscode.DiagnosticSeverity.Error,
-    );
-    diagnostic.source = 'anvil';
-    this.diagnostics.set(vscode.Uri.file(path), [diagnostic]);
-  }
-
   private pendingApprovals(): ApprovalRequest[] {
-    return this.manager?.pendingApprovals() ?? [];
+    return this.session?.pendingApprovals() ?? [];
   }
 
   // --- reviews ---------------------------------------------------------------
@@ -1082,6 +1418,115 @@ export class ChatPanel implements HostListener {
     );
     const existing = this.reviews.get(requestId) ?? [];
     this.reviews.set(requestId, [...existing, ...uris]);
+  }
+
+  /**
+   * Opens the per-hunk review for an approval that can be taken in parts.
+   *
+   * The card's `Review changes…` button is a hint about shape — a diff with both
+   * bodies. Whether the change really can be split is decided by `partialDiff`,
+   * which proves every hunk applies. A change that fails the proof is answered
+   * with Allow or Deny, and the notice says so rather than leaving a button
+   * that would produce a guessed file.
+   */
+  private async openPartialReview(requestId: string): Promise<void> {
+    const request = this.pendingApprovals().find((candidate) => candidate.request_id === requestId);
+    const partial = request ? partialDiff(request.tool, request.preview) : undefined;
+    if (!request || !partial) {
+      this.post({
+        type: 'notice',
+        level: 'warn',
+        message: 'This change cannot be applied in parts. Use Allow or Deny.',
+      });
+      return;
+    }
+    this.partialReviews.open(requestId, {
+      path: request.preview?.path ?? request.tool,
+      hunks: partial.hunks,
+      onAccept: (accepted) => this.answerPartial(request, partial, accepted),
+      onReject: () => this.rejectPartial(request, partial.hunks.length),
+    });
+  }
+
+  /**
+   * Answers "keep these parts" with an allow whose arguments carry the accepted
+   * text.
+   *
+   * The text is computed against the preview's whole `before` and handed to the
+   * host as rewritten arguments, so the call executes exactly what the reviewer
+   * chose — there is no second diff, and nothing is re-applied from the patch.
+   * When the computation or the rewrite refuses, nothing is sent and the card
+   * keeps its ordinary choice.
+   */
+  private async answerPartial(
+    request: ApprovalRequest,
+    partial: PartialDiff,
+    accepted: readonly number[],
+  ): Promise<void> {
+    if (accepted.length === 0) {
+      await this.rejectPartial(request, partial.hunks.length);
+      return;
+    }
+    const text = applyAccepted(partial.before, partial.hunks, accepted);
+    const args =
+      text === undefined
+        ? undefined
+        : rewriteArgs(request.tool, request.args, partial.before, partial.after, text);
+    if (text === undefined || args === undefined) {
+      this.post({
+        type: 'notice',
+        level: 'warn',
+        message:
+          'This change no longer matches the file it was previewed from, so nothing was sent. Decide with Allow or Deny.',
+      });
+      return;
+    }
+    const session = this.session;
+    if (!session) return;
+    try {
+      await session.respond(request.request_id, 'allow', { args });
+    } catch (err) {
+      this.post({
+        type: 'notice',
+        level: 'error',
+        message: `Could not answer the approval: ${(err as Error).message}`,
+      });
+      return;
+    }
+    await this.closeReview(request.request_id);
+    this.post({
+      type: 'approvalSettled',
+      requestId: request.request_id,
+      decision: 'allow',
+      kept: accepted.length,
+      total: partial.hunks.length,
+    });
+  }
+
+  /** Answers "keep none of it" as a denial, in the same words the card's Deny uses. */
+  private async rejectPartial(request: ApprovalRequest, total: number): Promise<void> {
+    const session = this.session;
+    if (!session) return;
+    try {
+      await session.respond(request.request_id, 'deny', {
+        message: 'The reviewer rejected this change.',
+      });
+    } catch (err) {
+      this.post({
+        type: 'notice',
+        level: 'error',
+        message: `Could not answer the approval: ${(err as Error).message}`,
+      });
+      return;
+    }
+    await this.closeReview(request.request_id);
+    this.post({
+      type: 'approvalSettled',
+      requestId: request.request_id,
+      decision: 'deny',
+      kept: 0,
+      total,
+    });
   }
 
   private async openChangeReview(path: string): Promise<void> {
@@ -1183,6 +1628,10 @@ export class ChatPanel implements HostListener {
   }
 
   private async closeReview(requestId: string): Promise<void> {
+    // Both surfaces belong to one question: closing the diff tabs while the
+    // per-hunk document stayed up would leave a live set of buttons over a
+    // request that has already been answered.
+    this.partialReviews.close(requestId);
     const uris = this.reviews.get(requestId);
     if (!uris) return;
     this.reviews.delete(requestId);
@@ -1245,35 +1694,43 @@ export class ChatPanel implements HostListener {
     // call is blocked until the user answers.
     void this.changes.snapshotToolCall(request.tool, request.args);
     this.post({ type: 'approval', request });
+    // A tab that now needs an answer is a different window state, and the
+    // status bar is the surface that has to show it even when this tab is not
+    // the one in front.
+    this.hub.notifyRunning();
   };
 
   onApprovalWithdrawn = (requestId: string): void => {
     void this.closeReview(requestId);
     this.post({ type: 'approvalWithdrawn', requestId });
+    this.hub.notifyRunning();
   };
 
   onDone = (done: DoneParams, failure: RunFailure): void => {
     this.post({ type: 'done', done, failure });
     void this.reportChanges(done.run_id);
+    void this.reportCheckpoint(done.run_id);
     // The turn changed the stored record — its run count, its status, its
     // updated_at — so the sidebar's copy of it is stale from here on.
-    this.sessionsChanged.fire();
+    this.hub.notifySessions();
+    this.hub.notifyRunning();
   };
 
   onState = (): void => {
-    if (this.manager) this.post({ type: 'state', ...this.manager.state() });
-    this.runningChanged.fire();
-    this.sessionsChanged.fire();
+    this.postState();
+    this.hub.notifyRunning();
+    this.hub.notifySessions();
   };
 
   /**
-   * A session opened. The mode the host resolved is the panel's to show, and the
+   * A session opened. The mode the host resolved is this tab's to show, and the
    * select is re-sent here rather than only when the user changes it: a session
    * opened under the workspace's declaration is a select that was showing the
    * wrong thing until now.
    */
   onSession = (result: SessionResult): void => {
     this.rememberAgent(result.agent_id);
+    this.noteResolvedMode(result);
     this.postMode();
     this.announceSessionMode(result);
   };
@@ -1294,6 +1751,87 @@ export class ChatPanel implements HostListener {
       });
     } catch (err) {
       this.log(`could not compute the changed files: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * Offers the undo of a run, once the run has ended.
+   *
+   * The checkpoint is looked up by run id rather than assumed: a run that changed
+   * nothing captured nothing, and a host that predates checkpoints has no list at
+   * all. Either way there is no button, rather than a button that would fail.
+   */
+  private async reportCheckpoint(runId: string): Promise<void> {
+    const agentId = this.currentAgentId();
+    if (!agentId || !runId) return;
+    try {
+      const runs = await this.hub.listCheckpoints(agentId);
+      const run = runs.find((candidate) => candidate.run_id === runId);
+      if (!run || run.files.length === 0) return;
+      this.post({ type: 'checkpoint', runId, files: run.files.map((file) => file.path) });
+    } catch (err) {
+      // A host without the method answers -32601, which is "no checkpoints here"
+      // rather than a failure worth a banner.
+      this.log(`could not read the checkpoint for ${runId}: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * Puts a run's files back, after a modal confirmation.
+   *
+   * The confirmation is the point: this writes to disk, and the extension has no
+   * record of the restored content to put back in turn. The card disabled itself
+   * when the button was pressed, so every outcome — cancelled, counts, error —
+   * is reported back to it.
+   */
+  private async restoreCheckpoint(runId: string): Promise<void> {
+    const agentId = this.currentAgentId();
+    if (!agentId) return;
+    const choice = 'Restore';
+    const answer = await vscode.window.showWarningMessage(
+      'Restore the files this run changed?',
+      {
+        modal: true,
+        detail:
+          'Each file goes back to its content before this run, and files the run created are deleted. ' +
+          'This cannot be undone from here.',
+      },
+      choice,
+    );
+    if (answer !== choice) {
+      this.post({ type: 'checkpointRestored', runId, cancelled: true });
+      return;
+    }
+    try {
+      const result = await this.hub.restoreCheckpoint(agentId, runId);
+      const deleted = result.files.filter((file) => file.deleted).length;
+      const restored = result.files.length - deleted;
+      // The next turn's changed-files card is computed against the restored
+      // workspace, not against the one the last card described.
+      this.changes.begin();
+      this.forgetChanges();
+      this.post({ type: 'checkpointRestored', runId, restored, deleted });
+    } catch (err) {
+      this.post({ type: 'checkpointRestored', runId, error: (err as Error).message });
+    }
+  }
+
+  /**
+   * Branches this conversation at a finished run, in a new tab.
+   *
+   * The hub opens the tab; this tab is not touched, because the point of a fork
+   * is that the conversation continues in two directions from the same history.
+   * The button disabled itself when pressed, so both endings are reported: a
+   * branch that could not be made has to be possible to ask for again.
+   */
+  private async forkSession(runId: string): Promise<void> {
+    const agentId = this.currentAgentId();
+    if (!agentId || !runId) return;
+    try {
+      const newId = await this.hub.forkSession(agentId, runId);
+      this.post({ type: 'forked', runId, agentId: newId });
+    } catch (err) {
+      this.post({ type: 'forked', runId, error: (err as Error).message });
     }
   }
 
@@ -1323,15 +1861,26 @@ export class ChatPanel implements HostListener {
     void panel.webview.postMessage(message).then(undefined, () => undefined);
   }
 
-  /** Re-announces where the session stands. The mode travels with `postMode`. */
+  /** Re-announces where this tab's session stands. The mode travels with `postMode`. */
   private postState(): void {
-    const manager = this.manager;
-    this.post(manager ? { type: 'state', ...manager.state() } : { type: 'state', state: 'idle' });
+    const session = this.session;
+    if (!session) {
+      this.post({ type: 'state', state: 'idle' });
+      return;
+    }
+    this.post({
+      type: 'state',
+      state: session.currentState,
+      runId: session.activeRun,
+      sessionId: session.id,
+      agentId: this.currentAgentId(),
+      mode: this.resolvedMode?.mode,
+    });
   }
 
-  /** Stops the active run. Safe when nothing is running. */
+  /** Stops this tab's active run. Safe when nothing is running. */
   async stop(): Promise<void> {
-    await this.manager?.cancel();
+    await this.session?.cancel();
   }
 
   /**
@@ -1344,12 +1893,11 @@ export class ChatPanel implements HostListener {
    * person cannot see from the select alone.
    */
   private postMode(): void {
-    const state = this.manager?.state();
     this.post({
       type: 'mode',
       mode: this.mode ?? '',
-      resolved: state?.mode ?? this.mode ?? 'ask',
-      source: state?.modeSource ?? 'default',
+      resolved: this.resolvedMode?.mode ?? this.mode ?? 'ask',
+      source: this.resolvedMode?.source ?? 'default',
     });
   }
 
@@ -1383,44 +1931,48 @@ export class ChatPanel implements HostListener {
 
   /** Replaces the host child and tells the view to start over. */
   async restart(): Promise<void> {
-    await this.ensureManager().restart();
-    this.catalogue = undefined;
+    await this.hub.restart();
     this.postState();
-    this.runningChanged.fire();
-    this.sessionsChanged.fire();
   }
 
   /** Whether a host child is live right now. */
   get running(): boolean {
-    return this.manager?.running ?? false;
+    return this.hub.manager.running;
   }
 
   /**
-   * Whether a turn is in flight. Distinct from `running`, which only means a
-   * session is open: the Stop button hangs off this one, because stopping an
-   * idle conversation is not a thing the user needs a button for.
+   * The session handle was closed by a crash or a restart. Everything the dead
+   * child said is still the conversation — the agent is on disk — but the
+   * handle must not be used again, and the mode it resolved is no longer the
+   * mode anything is running under.
    */
-  get busy(): boolean {
-    return this.manager?.state().state === 'running';
-  }
-
-  /** Subscribes to host up/down transitions. */
-  onRunningChanged(listener: () => void): vscode.Disposable {
-    return this.runningChanged.event(listener);
+  hostReset(): void {
+    this.session = undefined;
+    this.opening = undefined;
+    this.resolvedMode = undefined;
+    this.postState();
+    this.postMode();
   }
 
   async dispose(): Promise<void> {
-    const manager = this.manager;
-    this.manager = undefined;
-    this.runningChanged.dispose();
-    this.sessionsChanged.dispose();
-    this.diagnostics?.dispose();
-    this.diagnostics = undefined;
+    if (this.disposed) return;
+    this.disposed = true;
+    // The hub owns whether this tab is counted; it drops it from its set and
+    // forgets it before the handle is closed, so a late notification finds
+    // nothing rather than a half-disposed tab.
+    this.hub.unregister(this);
+    this.panel = undefined;
+    this.listening = false;
+    this.pending = [];
+    this.partialReviews.dispose();
+    const session = this.session;
+    this.session = undefined;
+    this.opening = undefined;
     for (const uris of this.reviews.values()) {
       await this.previews.close(uris).catch(() => undefined);
     }
     this.reviews.clear();
-    if (manager) await manager.dispose();
+    if (session) await this.hub.manager.close(session).catch(() => undefined);
   }
 }
 
@@ -1455,6 +2007,7 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
   -->
   <div id="composerDock" class="dock">
     <div id="status" class="status" hidden></div>
+    <div id="meter" class="meter" hidden></div>
     <div id="bypass" class="bypass" hidden>Bypass is on. Tool calls run without asking.</div>
     <div id="dontAsk" class="dont-ask" hidden>No asking. Only calls this workspace's rules allow will run.</div>
     <form id="composer" class="composer">
@@ -1480,6 +2033,17 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
         <button id="permissions" type="button" class="ghost" title="Open .anvil/permissions.json: what runs without asking, and what is refused">Permissions</button>
         <span class="spacer"></span>
         <button id="attach" type="button" class="secondary" title="Reference a file or folder">@</button>
+        <!--
+          The picker the paste path already accepts: a button because a paste
+          needs an image in the clipboard first, and a file on disk is the
+          common case.
+        -->
+        <button id="image" type="button" class="secondary" title="Attach an image">Image</button>
+        <!--
+          One control for both ends of a turn: a paper plane sends, and the same
+          button becomes a stop square while a turn runs. A separate Stop button
+          would appear only at the moment Send stops being useful.
+        -->
         <button id="send" type="button" class="primary icon" aria-label="Send" title="Send">
           <svg class="icon-send" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M22 2 11 13"/>
@@ -1491,6 +2055,13 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
         </button>
       </div>
     </form>
+    <!--
+      The model's own plan, below the composer: it is about the work in flight,
+      not about the conversation, so it does not belong in the transcript. Every
+      todo event carries the whole list and replaces this block; an empty list
+      hides it.
+    -->
+    <div id="todos" class="todos" hidden aria-label="Task list"></div>
   </div>
   <!--
     The Markdown parser first, because it is a plain script assigning a global
@@ -1500,6 +2071,8 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     requirement; it is written this way so a reader can see the dependency.
   -->
   <script nonce="${nonce}" src="${asset('markdown.js')}"></script>
+  <script nonce="${nonce}" src="${asset('meter.js')}"></script>
+  <script nonce="${nonce}" src="${asset('history.js')}"></script>
   <script nonce="${nonce}" src="${asset('chat.js')}"></script>
 </body>
 </html>`;

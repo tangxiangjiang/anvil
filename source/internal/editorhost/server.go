@@ -165,6 +165,16 @@ func (s *Server) dispatch(ctx context.Context, req *Request) (any, *RPCError) {
 		return s.handleSessionTranscript(ctx, req.Params)
 	case MethodSessionClose:
 		return s.handleSessionClose(req.Params)
+	case MethodSessionRename:
+		return s.handleSessionRename(ctx, req.Params)
+	case MethodSessionDelete:
+		return s.handleSessionDelete(ctx, req.Params)
+	case MethodSessionFork:
+		return s.handleSessionFork(ctx, req.Params)
+	case MethodCheckpointList:
+		return s.handleCheckpointList(ctx, req.Params)
+	case MethodCheckpointRestore:
+		return s.handleCheckpointRestore(ctx, req.Params)
 	case MethodPrompt:
 		return s.handlePrompt(ctx, req.Params)
 	case MethodCancel:
@@ -175,6 +185,8 @@ func (s *Server) dispatch(ctx context.Context, req *Request) (any, *RPCError) {
 		return s.handleSkillsList(ctx, req.Params)
 	case MethodRulesList:
 		return s.handleRulesList(ctx, req.Params)
+	case MethodMCPList:
+		return s.handleMCPList(ctx, req.Params)
 	case MethodPermissionsGet:
 		return s.handlePermissionsGet(ctx, req.Params)
 	case MethodPermissionsAdd:
@@ -234,7 +246,7 @@ func (s *Server) handleInitialize(params json.RawMessage) (any, *RPCError) {
 }
 
 func capabilities() []string {
-	return []string{"streaming", "sessions", "resume", "cancel", "models", "approval", "context", "vision", "plan", "skills", "rules", "permissions"}
+	return []string{"streaming", "sessions", "resume", "cancel", "models", "approval", "context", "vision", "plan", "skills", "rules", "permissions", "mcp"}
 }
 
 // ---------------------------------------------------------------------------
@@ -352,6 +364,143 @@ func (s *Server) handleSessionList(ctx context.Context, params json.RawMessage) 
 	if p.Limit > 0 && len(out.Sessions) > p.Limit {
 		out.Sessions = out.Sessions[:p.Limit]
 	}
+	return out, nil
+}
+
+// handleSessionRename names a stored session, as an appended `meta` record.
+func (s *Server) handleSessionRename(ctx context.Context, params json.RawMessage) (any, *RPCError) {
+	p, err := decode[SessionRenameParams](params)
+	if err != nil {
+		return nil, errInvalidParams("session.rename: " + err.Error())
+	}
+	if p.AgentID == "" {
+		return nil, errInvalidParams("session.rename: agent_id is required")
+	}
+	if strings.TrimSpace(p.Title) == "" {
+		return nil, errInvalidParams("session.rename: title is required")
+	}
+	opts := anvil.ListOptions{Local: anvil.LocalOptions{CWD: s.cwdPath(), Store: p.Store}}
+	if err := anvil.RenameAgent(ctx, p.AgentID, p.Title, opts); err != nil {
+		return nil, errHost(err)
+	}
+	s.logf("session.rename agent=%s", p.AgentID)
+	return SessionRenameResult{AgentID: p.AgentID, Title: strings.TrimSpace(p.Title)}, nil
+}
+
+// handleSessionDelete forgets a stored session.
+//
+// A live session holding the same agent is not closed here: closing is the
+// client's decision, and a tab that is still open would write the file again on
+// its next prompt. The client closes the owning tab first, which is what makes
+// the deletion stick.
+func (s *Server) handleSessionDelete(ctx context.Context, params json.RawMessage) (any, *RPCError) {
+	p, err := decode[SessionDeleteParams](params)
+	if err != nil {
+		return nil, errInvalidParams("session.delete: " + err.Error())
+	}
+	if p.AgentID == "" {
+		return nil, errInvalidParams("session.delete: agent_id is required")
+	}
+	opts := anvil.ListOptions{
+		Local:       anvil.LocalOptions{CWD: s.cwdPath(), Store: p.Store},
+		Checkpoints: &anvil.CheckpointOptions{},
+	}
+	if err := anvil.DeleteAgent(ctx, p.AgentID, opts); err != nil {
+		return nil, errHost(err)
+	}
+	s.logf("session.delete agent=%s", p.AgentID)
+	return SessionDeleteResult{AgentID: p.AgentID, Deleted: true}, nil
+}
+
+// handleSessionFork branches a stored session at a run boundary.
+//
+// The fork is not opened here. The client opens it in a tab, which is the step
+// that turns an id into a conversation — and a client forking from the sidebar
+// has no tab to open it in yet, so it is returned rather than resumed.
+func (s *Server) handleSessionFork(ctx context.Context, params json.RawMessage) (any, *RPCError) {
+	p, err := decode[SessionForkParams](params)
+	if err != nil {
+		return nil, errInvalidParams("session.fork: " + err.Error())
+	}
+	if p.AgentID == "" {
+		return nil, errInvalidParams("session.fork: agent_id is required")
+	}
+	if p.RunID == "" {
+		return nil, errInvalidParams("session.fork: run_id is required")
+	}
+	opts := anvil.ListOptions{Local: anvil.LocalOptions{CWD: s.cwdPath(), Store: p.Store}}
+	newID, err := anvil.ForkAgent(ctx, p.AgentID, p.RunID, opts)
+	if err != nil {
+		return nil, errHost(err)
+	}
+	s.logf("session.fork agent=%s run=%s fork=%s", p.AgentID, p.RunID, newID)
+	return SessionForkResult{AgentID: newID}, nil
+}
+
+// ---------------------------------------------------------------------------
+// checkpoint.list / checkpoint.restore
+// ---------------------------------------------------------------------------
+
+// handleCheckpointList lists the runs of a session that captured pre-images.
+//
+// An empty list is the normal answer for a session whose runs changed nothing,
+// and for one that ran before checkpoints existed; it is not an error. The
+// client shows the restore action only when there is a run to restore.
+func (s *Server) handleCheckpointList(ctx context.Context, params json.RawMessage) (any, *RPCError) {
+	_ = ctx
+	p, err := decode[CheckpointListParams](params)
+	if err != nil {
+		return nil, errInvalidParams("checkpoint.list: " + err.Error())
+	}
+	if p.AgentID == "" {
+		return nil, errInvalidParams("checkpoint.list: agent_id is required")
+	}
+	runs, err := anvil.ListCheckpoints(s.cwdPath(), p.AgentID, anvil.CheckpointOptions{})
+	if err != nil {
+		return nil, errHost(err)
+	}
+	out := CheckpointListResult{Runs: make([]CheckpointRun, 0, len(runs))}
+	for _, run := range runs {
+		files := make([]CheckpointFile, 0, len(run.Files))
+		for _, file := range run.Files {
+			files = append(files, CheckpointFile{Path: file.Path, Existed: file.Existed, Size: file.Size})
+		}
+		out.Runs = append(out.Runs, CheckpointRun{
+			RunID:     run.RunID,
+			CreatedAt: run.CreatedAt.UTC().Format(time.RFC3339),
+			Files:     files,
+		})
+	}
+	return out, nil
+}
+
+// handleCheckpointRestore puts one run's files back on disk.
+//
+// The SDK resolves every captured path through the workspace sandbox, so a
+// manifest that names its way out is refused rather than followed. The result
+// is what was actually written or deleted, not what was asked for: the client
+// reports that rather than restating the manifest.
+func (s *Server) handleCheckpointRestore(ctx context.Context, params json.RawMessage) (any, *RPCError) {
+	_ = ctx
+	p, err := decode[CheckpointRestoreParams](params)
+	if err != nil {
+		return nil, errInvalidParams("checkpoint.restore: " + err.Error())
+	}
+	if p.AgentID == "" {
+		return nil, errInvalidParams("checkpoint.restore: agent_id is required")
+	}
+	if p.RunID == "" {
+		return nil, errInvalidParams("checkpoint.restore: run_id is required")
+	}
+	restored, err := anvil.RestoreCheckpoint(s.cwdPath(), p.AgentID, p.RunID, anvil.CheckpointOptions{})
+	if err != nil {
+		return nil, errHost(err)
+	}
+	out := CheckpointRestoreResult{RunID: p.RunID, Files: make([]RestoredFile, 0, len(restored))}
+	for _, file := range restored {
+		out.Files = append(out.Files, RestoredFile{Path: file.Path, Deleted: file.Deleted})
+	}
+	s.logf("checkpoint.restore agent=%s run=%s files=%d", p.AgentID, p.RunID, len(out.Files))
 	return out, nil
 }
 
@@ -649,6 +798,50 @@ func (s *Server) handleRulesList(ctx context.Context, params json.RawMessage) (a
 	return out, nil
 }
 
+// handleMCPList reports what the selected file layers declare.
+//
+// It is configuration, not connection: nothing here says a server started. The
+// listing exists so a person can see which file would launch what before a turn
+// runs, and so a file that will not parse fails loudly here rather than as MCP
+// tools that silently do not exist.
+//
+// The response carries no status field on purpose. The SDK has no introspection
+// for a connected server, and a state inferred from "the file listed it" would
+// claim the one thing a green dot is supposed to mean.
+func (s *Server) handleMCPList(_ context.Context, params json.RawMessage) (any, *RPCError) {
+	p, err := decode[MCPListParams](params)
+	if err != nil {
+		return nil, errInvalidParams("mcp.list: " + err.Error())
+	}
+	sources, rpcErr := settingSourcesFrom(p.SettingSources)
+	if rpcErr != nil {
+		return nil, errInvalidParams("mcp.list: " + rpcErr.Message)
+	}
+	listed, err := anvil.ListMCPServers(s.cwdPath(), sources)
+	if err != nil {
+		return nil, errHost(err)
+	}
+	out := MCPListResult{
+		Servers: make([]MCPServerInfo, 0, len(listed.Servers)),
+		Sources: make([]MCPSourceInfo, 0, len(listed.Sources)),
+	}
+	for _, server := range listed.Servers {
+		out.Servers = append(out.Servers, MCPServerInfo{
+			Name:      server.Name,
+			Transport: server.Transport,
+			Source:    server.Source,
+		})
+	}
+	for _, source := range listed.Sources {
+		out.Sources = append(out.Sources, MCPSourceInfo{
+			Source: string(source.Source),
+			Path:   source.Path,
+			Exists: source.Exists,
+		})
+	}
+	return out, nil
+}
+
 // ---------------------------------------------------------------------------
 // permissions
 // ---------------------------------------------------------------------------
@@ -837,6 +1030,11 @@ func (s *Server) buildOptions(p SessionParams, sess *session) (anvil.Options, *R
 		// Off unless the client asks: Vision.Enabled is what makes the SDK
 		// accept an attachment, and enabling it also advertises read_image.
 		Vision: anvil.VisionOptions{Enabled: p.Vision},
+		// The host always keeps run pre-images: the panel offers "restore this
+		// run" for every session it opens, and a session captured only sometimes
+		// would offer an undo that silently does nothing. Empty fields are the
+		// SDK defaults ({cwd}/.anvil/checkpoints, 100 runs, 30 days).
+		Checkpoints: &anvil.CheckpointOptions{},
 	}
 	if len(p.TestCommand) > 0 {
 		opts.Test = anvil.TestOptions{Command: p.TestCommand}
@@ -852,16 +1050,16 @@ func (s *Server) buildOptions(p SessionParams, sess *session) (anvil.Options, *R
 		return opts, errInvalidParams("model is required (session model, host config, or ANVIL_MODEL)")
 	}
 	opts.Model = anvil.Model{ID: model}
-	for _, src := range p.SettingSources {
-		clean := strings.ToLower(strings.TrimSpace(src))
-		switch clean {
-		case string(anvil.SettingSourceProject), string(anvil.SettingSourceUser):
-			opts.Local.SettingSources = append(opts.Local.SettingSources, anvil.SettingSource(clean))
-		case "":
-		default:
-			return opts, errInvalidParams("unknown setting source: " + src)
-		}
+	sources, rpcErr := settingSourcesFrom(p.SettingSources)
+	if rpcErr != nil {
+		return opts, rpcErr
 	}
+	opts.Local.SettingSources = sources
+	web, rpcErr := webSearchFrom(p.WebSearch)
+	if rpcErr != nil {
+		return opts, rpcErr
+	}
+	opts.WebSearch = web
 	if sess.mode == ModePlan {
 		// Plan mode removes the tools that can change the workspace, so the
 		// model produces a plan instead of acting on it. The instruction that
@@ -872,6 +1070,68 @@ func (s *Server) buildOptions(p SessionParams, sess *session) (anvil.Options, *R
 	// permissionHookForMode and groupsForMode.
 	opts.Permission = s.permissionHookForMode(sess.mode, sess, approvalTimeout(p.ApprovalTimeoutMS))
 	return opts, nil
+}
+
+// settingSourcesFrom validates the wire's string list against the enum.
+//
+// buildOptions and mcp.list read the same client field, so they have to accept
+// the same values: a source that a session would load but the listing refuses
+// would make the card disagree with the conversation it describes.
+func settingSourcesFrom(values []string) ([]anvil.SettingSource, *RPCError) {
+	out := make([]anvil.SettingSource, 0, len(values))
+	for _, src := range values {
+		clean := strings.ToLower(strings.TrimSpace(src))
+		switch clean {
+		case string(anvil.SettingSourceProject), string(anvil.SettingSourceUser):
+			out = append(out, anvil.SettingSource(clean))
+		case "":
+		default:
+			return nil, errInvalidParams("unknown setting source: " + src)
+		}
+	}
+	return out, nil
+}
+
+// webSearchKeyEnv is where the SDK looks for the search credential. It is a
+// constant rather than a client field: which environment variable a credential
+// lives in is part of the spawn contract, and a session that could rename it
+// would be a session that could point the host at anything in its environment.
+const webSearchKeyEnv = "ANVIL_WEB_SEARCH_API_KEY"
+
+// webSearchFrom turns the session's request field into SDK options.
+//
+// Presence is the switch, so nil is off and the tools are never registered. An
+// endpoint is required for the http provider here rather than left to
+// session.new's SDK error: the message names the setting the user has to fill
+// in, which the SDK's "BaseURL is required" does not.
+func webSearchFrom(p *WebSearchParams) (anvil.WebSearchOptions, *RPCError) {
+	if p == nil {
+		return anvil.WebSearchOptions{}, nil
+	}
+	provider := strings.ToLower(strings.TrimSpace(p.Provider))
+	switch provider {
+	case "", "http":
+		if strings.TrimSpace(p.BaseURL) == "" {
+			return anvil.WebSearchOptions{}, errInvalidParams("web_search.base_url is required when the provider is http")
+		}
+	case "mcp":
+	default:
+		return anvil.WebSearchOptions{}, errInvalidParams("unknown web_search.provider: " + p.Provider)
+	}
+	if p.MaxResults < 0 {
+		return anvil.WebSearchOptions{}, errInvalidParams("web_search.max_results cannot be negative")
+	}
+	return anvil.WebSearchOptions{
+		Enabled:    true,
+		Provider:   provider,
+		BaseURL:    p.BaseURL,
+		APIKeyEnv:  webSearchKeyEnv,
+		MaxResults: p.MaxResults,
+		// The phase is search and fetch: a session that says yes to the web
+		// tools gets both. AllowPrivateURLs stays false — a client setting is
+		// not the place to relax a fetch policy.
+		AllowFetchURL: true,
+	}, nil
 }
 
 // boolOr reads a tri-state request field: absent means the default the host

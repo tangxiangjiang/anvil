@@ -4,6 +4,7 @@
 package editorhost
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -402,6 +403,86 @@ func TestProjectEventDropsSDKDone(t *testing.T) {
 	got, ok = projectEvent("s", "r", anvil.Event{Type: anvil.EventReasoning, Text: "hmm"})
 	if !ok || got.Type != "reasoning" || got.Text != "hmm" {
 		t.Fatalf("reasoning projection lost fields: %+v", got)
+	}
+}
+
+// TestProjectEventCarriesUsageOnATerminalEvent checks the one event that can
+// carry usage across the wire. The SDK's done is not forwarded (the `done`
+// notification, which already has usage, is the authoritative end of a run),
+// so an error is where a client reading only events learns what the run spent
+// before it failed.
+func TestProjectEventCarriesUsageOnATerminalEvent(t *testing.T) {
+	got, ok := projectEvent("s", "r", anvil.Event{
+		Type:  anvil.EventError,
+		Text:  "boom",
+		Usage: &anvil.Usage{InputTokens: 4, OutputTokens: 3, TotalTokens: 7},
+	})
+	if !ok || got.Usage == nil || got.Usage.TotalTokens != 7 {
+		t.Fatalf("error projection lost usage: %+v", got)
+	}
+	// Absent stays absent, and the wire omits the key entirely: a client that
+	// predates the field must see the payload it always saw.
+	got, ok = projectEvent("s", "r", anvil.Event{Type: anvil.EventError, Text: "boom"})
+	if !ok || got.Usage != nil {
+		t.Fatalf("usage appeared with none set: %+v", got)
+	}
+	raw, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), `"usage"`) {
+		t.Fatalf("nil usage reached the wire: %s", raw)
+	}
+}
+
+// TestProjectEventCarriesTodoItems checks the checklist across the wire. An
+// empty list has to reach the client as [] rather than null or an absent field:
+// [] is how a call says "nothing is planned now", and the first two would read
+// as "this event has no list" — which the client cannot distinguish from a
+// dropped message.
+func TestProjectEventCarriesTodoItems(t *testing.T) {
+	got, ok := projectEvent("s", "r", anvil.Event{
+		Type: anvil.EventTodo,
+		Items: []anvil.TodoItem{
+			{Text: "a", Status: anvil.TodoPending},
+			{Text: "b", Status: anvil.TodoDone},
+		},
+	})
+	if !ok || got.Items == nil || len(*got.Items) != 2 {
+		t.Fatalf("todo projection lost items: %+v", got)
+	}
+	if (*got.Items)[1].Status != anvil.TodoDone {
+		t.Fatalf("status %q", (*got.Items)[1].Status)
+	}
+	raw, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"items":[{"text":"a","status":"pending"}`) {
+		t.Fatalf("wire shape: %s", raw)
+	}
+
+	got, ok = projectEvent("s", "r", anvil.Event{Type: anvil.EventTodo})
+	if !ok || got.Items == nil || len(*got.Items) != 0 {
+		t.Fatalf("empty todo projection: %+v", got)
+	}
+	raw, err = json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"items":[]`) {
+		t.Fatalf("an empty list must marshal as []: %s", raw)
+	}
+
+	// Every other event omits the field, so a client that predates it reads the
+	// payload it always read.
+	got, _ = projectEvent("s", "r", anvil.Event{Type: anvil.EventAssistant, Text: "hi"})
+	if got.Items != nil {
+		t.Fatalf("items appeared off a todo event: %+v", got)
+	}
+	raw, _ = json.Marshal(got)
+	if strings.Contains(string(raw), `"items"`) {
+		t.Fatalf("nil items reached the wire: %s", raw)
 	}
 }
 

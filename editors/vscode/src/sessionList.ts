@@ -26,6 +26,18 @@ export interface SessionRow {
   icon: string;
   contextValue: string;
   agentId: string;
+  /**
+   * The stored name, when there is one. The label falls back to the id for a
+   * session nobody has named, and a rename box must not start out holding that
+   * fallback as if it were the name.
+   */
+  title?: string;
+  /**
+   * The last run the session ended, when it has ended one. It is where
+   * "Duplicate conversation" branches: a fork copies through a finished run,
+   * and the newest one is the whole conversation the row describes.
+   */
+  lastRunId?: string;
 }
 
 /** A recency heading over rows. */
@@ -53,10 +65,15 @@ export type SessionNode = SessionRow | SessionGroup | SessionNote;
 export interface SessionViewOptions {
   /** The clock, injected so the recency buckets are testable. */
   now: number;
-  /** The agent the chat tab is showing, if any. */
-  currentAgentId?: string;
-  /** The agent with a turn in flight, if any. */
-  runningAgentId?: string;
+  /**
+   * The agents with a chat tab open, and the agents with a turn in flight.
+   *
+   * Lists rather than one id: several tabs may be open, so the same agent can
+   * only be marked once but any number of the rows can be marked at the same
+   * time.
+   */
+  openAgentIds?: readonly string[];
+  runningAgentIds?: readonly string[];
 }
 
 /** Longest agent id shown as a label; the tooltip always carries the whole one. */
@@ -83,7 +100,7 @@ export function buildSessionView(
 ): SessionNode[] {
   if (sessions.length === 0) return [sessionNote('empty')];
 
-  const sorted = [...sessions].sort(byRecency);
+  const sorted = sortSessionsByRecency(sessions);
   const dated = sorted.some((session) => timestampOf(session) !== undefined);
   // With nothing to group by, headings would be decoration: one bucket labelled
   // "Undated" over every session says less than the sessions do.
@@ -200,7 +217,16 @@ function timestampOf(session: SessionInfo): number | undefined {
   return undefined;
 }
 
-/** Newest first, and the undated last rather than at the top. */
+/**
+ * Newest first, and the undated last rather than at the top.
+ *
+ * Exported because the search picker lists rows with no headings, and the order
+ * a person expects there is the same one the sidebar uses.
+ */
+export function sortSessionsByRecency(sessions: readonly SessionInfo[]): SessionInfo[] {
+  return [...sessions].sort(byRecency);
+}
+
 function byRecency(left: SessionInfo, right: SessionInfo): number {
   const a = timestampOf(left);
   const b = timestampOf(right);
@@ -220,7 +246,7 @@ function shortId(agentId: string): string {
  * session nobody prompted, or one whose first message was only whitespace —
  * falls back to the id rather than to a placeholder.
  */
-function sessionLabel(session: SessionInfo): string {
+export function sessionLabel(session: SessionInfo): string {
   const title = session.title?.trim();
   return title ? title : shortId(session.agent_id);
 }
@@ -231,8 +257,8 @@ function runs(count: number): string {
 
 function sessionRow(session: SessionInfo, options: SessionViewOptions): SessionRow {
   const agentId = session.agent_id;
-  const running = options.runningAgentId !== undefined && options.runningAgentId === agentId;
-  const current = options.currentAgentId !== undefined && options.currentAgentId === agentId;
+  const running = options.runningAgentIds?.includes(agentId) === true;
+  const current = options.openAgentIds?.includes(agentId) === true;
 
   // The icon carries the last status, so the description does not repeat it;
   // it carries what the row cannot show as a glyph — the model and the size of
@@ -245,10 +271,14 @@ function sessionRow(session: SessionInfo, options: SessionViewOptions): SessionR
   if (running) parts.push('running');
   else if (current) parts.push('open');
 
+  const title = session.title?.trim();
+  const lastRunId = session.last_run_id?.trim();
   return {
     kind: 'session',
     id: agentId,
     label: sessionLabel(session),
+    title: title ? title : undefined,
+    lastRunId: lastRunId ? lastRunId : undefined,
     description: parts.join(' · '),
     tooltip: tooltipFor(session, { running, current }),
     icon: running ? 'sync~spin' : STATUS_ICONS[session.last_status ?? ''] ?? 'history',
@@ -261,7 +291,7 @@ function sessionRow(session: SessionInfo, options: SessionViewOptions): SessionR
 function tooltipFor(session: SessionInfo, flags: { running: boolean; current: boolean }): string {
   const lines = [`Agent ${session.agent_id}`];
   if (flags.running) lines.push('A turn is running.');
-  else if (flags.current) lines.push('Open in the chat tab.');
+  else if (flags.current) lines.push('Open in a chat tab.');
   if (session.cwd) lines.push(`Workspace ${session.cwd}`);
   if (session.provider || session.model) {
     lines.push(`Model ${[session.provider, session.model].filter(Boolean).join('/')}`);

@@ -2,7 +2,7 @@
   "name": "anvil-vscode",
   "displayName": "Anvil",
   "description": "Anvil agent in VS Code: streaming chat, tool cards, per-call approvals.",
-  "version": "0.38.4",
+  "version": "0.40.10",
   "publisher": "anvil-dev",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -77,10 +77,44 @@
         "category": "Anvil"
       },
       {
+        "command": "anvil.openSessionInNewTab",
+        "title": "Anvil: Open Session in New Tab",
+        "category": "Anvil"
+      },
+      {
+        "command": "anvil.renameSession",
+        "title": "Anvil: Rename Session",
+        "category": "Anvil",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "anvil.deleteSession",
+        "title": "Anvil: Delete Session",
+        "category": "Anvil",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "anvil.forkSession",
+        "title": "Anvil: Duplicate Conversation",
+        "category": "Anvil",
+        "icon": "$(git-branch)"
+      },
+      {
+        "command": "anvil.searchSessions",
+        "title": "Anvil: Search Sessions",
+        "category": "Anvil",
+        "icon": "$(search)"
+      },
+      {
         "command": "anvil.stop",
         "title": "Anvil: Stop",
         "category": "Anvil",
         "icon": "$(debug-stop)"
+      },
+      {
+        "command": "anvil.focusChat",
+        "title": "Anvil: Focus Chat",
+        "category": "Anvil"
       },
       {
         "command": "anvil.setApiKey",
@@ -90,6 +124,16 @@
       {
         "command": "anvil.clearApiKey",
         "title": "Anvil: Clear API Key",
+        "category": "Anvil"
+      },
+      {
+        "command": "anvil.setWebSearchKey",
+        "title": "Anvil: Set Web Search Key",
+        "category": "Anvil"
+      },
+      {
+        "command": "anvil.clearWebSearchKey",
+        "title": "Anvil: Clear Web Search Key",
         "category": "Anvil"
       },
       {
@@ -111,26 +155,69 @@
           "group": "navigation@1"
         },
         {
-          "command": "anvil.refreshSessions",
+          "command": "anvil.searchSessions",
           "when": "view == anvil.sessions",
           "group": "navigation@2"
         },
         {
+          "command": "anvil.refreshSessions",
+          "when": "view == anvil.sessions",
+          "group": "navigation@3"
+        },
+        {
           "command": "anvil.stop",
           "when": "view == anvil.sessions && anvil.busy",
-          "group": "navigation@3"
+          "group": "navigation@4"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "anvil.openSessionInNewTab",
+          "when": "view == anvil.sessions && viewItem =~ /^session/",
+          "group": "inline@1"
+        },
+        {
+          "command": "anvil.forkSession",
+          "when": "view == anvil.sessions && viewItem =~ /^session/",
+          "group": "1_modification@1"
+        },
+        {
+          "command": "anvil.renameSession",
+          "when": "view == anvil.sessions && viewItem =~ /^session/",
+          "group": "1_modification@2"
+        },
+        {
+          "command": "anvil.deleteSession",
+          "when": "view == anvil.sessions && viewItem =~ /^session/",
+          "group": "2_dangerous@1"
         }
       ],
       "editor/title": [
         {
           "command": "anvil.stop",
-          "when": "activeWebviewPanelId == anvil.chat && anvil.busy",
+          "when": "activeWebviewPanelId == anvil.chat && anvil.activeBusy",
           "group": "navigation"
         }
       ],
       "commandPalette": [
         {
           "command": "anvil.openSession",
+          "when": "false"
+        },
+        {
+          "command": "anvil.openSessionInNewTab",
+          "when": "false"
+        },
+        {
+          "command": "anvil.renameSession",
+          "when": "false"
+        },
+        {
+          "command": "anvil.deleteSession",
+          "when": "false"
+        },
+        {
+          "command": "anvil.forkSession",
           "when": "false"
         }
       ]
@@ -168,6 +255,12 @@
           "minimum": 0,
           "description": "Maximum agent steps per turn. 0 uses the host default."
         },
+        "anvil.contextWindow": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "markdownDescription": "The context window the token meter measures the last run against, in tokens. 0 means unknown: the composer then shows cumulative input and output counts with no fraction. Anvil does not guess a window from the model name, so a percentage appears only when this is set."
+        },
         "anvil.store": {
           "type": "string",
           "enum": [
@@ -197,6 +290,42 @@
           "type": "boolean",
           "default": true,
           "markdownDescription": "Read this workspace's `.anvil/permissions.json`: the rules that let a tool call run, stop to ask about it, or refuse it outright. Off means the session ignores the file, and an approval card has nothing to offer under \"always allow\" — a rule written into a file this session does not read would not be in force."
+        },
+        "anvil.mcp.project": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Read `.cursor/mcp.json` in the workspace and load the MCP servers it declares. The file can start processes, which is why it is read only from this workspace, and why the extension refuses untrusted workspaces. Tool calls through MCP stay behind the `mcp` permission group."
+        },
+        "anvil.mcp.user": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Also read `~/.cursor/mcp.json` and load the servers it declares. Off by default: a home-directory file is shared by every project, so turning it on is a wider act than reading the workspace's own file. Project entries win over user entries with the same name."
+        },
+        "anvil.webSearch.enabled": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Give the session the web tools: `web_search`, and `fetch_url` for pages it finds. Off by default, and off means the tools are not registered at all — a tool the model can see but cannot authenticate is worse than one it never finds. Calls stay behind the `web` permission group. The key is set with **Anvil: Set Web Search Key** and stored in SecretStorage, never in settings."
+        },
+        "anvil.webSearch.provider": {
+          "type": "string",
+          "enum": [
+            "http",
+            "mcp"
+          ],
+          "default": "http",
+          "markdownDescription": "How a search runs. `http` calls the JSON endpoint in `anvil.webSearch.baseUrl` with the stored key. `mcp` registers no built-in tools and expects a web-search MCP server from this workspace's `.cursor/mcp.json` to provide one."
+        },
+        "anvil.webSearch.baseUrl": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "The search endpoint for the `http` provider, for example `https://gateway.example.com/v1/web/search`. A request is a JSON `POST` with `{\"query\", \"max_results\"}` and a bearer token from the stored key. Required when the provider is `http`; the session refuses to open without it."
+        },
+        "anvil.webSearch.maxResults": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "maximum": 10,
+          "description": "Results per search, 1–10. 0 uses the provider default (5)."
         }
       }
     }

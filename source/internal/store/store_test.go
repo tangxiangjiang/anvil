@@ -194,6 +194,76 @@ func TestSummarizeHasNoTitleForAWhitespaceOnlyPrompt(t *testing.T) {
 	}
 }
 
+func TestSummarizeTakesARenameOverTheFirstMessage(t *testing.T) {
+	recs := []store.Record{
+		{Type: store.TypeMeta, AgentID: "agent-a"},
+		{Type: store.TypeMessage, Role: "user", Content: "Fix the flaky test"},
+		{Type: store.TypeMeta, AgentID: "agent-a", Title: "Timeout work"},
+	}
+	if got := store.Summarize(recs).Title; got != "Timeout work" {
+		t.Fatalf("title=%q", got)
+	}
+}
+
+func TestSummarizeLetsTheLatestRenameWin(t *testing.T) {
+	recs := []store.Record{
+		{Type: store.TypeMeta, AgentID: "agent-a", Title: "First name"},
+		{Type: store.TypeMeta, AgentID: "agent-a", Title: "Second name"},
+	}
+	if got := store.Summarize(recs).Title; got != "Second name" {
+		t.Fatalf("title=%q", got)
+	}
+}
+
+func TestSummarizeStillFollowsAMessageWrittenAfterARename(t *testing.T) {
+	// The rename is a name; the message after it is a follow-up, not a better
+	// one. Only an empty title is filled from a prompt.
+	recs := []store.Record{
+		{Type: store.TypeMeta, AgentID: "agent-a", Title: "Kept"},
+		{Type: store.TypeMessage, Role: "user", Content: "something else entirely"},
+	}
+	if got := store.Summarize(recs).Title; got != "Kept" {
+		t.Fatalf("title=%q", got)
+	}
+}
+
+func TestSummarizeMakesARenameOneLine(t *testing.T) {
+	recs := []store.Record{{Type: store.TypeMeta, AgentID: "agent-a", Title: "two\nlines\there"}}
+	if got := store.Summarize(recs).Title; got != "two lines here" {
+		t.Fatalf("title=%q", got)
+	}
+}
+
+func TestDeleteRemovesTheSessionAndReportsAMissingOne(t *testing.T) {
+	dir := t.TempDir()
+	st := store.New(dir)
+	id := "agent-gone"
+	if err := st.Append(id, store.Record{Type: store.TypeMeta, AgentID: id}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Delete(id); err != nil {
+		t.Fatal(err)
+	}
+	if st.Exists(id) {
+		t.Fatal("expected the file gone")
+	}
+	if _, err := os.Stat(st.Path(id)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("file still there: %v", err)
+	}
+	// A second delete names nothing. Saying it worked would tell a caller that
+	// asked to remove the wrong id that it had removed the right one.
+	if err := st.Delete(id); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestDeleteRejectsPathTraversalID(t *testing.T) {
+	st := store.New(t.TempDir())
+	if err := st.Delete("../evil"); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
 func TestSummarizeDoesNotTitleASessionFromToolOutput(t *testing.T) {
 	// A tool result carries file contents; a session named after one would name
 	// the session after whatever the agent happened to read first.

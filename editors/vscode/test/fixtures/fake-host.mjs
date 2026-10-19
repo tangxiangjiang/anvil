@@ -38,6 +38,17 @@
  *                          on disk and nothing is live
  *   FAKE_HOST_TRANSCRIPT_DROPPED=<n>  entries the reader left out, so the panel's
  *                          "earlier turns are not shown" note can be seen
+ *   FAKE_HOST_CHECKPOINT=<paths>  comma-separated workspace-relative paths that
+ *                          every finished run is said to have changed. With it,
+ *                          checkpoint.list answers for the agent and
+ *                          checkpoint.restore writes each path back, so the
+ *                          extension's undo route is exercised without the SDK
+ *   FAKE_HOST_MCP=<name:transport,…>  servers the workspace's project file is
+ *                          said to declare. mcp.list reports them for the
+ *                          project layer and nothing else, because the file is
+ *                          what the real host reads
+ *   FAKE_HOST_MCP_BROKEN=1  answer mcp.list with the parse error a malformed
+ *                          `.cursor/mcp.json` produces
  *
  * One thing here is not scripted: the mode a new session starts in. It is
  * resolved from what the client asked for and from the workspace's
@@ -47,6 +58,7 @@
  */
 
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 
@@ -65,12 +77,47 @@ const rulesBroken = process.env.FAKE_HOST_RULES_BROKEN === '1';
 /** Whether this host knows session.transcript at all. Off means a 0.37 host. */
 const servesTranscript = process.env.FAKE_HOST_TRANSCRIPT === '1';
 /** Agents the store holds that this process never opened. */
-const storedIds = (process.env.FAKE_HOST_STORED || '')
+let storedIds = (process.env.FAKE_HOST_STORED || '')
   .split(',')
   .map((id) => id.trim())
   .filter((id) => id !== '');
+/**
+ * The names sessions have been given, by agent id.
+ *
+ * A rename is an appended `meta` record in the real store; here it is this map,
+ * which is enough to make the next `session.list` carry the new name — the one
+ * thing the client reads back.
+ */
+const titles = new Map();
 /** The workspace rule file, which `permissions.get/add` are about. */
 const rulesPath = join(process.env.FAKE_HOST_CWD || process.cwd(), '.anvil', 'permissions.json');
+/** Paths every finished run is said to have checkpointed; empty means no undo. */
+const checkpointPaths = (process.env.FAKE_HOST_CHECKPOINT || '')
+  .split(',')
+  .map((path) => path.trim())
+  .filter((path) => path !== '');
+/** Checkpointed runs by agent id, newest first. */
+const checkpoints = new Map();
+/** The workspace root the session claims, which is where the MCP file lives. */
+const workspaceCWD = process.env.FAKE_HOST_CWD || process.cwd();
+/** The project MCP file, as the host would resolve it. */
+const projectMCPPath = join(workspaceCWD, '.cursor', 'mcp.json');
+/** Servers the project file is said to declare, name and transport. */
+const mcpServers = (process.env.FAKE_HOST_MCP || '')
+  .split(',')
+  .map((entry) => entry.trim())
+  .filter((entry) => entry !== '')
+  .map((entry) => {
+    const [name, transport = 'stdio'] = entry.split(':');
+    return { name: name.trim(), transport: transport.trim() };
+  });
+/** Whether the project file is reported as one that will not parse. */
+const mcpBroken = process.env.FAKE_HOST_MCP_BROKEN === '1';
+/**
+ * The runs each agent finished, oldest first. A fork copies through one of
+ * them, so this is what `session.fork` validates a run id against.
+ */
+const finishedRuns = new Map();
 /** Its rules, as a session that appended them would have them. */
 const rules = [];
 /** Where the parse error is reported: the place, not a line for the file. */
@@ -103,7 +150,15 @@ let sessionSeq = 0;
 let runSeq = 0;
 /** Pending approval responders, by request id. */
 const approvals = new Map();
-let activeRun = null;
+/**
+ * The run in flight for each session, by session id.
+ *
+ * Per session and not one per process: the whole point of the multi-tab tests is
+ * two conversations running at once over one child. A single global run would
+ * make the second tab's prompt fail with the same `-32003` the real host uses
+ * for *one session's* second turn, which is a different rule.
+ */
+const activeRuns = new Map();
 
 /**
  * The mode the workspace's own file declares, and whether the host would honour
@@ -161,7 +216,7 @@ function newSession(params) {
     // list and its /resume picker have something to render. The title is the
     // first user message, and a run with no title is a session nobody prompted
     // — the shape a client falls back to the agent id for.
-    title: process.env.FAKE_HOST_TITLE,
+    title: titles.get(params.agent_id) ?? process.env.FAKE_HOST_TITLE,
     created_at: '2026-01-02T03:04:05Z',
     updated_at: '2026-01-02T03:05:06Z',
     last_status: 'finished',
@@ -222,7 +277,21 @@ function event(session, run, body) {
 }
 
 function finish(session, run, body) {
-  activeRun = null;
+  activeRuns.delete(session.session_id);
+  const finished = finishedRuns.get(session.agent_id) || [];
+  finished.push(run);
+  finishedRuns.set(session.agent_id, finished);
+  if (checkpointPaths.length > 0) {
+    // The real host captures pre-images as tools run; here each finished run is
+    // recorded as having changed the paths the test named.
+    const runs = checkpoints.get(session.agent_id) || [];
+    runs.unshift({
+      run_id: run,
+      created_at: new Date().toISOString(),
+      files: checkpointPaths.map((path) => ({ path, existed: true, size: 6 })),
+    });
+    checkpoints.set(session.agent_id, runs);
+  }
   notify('done', { session_id: session.session_id, run_id: run, ...body });
 }
 
@@ -240,11 +309,12 @@ async function runScript(session, run, message) {
 
   if (scenario === 'slow') {
     event(session, run, { type: 'assistant', text: 'working' });
-    activeRun = { session, run, cancelled: false, cancelledPromise: null };
-    activeRun.cancelledPromise = new Promise((resolve) => {
-      activeRun.markCancelled = resolve;
+    const slow = { session, run, cancelled: false, cancelledPromise: null };
+    activeRuns.set(session.session_id, slow);
+    slow.cancelledPromise = new Promise((resolve) => {
+      slow.markCancelled = resolve;
     });
-    await activeRun.cancelledPromise;
+    await slow.cancelledPromise;
     finish(session, run, { status: 'cancelled', steps: 1 });
     return;
   }
@@ -284,6 +354,64 @@ async function runScript(session, run, message) {
     }
     writeFileSync(diffFile, after);
     event(session, run, { type: 'tool_result', tool_call_id: 't1', content: `wrote ${after.length} bytes`, is_error: false });
+    event(session, run, { type: 'assistant', text: 'Done.' });
+    finish(session, run, { status: 'finished', result: 'ok', steps: 3 });
+    return;
+  }
+
+  if (scenario === 'partial') {
+    // An edit_file with two separate hunks, previewed the way a real host
+    // previews a gated edit: a unified diff plus both whole bodies. What runs
+    // is whatever the answer's arguments say — so a test can accept one hunk
+    // and read back the file that call actually produced.
+    const before = readIfPresent(diffFile);
+    const after = before.replace('bravo', 'BRAVO').replace('echo', 'ECHO');
+    const diff = [
+      '@@ -1,3 +1,3 @@',
+      ' alpha',
+      '-bravo',
+      '+BRAVO',
+      ' charlie',
+      '@@ -4,3 +4,3 @@',
+      ' delta',
+      '-echo',
+      '+ECHO',
+      ' foxtrot',
+    ].join('\n');
+    const args = { path: diffFile, old_string: before, new_string: after };
+    event(session, run, { type: 'assistant', text: 'I will make two edits.' });
+    event(session, run, { type: 'tool_call', tool_call_id: 't1', name: 'edit_file', args });
+    const requestId = `req-${run}`;
+    notify('approval.request', {
+      request_id: requestId,
+      session_id: session.session_id,
+      run_id: run,
+      tool: 'edit_file',
+      args,
+      preview: { kind: 'diff', path: diffFile, diff, before, after },
+      decisions: ['allow', 'allow_session', 'deny'],
+      timeout_ms: 30_000,
+    });
+    const answer = await new Promise((resolve) => approvals.set(requestId, resolve));
+    if (answer.decision === 'deny') {
+      event(session, run, { type: 'tool_result', tool_call_id: 't1', content: 'denied by the user', is_error: true });
+      finish(session, run, { status: 'finished', result: 'nothing written', steps: 2 });
+      return;
+    }
+    // The rewritten call is the one that executes. A single-occurrence replace
+    // is what edit_file does; here the old side is the whole pre-image, so one
+    // occurrence is all there is.
+    const called = answer.args && typeof answer.args === 'object' ? answer.args : args;
+    const oldText = typeof called.old_string === 'string' ? called.old_string : '';
+    const newText = typeof called.new_string === 'string' ? called.new_string : '';
+    const written =
+      typeof called.content === 'string'
+        ? called.content
+        : oldText === ''
+          ? before
+          : before.replace(oldText, newText);
+    writeFileSync(diffFile, written);
+    event(session, run, { type: 'tool_result', tool_call_id: 't1', content: `edited ${written.length} bytes`, is_error: false });
     event(session, run, { type: 'assistant', text: 'Done.' });
     finish(session, run, { status: 'finished', result: 'ok', steps: 3 });
     return;
@@ -467,7 +595,7 @@ async function handle(msg) {
         protocol,
         host: 'anvil-host (fake)',
         cwd: process.env.FAKE_HOST_CWD || process.cwd(),
-        capabilities: ['approval', 'sessions', 'store'],
+        capabilities: ['approval', 'sessions', 'store', 'mcp'],
       });
       return;
     case 'session.new':
@@ -490,7 +618,7 @@ async function handle(msg) {
             cwd: process.env.FAKE_HOST_CWD || process.cwd(),
             provider: 'openai',
             model: 'fake-model',
-            title: process.env.FAKE_HOST_TITLE,
+            title: titles.get(agentId) ?? process.env.FAKE_HOST_TITLE,
             updated_at: '2026-01-02T03:05:06Z',
             last_status: 'finished',
             runs: 1,
@@ -548,6 +676,103 @@ async function handle(msg) {
       ok(msg.id, { files });
       return;
     }
+    case 'mcp.list': {
+      // Configuration, not connection: the listing names what a file says, and
+      // carries no field for whether a server started. The layers are exactly
+      // the ones asked for, as the real host reads only what the session reads.
+      echo('mcp.list', msg.params || {});
+      const params = msg.params || {};
+      const wanted = Array.isArray(params.setting_sources) ? params.setting_sources : [];
+      const unknown = wanted.find((source) => source !== 'project' && source !== 'user');
+      if (unknown !== undefined) {
+        fail(msg.id, -32602, `unknown setting source: ${unknown}`);
+        return;
+      }
+      if (mcpBroken) {
+        fail(msg.id, -32000, `load project mcp.json: parse ${projectMCPPath}: unexpected end of JSON input`);
+        return;
+      }
+      const sources = [];
+      if (wanted.includes('user')) {
+        sources.push({ source: 'user', path: join(homedir(), '.cursor', 'mcp.json'), exists: false });
+      }
+      if (wanted.includes('project')) {
+        sources.push({ source: 'project', path: projectMCPPath, exists: mcpServers.length > 0 });
+      }
+      const servers = wanted.includes('project')
+        ? mcpServers.map((server) => ({
+            name: server.name,
+            transport: server.transport,
+            source: projectMCPPath,
+          }))
+        : [];
+      ok(msg.id, { servers, sources });
+      return;
+    }
+    case 'session.rename': {
+      echo('session.rename', msg.params || {});
+      const agentId = msg.params && msg.params.agent_id;
+      const title = ((msg.params && msg.params.title) || '').trim();
+      const known = sessions.values().some((s) => s.agent_id === agentId) || storedIds.includes(agentId);
+      if (!agentId || !known) {
+        fail(msg.id, -32000, `agent not found: ${agentId}`);
+        return;
+      }
+      if (title === '') {
+        fail(msg.id, -32602, 'session.rename: title is required');
+        return;
+      }
+      titles.set(agentId, title);
+      for (const session of sessions.values()) {
+        if (session.agent_id === agentId) session.title = title;
+      }
+      ok(msg.id, { agent_id: agentId, title });
+      return;
+    }
+    case 'session.delete': {
+      echo('session.delete', msg.params || {});
+      const agentId = msg.params && msg.params.agent_id;
+      const live = [...sessions.values()].filter((s) => s.agent_id === agentId);
+      const stored = storedIds.includes(agentId);
+      if (!agentId || (live.length === 0 && !stored)) {
+        fail(msg.id, -32000, `agent not found: ${agentId}`);
+        return;
+      }
+      for (const session of live) sessions.delete(session.session_id);
+      storedIds = storedIds.filter((id) => id !== agentId);
+      titles.delete(agentId);
+      ok(msg.id, { agent_id: agentId, deleted: true });
+      return;
+    }
+    case 'session.fork': {
+      echo('session.fork', msg.params || {});
+      const agentId = msg.params && msg.params.agent_id;
+      const runId = msg.params && msg.params.run_id;
+      const live = [...sessions.values()].some((s) => s.agent_id === agentId);
+      const stored = storedIds.includes(agentId);
+      if (!agentId || (!live && !stored)) {
+        fail(msg.id, -32000, `agent not found: ${agentId}`);
+        return;
+      }
+      // A stored conversation's fixture history is one finished run, r1 — the
+      // boundary `storedTranscript` reports. A live agent's boundaries are the
+      // runs this process watched end.
+      const finished = finishedRuns.get(agentId) || [];
+      if (!finished.includes(runId) && !(stored && runId === 'r1')) {
+        fail(msg.id, -32000, `run not found: ${runId}`);
+        return;
+      }
+      // The real host copies the records and answers a fresh agent id; here the
+      // fork is one more stored row, which is what the client's new tab
+      // resumes and what a listing then shows.
+      sessionSeq += 1;
+      const forkedId = `a${sessionSeq}`;
+      storedIds.push(forkedId);
+      const base = titles.get(agentId) ?? process.env.FAKE_HOST_TITLE;
+      if (base) titles.set(forkedId, `${base} (fork)`);
+      ok(msg.id, { agent_id: forkedId });
+      return;
+    }
     case 'session.close': {
       const id = msg.params && msg.params.session_id;
       if (!sessions.has(id)) {
@@ -556,6 +781,41 @@ async function handle(msg) {
       }
       sessions.delete(id);
       ok(msg.id, { closed: true });
+      return;
+    }
+    case 'checkpoint.list': {
+      echo('checkpoint.list', msg.params || {});
+      const agentId = msg.params && msg.params.agent_id;
+      if (!agentId) {
+        fail(msg.id, -32602, 'checkpoint.list: agent_id is required');
+        return;
+      }
+      ok(msg.id, { runs: checkpoints.get(agentId) || [] });
+      return;
+    }
+    case 'checkpoint.restore': {
+      echo('checkpoint.restore', msg.params || {});
+      const agentId = msg.params && msg.params.agent_id;
+      const runId = msg.params && msg.params.run_id;
+      const run = (checkpoints.get(agentId) || []).find((entry) => entry.run_id === runId);
+      if (!run) {
+        fail(msg.id, -32000, `no checkpoint for run ${runId}`);
+        return;
+      }
+      // Writing the files is what makes the route observable from the test: the
+      // extension must not report a restore it did not ask the host for.
+      const root = process.env.FAKE_HOST_CWD || process.cwd();
+      const files = [];
+      for (const file of run.files) {
+        try {
+          writeFileSync(join(root, ...file.path.split('/')), 'restored by the fake host\n');
+          files.push({ path: file.path, deleted: false });
+        } catch {
+          // A path that cannot be written is simply not in the answer, the way
+          // the real host reports what it actually did.
+        }
+      }
+      ok(msg.id, { run_id: runId, files });
       return;
     }
     case 'permissions.get': {
@@ -622,26 +882,30 @@ async function handle(msg) {
         fail(msg.id, -32001, 'no such session');
         return;
       }
-      if (activeRun) {
+      if (activeRuns.has(session.session_id)) {
         fail(msg.id, -32003, 'a run is already in progress');
         return;
       }
       runSeq += 1;
       const run = `r${runSeq}`;
       echo('prompt', msg.params || {});
-      activeRun = { session, run, cancelled: false };
+      activeRuns.set(session.session_id, { session, run, cancelled: false });
       ok(msg.id, { session_id: session.session_id, run_id: run, agent_id: session.agent_id });
       const message = (msg.params && msg.params.message) || '';
       void runScript(session, run, message);
       return;
     }
     case 'cancel': {
-      if (!activeRun) {
+      // Named by session, like every other notification: one tab's Stop must
+      // never cancel the turn running next door.
+      const sessionId = msg.params && msg.params.session_id;
+      const active = sessionId ? activeRuns.get(sessionId) : undefined;
+      if (!active) {
         fail(msg.id, -32002, 'no run in progress');
         return;
       }
-      activeRun.cancelled = true;
-      if (activeRun.markCancelled) activeRun.markCancelled();
+      active.cancelled = true;
+      if (active.markCancelled) active.markCancelled();
       ok(msg.id, { cancelled: true });
       return;
     }
@@ -652,6 +916,9 @@ async function handle(msg) {
         fail(msg.id, -32004, 'no pending approval');
         return;
       }
+      // Recorded before the answer takes effect, so a test can read exactly
+      // which call the client asked the host to run.
+      echo('approval.response', msg.params || {});
       approvals.delete(requestId);
       ok(msg.id, { accepted: true });
       resolve(msg.params);

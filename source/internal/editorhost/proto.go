@@ -24,7 +24,7 @@ import (
 const ProtocolVersion = 1
 
 // Version is the host build version, overridable at link time.
-var Version = "0.38.0-dev"
+var Version = "0.40.0-dev"
 
 // Client to host request methods.
 const (
@@ -39,11 +39,32 @@ const (
 	// its window and knows which agent it was talking to.
 	MethodSessionTranscript = "session.transcript"
 	MethodSessionClose      = "session.close"
+	// MethodSessionRename appends a title to a stored session. Additive: it
+	// changes no record that is already on disk, and a host without it answers
+	// -32601, which the client reads as "no rename here".
+	MethodSessionRename = "session.rename"
+	// MethodSessionDelete removes a stored session's records.
+	MethodSessionDelete = "session.delete"
+	// MethodSessionFork copies a stored conversation up to a finished run into a
+	// new agent, and answers its id. Additive: a host without it answers -32601,
+	// which a client reads as "no fork here".
+	MethodSessionFork = "session.fork"
+	// MethodCheckpointList lists the runs of a stored session that captured a
+	// pre-image, so a client can offer to put those files back. Additive: a host
+	// without it answers -32601, which a client reads as "no checkpoints here".
+	MethodCheckpointList = "checkpoint.list"
+	// MethodCheckpointRestore puts one run's captured files back.
+	MethodCheckpointRestore = "checkpoint.restore"
 	MethodPrompt            = "prompt"
 	MethodCancel            = "cancel"
 	MethodModelsList        = "models.list"
 	MethodSkillsList        = "skills.list"
 	MethodRulesList         = "rules.list"
+	// MethodMCPList reports the MCP servers the selected file layers declare,
+	// and which of those files exist. It is configuration, not connection: the
+	// SDK exposes no state for a server that failed to start. Additive: a host
+	// without it answers -32601, which a client reads as "no listing here".
+	MethodMCPList = "mcp.list"
 	// MethodPermissionsGet reads the workspace rule file — the effective policy
 	// for this workspace, and the place to put a squiggle when it will not
 	// compile.
@@ -201,6 +222,31 @@ type SessionParams struct {
 	// a prompt carrying attachments to a session that did not opt in is
 	// refused, so a client never gets a run that quietly ignores the image.
 	Vision bool `json:"vision,omitempty"`
+
+	// WebSearch turns on the SDK's web tools for this session. Absent means
+	// off, and off means the tools are not registered at all: a tool the model
+	// can see but cannot authenticate is worse than no tool, because the model
+	// will find it and fail.
+	//
+	// The key is deliberately not here. It reaches the host through the child
+	// environment as ANVIL_WEB_SEARCH_API_KEY, the same discipline the model
+	// key follows: credentials do not cross the pipe.
+	WebSearch *WebSearchParams `json:"web_search,omitempty"`
+}
+
+// WebSearchParams configures the web tools. Presence is the switch — a client
+// that wants them off omits the field rather than sending enabled=false, so a
+// host that predates the field and a client that does not want it agree.
+type WebSearchParams struct {
+	// Provider is "http" (the default when empty) or "mcp". The second
+	// registers no built-in tools and expects the workspace's MCP servers to
+	// supply web_search.
+	Provider string `json:"provider,omitempty"`
+	// BaseURL is the JSON search endpoint, required for the http provider.
+	BaseURL string `json:"base_url,omitempty"`
+	// MaxResults is the per-search result count (0 uses the SDK default of 5,
+	// and the SDK caps it at 10).
+	MaxResults int `json:"max_results,omitempty"`
 }
 
 // SessionResult is the identity of a live session.
@@ -517,6 +563,109 @@ type SessionTranscriptParams struct {
 	Store string `json:"store,omitempty"`
 }
 
+// ---------------------------------------------------------------------------
+// session.rename / session.delete
+// ---------------------------------------------------------------------------
+
+// SessionRenameParams names the session and the title to give it. Both are
+// agent-keyed, like session.list and session.transcript: a session can be named
+// before it is ever opened in this window, and after the window that ran it is
+// gone.
+type SessionRenameParams struct {
+	AgentID string `json:"agent_id"`
+	Title   string `json:"title"`
+	// Store selects the session backend to write: "jsonl" (default) or "sqlite".
+	Store string `json:"store,omitempty"`
+}
+
+// SessionRenameResult confirms what was written, so a client can show the name
+// it will actually see in the list rather than the one it typed.
+type SessionRenameResult struct {
+	AgentID string `json:"agent_id"`
+	Title   string `json:"title"`
+}
+
+// SessionDeleteParams names the session to forget.
+type SessionDeleteParams struct {
+	AgentID string `json:"agent_id"`
+	// Store selects the session backend to write: "jsonl" (default) or "sqlite".
+	Store string `json:"store,omitempty"`
+}
+
+// SessionDeleteResult confirms the deletion.
+type SessionDeleteResult struct {
+	AgentID string `json:"agent_id"`
+	Deleted bool   `json:"deleted"`
+}
+
+// SessionForkParams names the conversation and the run ending the part to keep.
+//
+// Both are required. A fork copies records only up to a `run_end`, so a run id
+// that never ended — one still going, or one whose end was never written — is
+// refused rather than approximated.
+type SessionForkParams struct {
+	AgentID string `json:"agent_id"`
+	RunID   string `json:"run_id"`
+	// Store selects the session backend to read and write: "jsonl" (default) or
+	// "sqlite".
+	Store string `json:"store,omitempty"`
+}
+
+// SessionForkResult is the id of the new conversation. The host does not open
+// it: the client does, in a new tab, which is what makes the fork usable.
+type SessionForkResult struct {
+	AgentID string `json:"agent_id"`
+}
+
+// ---------------------------------------------------------------------------
+// checkpoint.list / checkpoint.restore
+// ---------------------------------------------------------------------------
+
+// CheckpointListParams names the session whose run checkpoints to read. Like
+// session.transcript it is agent-keyed: a checkpoint belongs to a session that
+// may not be open in this window.
+type CheckpointListParams struct {
+	AgentID string `json:"agent_id"`
+}
+
+// CheckpointListResult is the runs that have a checkpoint, newest first.
+type CheckpointListResult struct {
+	Runs []CheckpointRun `json:"runs"`
+}
+
+// CheckpointRun mirrors anvil.CheckpointRun in host vocabulary.
+type CheckpointRun struct {
+	RunID     string           `json:"run_id"`
+	CreatedAt string           `json:"created_at,omitempty"`
+	Files     []CheckpointFile `json:"files"`
+}
+
+// CheckpointFile is one path a run captured.
+type CheckpointFile struct {
+	Path string `json:"path"`
+	// Existed false means the run created the file; restoring deletes it.
+	Existed bool  `json:"existed"`
+	Size    int64 `json:"size,omitempty"`
+}
+
+// CheckpointRestoreParams names the run to put back.
+type CheckpointRestoreParams struct {
+	AgentID string `json:"agent_id"`
+	RunID   string `json:"run_id"`
+}
+
+// CheckpointRestoreResult is what the restore actually did.
+type CheckpointRestoreResult struct {
+	RunID string         `json:"run_id"`
+	Files []RestoredFile `json:"files"`
+}
+
+// RestoredFile is one path a restore wrote or deleted.
+type RestoredFile struct {
+	Path    string `json:"path"`
+	Deleted bool   `json:"deleted"`
+}
+
 // SessionTranscriptResult is a stored conversation, oldest first.
 type SessionTranscriptResult struct {
 	Entries []TranscriptEntry `json:"entries"`
@@ -606,6 +755,37 @@ type RulesParams struct {
 // RulesResult is the rule files that apply to the workspace.
 type RulesResult struct {
 	Files []RuleFileInfo `json:"files"`
+}
+
+// MCPListParams names the file layers to report. An empty list is an empty
+// listing: the client sends exactly the sources it turned on, so nothing is
+// read that the session would not read.
+type MCPListParams struct {
+	SettingSources []string `json:"setting_sources,omitempty"`
+}
+
+// MCPServerInfo is one declared MCP server. There is deliberately no connected
+// or status field: the SDK does not expose connection state, and a field filled
+// from "the file mentioned it" would be a false green light.
+type MCPServerInfo struct {
+	Name      string `json:"name"`
+	Transport string `json:"transport,omitempty"`
+	// Source is the config file that declared this server.
+	Source string `json:"source"`
+}
+
+// MCPSourceInfo is one config file the listing looked at.
+type MCPSourceInfo struct {
+	Source string `json:"source"` // project | user
+	Path   string `json:"path"`
+	// Exists is false when the file is not there. That is a note, not an error.
+	Exists bool `json:"exists"`
+}
+
+// MCPListResult is what the selected layers declare.
+type MCPListResult struct {
+	Servers []MCPServerInfo `json:"servers"`
+	Sources []MCPSourceInfo `json:"sources"`
 }
 
 // ---------------------------------------------------------------------------
@@ -745,10 +925,25 @@ type EventParams struct {
 	Step       int             `json:"step,omitempty"`
 	MaxSteps   int             `json:"max_steps,omitempty"`
 	Code       string          `json:"code,omitempty"`
+	// Usage is the run's token usage so far on a terminal event (an error the
+	// host forwards), when the provider reported any (0.40.8+). It is absent
+	// elsewhere, so a client that predates the field reads exactly what it did.
+	// The authoritative end-of-run usage is still the `done` notification.
+	Usage *Usage `json:"usage,omitempty"`
 	// Rule is the workspace rule that decided this tool result, when one did. It
 	// is how a call that ran without a prompt says why it did not need one: nil
 	// means no rule decided it, which is not the same as "some rule allowed it".
 	Rule *RuleInfo `json:"rule,omitempty"`
+	// Items is the complete task list on a `todo` event (0.40.9). It is a
+	// pointer so that an empty list reaches the client as [] — clearing the
+	// panel — while every other event omits the field entirely.
+	Items *[]TodoItem `json:"items,omitempty"`
+}
+
+// TodoItem is one row of the model's plan.
+type TodoItem struct {
+	Text   string `json:"text"`
+	Status string `json:"status"`
 }
 
 // DoneParams is the terminal envelope of a run, projected from anvil.RunResult.

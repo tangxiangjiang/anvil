@@ -58,6 +58,50 @@ export function attachmentFromDataUrl(dataUrl: string): AttachmentResult {
   return { attachment: { data: payload, mime } };
 }
 
+/** The image extensions the picker offers, mapped to the MIME type to declare. */
+const IMAGE_EXTENSIONS: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+};
+
+/**
+ * The MIME type for an image path, or undefined when the extension is not one.
+ *
+ * The type is derived from the name rather than sniffed from the bytes: the
+ * picker's filter already limits what can be chosen, and the webview only ever
+ * sees the data URL, so the name is the one statement about the type there is.
+ * A wrong name is caught downstream by the vision path, which refuses what it
+ * cannot decode.
+ */
+export function mimeForImagePath(path: string): string | undefined {
+  const match = /\.([A-Za-z0-9]+)$/.exec(path);
+  return match ? IMAGE_EXTENSIONS[match[1].toLowerCase()] : undefined;
+}
+
+/**
+ * Encodes bytes as the data URL the composer already holds for a paste.
+ *
+ * The size is checked on the encoded length, because that is what the paste
+ * path caps: a picked file and a pasted image must not be refused by two
+ * different tests, or a file would be attachable one way and not the other.
+ */
+export function dataUrlFromBytes(
+  bytes: Uint8Array,
+  mime: string | undefined,
+): { dataUrl?: string; error?: string } {
+  if (!mime || !IMAGE_MIME.test(mime)) {
+    return { error: `only images can be attached, and that is ${mime || 'an unknown type'}` };
+  }
+  if (bytes.byteLength === 0) return { error: 'that image was empty' };
+  if (Math.ceil(bytes.byteLength / 3) * 4 > MAX_ATTACHMENT_BASE64) {
+    return { error: 'that image is too large to attach' };
+  }
+  return { dataUrl: `data:${mime};base64,${Buffer.from(bytes).toString('base64')}` };
+}
+
 /** Converts a batch, reporting the first refusal by index. */
 export function attachmentsFromDataUrls(dataUrls: string[]): { attachments: Attachment[]; errors: string[] } {
   const attachments: Attachment[] = [];

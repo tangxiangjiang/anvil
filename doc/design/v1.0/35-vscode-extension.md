@@ -487,7 +487,11 @@ quietly wrong.
 - Bundling or shipping VS Code Server, or otherwise touching [32](32-sandbox-code-review.md) — that line is tool-chain, this one is not.
 - Becoming a language server / DAP debugger; LSP stays **agent tools** ([16](16-lsp.md)).
 - Any scheduler / `agentd` / cluster path from the extension. This protocol deliberately has none; adding one would be a new, separately-decided capability rather than an extension of it.
-- Notebook cell editing, multi-root in one panel, sub-agent graph UI, checkpoints/rewind.
+- Notebook cell editing, multi-root in one panel, sub-agent graph UI. **Checkpoints / rewind were on
+  this list as a 0.35 non-goal and are now planned as [0.40.4](../../roadmaps/v1.0/m_0.40/p_0.40.4.md)
+  ([39](39-editor-alignment.md));** the sub-agent graph is still out, because the SDK has no
+  sub-agent concept to graph. Per-hunk *acceptance of one approval* arrives in 0.40.3; the
+  **persisted per-hunk policy** below remains a non-goal.
 - Persisting per-hunk approval policy to disk, or a settings-sync story. (A *rule* the card
   writes is a rule the user can read — milestone **0.36** appends it to
   `.anvil/permissions.json`, [36](36-tool-permissions.md); a per-hunk policy, or one kept

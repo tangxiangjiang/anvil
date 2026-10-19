@@ -9,26 +9,32 @@
 
 import * as vscode from 'vscode';
 import { HostClient, LogFn } from './hostClient';
-import { ChatSession, SendOptions, SessionConfig, SessionState } from './session';
-import { childEnv, readApiKey, readSettings } from './settings';
+import { ChatSession, SessionConfig, SessionState } from './session';
+import { SessionRouter } from './router';
+import { childEnv, readApiKey, readSettings, readWebSearchKey } from './settings';
 import { describeHost, hostFixHint, resolveHost, verifyHost, versionDrift } from './hostBundle';
 import {
   ApprovalRequest,
-  Decision,
+  CheckpointListParams,
+  CheckpointListResult,
+  CheckpointRestoreParams,
+  CheckpointRestoreResult,
   DoneParams,
   HostEvent,
+  McpListResult,
   Method,
   ModelEntry,
   PermissionMode,
-  ModeSourceDefault,
-  ModeSourceRequest,
   PermissionModeSource,
   PermissionsAddParams,
   PermissionsAddResult,
   PermissionsResult,
   RuleFileInfo,
   RuleSpec,
+  SessionDeleteResult,
+  SessionForkResult,
   SessionInfo,
+  SessionRenameResult,
   SessionResult,
   SessionTranscriptParams,
   SessionTranscriptResult,
@@ -63,27 +69,26 @@ export interface ResolvedMode {
 
 export class HostManager {
   private client: HostClient | undefined;
-  private session: ChatSession | undefined;
-  private starting: Promise<ChatSession> | undefined;
+  /**
+   * Every live conversation, by the host's session id.
+   *
+   * One process serves them all: a notification names the session it belongs
+   * to, so a second tab costs a session and not a child. The router is the
+   * rule; this class only hands it the notifications.
+   */
+  private readonly router = new SessionRouter<ChatSession>();
   private startingClient: Promise<HostClient> | undefined;
   private cwd: string | undefined;
   private disposed = false;
-  /** Set once a crash has been reported, so the panel is told only once. */
+  /** Set once a crash has been reported, so panels are told only once. */
   private crashed = false;
   /**
-   * Session options the user has changed since the host came up — the mode, the
-   * model, the skills. They are layered over the settings at every session this
-   * manager opens, so they survive a host restart as well as a re-open.
+   * Fires after a crash or a restart. Every panel holds a session handle that
+   * belonged to the dead child, and a handle is not reborn with the process:
+   * the panel drops it and opens a fresh one on its next prompt.
    */
-  private overrides: Partial<SessionConfig> = {};
-  /**
-   * What the host resolved for the live session. Kept here rather than read back
-   * from the session because it is the host's answer, not this client's request,
-   * and cleared when the session closes: with nothing open there is nothing
-   * resolved, and showing a stale mode would say the next session runs under an
-   * option nobody has chosen yet.
-   */
-  private resolvedMode: ResolvedMode | undefined;
+  private readonly resetEmitter = new vscode.EventEmitter<void>();
+  readonly onReset = this.resetEmitter.event;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -91,47 +96,52 @@ export class HostManager {
     private readonly listener: HostListener,
   ) {}
 
-  /** Starts the host and opens a session if it is not already up. */
-  async ensure(): Promise<ChatSession> {
-    if (this.session) return this.session;
-    if (this.starting) return this.starting;
-    this.starting = this.start().finally(() => {
-      this.starting = undefined;
+  /**
+   * Opens one conversation on the shared child.
+   *
+   * The listener is the panel's, not the window's: every event, approval and
+   * done notification is routed to exactly one caller. The session is
+   * registered under the id the host answers with, which is why constructing it
+   * here does not open it — `ChatSession.open` is what reaches the host, and a
+   * tab that is restored before its first prompt costs nothing.
+   */
+  async open(config: SessionConfig, listener: HostListener): Promise<ChatSession> {
+    const client = await this.startClient();
+    const session = new ChatSession(client, this.cwd ?? '', config, {
+      onEvent: listener.onEvent,
+      onApproval: listener.onApproval,
+      onApprovalWithdrawn: listener.onApprovalWithdrawn,
+      onDone: listener.onDone,
+      onState: listener.onState,
+      onSession: (result) => {
+        this.router.register(result.session_id, session);
+        listener.onSession?.(result);
+      },
+      onLog: this.log,
     });
-    return this.starting;
+    return session;
   }
 
-  private async start(): Promise<ChatSession> {
-    const client = await this.startClient();
-    if (this.session) return this.session;
-    const settings = readSettings();
-    // The session needs the client to exist, and the client needs the session's
-    // router: the handler goes on after both are built.
-    const session = new ChatSession(
-      client,
-      this.cwd ?? '',
-      { ...settings.session, ...this.overrides },
-      {
-        onEvent: this.listener.onEvent,
-        onApproval: this.listener.onApproval,
-        onApprovalWithdrawn: this.listener.onApprovalWithdrawn,
-        onDone: this.listener.onDone,
-        onState: this.listener.onState,
-        onSession: (result) => {
-          this.resolvedMode = {
-            mode: result.permission_mode,
-            source: result.permission_mode_source,
-            refused: result.permission_mode_refused,
-          };
-          this.listener.onSession?.(result);
-        },
-        onLog: this.log,
-      },
-    );
-    client.setNotificationHandler((method, params) => session.handle(method, params));
-    this.session = session;
-    this.crashed = false;
-    return session;
+  /** Sends one notification to the session it names. */
+  private route(method: string, params: unknown): void {
+    this.router.route(method, params, this.log);
+  }
+
+  /**
+   * Closes a session and takes it out of the router.
+   *
+   * Both halves are one operation: a session the host has closed cannot answer
+   * anything, and a router entry for it would only log a drop for every late
+   * notification that arrived in the gap.
+   */
+  async close(session: ChatSession): Promise<void> {
+    this.router.unregister(session);
+    await session.close();
+  }
+
+  /** The live sessions, for a caller that has to tell all of them something. */
+  liveSessions(): ChatSession[] {
+    return this.router.sessions();
   }
 
   /**
@@ -158,7 +168,12 @@ export class HostManager {
     // should hold even if a caller forgets to ask.
     HostManager.assertTrusted();
     const settings = readSettings();
-    const apiKey = await readApiKey(this.context);
+    // Both credentials are read before the spawn and only ever travel through
+    // the child environment.
+    const [apiKey, webSearchKey] = await Promise.all([
+      readApiKey(this.context),
+      readWebSearchKey(this.context),
+    ]);
     const folder = vscode.workspace.workspaceFolders?.[0];
     if (!folder) throw new Error('open a folder to use Anvil');
     const cwd = folder.uri.fsPath;
@@ -181,7 +196,7 @@ export class HostManager {
     const client = new HostClient({
       command: host.command,
       cwd,
-      env: childEnv(apiKey),
+      env: childEnv({ apiKey, webSearchKey }),
       log: this.log,
       onExit: (info) => this.onHostExit(info),
     });
@@ -209,119 +224,56 @@ export class HostManager {
     }
 
     this.client = client;
+    // One router for the whole window. It is installed here rather than per
+    // session because sessions come and go while the connection stays.
+    client.setNotificationHandler((method, params) => this.route(method, params));
+    this.crashed = false;
     return client;
   }
 
   private onHostExit(info: { code: number | null; signal: NodeJS.Signals | null; unexpected: boolean }): void {
     if (this.crashed || this.disposed) return;
     this.crashed = true;
-    const session = this.session;
+    const sessions = this.router.clear();
     this.client = undefined;
-    this.session = undefined;
-    // Whatever the host had resolved died with it.
-    this.resolvedMode = undefined;
     this.log(`host exited (code ${info.code ?? 'none'}${info.signal ? `, signal ${info.signal}` : ''})`);
 
     // A run that was in flight will never reach its `done`: the child that owed
-    // it is gone. Reporting it here is what unlocks the panel — without it the
+    // it is gone. Reporting it here is what unlocks each panel — without it the
     // composer stays disabled and the turn looks hung forever.
-    session?.failIfRunning('The Anvil host stopped while this turn was running.');
+    for (const session of sessions) {
+      session.failIfRunning('The Anvil host stopped while this turn was running.');
+    }
+    this.resetEmitter.fire();
     if (info.unexpected) {
       this.listener.onNotice?.('error', 'The Anvil host stopped. Send another message to restart it.');
     }
   }
 
-  /** Sends a turn, starting the host if needed. */
-  async send(text: string, options: SendOptions = {}): Promise<void> {
-    try {
-      const session = await this.ensure();
-      await session.send(text, options);
-    } catch (err) {
-      this.listener.onNotice?.('error', (err as Error).message);
-      throw err;
-    }
-  }
-
-  /** Stops the active run. */
-  async cancel(): Promise<void> {
-    const session = this.session;
-    if (!session) return;
-    try {
-      await session.cancel();
-    } catch (err) {
-      this.listener.onNotice?.('error', (err as Error).message);
-    }
-  }
-
-  /** Answers an approval. */
-  async respond(
-    requestId: string,
-    decision: Decision,
-    options: { scope?: string } = {},
-  ): Promise<void> {
-    const session = this.session;
-    if (!session) return;
-    try {
-      await session.respond(requestId, decision, options);
-    } catch (err) {
-      this.listener.onNotice?.('error', (err as Error).message);
-    }
-  }
-
-  /** Replaces the child: settings may have changed, or it may have wedged. */
+  /**
+   * Replaces the child: settings may have changed, or it may have wedged.
+   *
+   * Every session belonged to the process that is going away, so all of them are
+   * closed first and every panel is told to drop its handle. The conversations
+   * themselves are on disk; the next prompt resumes them.
+   */
   async restart(): Promise<void> {
-    const session = this.session;
+    const sessions = this.router.clear();
     const client = this.client;
-    this.session = undefined;
     this.client = undefined;
-    this.resolvedMode = undefined;
-    if (session) await session.close().catch(() => undefined);
+    for (const session of sessions) await session.close().catch(() => undefined);
     if (client) await client.stop();
     this.crashed = false;
+    this.resetEmitter.fire();
     this.listener.onNotice?.('info', 'The Anvil host was restarted.');
   }
 
   /** True when a child is live. */
   get running(): boolean {
-    return this.session !== undefined;
+    return this.client !== undefined;
   }
 
   // --- catalogue --------------------------------------------------------------
-
-  /**
-   * Applies session options the user chose. When a session is already live the
-   * conversation is re-opened under them — same agent, so the history stays.
-   * When none is, the change waits for the first prompt rather than creating a
-   * session to hold it.
-   */
-  async applyOptions(changes: Partial<SessionConfig>): Promise<boolean> {
-    const previous = this.overrides;
-    this.overrides = { ...this.overrides, ...changes };
-    const session = this.session;
-    if (!session) return false;
-    try {
-      await session.reopen(changes);
-      return true;
-    } catch (err) {
-      // Put the change back: a refusal has to be a refusal everywhere, or the
-      // next session would quietly open with an option the user was told had
-      // not been applied.
-      this.overrides = previous;
-      this.listener.onNotice?.('error', (err as Error).message);
-      return false;
-    }
-  }
-
-  /** Adds a skill to the conversation, keeping the ones already selected. */
-  async useSkill(id: string): Promise<boolean> {
-    const session = this.session;
-    const existing = session?.settings.skills ?? this.overrides.skills ?? [];
-    if (existing.includes(id)) {
-      this.listener.onNotice?.('info', `The ${id} skill is already on for this conversation.`);
-      return false;
-    }
-    return this.applyOptions({ skills: [...existing, id] });
-  }
 
   /** The skill packages this workspace offers. */
   async skills(): Promise<SkillEntry[]> {
@@ -339,6 +291,19 @@ export class HostManager {
     const client = await this.startClient();
     const result = await client.request<{ files: RuleFileInfo[] }>(Method.RulesList, readSettings().rules);
     return result.files ?? [];
+  }
+
+  /**
+   * The MCP servers the enabled file layers declare.
+   *
+   * Configuration, not connection: the host reports which files were read and
+   * what they name, and carries no state for a server that failed to start.
+   * The sources are the caller's — the panel passes the same list it put on the
+   * session, so the card cannot describe a layer the conversation does not load.
+   */
+  async mcpServers(settingSources: string[]): Promise<McpListResult> {
+    const client = await this.startClient();
+    return client.request<McpListResult>(Method.McpList, { setting_sources: settingSources });
   }
 
   /** Past agents stored under the workspace root. */
@@ -361,6 +326,71 @@ export class HostManager {
     const params: SessionTranscriptParams = { agent_id: agentId };
     if (limit !== undefined) params.limit = limit;
     return client.request<SessionTranscriptResult>(Method.SessionTranscript, params);
+  }
+
+  /**
+   * Gives a stored session a name of its own.
+   *
+   * It is an append, not an edit: nothing already in the file is rewritten, so a
+   * resume reads the same history it did before. The title in the listing is the
+   * last one written, which is what makes a second rename replace the first.
+   */
+  async renameSession(agentId: string, title: string): Promise<SessionRenameResult> {
+    const client = await this.startClient();
+    return client.request<SessionRenameResult>(Method.SessionRename, { agent_id: agentId, title });
+  }
+
+  /**
+   * Forgets a stored session.
+   *
+   * A live session holding the same agent is not closed here — the caller does
+   * that, because it is the tab that would write the file back on its next
+   * prompt. Deleting an agent that is not there rejects with a host error rather
+   * than succeeding, so a stale sidebar row reports that it was already gone.
+   */
+  async deleteSession(agentId: string): Promise<SessionDeleteResult> {
+    const client = await this.startClient();
+    return client.request<SessionDeleteResult>(Method.SessionDelete, { agent_id: agentId });
+  }
+
+  /**
+   * Branches a stored conversation at a finished run.
+   *
+   * The host copies the records and answers the new agent id; it does not open
+   * it, because the client is what turns an id into a tab. A run id that never
+   * ended is rejected rather than approximated — the server has no boundary to
+   * copy to, and a half-run fork would resume from a turn that never finished.
+   */
+  async forkSession(agentId: string, runId: string): Promise<SessionForkResult> {
+    const client = await this.startClient();
+    return client.request<SessionForkResult>(Method.SessionFork, { agent_id: agentId, run_id: runId });
+  }
+
+  /**
+   * The runs of a session that captured a pre-image, newest first.
+   *
+   * An empty list is the normal answer for a session whose runs changed nothing
+   * and for one that ran before checkpoints existed. It is keyed by agent id, so
+   * it answers for a session this host has not opened — a tab that has just come
+   * back can offer the undo of the run that broke something.
+   */
+  async listCheckpoints(agentId: string): Promise<CheckpointListResult> {
+    const client = await this.startClient();
+    const params: CheckpointListParams = { agent_id: agentId };
+    return client.request<CheckpointListResult>(Method.CheckpointList, params);
+  }
+
+  /**
+   * Puts one run's captured files back, and deletes the files that run created.
+   *
+   * The result is what was written or deleted, not what was asked for: a path
+   * the host refused is not in it. The SDK runs every path through the workspace
+   * sandbox, so this cannot be used to reach outside the workspace.
+   */
+  async restoreCheckpoint(agentId: string, runId: string): Promise<CheckpointRestoreResult> {
+    const client = await this.startClient();
+    const params: CheckpointRestoreParams = { agent_id: agentId, run_id: runId };
+    return client.request<CheckpointRestoreResult>(Method.CheckpointRestore, params);
   }
 
   /**
@@ -393,78 +423,33 @@ export class HostManager {
     return client.request<PermissionsAddResult>(Method.PermissionsAdd, params);
   }
 
-  /** The provider's model catalogue, for the /model picker. */
-  async listModels(): Promise<ModelEntry[]> {
+  /**
+   * The provider's model catalogue, for the /model picker.
+   *
+   * The provider can be overridden per tab, so the caller passes the tab's
+   * choice: a conversation pointed at one endpoint should not list another
+   * endpoint's models just because this window happens to share one child.
+   */
+  async listModels(options: { provider?: string; base_url?: string } = {}): Promise<ModelEntry[]> {
     const client = await this.startClient();
     const settings = readSettings();
     const result = await client.request<{ models: ModelEntry[] }>(Method.ModelsList, {
-      provider: this.overrides.provider ?? settings.session.provider,
-      base_url: this.overrides.base_url ?? settings.session.base_url,
+      provider: options.provider ?? settings.session.provider,
+      base_url: options.base_url ?? settings.session.base_url,
     });
     return result.models ?? [];
   }
 
-  /** Continues a stored agent as the current conversation. */
-  async resumeSession(agentId: string): Promise<void> {
-    const session = await this.ensure();
-    await session.continueWith(agentId);
-  }
-
-  /** Ends the current conversation; the next prompt starts a new agent. */
-  async clearConversation(): Promise<void> {
-    const session = this.session;
-    if (session) await session.reset();
-  }
-
-  /** The panel's whole view of where things stand, without reaching inside. */
-  state(): {
-    state: SessionState;
-    runId?: string;
-    sessionId?: string;
-    agentId?: string;
-    /** The mode in force, or undefined while nothing has resolved one. */
-    mode?: PermissionMode;
-    modeSource: PermissionModeSource;
-    modeRefused?: string;
-  } {
-    const session = this.session;
-    const chosen = this.overrides.permission_mode;
-    if (!session) {
-      // Nothing is open, so the host has resolved nothing: the only thing there
-      // is to show is the choice this client would send.
-      return {
-        state: 'idle',
-        mode: chosen,
-        modeSource: chosen ? ModeSourceRequest : ModeSourceDefault,
-      };
-    }
-    const resolved = this.resolvedMode;
-    return {
-      state: session.currentState,
-      runId: session.activeRun,
-      sessionId: session.id,
-      agentId: session.agent,
-      mode: resolved?.mode ?? chosen ?? 'ask',
-      modeSource: resolved?.source ?? (chosen ? ModeSourceRequest : ModeSourceDefault),
-      modeRefused: resolved?.refused,
-    };
-  }
-
-  /** Prompts still waiting for an answer. */
-  pendingApprovals(): ApprovalRequest[] {
-    return this.session?.pendingApprovals() ?? [];
-  }
-
   async dispose(): Promise<void> {
     this.disposed = true;
-    const session = this.session;
+    const sessions = this.router.clear();
     const client = this.client;
-    this.session = undefined;
     this.client = undefined;
-    // Close the session first so the host can stop its run cleanly, then ask
-    // the process to end. The child is killed either way.
-    if (session) await session.close().catch(() => undefined);
+    // Close the sessions first so the host can stop their runs cleanly, then
+    // ask the process to end. The child is killed either way.
+    for (const session of sessions) await session.close().catch(() => undefined);
     if (client) await client.stop();
+    this.resetEmitter.dispose();
   }
 
   /** The trusted-workspace gate, in one place. */

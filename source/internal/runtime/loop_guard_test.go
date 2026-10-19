@@ -6,6 +6,7 @@ package runtime
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/anvil-dev/anvil/internal/llm"
@@ -36,21 +37,18 @@ func TestLoopGuardCycle(t *testing.T) {
 	g := newLoopGuard()
 	a := llm.ToolCall{Name: "read_file", Args: json.RawMessage(`{"path":"a"}`)}
 	b := llm.ToolCall{Name: "grep", Args: json.RawMessage(`{"pattern":"x"}`)}
-	// Vary args/results so only cycle detector fires (not repeat/stall).
-	contents := []string{"1", "2", "3", "4", "5", "6"}
-	calls := []llm.ToolCall{a, b, a, b, a, b}
+	// The same two calls, over and over: the second pass learns nothing the
+	// first one did not. Results vary so only the cycle detector can fire.
 	var last loopAction
 	var reason string
-	for i, tc := range calls {
-		args := tc.Args
-		if tc.Name == "read_file" {
-			args = json.RawMessage(`{"path":"p` + contents[i] + `"}`)
-		} else {
-			args = json.RawMessage(`{"pattern":"p` + contents[i] + `"}`)
+	for i := 0; i < 6; i++ {
+		tc := a
+		if i%2 == 1 {
+			tc = b
 		}
 		last, reason = g.Observe(
-			[]llm.ToolCall{{Name: tc.Name, Args: args}},
-			[]tools.Result{{Content: contents[i]}},
+			[]llm.ToolCall{tc},
+			[]tools.Result{{Content: fmt.Sprintf("result-%d", i)}},
 		)
 		if last == loopStop {
 			break
@@ -59,11 +57,36 @@ func TestLoopGuardCycle(t *testing.T) {
 	if last != loopWarn && last != loopStop {
 		t.Fatalf("want cycle warn/stop got %v %q", last, reason)
 	}
+	if !strings.Contains(reason, "tool cycle [read_file grep]") {
+		t.Fatalf("reason names the tools, got %q", reason)
+	}
+}
+
+// The reported false positive (0.40.x): a model working through a large source
+// file alternates read_file and grep, with a different path and pattern every
+// time, and the name-only cycle detector stopped the run as
+// "[read_file grep] repeated ×3". Different arguments are progress.
+func TestLoopGuardAlternatingNamesWithNewArgumentsIsProgress(t *testing.T) {
+	g := newLoopGuard()
+	for i := 0; i < 12; i++ {
+		var tc llm.ToolCall
+		if i%2 == 0 {
+			tc = llm.ToolCall{Name: "read_file", Args: json.RawMessage(fmt.Sprintf(`{"path":"f%d"}`, i))}
+		} else {
+			tc = llm.ToolCall{Name: "grep", Args: json.RawMessage(fmt.Sprintf(`{"pattern":"p%d","path":"f%d"}`, i, i-1))}
+		}
+		res := tools.Result{Content: fmt.Sprintf("body-%d", i)}
+		action, reason := g.Observe([]llm.ToolCall{tc}, []tools.Result{res})
+		if action != loopOK {
+			t.Fatalf("call %d: action=%v reason=%q", i, action, reason)
+		}
+	}
 }
 
 func TestLoopGuardSameToolNameNotCycle(t *testing.T) {
 	g := newLoopGuard()
-	// Six different read_file calls must not trip name-cycle ([A A]×3).
+	// Six different read_file calls must not trip the cycle detector: a
+	// repeated name is not a repeated call.
 	for i := 0; i < 6; i++ {
 		tc := llm.ToolCall{
 			Name: "read_file",

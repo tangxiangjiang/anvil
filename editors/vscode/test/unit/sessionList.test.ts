@@ -194,8 +194,8 @@ test('the open session and the running one are marked, and running wins', () => 
   ];
   const nodes = buildSessionView(sessions, {
     now: NOW,
-    currentAgentId: 'open',
-    runningAgentId: 'busy',
+    openAgentIds: ['open'],
+    runningAgentIds: ['busy'],
   });
 
   assert.equal(rowFor(nodes, 'idle').contextValue, 'session');
@@ -207,7 +207,7 @@ test('the open session and the running one are marked, and running wins', () => 
 
   // A session that is both open and running reads as running: it is the one
   // changing under the user.
-  const both = buildSessionView(sessions, { now: NOW, currentAgentId: 'busy', runningAgentId: 'busy' });
+  const both = buildSessionView(sessions, { now: NOW, openAgentIds: ['busy'], runningAgentIds: ['busy'] });
   assert.equal(rowFor(both, 'busy').contextValue, 'session.running');
   assert.doesNotMatch(rowFor(both, 'busy').description, /open/);
 });
@@ -215,10 +215,24 @@ test('the open session and the running one are marked, and running wins', () => 
 test('markers are not applied to a session with a different id', () => {
   const nodes = buildSessionView([session({ agent_id: 'a', updated_at: at(2026, 9, 16, 8) })], {
     now: NOW,
-    currentAgentId: 'b',
-    runningAgentId: 'c',
+    openAgentIds: ['b'],
+    runningAgentIds: ['c'],
   });
   assert.equal(rowFor(nodes, 'a').contextValue, 'session');
+});
+
+test('several rows can be open at once', () => {
+  const sessions = [
+    session({ agent_id: 'a', updated_at: at(2026, 9, 16, 8) }),
+    session({ agent_id: 'b', updated_at: at(2026, 9, 16, 7) }),
+    session({ agent_id: 'c', updated_at: at(2026, 9, 16, 6) }),
+  ];
+  const nodes = buildSessionView(sessions, { now: NOW, openAgentIds: ['a', 'c'], runningAgentIds: ['c'] });
+
+  assert.equal(rowFor(nodes, 'a').contextValue, 'session.open');
+  assert.equal(rowFor(nodes, 'b').contextValue, 'session');
+  // Running still wins over open for a row that is both.
+  assert.equal(rowFor(nodes, 'c').contextValue, 'session.running');
 });
 
 test('an empty list is a note, not an empty group', () => {
@@ -269,4 +283,19 @@ test('the tooltip reports only what the store actually returned', () => {
     now: NOW,
   });
   assert.doesNotMatch(rowFor(bare, 'b').tooltip, /Tokens/);
+});
+
+test('a row carries the run a fork would copy through, when there is one', () => {
+  const nodes = buildSessionView(
+    [
+      session({ agent_id: 'a', updated_at: at(2026, 9, 16, 8), last_run_id: 'run-7' }),
+      session({ agent_id: 'b', updated_at: at(2026, 9, 16, 8) }),
+    ],
+    { now: NOW },
+  );
+  // The branch point is the run the row itself reports ending; a session with
+  // no finished run has none, and the command says so rather than guessing at
+  // the newest line in the file.
+  assert.equal(rowFor(nodes, 'a').lastRunId, 'run-7');
+  assert.equal(rowFor(nodes, 'b').lastRunId, undefined);
 });

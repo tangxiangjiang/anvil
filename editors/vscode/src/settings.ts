@@ -10,10 +10,14 @@
 
 import * as vscode from 'vscode';
 import { ApiKeyStore, applyApiKeyEnv, forgetApiKey, loadApiKey, saveApiKey } from './apiKeyStore';
+import { McpSettings, settingSourcesFor } from './mcp';
 import { SessionConfig } from './session';
+import { WebSearchSettings, webSearchParams } from './webSearch';
 
 const SECTION = 'anvil';
 const SECRET_KEY = 'anvil.apiKey';
+const WEB_SECRET_KEY = 'anvil.webSearchKey';
+const WEB_ENV_KEY = 'ANVIL_WEB_SEARCH_API_KEY';
 /** Global state only. Not registered with `setKeysForSync`, so it stays on this machine. */
 const SAVED_KEY = 'anvil.apiKey';
 
@@ -33,6 +37,26 @@ export interface ResolvedSettings {
    * running is worse than no list.
    */
   rules: { load_project: boolean; load_cursor_rules: boolean };
+  /**
+   * The MCP file layers this session is told to load. Kept beside the session
+   * config so the panel's card asks about the same layers the conversation
+   * uses: a card describing a different set would be worse than no card.
+   */
+  mcp: McpSettings;
+  /**
+   * The web-tool configuration the session was created with. Kept beside the
+   * session config for the same reason as `mcp`: the panel's row describes the
+   * tools this conversation actually has, and the key it asks about is the one
+   * the child was started with.
+   */
+  webSearch: WebSearchSettings;
+  /**
+   * The context window the meter measures the last run against, or 0 when it is
+   * unknown. This is display arithmetic, not a session option: it never travels
+   * to the host, and nothing here derives it from a model name — a guessed
+   * window would make the percentage a guess too.
+   */
+  contextWindow: number;
 }
 
 /** Reads the workspace configuration into a session config. */
@@ -64,10 +88,38 @@ export function readSettings(): ResolvedSettings {
   // in force. It is sent explicitly, both ways, because the host's default is
   // on and this is the one place a user turns it off.
   session.load_permissions = cfg.get<boolean>('permissions', true) ?? true;
+  // MCP is per source, with deliberately different defaults. The workspace file
+  // is reviewed like the rest of the workspace, and the extension refuses
+  // untrusted workspaces; a home-directory file a user may not remember writing
+  // is a larger act to read, so it is opt-in.
+  const mcp: McpSettings = {
+    project: cfg.get<boolean>('mcp.project', true) ?? true,
+    user: cfg.get<boolean>('mcp.user', false) ?? false,
+  };
+  // Omitted when both are off, which keeps the request exactly as it was before
+  // these settings existed.
+  const sources = settingSourcesFor(mcp);
+  if (sources.length > 0) session.setting_sources = sources;
+  // Off is absent: the field is omitted entirely, so a session that does not
+  // want the web tools is exactly the request it was before they existed.
+  const webSearch: WebSearchSettings = {
+    enabled: cfg.get<boolean>('webSearch.enabled', false) ?? false,
+    provider: cfg.get<string>('webSearch.provider', 'http') ?? 'http',
+    baseUrl: cfg.get<string>('webSearch.baseUrl', '') ?? '',
+    maxResults: cfg.get<number>('webSearch.maxResults', 0) ?? 0,
+  };
+  const web = webSearchParams(webSearch);
+  if (web) session.web_search = web;
+  // A window of zero, or a nonsense value, means the user has not told the
+  // panel one: the meter then shows counts and no fraction.
+  const window = cfg.get<number>('contextWindow', 0) ?? 0;
   return {
     hostPath: (cfg.get<string>('hostPath', '') ?? '').trim(),
     session,
     rules: { load_project: loadProject, load_cursor_rules: loadCursor },
+    mcp,
+    webSearch,
+    contextWindow: Number.isFinite(window) && window > 0 ? Math.floor(window) : 0,
   };
 }
 
@@ -76,17 +128,29 @@ function emptyToUndefined(value: string | undefined): string | undefined {
   return trimmed === '' ? undefined : trimmed;
 }
 
+/** The credentials the host may need, read from SecretStorage by the caller. */
+export interface ChildKeys {
+  apiKey?: string;
+  webSearchKey?: string;
+}
+
 /**
- * Builds the child environment. The API key is the only thing added beyond the
- * user's own environment; provider / model / base URL travel in `session.new`,
- * where the host also accepts them per session.
+ * Builds the child environment. The two credentials are the only things added
+ * beyond the user's own environment; provider / model / base URL travel in
+ * `session.new`, where the host also accepts them per session.
  *
- * The key is read by the caller and handed straight to the spawn, so it never
- * lands in a settings file, a log line, or an error object. With no saved key,
- * `ANVIL_API_KEY` already on this process is left alone.
+ * Both keys are read by the caller and handed straight to the spawn, so neither
+ * lands in a settings file, a log line, or an error object. The API key keeps
+ * the rule that a saved key overrides `ANVIL_API_KEY` while an inherited one is
+ * left alone, so a launch that already has the variable needs no command; the
+ * web-search key has no such precedence and is *deleted* when absent, because
+ * a value the window did not decide on would make "clear the key" untrue until
+ * the next process.
  */
-export function childEnv(apiKey: string | undefined): NodeJS.ProcessEnv {
-  return applyApiKeyEnv(process.env, apiKey);
+export function childEnv(keys: ChildKeys): NodeJS.ProcessEnv {
+  const env = applyApiKeyEnv(process.env, keys.apiKey);
+  setSecret(env, WEB_ENV_KEY, keys.webSearchKey);
+  return env;
 }
 
 function keyStore(context: vscode.ExtensionContext): ApiKeyStore {
@@ -97,6 +161,14 @@ function keyStore(context: vscode.ExtensionContext): ApiKeyStore {
     getSaved: () => context.globalState.get<string>(SAVED_KEY),
     setSaved: (value) => Promise.resolve(context.globalState.update(SAVED_KEY, value)),
   };
+}
+
+function setSecret(env: NodeJS.ProcessEnv, name: string, value: string | undefined): void {
+  if (value && value.trim() !== '') {
+    env[name] = value;
+  } else {
+    delete env[name];
+  }
 }
 
 /** Reads the stored key, or undefined when the user has not set one. */
@@ -121,5 +193,32 @@ export async function promptForApiKey(context: vscode.ExtensionContext): Promise
 /** Removes the stored key. */
 export async function clearApiKey(context: vscode.ExtensionContext): Promise<void> {
   await forgetApiKey(keyStore(context));
+}
+
+/** Reads the stored web-search key, or undefined when none is set. */
+export async function readWebSearchKey(
+  context: vscode.ExtensionContext,
+): Promise<string | undefined> {
+  return context.secrets.get(WEB_SECRET_KEY);
+}
+
+/** Prompts for a web-search key and stores it. Returns false when cancelled. */
+export async function promptForWebSearchKey(context: vscode.ExtensionContext): Promise<boolean> {
+  const value = await vscode.window.showInputBox({
+    title: 'Anvil web search API key',
+    prompt:
+      'Stored in VS Code SecretStorage and passed to the host as ANVIL_WEB_SEARCH_API_KEY. Not written to settings.',
+    password: true,
+    ignoreFocusOut: true,
+    validateInput: (input) => (input.trim() === '' ? 'The key cannot be empty.' : undefined),
+  });
+  if (value === undefined) return false;
+  await context.secrets.store(WEB_SECRET_KEY, value.trim());
+  return true;
+}
+
+/** Removes the stored web-search key. */
+export async function clearWebSearchKey(context: vscode.ExtensionContext): Promise<void> {
+  await context.secrets.delete(WEB_SECRET_KEY);
 }
 
