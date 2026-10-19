@@ -44,6 +44,42 @@ type Event struct {
 	// a successful todo_write call. It is the whole list rather than a change:
 	// a client replaces what it shows, and an empty list clears it.
 	Items []tools.TodoItem
+	// Compact is what a history compaction folded away, on the `compact` event
+	// (0.43+). It is nil on every other event. A client draws it as a divider;
+	// the turns themselves are still in the store, so a replay shows them too.
+	Compact *CompactInfo
+}
+
+// CompactInfo is one history compaction's numbers.
+type CompactInfo struct {
+	Reason     string // "auto" or "manual"
+	Before     int    // estimated tokens before
+	After      int    // estimated tokens after
+	Summarized int    // messages folded into the summary
+	Window     int    // the declared context window, 0 when none
+}
+
+// ContextBudget is the declared context window compaction works against.
+type ContextBudget struct {
+	WindowTokens  int     // 0 = no budget; compaction is off
+	AutoCompactAt float64 // fraction of the window; 0 or out of range means 0.8
+	KeepRecent    int     // messages kept verbatim; 0 means 8
+}
+
+// threshold is the estimated token count at which compaction triggers.
+func (b ContextBudget) threshold() int {
+	if b.WindowTokens <= 0 {
+		return 0
+	}
+	at := b.AutoCompactAt
+	if at <= 0 || at > 1 {
+		at = 0.8
+	}
+	n := int(float64(b.WindowTokens) * at)
+	if n < 1 {
+		n = 1
+	}
+	return n
 }
 
 // DefaultMaxSteps is deprecated: MaxSteps 0 means unlimited. Kept as 0 for callers.
@@ -84,6 +120,11 @@ type Config struct {
 	// HistoryMaxChars / HistoryKeepRecent enable optional compression (0.3+).
 	HistoryMaxChars   int
 	HistoryKeepRecent int
+	// Context is the token budget (0.43+). When its window is set, the loop
+	// compacts before the run and again between steps, keeping a tail that
+	// starts at a user message. It composes with HistoryMaxChars: whichever
+	// budget triggers first does the work.
+	Context ContextBudget
 	// Sink, if set, receives each conversation message as it is appended
 	// (user, assistant, tool) so callers can persist them durably.
 	Sink func(llm.Message)
@@ -145,6 +186,7 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 			}
 		}
 	}
+	messages = compactBudget(ctx, completer, cfg, messages, sink, emit)
 
 	var usageAcc *llm.Usage
 	toolDefs := registry.Defs()
@@ -158,6 +200,14 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 		}
 		if err := ctx.Err(); err != nil {
 			return cancelledResult(ctx, runID, step, usageAcc, messages, err, emit)
+		}
+		// A long tool-calling run crosses the budget between steps, not only at
+		// its start. The check is before the request is built, so the estimate it
+		// compares is exactly the one about to be sent. Step 0 is skipped: the
+		// pre-loop check already ran on this exact slice, and repeating it can
+		// only compact twice — the second summary would fold the first.
+		if step > 0 {
+			messages = compactBudget(ctx, completer, cfg, messages, sink, emit)
 		}
 
 		emit(Event{Type: "progress", Step: step + 1, MaxSteps: cfg.MaxSteps})
@@ -271,6 +321,40 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 			}
 		}
 	}
+}
+
+// compactBudget folds older turns into a summary when the estimate crosses the
+// declared budget.
+//
+// It returns messages unchanged when there is no window, when the estimate is
+// below the threshold, or when there is nothing old enough to summarize. On a
+// compaction it persists the summary marker and the kept tail through the same
+// sink every other message uses, so Resume sees exactly one boundary, and emits
+// one event so a live reader can draw it.
+func compactBudget(ctx context.Context, completer llm.Completer, cfg Config, messages []llm.Message, sink func(llm.Message), emit Emitter) []llm.Message {
+	threshold := cfg.Context.threshold()
+	if threshold <= 0 {
+		return messages
+	}
+	cr, err := compress.Compact(ctx, completer, cfg.Model, messages, compress.BudgetOptions{
+		MaxTokens:  threshold,
+		KeepRecent: cfg.Context.KeepRecent,
+	})
+	if err != nil || !cr.DidCompress {
+		return messages
+	}
+	sink(llm.Message{Role: llm.RoleUser, Name: compress.SummaryMarker, Content: cr.Summary})
+	for _, m := range cr.Recent {
+		sink(m)
+	}
+	emit(Event{Type: "compact", Compact: &CompactInfo{
+		Reason:     "auto",
+		Before:     cr.Before,
+		After:      cr.After,
+		Summarized: cr.Summarized,
+		Window:     cfg.Context.WindowTokens,
+	}})
+	return cr.Messages
 }
 
 func runToolCalls(

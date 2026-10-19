@@ -54,8 +54,12 @@ type Agent struct {
 
 	store store.Backend
 
-	mu           sync.Mutex
+	mu sync.Mutex
+	// running is a turn in flight; compacting is a manual compaction, which is
+	// also a model call and therefore must not overlap a turn. They are separate
+	// flags because a refused Send and a refused Compact say different things.
 	running      bool
+	compacting   bool
 	activeRun    *Run
 	history      []llm.Message
 	complete     llm.Completer
@@ -967,6 +971,10 @@ func (a *Agent) Send(ctx context.Context, message string, opts ...SendOption) (*
 		a.mu.Unlock()
 		return nil, newError("another run is already in progress", false, nil)
 	}
+	if a.compacting {
+		a.mu.Unlock()
+		return nil, newError("a compaction is in progress", false, nil)
+	}
 	a.running = true
 	historyCopy := append([]llm.Message(nil), a.history...)
 	wall := a.opts.MaxWallTime
@@ -1062,6 +1070,20 @@ func todoItemsInfo(items []tools.TodoItem) []TodoItem {
 	return out
 }
 
+// compactInfo projects a runtime compaction onto the public event.
+func compactInfo(in *runtime.CompactInfo) *CompactInfo {
+	if in == nil {
+		return nil
+	}
+	return &CompactInfo{
+		Reason:     in.Reason,
+		Before:     in.Before,
+		After:      in.After,
+		Summarized: in.Summarized,
+		Window:     in.Window,
+	}
+}
+
 func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseFunc, wall time.Duration, run *Run, message string, history []llm.Message, userParts []llm.ContentPart) {
 	defer func() {
 		// The run is over, so its pre-images stop being written: a tool call made
@@ -1109,10 +1131,15 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 		RunID:             run.id,
 		HistoryMaxChars:   a.opts.HistoryMaxChars,
 		HistoryKeepRecent: a.opts.HistoryKeepRecent,
-		SystemPrompt:      sysPrompt,
-		ParallelTools:     a.opts.ParallelTools,
-		ParallelToolsMax:  a.opts.ParallelToolsMax,
-		Sink:              func(m llm.Message) { a.persistMessage(run.id, m) },
+		Context: runtime.ContextBudget{
+			WindowTokens:  a.opts.Context.WindowTokens,
+			AutoCompactAt: a.opts.Context.AutoCompactAt,
+			KeepRecent:    a.opts.Context.KeepRecent,
+		},
+		SystemPrompt:     sysPrompt,
+		ParallelTools:    a.opts.ParallelTools,
+		ParallelToolsMax: a.opts.ParallelToolsMax,
+		Sink:             func(m llm.Message) { a.persistMessage(run.id, m) },
 	}, func(ev runtime.Event) {
 		out := Event{
 			Type:       EventType(ev.Type),
@@ -1128,6 +1155,7 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 			Rule:       permissionRuleMatch(ev.Rule),
 			Usage:      usageInfo(ev.Usage),
 			Items:      todoItemsInfo(ev.Items),
+			Compact:    compactInfo(ev.Compact),
 		}
 		run.emit(out)
 		// A child's events travel to whoever asked for the child, tagged with the
@@ -1328,6 +1356,17 @@ func normalizeOptions(opts Options) (Options, string, error) {
 	// MaxSteps 0 = unlimited; loop guard stops runaway tool repetition.
 	if opts.HistoryKeepRecent < 0 {
 		opts.HistoryKeepRecent = 0
+	}
+	// A declared budget normalizes here so every reader — the runtime, the
+	// transcript, a client's meter — agrees on the same threshold.
+	if opts.Context.WindowTokens < 0 {
+		opts.Context.WindowTokens = 0
+	}
+	if opts.Context.AutoCompactAt <= 0 || opts.Context.AutoCompactAt > 1 {
+		opts.Context.AutoCompactAt = 0.8
+	}
+	if opts.Context.KeepRecent < 2 {
+		opts.Context.KeepRecent = 8
 	}
 	return opts, abs, nil
 }

@@ -1,8 +1,8 @@
 # Design v1.0 (cutoff)
 
-Anvil **local-only** Go Agent SDK design through product milestone **0.42**. The chapters end at **41** (subagents, background tasks, and workflows): 0.39 is the Delivery **execute / test campaign loop**, and it is designed by [33](33-delivery-ui.md) together with [DELIVERY_PIPELINE_VISION.md](../../../DELIVERY_PIPELINE_VISION.md) rather than by a chapter of its own. Read chapters in order before implementing the matching roadmap phase.
+Anvil **local-only** Go Agent SDK design through product milestone **0.43**. The chapters end at **42** (context management): 0.39 is the Delivery **execute / test campaign loop**, and it is designed by [33](33-delivery-ui.md) together with [DELIVERY_PIPELINE_VISION.md](../../../DELIVERY_PIPELINE_VISION.md) rather than by a chapter of its own. Read chapters in order before implementing the matching roadmap phase.
 
-This tree is the **design cutoff** for 0.1–0.42 delivery. Later product lines get a new `doc/design/v…/` directory.
+This tree is the **design cutoff** for 0.1–0.43 delivery. Later product lines get a new `doc/design/v…/` directory.
 
 ## Read order
 
@@ -50,6 +50,7 @@ This tree is the **design cutoff** for 0.1–0.42 delivery. Later product lines 
 | 39 | [39-editor-alignment.md](39-editor-alignment.md) | Parallel tabs, session administration, partial acceptance, checkpoints, fork, and the SDK capabilities the client never turned on → **0.40** |
 | 40 | [40-permission-auto-and-manager.md](40-permission-auto-and-manager.md) | A deterministic `auto` rung, and a structured permissions manager → **0.41** |
 | 41 | [41-subagents-and-tasks.md](41-subagents-and-tasks.md) | Agent-in-agent, background tasks and `/tasks`, and declarative workflows → **0.42** |
+| 42 | [42-context-management.md](42-context-management.md) | A token budget, safe compaction at run start and mid-run, `/compact`, and the cache clock → **0.43** |
 
 Parent index: [`doc/design/README.md`](../README.md).
 
@@ -57,4 +58,4 @@ Parent index: [`doc/design/README.md`](../README.md).
 
 - Design describes **what** and **why** for this cutoff.
 - [`doc/roadmaps/v1.0/`](../../roadmaps/v1.0/) describes **when**.
-- Chapters 11–41 map to [m_0.11](../../roadmaps/v1.0/m_0.11_worker_daemon.md) … [m_0.42](../../roadmaps/v1.0/m_0.42_subagents_and_tasks.md). [m_0.39](../../roadmaps/v1.0/m_0.39_execute.md) maps back to chapter 33.
+- Chapters 11–42 map to [m_0.11](../../roadmaps/v1.0/m_0.11_worker_daemon.md) … [m_0.43](../../roadmaps/v1.0/m_0.43_context_management.md). [m_0.39](../../roadmaps/v1.0/m_0.39_execute.md) maps back to chapter 33.

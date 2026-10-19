@@ -83,6 +83,17 @@ type Options struct {
 	// 0 defaults to 6.
 	HistoryKeepRecent int
 
+	// Context declares the token budget (0.43+). Unlike HistoryMaxChars it is
+	// measured in estimated tokens and enforced before the run and between its
+	// steps, and its tail always begins at a user message so a tool result is
+	// never separated from its call. Both budgets may be set; whichever triggers
+	// first compacts. WindowTokens 0 turns the budget off.
+	//
+	// WindowTokens is a declaration, not a lookup: the SDK does not know a
+	// model's window and does not guess one. A client that does not know it
+	// leaves this zero and keeps the old behaviour.
+	Context ContextOptions
+
 	// ParallelTools runs same-turn tool_calls concurrently when all are non-mutating (0.9+).
 	ParallelTools bool
 	// ParallelToolsMax bounds concurrent tool executions when ParallelTools is on (0 = 4).
@@ -235,9 +246,9 @@ type PluginPolicy struct {
 
 // VisionOptions controls image attachments / read_image (0.19+).
 type VisionOptions struct {
-	Enabled            bool
-	MaxSide            int  // longest side before downscale; 0 = 2048
-	MaxBytes           int  // max base64 payload bytes; 0 = 4MiB
+	Enabled             bool
+	MaxSide             int  // longest side before downscale; 0 = 2048
+	MaxBytes            int  // max base64 payload bytes; 0 = 4MiB
 	AllowRemoteImageURL bool // reserved; remote https fetch stays off in 0.19
 }
 

@@ -48,6 +48,7 @@ Versioned delivery for Anvil through product **0.42**. Design cutoff: [`doc/desi
 | 0.40 | Editor alignment (Claude-class VS Code client) | done | [m_0.40_editor_alignment.md](m_0.40_editor_alignment.md) | [39](../../design/v1.0/39-editor-alignment.md) |
 | 0.41 | Auto mode + permissions manager | done | [m_0.41_permission_auto_and_manager.md](m_0.41_permission_auto_and_manager.md) | [40](../../design/v1.0/40-permission-auto-and-manager.md) |
 | 0.42 | Subagents, background tasks, and workflows | done | [m_0.42_subagents_and_tasks.md](m_0.42_subagents_and_tasks.md) | [41](../../design/v1.0/41-subagents-and-tasks.md) |
+| 0.43 | Context management | in_progress | [m_0.43_context_management.md](m_0.43_context_management.md) | [42](../../design/v1.0/42-context-management.md) |
 
 ## Naming
 

@@ -33,7 +33,23 @@ const (
 	// replayed conversation rebuilds the list from the stored arguments; this
 	// event is what a live reader receives.
 	EventTodo EventType = "todo"
+	// EventCompact reports one history compaction (0.43+): what was folded, and
+	// the estimate on either side. The summary itself is stored, so a replayed
+	// conversation draws the same boundary without this event.
+	EventCompact EventType = "compact"
 )
+
+// CompactInfo is one history compaction's numbers, set on EventCompact.
+type CompactInfo struct {
+	// Reason is "auto" when the budget triggered it or "manual" when a caller
+	// asked. A manual compaction from Agent.Compact is reported by its result;
+	// this field is what a runtime compaction says about itself.
+	Reason     string
+	Before     int
+	After      int
+	Summarized int
+	Window     int
+}
 
 // TodoItem is one row of the model's plan.
 type TodoItem struct {
@@ -104,4 +120,7 @@ type Event struct {
 	// other event. It is the complete list the call wrote, not a change: a
 	// client replaces its checklist, and an empty list means the call cleared it.
 	Items []TodoItem
+	// Compact is what a history compaction folded away, set on EventCompact
+	// (0.43+) and nil on every other event.
+	Compact *CompactInfo
 }
