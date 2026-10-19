@@ -15,6 +15,10 @@ import { childEnv, readApiKey, readSettings } from './settings';
 import { describeHost, hostFixHint, resolveHost, verifyHost, versionDrift } from './hostBundle';
 import {
   ApprovalRequest,
+  CheckpointListParams,
+  CheckpointListResult,
+  CheckpointRestoreParams,
+  CheckpointRestoreResult,
   DoneParams,
   HostEvent,
   Method,
@@ -327,6 +331,33 @@ export class HostManager {
   async deleteSession(agentId: string): Promise<SessionDeleteResult> {
     const client = await this.startClient();
     return client.request<SessionDeleteResult>(Method.SessionDelete, { agent_id: agentId });
+  }
+
+  /**
+   * The runs of a session that captured a pre-image, newest first.
+   *
+   * An empty list is the normal answer for a session whose runs changed nothing
+   * and for one that ran before checkpoints existed. It is keyed by agent id, so
+   * it answers for a session this host has not opened — a tab that has just come
+   * back can offer the undo of the run that broke something.
+   */
+  async listCheckpoints(agentId: string): Promise<CheckpointListResult> {
+    const client = await this.startClient();
+    const params: CheckpointListParams = { agent_id: agentId };
+    return client.request<CheckpointListResult>(Method.CheckpointList, params);
+  }
+
+  /**
+   * Puts one run's captured files back, and deletes the files that run created.
+   *
+   * The result is what was written or deleted, not what was asked for: a path
+   * the host refused is not in it. The SDK runs every path through the workspace
+   * sandbox, so this cannot be used to reach outside the workspace.
+   */
+  async restoreCheckpoint(agentId: string, runId: string): Promise<CheckpointRestoreResult> {
+    const client = await this.startClient();
+    const params: CheckpointRestoreParams = { agent_id: agentId, run_id: runId };
+    return client.request<CheckpointRestoreResult>(Method.CheckpointRestore, params);
   }
 
   /**

@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/anvil-dev/anvil/internal/checkpoint"
 	"github.com/anvil-dev/anvil/internal/llm"
 	"github.com/anvil-dev/anvil/internal/lsp"
 	"github.com/anvil-dev/anvil/internal/permissions"
@@ -83,6 +84,14 @@ type Registry struct {
 	visionCfg  VisionConfig
 	visionMu   sync.Mutex
 	visionQ    []llm.ContentPart
+	// cpDir is the checkpoint root. Empty means capture is off, which is what
+	// every caller that does not ask for it gets.
+	cpDir string
+	// cpAgent and cpRun name the run whose pre-images are being written. They
+	// are set before a run starts and cleared with it; an empty either keeps
+	// capture off, so a bare Registry stays unaffected.
+	cpAgent string
+	cpRun   string
 }
 
 // PreExecFunc runs before every tool (hooks like beforeMCP / beforeRead).
@@ -128,6 +137,22 @@ func (r *Registry) SetPreExec(fn PreExecFunc) {
 func (r *Registry) SetPostExec(fn PostExecFunc) {
 	if r != nil {
 		r.postExec = fn
+	}
+}
+
+// SetCheckpoints turns pre-run capture on, writing under dir. Empty dir is off.
+func (r *Registry) SetCheckpoints(dir string) {
+	if r != nil {
+		r.cpDir = dir
+	}
+}
+
+// SetRunContext names the run capture belongs to. An empty id switches capture
+// off for this registry, which is what a closed or not-yet-started run is.
+func (r *Registry) SetRunContext(agentID, runID string) {
+	if r != nil {
+		r.cpAgent = agentID
+		r.cpRun = runID
 	}
 }
 
@@ -344,6 +369,10 @@ func (r *Registry) Execute(ctx context.Context, name string, args json.RawMessag
 			return Result{Content: ruleNoChannelMessage(name, decision), IsError: true, Rule: decidedBy}
 		}
 	}
+	// The pre-image is taken from the arguments the call will actually run
+	// with: an approval may have rewritten them, and the file that changes is
+	// the one in the rewritten call, not the one the model first named.
+	r.captureBefore(name, execArgs)
 	res = t.Execute(ctx, execArgs)
 	res.Content = truncate(res.Content, r.maxOutput)
 	if r.postExec != nil {
@@ -363,6 +392,34 @@ func callFacts(name string, args json.RawMessage) permissions.CallFacts {
 		Tool:    name,
 		Command: commandOf(name, args),
 		Paths:   pathsOf(name, args),
+	}
+}
+
+// captureBefore records the pre-image of every path this call names.
+//
+// It is the last thing done before execution and the first thing that can
+// observe the arguments a permission rewrite produced. Nothing here may turn a
+// successful call into a failed one, so every error is dropped: a missing
+// checkpoint is a gap in the undo history, while a refusal here would be a
+// tool that stops working because a backup could not be filed.
+func (r *Registry) captureBefore(name string, args json.RawMessage) {
+	if r.cpDir == "" || r.cpAgent == "" || r.cpRun == "" {
+		return
+	}
+	root := r.cwd
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = filepath.Clean(resolved)
+	}
+	for _, p := range pathsOf(name, args) {
+		abs, err := r.resolvePath(p)
+		if err != nil {
+			continue
+		}
+		rel, err := filepath.Rel(root, abs)
+		if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+			continue
+		}
+		_ = checkpoint.Capture(r.cpDir, r.cpAgent, r.cpRun, filepath.ToSlash(rel), abs)
 	}
 }
 
@@ -390,12 +447,21 @@ func ruleNoChannelMessage(name string, d permissions.Decision) string {
 }
 
 func (r *Registry) resolvePath(p string) (string, error) {
+	return ResolveInRoot(r.cwd, p)
+}
+
+// ResolveInRoot resolves p against root and refuses anything that would leave
+// it. It is the one sandbox check: the tools use it before touching a file, the
+// approval preview uses it before reading one, and checkpoint restore uses it
+// before writing one back — so a path a checkpoint manifest names is held to
+// exactly the boundary a tool argument is.
+func ResolveInRoot(root, p string) (string, error) {
 	if p == "" {
 		return "", fmt.Errorf("path is required")
 	}
-	cwdResolved, err := filepath.EvalSymlinks(r.cwd)
+	cwdResolved, err := filepath.EvalSymlinks(root)
 	if err != nil {
-		cwdResolved = filepath.Clean(r.cwd)
+		cwdResolved = filepath.Clean(root)
 	} else {
 		cwdResolved = filepath.Clean(cwdResolved)
 	}

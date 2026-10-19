@@ -45,11 +45,17 @@ const (
 	MethodSessionRename = "session.rename"
 	// MethodSessionDelete removes a stored session's records.
 	MethodSessionDelete = "session.delete"
-	MethodPrompt        = "prompt"
-	MethodCancel        = "cancel"
-	MethodModelsList    = "models.list"
-	MethodSkillsList    = "skills.list"
-	MethodRulesList     = "rules.list"
+	// MethodCheckpointList lists the runs of a stored session that captured a
+	// pre-image, so a client can offer to put those files back. Additive: a host
+	// without it answers -32601, which a client reads as "no checkpoints here".
+	MethodCheckpointList = "checkpoint.list"
+	// MethodCheckpointRestore puts one run's captured files back.
+	MethodCheckpointRestore = "checkpoint.restore"
+	MethodPrompt            = "prompt"
+	MethodCancel            = "cancel"
+	MethodModelsList        = "models.list"
+	MethodSkillsList        = "skills.list"
+	MethodRulesList         = "rules.list"
 	// MethodPermissionsGet reads the workspace rule file — the effective policy
 	// for this workspace, and the place to put a squiggle when it will not
 	// compile.
@@ -555,6 +561,55 @@ type SessionDeleteParams struct {
 // SessionDeleteResult confirms the deletion.
 type SessionDeleteResult struct {
 	AgentID string `json:"agent_id"`
+	Deleted bool   `json:"deleted"`
+}
+
+// ---------------------------------------------------------------------------
+// checkpoint.list / checkpoint.restore
+// ---------------------------------------------------------------------------
+
+// CheckpointListParams names the session whose run checkpoints to read. Like
+// session.transcript it is agent-keyed: a checkpoint belongs to a session that
+// may not be open in this window.
+type CheckpointListParams struct {
+	AgentID string `json:"agent_id"`
+}
+
+// CheckpointListResult is the runs that have a checkpoint, newest first.
+type CheckpointListResult struct {
+	Runs []CheckpointRun `json:"runs"`
+}
+
+// CheckpointRun mirrors anvil.CheckpointRun in host vocabulary.
+type CheckpointRun struct {
+	RunID     string           `json:"run_id"`
+	CreatedAt string           `json:"created_at,omitempty"`
+	Files     []CheckpointFile `json:"files"`
+}
+
+// CheckpointFile is one path a run captured.
+type CheckpointFile struct {
+	Path string `json:"path"`
+	// Existed false means the run created the file; restoring deletes it.
+	Existed bool  `json:"existed"`
+	Size    int64 `json:"size,omitempty"`
+}
+
+// CheckpointRestoreParams names the run to put back.
+type CheckpointRestoreParams struct {
+	AgentID string `json:"agent_id"`
+	RunID   string `json:"run_id"`
+}
+
+// CheckpointRestoreResult is what the restore actually did.
+type CheckpointRestoreResult struct {
+	RunID string         `json:"run_id"`
+	Files []RestoredFile `json:"files"`
+}
+
+// RestoredFile is one path a restore wrote or deleted.
+type RestoredFile struct {
+	Path    string `json:"path"`
 	Deleted bool   `json:"deleted"`
 }
 

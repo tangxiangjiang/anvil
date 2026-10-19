@@ -19,6 +19,8 @@ import { ChatPanel } from './chatPanel';
 import { SlashCommand, commandCatalogue } from './commands';
 import { HostManager } from './hostManager';
 import {
+  CheckpointRestoreResult,
+  CheckpointRun,
   ModelEntry,
   PermissionsAddResult,
   PermissionsResult,
@@ -267,6 +269,17 @@ export class Hub {
   /** The stored conversation for one agent, oldest first. */
   transcript(agentId: string, limit?: number): Promise<SessionTranscriptResult> {
     return this.manager.transcript(agentId, limit);
+  }
+
+  /** The runs of one agent that can be put back, newest first. */
+  async listCheckpoints(agentId: string): Promise<CheckpointRun[]> {
+    const result = await this.manager.listCheckpoints(agentId);
+    return result.runs;
+  }
+
+  /** Puts one run's files back. */
+  restoreCheckpoint(agentId: string, runId: string): Promise<CheckpointRestoreResult> {
+    return this.manager.restoreCheckpoint(agentId, runId);
   }
 
   /** Gives a stored session a name, then redraws every list that shows it. */

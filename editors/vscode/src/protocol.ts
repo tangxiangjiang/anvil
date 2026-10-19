@@ -37,6 +37,14 @@ export const Method = {
   SessionRename: 'session.rename',
   /** Removes a stored session's records. */
   SessionDelete: 'session.delete',
+  /**
+   * Lists the runs of a session that captured a pre-image, newest first.
+   * Additive: a host that predates it answers `-32601`, and the panel then
+   * offers no restore rather than an error.
+   */
+  CheckpointList: 'checkpoint.list',
+  /** Puts one run's captured files back. */
+  CheckpointRestore: 'checkpoint.restore',
   Prompt: 'prompt',
   Cancel: 'cancel',
   ModelsList: 'models.list',
@@ -519,6 +527,48 @@ export interface SessionDeleteParams {
 
 export interface SessionDeleteResult {
   agent_id: string;
+  deleted: boolean;
+}
+
+// --- checkpoint.list / checkpoint.restore ------------------------------------
+
+/** Names the session whose run checkpoints to read. */
+export interface CheckpointListParams {
+  agent_id: string;
+}
+
+export interface CheckpointListResult {
+  runs: CheckpointRun[];
+}
+
+/** One run's captured pre-images. */
+export interface CheckpointRun {
+  run_id: string;
+  created_at?: string;
+  files: CheckpointFile[];
+}
+
+export interface CheckpointFile {
+  /** Workspace-relative, slash-separated. */
+  path: string;
+  /** False means the run created the file; restoring deletes it. */
+  existed: boolean;
+  size?: number;
+}
+
+export interface CheckpointRestoreParams {
+  agent_id: string;
+  run_id: string;
+}
+
+/** What the restore actually did, rather than what it was asked to do. */
+export interface CheckpointRestoreResult {
+  run_id: string;
+  files: RestoredFile[];
+}
+
+export interface RestoredFile {
+  path: string;
   deleted: boolean;
 }
 

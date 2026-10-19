@@ -136,6 +136,26 @@ type Options struct {
 	PluginDirs []string
 	// PluginPolicy optionally gates ids/permissions (daemon/worker); nil = allow requested.
 	PluginPolicy *PluginPolicy
+
+	// Checkpoints turns on capturing a run's file pre-images, so its changes can
+	// be put back (0.40+). Nil means off, which is what an embedder that does
+	// not offer an undo gets: nothing is read and nothing is written.
+	Checkpoints *CheckpointOptions
+}
+
+// CheckpointOptions says where run pre-images are kept and how many survive.
+//
+// Zero values are the defaults, not "off": a caller that asks for checkpoints
+// with an empty struct gets {cwd}/.anvil/checkpoints, the newest 100 runs, and
+// 30 days. A negative Keep or MaxAge disables that bound.
+type CheckpointOptions struct {
+	// Dir is the root under which per-agent, per-run directories are written.
+	// Empty means {cwd}/.anvil/checkpoints.
+	Dir string
+	// Keep is how many of an agent's newest runs are kept.
+	Keep int
+	// MaxAge is how long a run's checkpoint is kept.
+	MaxAge time.Duration
 }
 
 // PluginPolicy mirrors daemon allowlist gates for in-process hosts (0.20+).

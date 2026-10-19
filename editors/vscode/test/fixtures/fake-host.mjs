@@ -38,6 +38,11 @@
  *                          on disk and nothing is live
  *   FAKE_HOST_TRANSCRIPT_DROPPED=<n>  entries the reader left out, so the panel's
  *                          "earlier turns are not shown" note can be seen
+ *   FAKE_HOST_CHECKPOINT=<paths>  comma-separated workspace-relative paths that
+ *                          every finished run is said to have changed. With it,
+ *                          checkpoint.list answers for the agent and
+ *                          checkpoint.restore writes each path back, so the
+ *                          extension's undo route is exercised without the SDK
  *
  * One thing here is not scripted: the mode a new session starts in. It is
  * resolved from what the client asked for and from the workspace's
@@ -79,6 +84,13 @@ let storedIds = (process.env.FAKE_HOST_STORED || '')
 const titles = new Map();
 /** The workspace rule file, which `permissions.get/add` are about. */
 const rulesPath = join(process.env.FAKE_HOST_CWD || process.cwd(), '.anvil', 'permissions.json');
+/** Paths every finished run is said to have checkpointed; empty means no undo. */
+const checkpointPaths = (process.env.FAKE_HOST_CHECKPOINT || '')
+  .split(',')
+  .map((path) => path.trim())
+  .filter((path) => path !== '');
+/** Checkpointed runs by agent id, newest first. */
+const checkpoints = new Map();
 /** Its rules, as a session that appended them would have them. */
 const rules = [];
 /** Where the parse error is reported: the place, not a line for the file. */
@@ -239,6 +251,17 @@ function event(session, run, body) {
 
 function finish(session, run, body) {
   activeRuns.delete(session.session_id);
+  if (checkpointPaths.length > 0) {
+    // The real host captures pre-images as tools run; here each finished run is
+    // recorded as having changed the paths the test named.
+    const runs = checkpoints.get(session.agent_id) || [];
+    runs.unshift({
+      run_id: run,
+      created_at: new Date().toISOString(),
+      files: checkpointPaths.map((path) => ({ path, existed: true, size: 6 })),
+    });
+    checkpoints.set(session.agent_id, runs);
+  }
   notify('done', { session_id: session.session_id, run_id: run, ...body });
 }
 
@@ -666,6 +689,41 @@ async function handle(msg) {
       }
       sessions.delete(id);
       ok(msg.id, { closed: true });
+      return;
+    }
+    case 'checkpoint.list': {
+      echo('checkpoint.list', msg.params || {});
+      const agentId = msg.params && msg.params.agent_id;
+      if (!agentId) {
+        fail(msg.id, -32602, 'checkpoint.list: agent_id is required');
+        return;
+      }
+      ok(msg.id, { runs: checkpoints.get(agentId) || [] });
+      return;
+    }
+    case 'checkpoint.restore': {
+      echo('checkpoint.restore', msg.params || {});
+      const agentId = msg.params && msg.params.agent_id;
+      const runId = msg.params && msg.params.run_id;
+      const run = (checkpoints.get(agentId) || []).find((entry) => entry.run_id === runId);
+      if (!run) {
+        fail(msg.id, -32000, `no checkpoint for run ${runId}`);
+        return;
+      }
+      // Writing the files is what makes the route observable from the test: the
+      // extension must not report a restore it did not ask the host for.
+      const root = process.env.FAKE_HOST_CWD || process.cwd();
+      const files = [];
+      for (const file of run.files) {
+        try {
+          writeFileSync(join(root, ...file.path.split('/')), 'restored by the fake host\n');
+          files.push({ path: file.path, deleted: false });
+        } catch {
+          // A path that cannot be written is simply not in the answer, the way
+          // the real host reports what it actually did.
+        }
+      }
+      ok(msg.id, { run_id: runId, files });
       return;
     }
     case 'permissions.get': {

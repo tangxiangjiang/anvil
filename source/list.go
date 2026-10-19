@@ -30,6 +30,10 @@ type AgentInfo struct {
 // ListOptions configures List / Get. Only Local.CWD is required.
 type ListOptions struct {
 	Local LocalOptions
+	// Checkpoints says where an agent's run checkpoints live, so that deleting
+	// an agent can forget them too. Nil means the default root under the
+	// workspace; only Dir is read here. See Options.Checkpoints.
+	Checkpoints *CheckpointOptions
 }
 
 // List returns agents stored under opts.Local.CWD.

@@ -83,6 +83,9 @@ func Create(ctx context.Context, opts Options) (*Agent, error) {
 		return nil, newError("open store", false, err)
 	}
 	agentID := "agent-" + id.New()
+	// An agent's history is trimmed when it opens, so the bound is honoured even
+	// by embedders that never list checkpoints.
+	pruneCheckpoints(cwd, agentID, opts.Checkpoints)
 	allowShell := opts.Local.AllowShellEnabled()
 	if err := st.Append(agentID, store.Record{
 		Type:       store.TypeMeta,
@@ -180,6 +183,7 @@ func Resume(ctx context.Context, agentID string, opts Options) (*Agent, error) {
 		cleanupRegistry(sessions, plugMgr, lspSup)
 		return nil, newError("load project rules", false, err)
 	}
+	pruneCheckpoints(cwd, agentID, opts.Checkpoints)
 	return &Agent{
 		id:           agentID,
 		opts:         opts,
@@ -327,6 +331,11 @@ func toPluginPolicy(p *PluginPolicy) *plugin.Policy {
 
 func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Registry, []*mcp.Session, *plugin.Manager, *hooks.File, *lsp.Supervisor, error) {
 	reg := tools.NewRegistry(cwd, opts.Local.AllowShellEnabled())
+	if opts.Checkpoints != nil {
+		// Capture is named but not yet scoped to a run: SetRunContext in
+		// executeRun is what turns a call from "no pre-image" into one.
+		reg.SetCheckpoints(checkpointRoot(cwd, *opts.Checkpoints))
+	}
 	embedKey := opts.EmbedAPIKey
 	if embedKey == "" {
 		embedKey = opts.APIKey
@@ -932,6 +941,10 @@ func (a *Agent) Reload(ctx context.Context) error {
 
 func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseFunc, wall time.Duration, run *Run, message string, history []llm.Message, userParts []llm.ContentPart) {
 	defer func() {
+		// The run is over, so its pre-images stop being written: a tool call made
+		// outside a run — a resumed tab replaying, a direct Execute — belongs to no
+		// checkpoint and must not be filed under this run.
+		a.registry.SetRunContext("", "")
 		cancelCause(nil)
 		a.mu.Lock()
 		a.running = false
@@ -955,6 +968,7 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 		sysPrompt += "\n\n# Skills (matched)\n" + routed
 	}
 
+	a.registry.SetRunContext(a.id, run.id)
 	result := runtime.Loop(loopCtx, a.complete, a.registry, runtime.Config{
 		CWD:               a.cwd,
 		Model:             a.opts.Model.ID,

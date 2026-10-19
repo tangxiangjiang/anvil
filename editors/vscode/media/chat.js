@@ -62,6 +62,11 @@
   const callFacts = new Map();
   /** Approval cards by request_id. */
   const approvals = new Map();
+  /**
+   * Undo cards by run id: the card and the button that was pressed, so the
+   * restore's answer can settle the one it belongs to and no other.
+   */
+  const checkpointBlocks = new Map();
   /** Referenced workspace paths, in the order they were picked. */
   let mentions = [];
   /** Pasted images, as data URLs. */
@@ -119,6 +124,7 @@
     toolCards.clear();
     callFacts.clear();
     approvals.clear();
+    checkpointBlocks.clear();
     mentions = [];
     images = [];
     renderChips();
@@ -1167,6 +1173,80 @@
     endRound();
   }
 
+  // --- undo -----------------------------------------------------------------
+
+  /**
+   * Offers the undo of a finished run.
+   *
+   * The button is the only route to a write: it asks the extension, which asks
+   * the user in a modal before anything on disk changes. The paths are shown
+   * because "restore the workspace" is too broad a promise for a card to make —
+   * these files, no others.
+   */
+  function showCheckpoint(msg) {
+    const runId = typeof msg.runId === 'string' ? msg.runId : '';
+    if (!runId || checkpointBlocks.has(runId)) return;
+    const files = Array.isArray(msg.files) ? msg.files.filter((path) => typeof path === 'string') : [];
+    if (files.length === 0) return;
+    const card = el('div', 'checkpoint');
+    card.appendChild(el('div', 'head', 'Undo this run'));
+    card.appendChild(
+      el(
+        'div',
+        'hint',
+        'Put ' + files.length + ' file' + (files.length === 1 ? '' : 's') +
+          ' back as they were before this run. Files a shell command wrote are not covered.',
+      ),
+    );
+    const shown = files.slice(0, 8).join(', ') + (files.length > 8 ? ', …' : '');
+    card.appendChild(el('div', 'paths', shown));
+
+    const button = el('button', 'restore', 'Restore files…');
+    button.type = 'button';
+    button.title = 'Put these files back to their content before this run';
+    button.addEventListener('click', () => {
+      if (button.disabled) return;
+      button.disabled = true;
+      button.textContent = 'Waiting for confirmation…';
+      vscode.postMessage({ type: 'restoreCheckpoint', runId: runId });
+    });
+    card.appendChild(button);
+
+    checkpointBlocks.set(runId, { card: card, button: button });
+    append(card);
+    endRound();
+  }
+
+  /** Settles the card whose restore was answered: cancelled, failed, or done. */
+  function settleCheckpoint(msg) {
+    const entry = checkpointBlocks.get(msg.runId);
+    if (!entry) return;
+    const button = entry.button;
+    if (msg.cancelled === true) {
+      button.disabled = false;
+      button.textContent = 'Restore files…';
+      return;
+    }
+    if (typeof msg.error === 'string' && msg.error !== '') {
+      button.disabled = false;
+      button.textContent = 'Try again';
+      entry.card.appendChild(el('div', 'outcome failed', 'Not restored: ' + msg.error));
+      return;
+    }
+    button.disabled = true;
+    button.textContent = 'Restored';
+    const parts = [];
+    if (typeof msg.restored === 'number' && msg.restored > 0) {
+      parts.push('put back ' + msg.restored + ' file' + (msg.restored === 1 ? '' : 's'));
+    }
+    if (typeof msg.deleted === 'number' && msg.deleted > 0) {
+      parts.push('deleted ' + msg.deleted + ' file' + (msg.deleted === 1 ? '' : 's') + ' the run created');
+    }
+    entry.card.appendChild(
+      el('div', 'outcome done', parts.length > 0 ? 'Restored: ' + parts.join(', ') + '.' : 'Nothing to restore.'),
+    );
+  }
+
   // --- mode -----------------------------------------------------------------
 
   /**
@@ -1673,6 +1753,12 @@
         return;
       case 'changes':
         showChanges(msg.files);
+        return;
+      case 'checkpoint':
+        showCheckpoint(msg);
+        return;
+      case 'checkpointRestored':
+        settleCheckpoint(msg);
         return;
       case 'commands':
         catalogue = Array.isArray(msg.commands) ? msg.commands : [];

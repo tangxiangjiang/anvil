@@ -169,6 +169,10 @@ func (s *Server) dispatch(ctx context.Context, req *Request) (any, *RPCError) {
 		return s.handleSessionRename(ctx, req.Params)
 	case MethodSessionDelete:
 		return s.handleSessionDelete(ctx, req.Params)
+	case MethodCheckpointList:
+		return s.handleCheckpointList(ctx, req.Params)
+	case MethodCheckpointRestore:
+		return s.handleCheckpointRestore(ctx, req.Params)
 	case MethodPrompt:
 		return s.handlePrompt(ctx, req.Params)
 	case MethodCancel:
@@ -393,12 +397,82 @@ func (s *Server) handleSessionDelete(ctx context.Context, params json.RawMessage
 	if p.AgentID == "" {
 		return nil, errInvalidParams("session.delete: agent_id is required")
 	}
-	opts := anvil.ListOptions{Local: anvil.LocalOptions{CWD: s.cwdPath(), Store: p.Store}}
+	opts := anvil.ListOptions{
+		Local:       anvil.LocalOptions{CWD: s.cwdPath(), Store: p.Store},
+		Checkpoints: &anvil.CheckpointOptions{},
+	}
 	if err := anvil.DeleteAgent(ctx, p.AgentID, opts); err != nil {
 		return nil, errHost(err)
 	}
 	s.logf("session.delete agent=%s", p.AgentID)
 	return SessionDeleteResult{AgentID: p.AgentID, Deleted: true}, nil
+}
+
+// ---------------------------------------------------------------------------
+// checkpoint.list / checkpoint.restore
+// ---------------------------------------------------------------------------
+
+// handleCheckpointList lists the runs of a session that captured pre-images.
+//
+// An empty list is the normal answer for a session whose runs changed nothing,
+// and for one that ran before checkpoints existed; it is not an error. The
+// client shows the restore action only when there is a run to restore.
+func (s *Server) handleCheckpointList(ctx context.Context, params json.RawMessage) (any, *RPCError) {
+	_ = ctx
+	p, err := decode[CheckpointListParams](params)
+	if err != nil {
+		return nil, errInvalidParams("checkpoint.list: " + err.Error())
+	}
+	if p.AgentID == "" {
+		return nil, errInvalidParams("checkpoint.list: agent_id is required")
+	}
+	runs, err := anvil.ListCheckpoints(s.cwdPath(), p.AgentID, anvil.CheckpointOptions{})
+	if err != nil {
+		return nil, errHost(err)
+	}
+	out := CheckpointListResult{Runs: make([]CheckpointRun, 0, len(runs))}
+	for _, run := range runs {
+		files := make([]CheckpointFile, 0, len(run.Files))
+		for _, file := range run.Files {
+			files = append(files, CheckpointFile{Path: file.Path, Existed: file.Existed, Size: file.Size})
+		}
+		out.Runs = append(out.Runs, CheckpointRun{
+			RunID:     run.RunID,
+			CreatedAt: run.CreatedAt.UTC().Format(time.RFC3339),
+			Files:     files,
+		})
+	}
+	return out, nil
+}
+
+// handleCheckpointRestore puts one run's files back on disk.
+//
+// The SDK resolves every captured path through the workspace sandbox, so a
+// manifest that names its way out is refused rather than followed. The result
+// is what was actually written or deleted, not what was asked for: the client
+// reports that rather than restating the manifest.
+func (s *Server) handleCheckpointRestore(ctx context.Context, params json.RawMessage) (any, *RPCError) {
+	_ = ctx
+	p, err := decode[CheckpointRestoreParams](params)
+	if err != nil {
+		return nil, errInvalidParams("checkpoint.restore: " + err.Error())
+	}
+	if p.AgentID == "" {
+		return nil, errInvalidParams("checkpoint.restore: agent_id is required")
+	}
+	if p.RunID == "" {
+		return nil, errInvalidParams("checkpoint.restore: run_id is required")
+	}
+	restored, err := anvil.RestoreCheckpoint(s.cwdPath(), p.AgentID, p.RunID, anvil.CheckpointOptions{})
+	if err != nil {
+		return nil, errHost(err)
+	}
+	out := CheckpointRestoreResult{RunID: p.RunID, Files: make([]RestoredFile, 0, len(restored))}
+	for _, file := range restored {
+		out.Files = append(out.Files, RestoredFile{Path: file.Path, Deleted: file.Deleted})
+	}
+	s.logf("checkpoint.restore agent=%s run=%s files=%d", p.AgentID, p.RunID, len(out.Files))
+	return out, nil
 }
 
 // handleSessionTranscript replays a stored conversation.
@@ -883,6 +957,11 @@ func (s *Server) buildOptions(p SessionParams, sess *session) (anvil.Options, *R
 		// Off unless the client asks: Vision.Enabled is what makes the SDK
 		// accept an attachment, and enabling it also advertises read_image.
 		Vision: anvil.VisionOptions{Enabled: p.Vision},
+		// The host always keeps run pre-images: the panel offers "restore this
+		// run" for every session it opens, and a session captured only sometimes
+		// would offer an undo that silently does nothing. Empty fields are the
+		// SDK defaults ({cwd}/.anvil/checkpoints, 100 runs, 30 days).
+		Checkpoints: &anvil.CheckpointOptions{},
 	}
 	if len(p.TestCommand) > 0 {
 		opts.Test = anvil.TestOptions{Command: p.TestCommand}

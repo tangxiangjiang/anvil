@@ -77,6 +77,12 @@ type Inbound =
   | { type: 'reviewPartial'; requestId: string }
   | { type: 'reviewChange'; path: string }
   /**
+   * "Put the files back the way they were before that run". The extension asks
+   * for confirmation before touching anything: the restore happens on disk, and
+   * there is no second undo for it.
+   */
+  | { type: 'restoreCheckpoint'; runId: string }
+  /**
    * "Show me what that call changed", from a finished tool card. The call's
    * facts travel with the click because this is the only place they still
    * exist: the card already holds the arguments, and keeping a copy of every
@@ -130,6 +136,21 @@ type Outbound =
   | { type: 'mentions'; paths: string[] }
   | { type: 'vision'; enabled: boolean }
   | { type: 'changes'; files: Array<Pick<ChangedFile, 'path' | 'kind'>> }
+  /**
+   * A finished run that captured pre-images, so it can be undone. Posted only
+   * when the run changed something: an undo that would do nothing is not a
+   * button worth showing.
+   */
+  | { type: 'checkpoint'; runId: string; files: string[] }
+  /** What the restore did, or that it was cancelled or failed. */
+  | {
+      type: 'checkpointRestored';
+      runId: string;
+      cancelled?: boolean;
+      restored?: number;
+      deleted?: number;
+      error?: string;
+    }
   | { type: 'commands'; commands: SlashCommand[] }
   | { type: 'help'; commands: SlashCommand[] }
   | { type: 'mode'; mode: PermissionMode | ''; resolved: PermissionMode; source: PermissionModeSource }
@@ -575,6 +596,9 @@ export class ChatPanel implements HostListener {
         return;
       case 'reviewChange':
         await this.openChangeReview(msg.path);
+        return;
+      case 'restoreCheckpoint':
+        await this.restoreCheckpoint(msg.runId);
         return;
       case 'reviewCall':
         await this.openCallReview(msg);
@@ -1395,6 +1419,7 @@ export class ChatPanel implements HostListener {
   onDone = (done: DoneParams, failure: RunFailure): void => {
     this.post({ type: 'done', done, failure });
     void this.reportChanges(done.run_id);
+    void this.reportCheckpoint(done.run_id);
     // The turn changed the stored record — its run count, its status, its
     // updated_at — so the sidebar's copy of it is stale from here on.
     this.hub.notifySessions();
@@ -1436,6 +1461,68 @@ export class ChatPanel implements HostListener {
       });
     } catch (err) {
       this.log(`could not compute the changed files: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * Offers the undo of a run, once the run has ended.
+   *
+   * The checkpoint is looked up by run id rather than assumed: a run that changed
+   * nothing captured nothing, and a host that predates checkpoints has no list at
+   * all. Either way there is no button, rather than a button that would fail.
+   */
+  private async reportCheckpoint(runId: string): Promise<void> {
+    const agentId = this.currentAgentId();
+    if (!agentId || !runId) return;
+    try {
+      const runs = await this.hub.listCheckpoints(agentId);
+      const run = runs.find((candidate) => candidate.run_id === runId);
+      if (!run || run.files.length === 0) return;
+      this.post({ type: 'checkpoint', runId, files: run.files.map((file) => file.path) });
+    } catch (err) {
+      // A host without the method answers -32601, which is "no checkpoints here"
+      // rather than a failure worth a banner.
+      this.log(`could not read the checkpoint for ${runId}: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * Puts a run's files back, after a modal confirmation.
+   *
+   * The confirmation is the point: this writes to disk, and the extension has no
+   * record of the restored content to put back in turn. The card disabled itself
+   * when the button was pressed, so every outcome — cancelled, counts, error —
+   * is reported back to it.
+   */
+  private async restoreCheckpoint(runId: string): Promise<void> {
+    const agentId = this.currentAgentId();
+    if (!agentId) return;
+    const choice = 'Restore';
+    const answer = await vscode.window.showWarningMessage(
+      'Restore the files this run changed?',
+      {
+        modal: true,
+        detail:
+          'Each file goes back to its content before this run, and files the run created are deleted. ' +
+          'This cannot be undone from here.',
+      },
+      choice,
+    );
+    if (answer !== choice) {
+      this.post({ type: 'checkpointRestored', runId, cancelled: true });
+      return;
+    }
+    try {
+      const result = await this.hub.restoreCheckpoint(agentId, runId);
+      const deleted = result.files.filter((file) => file.deleted).length;
+      const restored = result.files.length - deleted;
+      // The next turn's changed-files card is computed against the restored
+      // workspace, not against the one the last card described.
+      this.changes.begin();
+      this.forgetChanges();
+      this.post({ type: 'checkpointRestored', runId, restored, deleted });
+    } catch (err) {
+      this.post({ type: 'checkpointRestored', runId, error: (err as Error).message });
     }
   }
 

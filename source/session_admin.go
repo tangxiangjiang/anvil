@@ -6,8 +6,10 @@ package anvil
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 
+	"github.com/anvil-dev/anvil/internal/checkpoint"
 	"github.com/anvil-dev/anvil/internal/store"
 )
 
@@ -61,6 +63,10 @@ func RenameAgent(ctx context.Context, agentID, title string, opts ListOptions) e
 // A live session is a different thing and is not this function's concern: it
 // holds the agent id, and its next run would write the file again. Callers that
 // own sessions close the one holding the agent first.
+//
+// The agent's checkpoints go too. They are the undo history of the conversation
+// being forgotten, and keeping them would leave behind the very thing the
+// delete was about.
 func DeleteAgent(ctx context.Context, agentID string, opts ListOptions) error {
 	_ = ctx
 	if agentID == "" {
@@ -80,6 +86,17 @@ func DeleteAgent(ctx context.Context, agentID string, opts ListOptions) error {
 			return newError("agent not found: "+agentID, false, nil)
 		}
 		return newError("delete agent", false, err)
+	}
+	// The undo history goes with the conversation it belongs to; a checkpoint
+	// for a session nobody can open again is only disk. A failure here is
+	// reported rather than ignored, because the person asked for the agent to be
+	// gone and this is what would still be there.
+	root := filepath.Join(cwd, ".anvil", "checkpoints")
+	if opts.Checkpoints != nil {
+		root = checkpointRoot(cwd, *opts.Checkpoints)
+	}
+	if err := checkpoint.Remove(root, agentID); err != nil {
+		return newError("delete agent checkpoints", false, err)
 	}
 	return nil
 }
