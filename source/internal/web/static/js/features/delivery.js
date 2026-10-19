@@ -1325,6 +1325,7 @@ window.Features.delivery = {
         this.loadExecuteWorkers();
         this.bindRoadmapCanvas(el);
         this.bindMilestoneCardControls(el);
+        this.bindRoadmapJobStreams(el);
         if (this._rmFocusMs) {
           const focusId = this._rmFocusMs;
           this._rmFocusMs = null;
@@ -1335,6 +1336,93 @@ window.Features.delivery = {
 
     if (route.section === "test" && route.routeMajor != null) {
       this.bindTestCardControls(el);
+    }
+  },
+
+  closeRoadmapJobStreams() {
+    if (this._jobAbort) {
+      for (const a of Object.values(this._jobAbort)) {
+        try {
+          a.abort();
+        } catch (_) {}
+      }
+    }
+    this._jobAbort = {};
+  },
+
+  bindRoadmapJobStreams(el) {
+    this.closeRoadmapJobStreams();
+    this._jobAbort = {};
+    el.querySelectorAll("[data-ms-card]").forEach((card) => {
+      const run = (card.getAttribute("data-run-state") || "").toLowerCase();
+      const jobId = (card.getAttribute("data-active-job") || "").trim();
+      if (run !== "running" || !jobId) return;
+      if (this._jobAbort[jobId]) return;
+      const ac = new AbortController();
+      this._jobAbort[jobId] = ac;
+      const snip = card.querySelector("[data-job-snip]");
+      void this.watchDeliveryJobSSE(jobId, ac.signal, {
+        onEvent(data) {
+          const text = data.text || data.content || data.type || "";
+          if (snip && text) snip.textContent = String(text).slice(0, 160);
+        },
+        onDone: async () => {
+          delete this._jobAbort[jobId];
+          await this.reload();
+          this.render();
+        },
+      });
+    });
+  },
+
+  async watchDeliveryJobSSE(jobId, signal, { onEvent, onDone }) {
+    try {
+      const tok = api.getToken?.() || localStorage.getItem("anvil_web_token") || "";
+      const res = await fetch(api.v1.deliveryJobEventsURL(jobId), {
+        headers: tok ? { Authorization: "Bearer " + tok } : {},
+        signal,
+      });
+      if (!res.ok || !res.body) {
+        if (onDone) await onDone();
+        return;
+      }
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      let eventName = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const parts = buf.split("\n");
+        buf = parts.pop() || "";
+        for (const line of parts) {
+          if (line.startsWith("event:")) {
+            eventName = line.slice(6).trim();
+            continue;
+          }
+          if (line.startsWith("data:")) {
+            const raw = line.slice(5).trim();
+            let data = {};
+            try {
+              data = JSON.parse(raw);
+            } catch (_) {
+              data = { text: raw };
+            }
+            if (eventName === "job.event" && onEvent) onEvent(data);
+            if (eventName === "job.done" || eventName === "error") {
+              if (onDone) await onDone();
+              return;
+            }
+            eventName = "";
+          }
+          if (line === "") eventName = "";
+        }
+      }
+      if (onDone) await onDone();
+    } catch (e) {
+      if (e?.name === "AbortError") return;
+      if (onDone) await onDone();
     }
   },
 
@@ -5378,9 +5466,25 @@ window.Features.delivery = {
       : showPolish
         ? `<p class="muted del-polish-empty">No polish items yet.</p>`
         : "";
+    const phases = m.phases || [];
+    const activePh =
+      phases.find(
+        (p) => p.job_status === "running" || p.job_status === "queued",
+      ) || phases.find((p) => p.job_id);
+    const jobStrip = activePh
+      ? `<div class="del-job-strip" data-job-id="${this.esc(activePh.job_id || "")}">
+           <span class="muted">Phase</span>
+           <span>${this.esc(activePh.title || "")}</span>
+           ${this.badge(activePh.job_status || activePh.status)}
+           <span class="muted del-job-snip" data-job-snip>${this.esc(activePh.job_last_event || "")}</span>
+         </div>`
+      : phases.length
+        ? `<div class="del-job-strip muted">${phases.filter((p) => (p.status || "") === "finished" || p.job_status === "finished").length}/${phases.length} phases finished</div>`
+        : "";
 
     return `
-      <div class="del-rm-ctrl-card" data-ms-card="${this.esc(m.id)}" id="ms-card-${this.esc(m.id)}">
+      <div class="del-rm-ctrl-card" data-ms-card="${this.esc(m.id)}" id="ms-card-${this.esc(m.id)}"
+        data-run-state="${this.esc(run)}" data-active-job="${this.esc(activePh?.job_id || "")}">
         <div class="del-rm-ctrl-top">
           <div class="del-rm-ctrl-id">
             <strong class="del-rm-card-title">${this.esc(m.title)}</strong>
@@ -5393,6 +5497,7 @@ window.Features.delivery = {
           </div>
           ${this.badge(life || m.status)}
         </div>
+        ${jobStrip}
         <div class="del-rm-ctrl-links">
           ${
             desHref

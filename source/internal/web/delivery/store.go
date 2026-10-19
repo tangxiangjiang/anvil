@@ -157,7 +157,10 @@ CREATE TABLE IF NOT EXISTS delivery_phases (
   milestone_id TEXT NOT NULL REFERENCES delivery_milestones(id) ON DELETE CASCADE,
   title TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'planned',
-  sort_order INTEGER NOT NULL DEFAULT 0
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  job_id TEXT NOT NULL DEFAULT '',
+  job_status TEXT NOT NULL DEFAULT '',
+  job_last_event TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS delivery_edges (
   from_id TEXT NOT NULL,
@@ -223,7 +226,29 @@ CREATE TABLE IF NOT EXISTS delivery_trash (
 	if err := s.ensureTestCasesTable(); err != nil {
 		return err
 	}
+	if err := s.ensurePhaseJobColumns(); err != nil {
+		return err
+	}
 	return s.ensurePolishesTable()
+}
+
+func (s *Store) ensurePhaseJobColumns() error {
+	for _, q := range []string{
+		`ALTER TABLE delivery_phases ADD COLUMN job_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE delivery_phases ADD COLUMN job_status TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE delivery_phases ADD COLUMN job_last_event TEXT NOT NULL DEFAULT ''`,
+	} {
+		_, err := s.db.Exec(q)
+		if err == nil {
+			continue
+		}
+		msg := strings.ToLower(err.Error())
+		if strings.Contains(msg, "duplicate column") {
+			continue
+		}
+		return err
+	}
+	return nil
 }
 
 // ensureMilestoneExecuteWorker adds execute_worker_id on older DBs (0.39.1).
@@ -573,11 +598,23 @@ func scanDesign(scanner interface {
 	return nil
 }
 
+// Phase job_status values (0.39.5+).
+const (
+	JobQueued    = "queued"
+	JobRunning   = "running"
+	JobFinished  = "finished"
+	JobError     = "error"
+	JobCancelled = "cancelled"
+)
+
 // Phase is a step under a milestone.
 type Phase struct {
-	ID     string `json:"id"`
-	Title  string `json:"title"`
-	Status string `json:"status"`
+	ID           string `json:"id"`
+	Title        string `json:"title"`
+	Status       string `json:"status"`
+	JobID        string `json:"job_id,omitempty"`
+	JobStatus    string `json:"job_status,omitempty"`
+	JobLastEvent string `json:"job_last_event,omitempty"`
 }
 
 // Run-state values for milestone execute controls (pre-Job).
@@ -2758,6 +2795,11 @@ func parseMilestoneBind(msID string) *milestoneBind {
 	return &milestoneBind{EngID: engID, Major: major, Minor: minor}
 }
 
+// GetMilestone returns a milestone with phases.
+func (s *Store) GetMilestone(id string) (Milestone, error) {
+	return s.getMilestone(id)
+}
+
 func (s *Store) getMilestone(id string) (Milestone, error) {
 	var m Milestone
 	err := s.db.QueryRow(`
@@ -2839,7 +2881,8 @@ FROM delivery_milestones ORDER BY sort_order, id`)
 
 func (s *Store) listPhases(msID string) ([]Phase, error) {
 	rows, err := s.db.Query(`
-SELECT id, title, status FROM delivery_phases WHERE milestone_id=? ORDER BY sort_order, id`, msID)
+SELECT id, title, status, COALESCE(job_id,''), COALESCE(job_status,''), COALESCE(job_last_event,'')
+FROM delivery_phases WHERE milestone_id=? ORDER BY sort_order, id`, msID)
 	if err != nil {
 		return nil, err
 	}
@@ -2847,12 +2890,202 @@ SELECT id, title, status FROM delivery_phases WHERE milestone_id=? ORDER BY sort
 	var list []Phase
 	for rows.Next() {
 		var p Phase
-		if err := rows.Scan(&p.ID, &p.Title, &p.Status); err != nil {
+		if err := rows.Scan(&p.ID, &p.Title, &p.Status, &p.JobID, &p.JobStatus, &p.JobLastEvent); err != nil {
 			return nil, err
 		}
 		list = append(list, p)
 	}
 	return list, rows.Err()
+}
+
+// GetPhase returns one phase by id.
+func (s *Store) GetPhase(phaseID string) (Phase, string, error) {
+	var p Phase
+	var msID string
+	err := s.db.QueryRow(`
+SELECT id, milestone_id, title, status, COALESCE(job_id,''), COALESCE(job_status,''), COALESCE(job_last_event,'')
+FROM delivery_phases WHERE id=?`, phaseID).Scan(
+		&p.ID, &msID, &p.Title, &p.Status, &p.JobID, &p.JobStatus, &p.JobLastEvent)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return Phase{}, "", fmt.Errorf("phase not found")
+		}
+		return Phase{}, "", err
+	}
+	return p, msID, nil
+}
+
+// NextRunnablePhase returns the first phase that is not finished (by sort_order).
+func (s *Store) NextRunnablePhase(msID string) (Phase, error) {
+	phases, err := s.listPhases(msID)
+	if err != nil {
+		return Phase{}, err
+	}
+	for _, p := range phases {
+		st := strings.ToLower(p.Status)
+		if st == "finished" || st == "done" || st == JobFinished {
+			continue
+		}
+		if p.JobStatus == JobRunning || p.JobStatus == JobQueued {
+			return p, nil
+		}
+		return p, nil
+	}
+	return Phase{}, fmt.Errorf("no runnable phases")
+}
+
+// ActivePhaseJob returns the phase currently queued/running for a milestone, if any.
+func (s *Store) ActivePhaseJob(msID string) (Phase, error) {
+	phases, err := s.listPhases(msID)
+	if err != nil {
+		return Phase{}, err
+	}
+	for _, p := range phases {
+		if p.JobStatus == JobRunning || p.JobStatus == JobQueued {
+			return p, nil
+		}
+	}
+	return Phase{}, fmt.Errorf("no active phase job")
+}
+
+// SetPhaseJob binds a job to a phase.
+func (s *Store) SetPhaseJob(phaseID, jobID, jobStatus, lastEvent string) error {
+	_, err := s.db.Exec(`
+UPDATE delivery_phases SET job_id=?, job_status=?, job_last_event=? WHERE id=?`,
+		jobID, jobStatus, truncateRunes(lastEvent, 280), phaseID)
+	return err
+}
+
+// AppendPhaseJobEvent updates the last-event snippet and status.
+func (s *Store) AppendPhaseJobEvent(phaseID, jobStatus, lastEvent string) error {
+	_, err := s.db.Exec(`
+UPDATE delivery_phases SET job_status=?, job_last_event=? WHERE id=?`,
+		jobStatus, truncateRunes(lastEvent, 280), phaseID)
+	return err
+}
+
+// CompletePhaseJob marks phase finished/error and clears running state fields appropriately.
+func (s *Store) CompletePhaseJob(phaseID, jobStatus, phaseStatus, lastEvent string) error {
+	_, err := s.db.Exec(`
+UPDATE delivery_phases SET job_status=?, status=?, job_last_event=? WHERE id=?`,
+		jobStatus, phaseStatus, truncateRunes(lastEvent, 280), phaseID)
+	return err
+}
+
+// FindPhaseByJobID locates a phase with the given job id.
+func (s *Store) FindPhaseByJobID(jobID string) (Phase, string, error) {
+	jobID = strings.TrimSpace(jobID)
+	if jobID == "" {
+		return Phase{}, "", fmt.Errorf("job id required")
+	}
+	var p Phase
+	var msID string
+	err := s.db.QueryRow(`
+SELECT id, milestone_id, title, status, COALESCE(job_id,''), COALESCE(job_status,''), COALESCE(job_last_event,'')
+FROM delivery_phases WHERE job_id=?`, jobID).Scan(
+		&p.ID, &msID, &p.Title, &p.Status, &p.JobID, &p.JobStatus, &p.JobLastEvent)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return Phase{}, "", fmt.Errorf("phase not found for job")
+		}
+		return Phase{}, "", err
+	}
+	return p, msID, nil
+}
+
+// BuildPhasePrompt composes the v1 agent prompt for a phase under a milestone.
+func (s *Store) BuildPhasePrompt(msID, phaseID string) (string, error) {
+	ms, err := s.getMilestone(msID)
+	if err != nil {
+		return "", err
+	}
+	ph, _, err := s.GetPhase(phaseID)
+	if err != nil {
+		return "", err
+	}
+	phases, err := s.listPhases(msID)
+	if err != nil {
+		return "", err
+	}
+	idx, total := 1, len(phases)
+	for i, p := range phases {
+		if p.ID == phaseID {
+			idx = i + 1
+			break
+		}
+	}
+	bind := parseMilestoneBind(msID)
+	var gate, arch, class, success, project string
+	if bind != nil {
+		eng, err := s.GetEngReq(bind.EngID)
+		if err == nil {
+			project = eng.ProjectKey
+			if project == "" {
+				project = eng.WorkerMeta.ProjectRel
+			}
+			var head *ReqVersion
+			for i := range eng.Versions {
+				v := &eng.Versions[i]
+				if v.Major == bind.Major && v.Minor == bind.Minor {
+					if head == nil || v.Patch < head.Patch {
+						head = v
+					}
+				}
+			}
+			if head != nil {
+				success = head.Success
+				if success == "" {
+					success = head.Goals
+				}
+			}
+		}
+		for _, d := range mustListDesigns(s) {
+			if d.EngReqID == bind.EngID && d.Major == bind.Major && d.Minor == bind.Minor {
+				vers, _ := s.listDesignVersions(d.ID)
+				if idx-1 < len(vers) {
+					dv := vers[idx-1]
+					gate, arch, class = dv.Gate, dv.SubArchitecture, dv.ClassDesign
+				} else if len(vers) > 0 {
+					dv := vers[0]
+					gate, arch, class = dv.Gate, dv.SubArchitecture, dv.ClassDesign
+				}
+				break
+			}
+		}
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "Milestone %s", ms.Title)
+	if bind != nil {
+		fmt.Fprintf(&b, " (%d.%d)", bind.Major, bind.Minor)
+	}
+	fmt.Fprintf(&b, " phase %d/%d: %s\n", idx, total, ph.Title)
+	if project != "" {
+		fmt.Fprintf(&b, "Worker checkout: %s\n", project)
+	}
+	if gate != "" {
+		fmt.Fprintf(&b, "Gate: %s\n", truncateRunes(gate, 800))
+	}
+	if arch != "" {
+		fmt.Fprintf(&b, "Sub-architecture: %s\n", truncateRunes(arch, 800))
+	}
+	if class != "" {
+		fmt.Fprintf(&b, "Class design: %s\n", truncateRunes(class, 800))
+	}
+	if success != "" {
+		fmt.Fprintf(&b, "Req success / acceptance: %s\n", truncateRunes(success, 800))
+	} else if ms.Acceptance != "" {
+		fmt.Fprintf(&b, "Req success / acceptance: %s\n", truncateRunes(ms.Acceptance, 800))
+	}
+	b.WriteString("Implement this phase only; commit on the current branch when done.\n")
+	return b.String(), nil
+}
+
+func mustListDesigns(s *Store) []Design {
+	list, err := s.listDesigns()
+	if err != nil {
+		return nil
+	}
+	return list
 }
 
 func (s *Store) listGates() ([]Gate, error) {

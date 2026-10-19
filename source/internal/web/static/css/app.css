@@ -797,6 +797,21 @@ span.del-crumb { color: var(--text); }
 .del-rm-ctrl-btns {
   display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center;
 }
+.del-job-strip {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 0.55rem;
+  font-size: 0.82rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #121820;
+}
+.del-job-snip {
+  flex: 1 1 8rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .del-run-btn {
   padding: 0.35rem 0.65rem; font-size: 0.82rem;
 }

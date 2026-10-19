@@ -603,6 +603,7 @@ func (s *Server) handleDelivery(w http.ResponseWriter, r *http.Request) {
 				FailTest        *bool    `json:"fail_test"`
 				FailTitle       string   `json:"fail_title"`
 				FailBody        string   `json:"fail_body"`
+				ForceStub       bool     `json:"force_stub"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				http.Error(w, "bad json", http.StatusBadRequest)
@@ -621,6 +622,23 @@ func (s *Server) handleDelivery(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "x and y must both be set when moving", http.StatusBadRequest)
 				return
 			}
+			// Pause / Stop: soft-cancel active phase job then set run_state.
+			if body.RunState != nil && !exec {
+				rs := strings.ToLower(strings.TrimSpace(*body.RunState))
+				if rs == delivery.RunPaused || rs == delivery.RunStopped {
+					if err := s.softStopMilestoneJobs(id, rs); err != nil {
+						http.Error(w, err.Error(), http.StatusBadRequest)
+						return
+					}
+					m, err := s.delivery.GetMilestone(id)
+					if err != nil {
+						http.Error(w, err.Error(), http.StatusBadRequest)
+						return
+					}
+					writeJSON(w, http.StatusOK, m)
+					return
+				}
+			}
 			m, err := s.delivery.PatchMilestone(id, delivery.PatchMilestoneInput{
 				X:               body.X,
 				Y:               body.Y,
@@ -638,7 +656,45 @@ func (s *Server) handleDelivery(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
+			if exec {
+				if _, err := s.startMilestonePhaseJob(id, body.ForceStub); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				m, err = s.delivery.GetMilestone(id)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+			}
 			writeJSON(w, http.StatusOK, m)
+			return
+		}
+	}
+
+	if path == "jobs" && r.Method == http.MethodPost {
+		var body struct {
+			MilestoneID string `json:"milestone_id"`
+			ForceStub   bool   `json:"force_stub"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+		ph, err := s.startMilestonePhaseJob(body.MilestoneID, body.ForceStub)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, http.StatusOK, ph)
+		return
+	}
+
+	if strings.HasPrefix(path, "jobs/") && r.Method == http.MethodGet {
+		rest := strings.TrimPrefix(path, "jobs/")
+		parts := strings.Split(rest, "/")
+		if len(parts) == 2 && parts[1] == "events" {
+			s.handleDeliveryJobEvents(w, r, parts[0])
 			return
 		}
 	}

@@ -26,6 +26,8 @@ type Server struct {
 	delivery  *delivery.Store
 	workspace *workspace.Store
 	sched     *schedclient.Client
+	jobs      JobRunner // optional; defaults to sched client
+	jobHub    *jobHub
 	static    fs.FS
 	log       *log.Logger
 }

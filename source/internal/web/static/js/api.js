@@ -299,5 +299,12 @@ window.api = {
     deliveryRegressBuglist(body) {
       return api.req("POST", "/api/v1/delivery/buglist/regress", body || {});
     },
+    deliveryCreateJob(body) {
+      return api.req("POST", "/api/v1/delivery/jobs", body || {});
+    },
+    /** Absolute URL for EventSource (same origin + session cookie). */
+    deliveryJobEventsURL(jobId) {
+      return "/api/v1/delivery/jobs/" + encodeURIComponent(jobId) + "/events";
+    },
   },
 };
