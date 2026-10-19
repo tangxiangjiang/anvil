@@ -1402,3 +1402,16 @@ body.dont-ask-mode .composer {
   border-top: 1px dashed var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
   padding-top: 6px;
 }
+
+/*
+ * A compaction boundary: the conversation continues, but not from where it
+ * was. Two borders make it read as a seam in the flow rather than a message.
+ */
+.msg.compact .body {
+  font-size: 0.85em;
+  color: var(--vscode-descriptionForeground);
+  text-align: center;
+  border-top: 1px dashed var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
+  border-bottom: 1px dashed var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
+  padding: 4px 0;
+}

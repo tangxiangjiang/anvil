@@ -12,6 +12,8 @@ import {
   ApprovalRequest,
   Attachment,
   CodeNoApproval,
+  CompactInfo,
+  ContextInfo,
   Decision,
   DoneParams,
   HostEvent,
@@ -19,6 +21,7 @@ import {
   Notify,
   PromptContext,
   PromptResult,
+  SessionCompactResult,
   SessionParams,
   SessionResult,
   TaskInfo,
@@ -61,6 +64,12 @@ export interface ChatSessionHandlers {
    * keyed by it and this is the only place both facts are together.
    */
   onTask?: (task: TaskInfo, sessionId: string) => void;
+  /**
+   * The conversation was compacted on request. It is not a run, so it does not
+   * arrive as an event; the session id travels so a window with several tabs
+   * can tell which one drew the divider.
+   */
+  onCompact?: (info: CompactInfo, sessionId: string) => void;
   onLog?: LogFn;
 }
 
@@ -155,6 +164,16 @@ export class ChatSession {
         const notification = params as TaskNotification;
         if (!this.isMine(notification.session_id)) return;
         this.handlers.onTask?.(notification.task, notification.session_id);
+        return;
+      }
+      case Notify.Compact: {
+        // A manual compaction has no run, so it cannot ride the event stream.
+        // The payload is the same `compact` object an auto one carries.
+        const notification = params as { session_id?: string; compact?: CompactInfo };
+        if (!this.isMine(notification.session_id)) return;
+        if (notification.compact) {
+          this.handlers.onCompact?.(notification.compact, notification.session_id ?? '');
+        }
         return;
       }
       case Notify.Log: {
@@ -277,6 +296,40 @@ export class ChatSession {
   async cancel(): Promise<void> {
     if (!this.result || !this.runId) return;
     await this.client.request(Method.Cancel, { session_id: this.result.session_id, run_id: this.runId });
+  }
+
+  /**
+   * Where the open conversation stands against its declared window.
+   *
+   * A session that has not been opened has nothing to measure, and opening one
+   * to ask would be host work nobody requested — so the caller asks only when
+   * a session is live. An older host answers `-32601`, which the meter reads as
+   * "no estimate" rather than as a failure.
+   */
+  async context(): Promise<ContextInfo> {
+    const session = this.result;
+    if (!session) throw new Error('no session is open');
+    return this.client.request<ContextInfo>(Method.SessionContext, {
+      session_id: session.session_id,
+    });
+  }
+
+  /**
+   * Compacts an idle conversation on purpose.
+   *
+   * Refused while a turn runs: the loop is mutating the history it would
+   * summarize. The host enforces the same rule, and this check is what lets the
+   * panel say so without a round trip.
+   */
+  async compact(): Promise<SessionCompactResult> {
+    if (this.state === 'running') {
+      throw new Error(`a turn is running (${this.runId ?? 'unknown run'}); stop it first`);
+    }
+    const session = this.result;
+    if (!session) throw new Error('no session is open');
+    return this.client.request<SessionCompactResult>(Method.SessionCompact, {
+      session_id: session.session_id,
+    });
   }
 
   /**

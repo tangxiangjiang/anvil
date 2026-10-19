@@ -22,7 +22,8 @@
  *
  * Environment:
  *   FAKE_HOST_ECHO=<path>  append every session.new / session.resume / prompt /
- *                          session.transcript this host receives to that file as
+ *                          session.transcript / session.compact /
+ *                          session.context this host receives to that file as
  *                          one JSON line each, so a test can assert what the
  *                          client sent
  *   FAKE_HOST_RULES_BROKEN=1  report the workspace rule file as malformed, both
@@ -161,6 +162,47 @@ const approvals = new Map();
 const activeRuns = new Map();
 
 /**
+ * Each session's conversation, as far as compaction can see it: how many
+ * messages the next request would carry and roughly what they weigh. The real
+ * host measures both; here two counters are enough to make `session.context`,
+ * `session.compact` and the estimate on `done` behave the same way — and to
+ * make "nothing to compact yet" a real state a test can reach.
+ */
+const contexts = new Map();
+/** The budget each session was opened with, exactly as `session.new` sent it. */
+const budgets = new Map();
+
+/** The conversation counters for a session, created empty if it has none. */
+function contextOf(session) {
+  let ctx = contexts.get(session.session_id);
+  if (!ctx) {
+    ctx = { messages: 0, tokens: 0 };
+    contexts.set(session.session_id, ctx);
+  }
+  return ctx;
+}
+
+/** The window the session declared, or 0 for "nobody said". */
+function windowOf(session) {
+  const budget = budgets.get(session.session_id);
+  return budget && typeof budget.window_tokens === 'number' ? budget.window_tokens : 0;
+}
+
+/** The `ContextInfo` shape the real host answers `session.context` with. */
+function contextInfo(session) {
+  const ctx = contextOf(session);
+  const window = windowOf(session);
+  const budget = budgets.get(session.session_id);
+  const share = budget && typeof budget.auto_compact_at === 'number' ? budget.auto_compact_at : 0.8;
+  return {
+    estimated_tokens: ctx.tokens,
+    window_tokens: window,
+    compact_at_tokens: window > 0 ? Math.floor(window * share) : 0,
+    messages: ctx.messages,
+  };
+}
+
+/**
  * The mode the workspace's own file declares, and whether the host would honour
  * it.
  *
@@ -225,6 +267,8 @@ function newSession(params) {
     usage: { input_tokens: 120, output_tokens: 18, total_tokens: 138 },
   };
   sessions.set(id, session);
+  budgets.set(id, params.context && typeof params.context === 'object' ? params.context : null);
+  contexts.set(id, { messages: 0, tokens: 0 });
   return session;
 }
 
@@ -292,7 +336,16 @@ function finish(session, run, body) {
     });
     checkpoints.set(session.agent_id, runs);
   }
-  notify('done', { session_id: session.session_id, run_id: run, ...body });
+  notify('done', {
+    session_id: session.session_id,
+    run_id: run,
+    // The run reached the provider, so both facts are the host's to state: the
+    // estimate after the run, and the moment the request went out — the anchor
+    // the client's cache countdown counts from.
+    context: contextInfo(session),
+    last_request_at: new Date().toISOString(),
+    ...body,
+  });
 }
 
 /** Drives one scripted run, in the background. */
@@ -525,7 +578,15 @@ async function runScript(session, run, message) {
     status: 'finished',
     result: 'The file is a README.',
     steps: 2,
-    usage: { input_tokens: 120, output_tokens: 18, total_tokens: 138 },
+    // Cached input is reported the way an Anthropic run reports it, so the
+    // meter's cache half has a fact to draw rather than a placeholder.
+    usage: {
+      input_tokens: 120,
+      output_tokens: 18,
+      total_tokens: 138,
+      cached_tokens: 96,
+      cache_write_tokens: 24,
+    },
   });
 }
 
@@ -637,6 +698,69 @@ async function handle(msg) {
       }
       ok(msg.id, storedTranscript());
       return;
+    case 'session.compact': {
+      echo('session.compact', msg.params || {});
+      const session = sessions.get(msg.params && msg.params.session_id);
+      if (!session) {
+        fail(msg.id, -32001, 'no such session');
+        return;
+      }
+      // The same refusal the real host makes: a conversation at rest is the
+      // precondition, because the loop's history is not the one being folded.
+      if (activeRuns.has(session.session_id)) {
+        fail(msg.id, -32003, 'a run is already in progress');
+        return;
+      }
+      const ctx = contextOf(session);
+      const budget = budgets.get(session.session_id);
+      const keep = budget && typeof budget.keep_recent === 'number' ? budget.keep_recent : 8;
+      if (ctx.messages <= keep) {
+        // Nothing earlier to fold. Said as an answer rather than an error: the
+        // request was valid, there was simply nothing to do.
+        ok(msg.id, {
+          session_id: session.session_id,
+          compacted: false,
+          context: contextInfo(session),
+        });
+        return;
+      }
+      const summarized = ctx.messages - keep;
+      const before = ctx.tokens;
+      const after = Math.max(1, Math.round((before * keep) / ctx.messages));
+      ctx.messages = keep;
+      ctx.tokens = after;
+      const window = windowOf(session);
+      const compact = {
+        reason: 'manual',
+        before,
+        after,
+        summarized,
+        ...(window > 0 ? { window } : {}),
+      };
+      // The divider is drawn from the notification, not from the answer, so
+      // this is what a real host's announcement has to look like — emitted as
+      // the compaction happens, before the answer that reports it.
+      notify('compact', { session_id: session.session_id, type: 'compact', compact });
+      ok(msg.id, {
+        session_id: session.session_id,
+        compacted: true,
+        before,
+        after,
+        summarized,
+        context: contextInfo(session),
+      });
+      return;
+    }
+    case 'session.context': {
+      echo('session.context', msg.params || {});
+      const session = sessions.get(msg.params && msg.params.session_id);
+      if (!session) {
+        fail(msg.id, -32001, 'no such session');
+        return;
+      }
+      ok(msg.id, contextInfo(session));
+      return;
+    }
     case 'skills.list':
       // Two packages on purpose: one selected by hand, one always-on, which is
       // the pair the extension's catalogue has to render differently.
@@ -889,6 +1013,11 @@ async function handle(msg) {
       runSeq += 1;
       const run = `r${runSeq}`;
       echo('prompt', msg.params || {});
+      // The turn being sent is part of what the next request carries, so the
+      // estimate grows before the run rather than after it.
+      const ctx = contextOf(session);
+      ctx.messages += 6;
+      ctx.tokens += 20000;
       activeRuns.set(session.session_id, { session, run, cancelled: false });
       ok(msg.id, { session_id: session.session_id, run_id: run, agent_id: session.agent_id });
       const message = (msg.params && msg.params.message) || '';

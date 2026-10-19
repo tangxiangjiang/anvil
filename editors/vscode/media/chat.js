@@ -50,6 +50,16 @@
    */
   const count = meterMath.short;
 
+  /**
+   * The same shorthand, except that zero is spelled out. `short(0)` is the empty
+   * string, which is right where a count is optional and wrong where it is the
+   * subject — "0 of 200k" is a fact, " of 200k" is a riddle.
+   */
+  function amount(value) {
+    const whole = meterMath.count(value);
+    return whole > 0 ? count(whole) : '0';
+  }
+
   /** Prompt recall, from `media/history.js` — another plain global script. */
   const historyMath = self.anvilHistory;
   const history = historyMath.create();
@@ -139,6 +149,20 @@
    * number about Anvil rather than about the model.
    */
   let contextWindow = 0;
+  /** Where the session compacts, as a fraction of the window. 0 means unset. */
+  let autoCompactAt = 0;
+  /** The prompt cache's TTL the client knows, or 0 when none is known. */
+  let cacheTtlSeconds = 0;
+  /**
+   * The host's last estimate of the conversation, or null before one arrives.
+   * It is an estimate of the next request, not the provider's count — the field
+   * names on the wire say so, and so does the meter's wording.
+   */
+  let contextInfo = null;
+  /** When the last run reached the provider, in ms since epoch, or null. */
+  let lastRequestAt = null;
+  /** The one-second cache countdown, or null while nothing needs counting. */
+  let cacheClock = null;
   /**
    * What this session has spent, and what its last run spent. Reset with the
    * transcript, because the two describe the same conversation: a meter outliving
@@ -719,6 +743,31 @@
     const wrap = el('div', 'msg note');
     wrap.title = 'The loop put this into the conversation; you did not type it.';
     wrap.appendChild(el('div', 'body', text));
+    append(wrap);
+    endRound();
+  }
+
+  /**
+   * The boundary a compaction leaves in the conversation.
+   *
+   * A live compaction knows what it did — how many messages it summarized and
+   * what the estimate fell from and to — and says so. A replayed one comes from
+   * a stored summary record that keeps none of those numbers, so it says only
+   * that the boundary is there. Both are the same row in the same place, which
+   * is what makes the replay readable as the conversation it is.
+   */
+  function addCompact(info) {
+    const parts = ['context compacted'];
+    const summarized = info ? count(info.summarized) : '';
+    if (summarized) {
+      parts.push(summarized + (summarized === '1' ? ' message summarized' : ' messages summarized'));
+    }
+    const before = info ? count(info.before) : '';
+    const after = info ? count(info.after) : '';
+    if (before && after) parts.push(before + ' → ' + after);
+    const wrap = el('div', 'msg compact');
+    wrap.title = 'Earlier turns were summarized so the conversation fits its window.';
+    wrap.appendChild(el('div', 'body', parts.join(' · ')));
     append(wrap);
     endRound();
   }
@@ -1974,25 +2023,106 @@
    */
   function recordUsage(done) {
     meterMath.add(usageTotals, done);
+    recordContext(done);
     renderMeter();
+  }
+
+  /**
+   * Keeps the two per-run facts the meter needs beyond the counts: the host's
+   * estimate of the conversation, and when the run last reached the provider.
+   *
+   * An absent estimate leaves the previous one alone — the conversation has not
+   * changed — but an absent anchor is left alone too, on purpose: a run that
+   * never reached the provider did not refresh the cache, so the previous
+   * request is still the most recent one and its countdown goes on aging.
+   */
+  function recordContext(done) {
+    if (!done) return;
+    if (done.context && typeof done.context === 'object') contextInfo = done.context;
+    if (typeof done.last_request_at === 'string' && done.last_request_at !== '') {
+      const at = Date.parse(done.last_request_at);
+      if (isFinite(at)) lastRequestAt = at;
+    }
   }
 
   /** Forgets the session's totals, for a session that is replacing this one. */
   function resetUsage() {
     usageTotals = meterMath.empty();
+    contextInfo = null;
+    lastRequestAt = null;
     renderMeter();
   }
 
   /**
-   * Draws the one line under the composer. Counts always, and the last run's
-   * share of the window only when a window was configured.
+   * Draws the one line under the composer.
+   *
+   * Two numbers, two sources. Context comes from the host's estimate against the
+   * declared window; before the host has answered, the last run's total stands
+   * in, because it is measured rather than guessed. Cache comes from the last
+   * run's reported cached input and the TTL the client was told, counted from
+   * the run's own last request — so the line says "the cache is warm for this
+   * long", not "something is happening".
    */
   function renderMeter() {
     if (!meter) return;
-    const text = meterMath.label(usageTotals, contextWindow);
+    const parts = [];
+    const context = meterMath.remaining(usageTotals, contextInfo, autoCompactAt);
+    if (context) {
+      parts.push(
+        amount(context.used) +
+          ' of ' +
+          amount(context.window) +
+          ' (' +
+          meterMath.percent(context.used, context.window) +
+          '%)',
+      );
+      parts.push(amount(context.left) + ' left');
+      if (context.compactAt > 0) parts.push('compact at ' + amount(context.compactAt));
+    } else {
+      const spent = meterMath.label(usageTotals, contextWindow);
+      if (spent) parts.push(spent);
+    }
+    const cache = meterMath.cache(usageTotals, cacheTtlSeconds, lastRequestAt, Date.now());
+    if (cache.cached > 0) {
+      let item = 'cache ' + amount(cache.cached);
+      if (cache.remaining !== null) {
+        item += cache.remaining > 0 ? ' · ' + meterMath.clock(cache.remaining) : ' · cold';
+      }
+      parts.push(item);
+    }
+    const text = parts.join(' · ');
     meter.textContent = text;
     meter.hidden = text === '';
+    syncCacheClock(cache);
   }
+
+  /**
+   * Runs the one-second clock only while there is something to count: a known
+   * TTL, a run to count from, a cache worth watching, life left in it, and a tab
+   * the person can actually see. Everything else on the line moves on an event,
+   * so anything more than this would be a timer redrawing static text.
+   */
+  function syncCacheClock(cache) {
+    const wanted =
+      cacheTtlSeconds > 0 &&
+      lastRequestAt !== null &&
+      cache.cached > 0 &&
+      cache.remaining !== null &&
+      cache.remaining > 0 &&
+      !document.hidden;
+    if (wanted && cacheClock === null) {
+      cacheClock = setInterval(renderMeter, 1000);
+    } else if (!wanted && cacheClock !== null) {
+      clearInterval(cacheClock);
+      cacheClock = null;
+    }
+  }
+
+  // A hidden tab stops counting; coming back draws the truth at once, and
+  // `renderMeter` starts the clock again only if the TTL has time left.
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) renderMeter();
+  });
 
   /** The mark a status draws. An unknown status gets a plain one, not a guess. */
   const todoMarks = { pending: '○', in_progress: '◐', done: '✓' };
@@ -2466,6 +2596,7 @@
     else if (e.type === 'tool_call') addToolCall(e, msg.reviewable === true, msg.edit);
     else if (e.type === 'tool_result') addToolResult(e);
     else if (e.type === 'todo') setTodos(e.items);
+    else if (e.type === 'compact') addCompact(e.compact);
     else if (e.type === 'error') addNotice(e.text || 'The run reported an error.');
     else if (e.type === 'progress' && e.text) {
       statusLine.textContent = e.text;
@@ -2583,6 +2714,13 @@
         // 0 is "unknown", the same value the setting's absence means, so a
         // missing or malformed field falls back to counts only.
         contextWindow = typeof msg.window === 'number' ? msg.window : 0;
+        autoCompactAt = typeof msg.auto_compact_at === 'number' ? msg.auto_compact_at : 0;
+        cacheTtlSeconds = typeof msg.cache_ttl_seconds === 'number' ? msg.cache_ttl_seconds : 0;
+        // The estimate is the host's answer to `session.context`, and its
+        // absence means the host did not answer — not that the conversation is
+        // empty. Falling back to the last run's total is more honest than
+        // keeping a figure from a session that may have been replaced.
+        contextInfo = msg.info && typeof msg.info === 'object' ? msg.info : null;
         renderMeter();
         return;
       case 'reset':

@@ -73,6 +73,17 @@ export function replayOf(entries: TranscriptEntry[], sessionId = ''): ReplayStep
       continue;
     }
 
+    if (entry.kind === 'summary') {
+      // A compaction boundary. The live path draws the same row from a
+      // `compact` event; the store keeps no counts, so the replayed one says
+      // only that it happened — which is all a reader can be told honestly.
+      steps.push({
+        kind: 'event',
+        event: { session_id: sessionId, run_id: runId, type: 'compact' },
+      });
+      continue;
+    }
+
     if (entry.kind !== 'message') continue;
 
     if (entry.role === 'user') {

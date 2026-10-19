@@ -19,6 +19,7 @@ import {
   CheckpointListResult,
   CheckpointRestoreParams,
   CheckpointRestoreResult,
+  CompactInfo,
   DoneParams,
   HostEvent,
   McpListResult,
@@ -61,6 +62,8 @@ export interface HostListener {
   onSession?: (result: SessionResult) => void;
   /** A background task in this session tree started or ended. */
   onTask?: (task: TaskInfo, sessionId: string) => void;
+  /** The conversation was compacted on request (0.43); no run owns it. */
+  onCompact?: (info: CompactInfo, sessionId: string) => void;
   onNotice?: (level: 'info' | 'warn' | 'error', message: string) => void;
 }
 
@@ -128,6 +131,7 @@ export class HostManager {
         listener.onSession?.(result);
       },
       onTask: listener.onTask,
+      onCompact: listener.onCompact,
       onLog: this.log,
     });
     return session;

@@ -269,7 +269,26 @@
           "type": "number",
           "default": 0,
           "minimum": 0,
-          "markdownDescription": "The context window the token meter measures the last run against, in tokens. 0 means unknown: the composer then shows cumulative input and output counts with no fraction. Anvil does not guess a window from the model name, so a percentage appears only when this is set."
+          "markdownDescription": "The context window the token meter measures against, in tokens. 0 means unknown: the composer then shows cumulative input and output counts with no fraction, and the session does not auto-compact. Anvil does not guess a window from the model name, so a percentage appears only when this is set."
+        },
+        "anvil.autoCompactAt": {
+          "type": "number",
+          "default": 0.8,
+          "minimum": 0.1,
+          "maximum": 1,
+          "markdownDescription": "How full the context window may get before the host summarizes the conversation on its own, as a fraction of `anvil.contextWindow`. The meter marks this point and counts down to it. Ignored while the window is 0."
+        },
+        "anvil.contextKeepRecent": {
+          "type": "number",
+          "default": 8,
+          "minimum": 2,
+          "markdownDescription": "Messages a compaction keeps verbatim; everything older may be summarized. A transcript needs the recent turns as they were, or the model loses the thread it is holding."
+        },
+        "anvil.cacheTtlSeconds": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "markdownDescription": "How long the provider keeps its prompt cache, in seconds, for the meter's countdown. 0 means the provider's default: 300 seconds for Anthropic, and no countdown for a provider whose cache lifetime is unknown. The countdown appears only after a run reports cached tokens."
         },
         "anvil.store": {
           "type": "string",

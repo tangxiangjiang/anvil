@@ -29,6 +29,17 @@ export const Method = {
   SessionTranscript: 'session.transcript',
   SessionClose: 'session.close',
   /**
+   * Compacts an idle conversation: older turns become one summary and a safe
+   * tail is kept. Additive: a host that predates it answers `-32601`, and the
+   * client then offers no compaction rather than a command that always fails.
+   */
+  SessionCompact: 'session.compact',
+  /**
+   * Where a live conversation stands against its declared window, so a tab that
+   * has not run anything can still draw a meter. Additive for the same reason.
+   */
+  SessionContext: 'session.context',
+  /**
    * Names a stored session. Additive: it appends a `meta` record rather than
    * rewriting the file, so a resume replays exactly the history it did before.
    * A host that predates it answers `-32601`, which the client reads as "no
@@ -94,6 +105,13 @@ export const Notify = {
    * needs the table asks `tasks.list` for it.
    */
   Task: 'task',
+  /**
+   * One compaction of an idle conversation (0.43). A compaction the runtime
+   * performs during a run arrives as an `event` of type `compact`; this one has
+   * no run to key an event to, so it travels as its own notification carrying
+   * the same `compact` payload.
+   */
+  Compact: 'compact',
 } as const;
 
 // --- errors ------------------------------------------------------------------
@@ -193,6 +211,13 @@ export interface SessionParams {
    */
   subagents?: boolean;
   /**
+   * The conversation's own budget: the window it is measured against, where it
+   * compacts, and how much of the tail survives a summary. Omitted means no
+   * budget at all, which is exactly what every client before 0.43 sent — a
+   * host cannot start compacting a session nobody asked about.
+   */
+  context?: ContextParams;
+  /**
    * Turn on the web tools. Absent means off; there is no `enabled` field
    * because a host that predates the field and a client that does not want the
    * tools should agree about absence.
@@ -201,6 +226,19 @@ export interface SessionParams {
    * environment the extension spawns it with.
    */
   web_search?: WebSearchParams;
+}
+
+/**
+ * The budget a session declares for its conversation.
+ *
+ * A window of 0 (or an absent object) turns automatic compaction off. The
+ * fraction and the keep count are the host's to clamp: a client that sent a
+ * nonsense value gets a working session, not an error.
+ */
+export interface ContextParams {
+  window_tokens?: number;
+  auto_compact_at?: number;
+  keep_recent?: number;
 }
 
 /** Configuration for `web_search` / `fetch_url`; presence is the switch. */
@@ -621,6 +659,48 @@ export interface SessionInfo {
   task_title?: string;
 }
 
+// --- session.compact / session.context ---------------------------------------
+
+/**
+ * Where a conversation stands against its budget. Every figure is an estimate
+ * of the next request's size, never the provider's token count — which is why
+ * the field names say "estimated" rather than "used".
+ */
+export interface ContextInfo {
+  estimated_tokens: number;
+  /** 0 when the session declared no window; compaction is off in that case. */
+  window_tokens: number;
+  compact_at_tokens: number;
+  messages: number;
+}
+
+/**
+ * One compaction, for the transcript divider.
+ *
+ * `reason` is `auto` for a runtime budget check and `manual` for a person
+ * asking through `/compact`. The stored summary entry carries no counts, so a
+ * replayed divider is this row with none of the figures.
+ */
+export interface CompactInfo {
+  reason: string;
+  before: number;
+  after: number;
+  summarized: number;
+  window?: number;
+}
+
+/** The answer to a manual compaction. */
+export interface SessionCompactResult {
+  session_id: string;
+  /** False when there was nothing left to summarize: a no-op, not an error. */
+  compacted: boolean;
+  before?: number;
+  after?: number;
+  summarized?: number;
+  /** The state after the compaction, so the client need not ask again. */
+  context: ContextInfo;
+}
+
 // --- session.transcript ------------------------------------------------------
 
 export interface SessionTranscriptParams {
@@ -643,15 +723,16 @@ export interface TranscriptCall {
 }
 
 /**
- * One unit of a stored conversation: a message, or where a run ended. The union
- * is by `kind`, and `reasoning` is not one of the values — it was streamed and
- * dropped rather than stored, so there is nothing to replay it from.
+ * One unit of a stored conversation: a message, where a run ended, or a
+ * compaction boundary. The union is by `kind`, and `reasoning` is not one of
+ * the values — it was streamed and dropped rather than stored, so there is
+ * nothing to replay it from.
  */
 export interface TranscriptEntry {
-  kind: 'message' | 'run_end';
+  kind: 'message' | 'run_end' | 'summary';
   run_id?: string;
 
-  /** message */
+  /** message, and summary for its text */
   role?: 'user' | 'assistant' | 'tool';
   content?: string;
   tool_call_id?: string;
@@ -867,7 +948,13 @@ export type EventType =
    * synthesises the same event from the stored call's arguments, so the webview
    * has one path for both.
    */
-  | 'todo';
+  | 'todo'
+  /**
+   * One compaction, carried in `compact` (0.43). It marks where older turns
+   * became a summary. The replay draws the same row from the stored `summary`
+   * entry, which carries no counts and therefore no figures in the row.
+   */
+  | 'compact';
 
 /** One streamed unit of a run. */
 export interface HostEvent {
@@ -917,6 +1004,12 @@ export interface HostEvent {
    * other event, and is why the host writes a pointer rather than omitting it.
    */
   items?: TodoItem[];
+  /**
+   * The compaction this `compact` event reports (0.43). Present only on that
+   * type, and present there even when every count is zero, because the event
+   * exists to say a compaction happened.
+   */
+  compact?: CompactInfo;
 }
 
 /** One row of the model's plan, as `todo_write` wrote it. */
@@ -938,12 +1031,32 @@ export interface DoneParams {
   usage?: Usage;
   err?: string;
   code?: string;
+  /**
+   * Where the conversation stands after the run (0.43). Omitted when there is
+   * no live agent to ask — a shutdown, for instance — because a zero would be
+   * drawn as an empty conversation.
+   */
+  context?: ContextInfo;
+  /**
+   * RFC 3339 in UTC: when the run last reached the provider. Absent when it
+   * never did, which is how the cache countdown tells "no anchor" from "an old
+   * one".
+   */
+  last_request_at?: string;
 }
 
 export interface Usage {
   input_tokens: number;
   output_tokens: number;
   total_tokens: number;
+  /**
+   * Input tokens the provider served from its cache (0.43). Absent when the
+   * provider reported nothing; the meter must read absence as unknown, not as
+   * a cache that is empty.
+   */
+  cached_tokens?: number;
+  /** Tokens this request wrote into the provider's cache (0.43). */
+  cache_write_tokens?: number;
 }
 
 export interface LogParams {

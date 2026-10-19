@@ -112,7 +112,10 @@ names both sides and stops rather than failing later inside a tool call.
 | `anvil.model` | Model id; empty uses the host's default |
 | `anvil.baseUrl` | OpenAI-compatible base URL; empty uses the provider default |
 | `anvil.maxSteps` | Step limit per turn; `0` uses the host's default |
-| `anvil.contextWindow` | The window the token meter measures the last run against, in tokens. `0` (the default) means unknown, and the composer then shows counts only — Anvil does not guess a window from a model name |
+| `anvil.contextWindow` | The window the token meter measures against, in tokens, and the window the session auto-compacts within. `0` (the default) means unknown, and the composer then shows counts only — Anvil does not guess a window from a model name |
+| `anvil.autoCompactAt` | How full that window may get before the host summarizes the conversation on its own, as a fraction (default `0.8`). The meter marks this point and counts down to it; ignored while the window is `0` |
+| `anvil.contextKeepRecent` | Messages a compaction keeps verbatim (default `8`, minimum `2`) |
+| `anvil.cacheTtlSeconds` | How long the provider keeps its prompt cache, for the meter's countdown. `0` (the default) means the provider's default: five minutes for Anthropic, and no countdown for a provider that never states one |
 | `anvil.store` | `jsonl`, `sqlite`, or empty for the host's default |
 | `anvil.vision` | Accept pasted images; off by default |
 | `anvil.rules` | Load `AGENTS.md` and `.anvil/rules/*.md`; on by default |
@@ -183,10 +186,16 @@ spawned with.
 - **Counts what the session spent.** A line under the composer adds up the input
   and output tokens of every finished run — live, or replayed from a stored
   `run_end` — and it resets when the tab moves to a new conversation. With
-  `anvil.contextWindow` set it also draws the last run's total as a share of
-  that window. With it unset there is no percentage: no catalogue in the
-  repository defines a window, and a guess from a model name would make the
-  fraction a number about Anvil rather than about the model.
+  `anvil.contextWindow` set it draws the conversation's estimated size against
+  that window, what is left, and where auto-compaction will fire
+  (`18k of 200k (9%) · 182k left · compact at 160k`); the estimate comes from the
+  host, so it is re-read after every run and when a compaction finishes. When a
+  provider reports cached input, the line adds the cached share and — with a
+  known TTL — counts the cache's remaining life down to **cache cold**. With no
+  window there is no percentage: no catalogue in the repository defines one, and
+  a guess from a model name would make the fraction a number about Anvil rather
+  than about the model. `/compact` folds the conversation on demand; the
+  transcript marks the boundary and says how much was summarized.
 - **Shows the plan as a checklist.** The built-in `todo_write` tool lets the
   model publish its task list, and the panel draws it below the composer — one
   row per item, with the current one in the normal text colour and finished ones
@@ -351,6 +360,7 @@ Type `/` in the composer for the catalogue. Built-ins:
 | `/model [id]` | Choose the model this conversation uses |
 | `/resume [agent id]` | Continue a past session in this workspace |
 | `/clear` | Start a new conversation |
+| `/compact` | Summarize the conversation so far; handled by the host, nothing is sent to the model. Refused while a turn is running |
 | `/tasks` | Open the background tasks panel; sends nothing to the model |
 | `/help` | List the commands |
 

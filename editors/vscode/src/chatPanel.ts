@@ -32,6 +32,7 @@ import { buildPromptContext, pickMentions } from './editorContext';
 import { attachmentsFromDataUrls, dataUrlFromBytes, mimeForImagePath } from './attachments';
 import type { Hub } from './hub';
 import { HostListener, HostManager, ResolvedMode } from './hostManager';
+import { HostRpcError } from './hostClient';
 import { ChatSession, SessionConfig, SessionState } from './session';
 import { PreviewDocuments } from './review';
 import { dedupeMentions, relativeMention } from './mentions';
@@ -41,6 +42,9 @@ import { replayOf } from './transcript';
 import { CommandAction, SlashCommand, parseSlash, route } from './commands';
 import {
   ApprovalRequest,
+  CodeMethodNotFound,
+  CompactInfo,
+  ContextInfo,
   Decision,
   DoneParams,
   HostEvent,
@@ -53,6 +57,7 @@ import {
   RuleSpec,
   SessionInfo,
   SessionResult,
+  SessionCompactResult,
   SessionTranscriptResult,
   TaskInfo,
 } from './protocol';
@@ -176,11 +181,17 @@ type Outbound =
   | { type: 'images'; images: string[] }
   | { type: 'vision'; enabled: boolean }
   /**
-   * The context window the token meter measures the last run against, or 0
-   * when it is unknown. The window is display arithmetic only and never travels
-   * to the host.
+   * The token meter's inputs. The window is display arithmetic only and never
+   * travels to the host; `info` is the live session's own estimate, present
+   * only when this host can answer `session.context`.
    */
-  | { type: 'context'; window: number }
+  | {
+      type: 'context';
+      window: number;
+      auto_compact_at: number;
+      cache_ttl_seconds: number;
+      info?: ContextInfo;
+    }
   | { type: 'changes'; files: Array<Pick<ChangedFile, 'path' | 'kind'>> }
   /**
    * A finished run that captured pre-images, so it can be undone. Posted only
@@ -1017,6 +1028,12 @@ export class ChatPanel implements HostListener {
       case 'clear':
         await this.clearConversation();
         return;
+      case 'compact':
+        // A request to the host, never a prompt: the model is not asked to
+        // summarize, and nothing typed after the command is sent anywhere.
+        await this.compactSession();
+        this.postState();
+        return;
       case 'tasks':
         // Window-wide, and it sends nothing to the model: the command is a way
         // to open a document, not a prompt.
@@ -1350,14 +1367,101 @@ export class ChatPanel implements HostListener {
   }
 
   /**
-   * Tells the document the window the token meter measures against.
+   * Tells the document how the token meter should measure, and asks the live
+   * session where it stands.
    *
    * Public because a settings change restarts the host without reloading any
-   * tab, and `Hub.restart` calls this on each one so the number on screen is
-   * the one the setting now says. 0 is "unknown" and means counts only.
+   * tab, and `Hub.restart` calls this on each one so the numbers on screen are
+   * the ones the settings now say. 0 is "unknown" and means counts only.
    */
   reportContext(): void {
-    this.post({ type: 'context', window: readSettings().contextWindow });
+    this.postContext();
+    void this.refreshContext();
+  }
+
+  /** Announces the settings and, when there is one, the live estimate. */
+  private postContext(info?: ContextInfo): void {
+    const settings = readSettings();
+    this.post({
+      type: 'context',
+      window: settings.contextWindow,
+      auto_compact_at: settings.autoCompactAt,
+      cache_ttl_seconds: settings.cacheTtlSeconds,
+      ...(info ? { info } : {}),
+    });
+  }
+
+  /**
+   * Asks the open conversation for its estimate.
+   *
+   * No session is opened to ask: a tab that has not started has nothing to
+   * measure, and opening one would be host work nobody requested. A host from
+   * before 0.43 answers `-32601`; the meter then keeps the counts it has rather
+   * than a figure assembled from nothing.
+   */
+  private async refreshContext(): Promise<void> {
+    const session = this.session;
+    if (!session || !session.id) return;
+    try {
+      const info = await session.context();
+      // The tab may have moved to another conversation while the answer was in
+      // flight; its figures belong to the one that is no longer here.
+      if (this.session !== session) return;
+      this.postContext(info);
+    } catch {
+      // No estimate is a normal answer from an older host, not a failure worth
+      // a banner over the conversation.
+    }
+  }
+
+  /**
+   * Compacts this conversation on request.
+   *
+   * The divider itself comes from the host's `compact` notification, which is
+   * the same row an automatic compaction draws — this method only has to say
+   * why nothing happened. A turn in flight is refused in words rather than
+   * racing the loop's history, and a host that does not know the method is
+   * reported as too old instead of as a broken conversation.
+   */
+  private async compactSession(): Promise<void> {
+    const session = this.session;
+    if (!session || !session.id) {
+      this.post({
+        type: 'notice',
+        level: 'info',
+        message: 'There is nothing to compact yet — this conversation has not started.',
+      });
+      return;
+    }
+    if (session.currentState === 'running') {
+      this.post({
+        type: 'notice',
+        level: 'info',
+        message: 'A turn is running. Stop it before compacting: compaction needs the conversation at rest.',
+      });
+      return;
+    }
+    let result: SessionCompactResult;
+    try {
+      result = await session.compact();
+      if (!result.compacted) {
+        this.post({
+          type: 'notice',
+          level: 'info',
+          message: 'Nothing was compacted: there is no earlier turn left to summarize.',
+        });
+      }
+    } catch (err) {
+      const message =
+        err instanceof HostRpcError && err.code === CodeMethodNotFound
+          ? 'This host does not support compaction. Update anvil-host to use /compact.'
+          : `Could not compact the conversation: ${(err as Error).message}`;
+      this.post({ type: 'notice', level: 'error', message });
+      return;
+    }
+    // The answer carries the post-compaction estimate, so the meter is correct
+    // without a second round trip.
+    this.postContext(result.context);
   }
 
   /** Answers an approval, and closes the review it was answered from. */
@@ -1775,6 +1879,20 @@ export class ChatPanel implements HostListener {
    */
   onTask = (task: TaskInfo, sessionId: string): void => {
     this.hub.noteTask(sessionId, task);
+  };
+
+  /**
+   * A compaction the tab asked for.
+   *
+   * It is posted as an event so the webview draws the divider with the same
+   * renderer an automatic compaction uses. The run id is empty because there is
+   * no run: the divider is not part of any turn.
+   */
+  onCompact = (info: CompactInfo, sessionId: string): void => {
+    this.post({
+      type: 'event',
+      event: { session_id: sessionId, run_id: '', type: 'compact', compact: info },
+    });
   };
 
   /** Reports what the turn actually changed, once the writes have landed. */
