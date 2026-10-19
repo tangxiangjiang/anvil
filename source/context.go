@@ -26,6 +26,11 @@ type ContextOptions struct {
 	// KeepRecent is how many trailing messages compaction keeps verbatim before
 	// moving the cut to a user message. 0 means 8; a value below 2 means 8.
 	KeepRecent int
+	// PromptCache places provider cache breakpoints where one is supported
+	// (0.43+). Nil means on for the Anthropic provider and ignored by
+	// OpenAI-compatible providers, which cache on their own. A pointer rather
+	// than a bool so "leave it alone" and "turn it off" are different requests.
+	PromptCache *bool
 }
 
 // ContextUsage describes where an agent's conversation stands against its

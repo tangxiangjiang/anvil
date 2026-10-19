@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/anvil-dev/anvil/internal/compress"
 	"github.com/anvil-dev/anvil/internal/id"
@@ -48,6 +49,11 @@ type Event struct {
 	// (0.43+). It is nil on every other event. A client draws it as a divider;
 	// the turns themselves are still in the store, so a replay shows them too.
 	Compact *CompactInfo
+	// LastRequestAt is when the most recent model request completed, on the
+	// terminal event (0.43+). Zero when the run never reached the provider. A
+	// client computes prompt-cache remaining life from it; the runtime does not
+	// know any provider's TTL and does not guess one.
+	LastRequestAt time.Time
 }
 
 // CompactInfo is one history compaction's numbers.
@@ -104,6 +110,9 @@ type Result struct {
 	Err      string
 	Code     string
 	Messages []llm.Message // full conversation incl. system prompt
+	// LastRequestAt is when the most recent model request completed; zero when
+	// none did.
+	LastRequestAt time.Time
 }
 
 // Config for a single run.
@@ -125,6 +134,9 @@ type Config struct {
 	// starts at a user message. It composes with HistoryMaxChars: whichever
 	// budget triggers first does the work.
 	Context ContextBudget
+	// PromptCache asks the adapter to place provider cache breakpoints (0.43+).
+	// Only Anthropic acts on it.
+	PromptCache bool
 	// Sink, if set, receives each conversation message as it is appended
 	// (user, assistant, tool) so callers can persist them durably.
 	Sink func(llm.Message)
@@ -189,17 +201,18 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 	messages = compactBudget(ctx, completer, cfg, messages, sink, emit)
 
 	var usageAcc *llm.Usage
+	var lastRequestAt time.Time
 	toolDefs := registry.Defs()
 	guard := newLoopGuard()
 
 	for step := 0; ; step++ {
 		if cfg.MaxSteps > 0 && step >= cfg.MaxSteps {
 			msg := fmt.Sprintf("%s (%d)", MaxStepsExceededPrefix, cfg.MaxSteps)
-			emit(Event{Type: "error", Text: msg, Code: CodeMaxSteps, Usage: usageAcc})
-			return Result{ID: runID, Status: "error", Steps: cfg.MaxSteps, Usage: usageAcc, Err: msg, Code: CodeMaxSteps, Messages: messages}
+			emit(Event{Type: "error", Text: msg, Code: CodeMaxSteps, Usage: usageAcc, LastRequestAt: lastRequestAt})
+			return Result{ID: runID, Status: "error", Steps: cfg.MaxSteps, Usage: usageAcc, Err: msg, Code: CodeMaxSteps, Messages: messages, LastRequestAt: lastRequestAt}
 		}
 		if err := ctx.Err(); err != nil {
-			return cancelledResult(ctx, runID, step, usageAcc, messages, err, emit)
+			return cancelledResult(ctx, runID, step, usageAcc, messages, err, lastRequestAt, emit)
 		}
 		// A long tool-calling run crosses the budget between steps, not only at
 		// its start. The check is before the request is built, so the estimate it
@@ -215,7 +228,7 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 		streamed := false
 		var resp *llm.Response
 		var err error
-		req := llm.Request{Model: cfg.Model, Messages: messages, Tools: toolDefs}
+		req := llm.Request{Model: cfg.Model, Messages: messages, Tools: toolDefs, PromptCache: cfg.PromptCache}
 		if sc, ok := completer.(llm.StreamCompleter); ok {
 			// Reasoning is accumulated and flushed in batches rather than per
 			// chunk. A reasoner emits several times the tokens of its answer,
@@ -257,12 +270,13 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 		}
 		if err != nil {
 			if ctx.Err() != nil {
-				return cancelledResult(ctx, runID, step, usageAcc, messages, ctx.Err(), emit)
+				return cancelledResult(ctx, runID, step, usageAcc, messages, ctx.Err(), lastRequestAt, emit)
 			}
 			msg := err.Error()
-			emit(Event{Type: "error", Text: msg, Code: CodeProvider, Usage: usageAcc})
-			return Result{ID: runID, Status: "error", Steps: step, Usage: usageAcc, Err: msg, Code: CodeProvider, Messages: messages}
+			emit(Event{Type: "error", Text: msg, Code: CodeProvider, Usage: usageAcc, LastRequestAt: lastRequestAt})
+			return Result{ID: runID, Status: "error", Steps: step, Usage: usageAcc, Err: msg, Code: CodeProvider, Messages: messages, LastRequestAt: lastRequestAt}
 		}
+		lastRequestAt = time.Now()
 		if resp.Usage != nil {
 			if usageAcc == nil {
 				usageAcc = &llm.Usage{}
@@ -270,6 +284,8 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 			usageAcc.InputTokens += resp.Usage.InputTokens
 			usageAcc.OutputTokens += resp.Usage.OutputTokens
 			usageAcc.TotalTokens += resp.Usage.TotalTokens
+			usageAcc.CachedTokens += resp.Usage.CachedTokens
+			usageAcc.CacheWriteTokens += resp.Usage.CacheWriteTokens
 		}
 
 		assistant := resp.Message
@@ -283,14 +299,15 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 		sink(assistant)
 
 		if len(assistant.ToolCalls) == 0 {
-			emit(Event{Type: "done", Text: assistant.Content, Usage: usageAcc})
+			emit(Event{Type: "done", Text: assistant.Content, Usage: usageAcc, LastRequestAt: lastRequestAt})
 			return Result{
-				ID:       runID,
-				Status:   "finished",
-				Result:   assistant.Content,
-				Steps:    step + 1,
-				Usage:    usageAcc,
-				Messages: messages,
+				ID:            runID,
+				Status:        "finished",
+				Result:        assistant.Content,
+				Steps:         step + 1,
+				Usage:         usageAcc,
+				Messages:      messages,
+				LastRequestAt: lastRequestAt,
 			}
 		}
 
@@ -314,10 +331,10 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 			emit(Event{Type: "assistant", Text: inj.Content, Code: CodeLoopDetected})
 		case loopStop:
 			msg := fmt.Sprintf("%s: %s", LoopDetectedPrefix, reason)
-			emit(Event{Type: "error", Text: msg, Code: CodeLoopDetected, Usage: usageAcc})
+			emit(Event{Type: "error", Text: msg, Code: CodeLoopDetected, Usage: usageAcc, LastRequestAt: lastRequestAt})
 			return Result{
 				ID: runID, Status: "error", Steps: step + 1, Usage: usageAcc,
-				Err: msg, Code: CodeLoopDetected, Messages: messages,
+				Err: msg, Code: CodeLoopDetected, Messages: messages, LastRequestAt: lastRequestAt,
 			}
 		}
 	}
@@ -457,10 +474,10 @@ func IsContextDeadline(errText string) bool {
 	return errText == context.DeadlineExceeded.Error() || errText == "context deadline exceeded"
 }
 
-func cancelledResult(ctx context.Context, runID string, steps int, usage *llm.Usage, messages []llm.Message, err error, emit Emitter) Result {
+func cancelledResult(ctx context.Context, runID string, steps int, usage *llm.Usage, messages []llm.Message, err error, lastRequestAt time.Time, emit Emitter) Result {
 	code, msg := classifyCancel(ctx, err)
-	emit(Event{Type: "error", Text: msg, Code: code, Usage: usage})
-	return Result{ID: runID, Status: "cancelled", Steps: steps, Usage: usage, Err: msg, Code: code, Messages: messages}
+	emit(Event{Type: "error", Text: msg, Code: code, Usage: usage, LastRequestAt: lastRequestAt})
+	return Result{ID: runID, Status: "cancelled", Steps: steps, Usage: usage, Err: msg, Code: code, Messages: messages, LastRequestAt: lastRequestAt}
 }
 
 func classifyCancel(ctx context.Context, err error) (code, msg string) {

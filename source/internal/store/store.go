@@ -51,6 +51,10 @@ type Usage struct {
 	InputTokens  int `json:"input_tokens,omitempty"`
 	OutputTokens int `json:"output_tokens,omitempty"`
 	TotalTokens  int `json:"total_tokens,omitempty"`
+	// Cache counts are additive fields (0.43+): older files simply lack them,
+	// and zero keeps its honest meaning — the provider reported nothing.
+	CachedTokens     int `json:"cached_tokens,omitempty"`
+	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`
 }
 
 // Record is one JSONL line. Only the fields relevant to Type are populated.
@@ -338,6 +342,8 @@ func Summarize(records []Record) Summary {
 				usage.InputTokens += rec.Usage.InputTokens
 				usage.OutputTokens += rec.Usage.OutputTokens
 				usage.TotalTokens += rec.Usage.TotalTokens
+				usage.CachedTokens += rec.Usage.CachedTokens
+				usage.CacheWriteTokens += rec.Usage.CacheWriteTokens
 			}
 		}
 	}

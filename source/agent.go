@@ -1046,6 +1046,13 @@ func (a *Agent) Reload(ctx context.Context) error {
 	return nil
 }
 
+// promptCacheEnabled reports whether the adapter should place cache
+// breakpoints. normalizeOptions has resolved nil already; this keeps the
+// runtime call site free of a pointer.
+func promptCacheEnabled(opts Options) bool {
+	return opts.Context.PromptCache != nil && *opts.Context.PromptCache
+}
+
 // usageInfo projects the runtime's usage onto the public type. It is nil in,
 // nil out: a provider that reported no counts must not become a zero row that
 // a client draws as a run that cost nothing.
@@ -1053,7 +1060,13 @@ func usageInfo(u *llm.Usage) *Usage {
 	if u == nil {
 		return nil
 	}
-	return &Usage{InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, TotalTokens: u.TotalTokens}
+	return &Usage{
+		InputTokens:      u.InputTokens,
+		OutputTokens:     u.OutputTokens,
+		TotalTokens:      u.TotalTokens,
+		CachedTokens:     u.CachedTokens,
+		CacheWriteTokens: u.CacheWriteTokens,
+	}
 }
 
 // todoItemsInfo projects the model's task list onto the public type. A nil list
@@ -1091,12 +1104,7 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 		// checkpoint and must not be filed under this run.
 		a.registry.SetRunContext("", "")
 		cancelCause(nil)
-		a.mu.Lock()
-		a.running = false
-		if a.activeRun == run {
-			a.activeRun = nil
-		}
-		a.mu.Unlock()
+		a.clearRunState(run)
 	}()
 
 	loopCtx := ctx
@@ -1136,26 +1144,28 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 			AutoCompactAt: a.opts.Context.AutoCompactAt,
 			KeepRecent:    a.opts.Context.KeepRecent,
 		},
+		PromptCache:      promptCacheEnabled(a.opts),
 		SystemPrompt:     sysPrompt,
 		ParallelTools:    a.opts.ParallelTools,
 		ParallelToolsMax: a.opts.ParallelToolsMax,
 		Sink:             func(m llm.Message) { a.persistMessage(run.id, m) },
 	}, func(ev runtime.Event) {
 		out := Event{
-			Type:       EventType(ev.Type),
-			Text:       ev.Text,
-			ToolCallID: ev.ToolCallID,
-			Name:       ev.Name,
-			Args:       json.RawMessage(ev.Args),
-			Content:    ev.Content,
-			IsError:    ev.IsError,
-			Step:       ev.Step,
-			MaxSteps:   ev.MaxSteps,
-			Code:       Code(ev.Code),
-			Rule:       permissionRuleMatch(ev.Rule),
-			Usage:      usageInfo(ev.Usage),
-			Items:      todoItemsInfo(ev.Items),
-			Compact:    compactInfo(ev.Compact),
+			Type:          EventType(ev.Type),
+			Text:          ev.Text,
+			ToolCallID:    ev.ToolCallID,
+			Name:          ev.Name,
+			Args:          json.RawMessage(ev.Args),
+			Content:       ev.Content,
+			IsError:       ev.IsError,
+			Step:          ev.Step,
+			MaxSteps:      ev.MaxSteps,
+			Code:          Code(ev.Code),
+			Rule:          permissionRuleMatch(ev.Rule),
+			Usage:         usageInfo(ev.Usage),
+			Items:         todoItemsInfo(ev.Items),
+			Compact:       compactInfo(ev.Compact),
+			LastRequestAt: ev.LastRequestAt,
 		}
 		run.emit(out)
 		// A child's events travel to whoever asked for the child, tagged with the
@@ -1181,13 +1191,14 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 	a.mu.Unlock()
 
 	rr := &RunResult{
-		ID:     result.ID,
-		Status: RunStatus(result.Status),
-		Result: result.Result,
-		Steps:  result.Steps,
-		Usage:  usageInfo(result.Usage),
-		Err:    result.Err,
-		Code:   Code(result.Code),
+		ID:            result.ID,
+		Status:        RunStatus(result.Status),
+		Result:        result.Result,
+		Steps:         result.Steps,
+		Usage:         usageInfo(result.Usage),
+		Err:           result.Err,
+		Code:          Code(result.Code),
+		LastRequestAt: result.LastRequestAt,
 	}
 	if rr.ID == "" {
 		rr.ID = run.id
@@ -1198,9 +1209,11 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 	var usage *store.Usage
 	if result.Usage != nil {
 		usage = &store.Usage{
-			InputTokens:  result.Usage.InputTokens,
-			OutputTokens: result.Usage.OutputTokens,
-			TotalTokens:  result.Usage.TotalTokens,
+			InputTokens:      result.Usage.InputTokens,
+			OutputTokens:     result.Usage.OutputTokens,
+			TotalTokens:      result.Usage.TotalTokens,
+			CachedTokens:     result.Usage.CachedTokens,
+			CacheWriteTokens: result.Usage.CacheWriteTokens,
 		}
 	}
 	a.persist(store.Record{
@@ -1215,7 +1228,24 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 	if rr.Status == StatusError {
 		err = newError(rr.Err, false, nil)
 	}
+	// Release the slot before publishing the result. Wait wakes on finish, so a
+	// caller that waits and immediately sends again would otherwise race this
+	// goroutine's deferred cleanup and be told a run is already in progress.
+	// The defer clears it again, which is harmless: activeRun is already nil.
+	a.clearRunState(run)
 	run.finish(rr, err)
+}
+
+// clearRunState releases an agent's run slot. The deferred call is the normal
+// path; executeRun also calls it before finishing a Run so the state is true
+// by the time a waiter observes the result.
+func (a *Agent) clearRunState(run *Run) {
+	a.mu.Lock()
+	a.running = false
+	if a.activeRun == run {
+		a.activeRun = nil
+	}
+	a.mu.Unlock()
 }
 
 func (a *Agent) persistMessage(runID string, m llm.Message) {
@@ -1367,6 +1397,14 @@ func normalizeOptions(opts Options) (Options, string, error) {
 	}
 	if opts.Context.KeepRecent < 2 {
 		opts.Context.KeepRecent = 8
+	}
+	// Prompt caching is on by default for Anthropic: it costs no extra input
+	// (a cache read is cheaper, a write is the same tokens) and it is what the
+	// client's countdown reads. An OpenAI-compatible endpoint caches on its own
+	// and ignores the flag, so turning it on there changes nothing.
+	if opts.Context.PromptCache == nil {
+		on := opts.Provider == ProviderAnthropic
+		opts.Context.PromptCache = &on
 	}
 	return opts, abs, nil
 }

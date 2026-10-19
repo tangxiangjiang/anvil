@@ -13,11 +13,20 @@ import (
 	"strings"
 )
 
+// openAIStreamOptions asks for the final usage chunk. Without it a conforming
+// server sends no usage at all in a streamed response, so every streamed run
+// would report zero tokens. The field is optional in the protocol: a compatible
+// server that does not know it ignores it and keeps streaming.
+type openAIStreamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
+}
+
 type openAIStreamRequest struct {
-	Model    string          `json:"model"`
-	Messages []openAIMessage `json:"messages"`
-	Tools    []openAITool    `json:"tools,omitempty"`
-	Stream   bool            `json:"stream"`
+	Model         string               `json:"model"`
+	Messages      []openAIMessage      `json:"messages"`
+	Tools         []openAITool         `json:"tools,omitempty"`
+	Stream        bool                 `json:"stream"`
+	StreamOptions *openAIStreamOptions `json:"stream_options,omitempty"`
 }
 
 // CompleteStream implements StreamCompleter for OpenAI-compatible SSE.
@@ -29,10 +38,11 @@ func (c *OpenAI) CompleteStream(ctx context.Context, req Request, onDelta func(D
 		onDelta = func(Delta) {}
 	}
 	body := openAIStreamRequest{
-		Model:    firstNonEmpty(req.Model, c.cfg.Model),
-		Messages: toOpenAIMessages(req.Messages),
-		Tools:    toOpenAITools(req.Tools),
-		Stream:   true,
+		Model:         firstNonEmpty(req.Model, c.cfg.Model),
+		Messages:      toOpenAIMessages(req.Messages),
+		Tools:         toOpenAITools(req.Tools),
+		Stream:        true,
+		StreamOptions: &openAIStreamOptions{IncludeUsage: true},
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {
@@ -100,11 +110,7 @@ func (c *OpenAI) CompleteStream(ctx context.Context, req Request, onDelta func(D
 					} `json:"tool_calls"`
 				} `json:"delta"`
 			} `json:"choices"`
-			Usage *struct {
-				PromptTokens     int `json:"prompt_tokens"`
-				CompletionTokens int `json:"completion_tokens"`
-				TotalTokens      int `json:"total_tokens"`
-			} `json:"usage"`
+			Usage *openAIUsageWire `json:"usage"`
 			Error *struct {
 				Message string `json:"message"`
 			} `json:"error"`
@@ -116,11 +122,7 @@ func (c *OpenAI) CompleteStream(ctx context.Context, req Request, onDelta func(D
 			return nil, &HTTPError{Status: httpResp.StatusCode, Message: chunk.Error.Message, Retryable: false}
 		}
 		if chunk.Usage != nil {
-			usage = &Usage{
-				InputTokens:  chunk.Usage.PromptTokens,
-				OutputTokens: chunk.Usage.CompletionTokens,
-				TotalTokens:  chunk.Usage.TotalTokens,
-			}
+			usage = chunk.Usage.usage()
 		}
 		if len(chunk.Choices) == 0 {
 			continue

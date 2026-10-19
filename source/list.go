@@ -140,9 +140,11 @@ func loadInfo(st store.Backend, agentID string) (AgentInfo, error) {
 	}
 	if sum.Usage != nil {
 		info.Usage = &Usage{
-			InputTokens:  sum.Usage.InputTokens,
-			OutputTokens: sum.Usage.OutputTokens,
-			TotalTokens:  sum.Usage.TotalTokens,
+			InputTokens:      sum.Usage.InputTokens,
+			OutputTokens:     sum.Usage.OutputTokens,
+			TotalTokens:      sum.Usage.TotalTokens,
+			CachedTokens:     sum.Usage.CachedTokens,
+			CacheWriteTokens: sum.Usage.CacheWriteTokens,
 		}
 	}
 	return info, nil

@@ -162,9 +162,11 @@ func transcriptFromRecords(recs []store.Record, limit int) TranscriptResult {
 			}
 			if rec.Usage != nil {
 				entry.Usage = &Usage{
-					InputTokens:  rec.Usage.InputTokens,
-					OutputTokens: rec.Usage.OutputTokens,
-					TotalTokens:  rec.Usage.TotalTokens,
+					InputTokens:      rec.Usage.InputTokens,
+					OutputTokens:     rec.Usage.OutputTokens,
+					TotalTokens:      rec.Usage.TotalTokens,
+					CachedTokens:     rec.Usage.CachedTokens,
+					CacheWriteTokens: rec.Usage.CacheWriteTokens,
 				}
 			}
 			entries = append(entries, entry)

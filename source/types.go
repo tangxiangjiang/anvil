@@ -3,7 +3,10 @@
 
 package anvil
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"time"
+)
 
 // RunStatus is the terminal status of a Run.
 type RunStatus string
@@ -69,6 +72,14 @@ type Usage struct {
 	InputTokens  int
 	OutputTokens int
 	TotalTokens  int
+	// CachedTokens is how many input tokens were served from a prompt cache
+	// (0.43+). Zero means "the provider did not say": an endpoint or gateway
+	// that does not report caching leaves it zero, which is not the same fact
+	// as a cache miss.
+	CachedTokens int
+	// CacheWriteTokens is how many input tokens were written into a cache
+	// (Anthropic only, 0.43+).
+	CacheWriteTokens int
 }
 
 // Code is a stable machine-readable run failure class (0.7+).
@@ -92,6 +103,11 @@ type RunResult struct {
 	Usage  *Usage
 	Err    string
 	Code   Code // set on error/cancelled when classifiable (0.7+)
+	// LastRequestAt is when the run's most recent model request completed
+	// (0.43+). Zero when the run never reached the provider. A client uses it
+	// with a TTL it knows to draw a cache countdown; the SDK does not know any
+	// provider's TTL.
+	LastRequestAt time.Time
 }
 
 // Event is one streamed unit from a Run.
@@ -123,4 +139,8 @@ type Event struct {
 	// Compact is what a history compaction folded away, set on EventCompact
 	// (0.43+) and nil on every other event.
 	Compact *CompactInfo
+	// LastRequestAt is when the most recent model request completed, set on the
+	// terminal event (done or error) (0.43+). Zero when the run never reached
+	// the provider.
+	LastRequestAt time.Time
 }
