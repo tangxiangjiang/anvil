@@ -698,13 +698,58 @@ func (s *Server) handleDelivery(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 			}
+			// 提交测试: stop active jobs first so testing does not race a live phase job.
+			if submit {
+				_ = s.softStopMilestoneJobs(id, delivery.RunStopped)
+			}
+
+			// Start: persist worker, preflight job, then commit Execute; roll back on enqueue failure.
+			if exec {
+				prev, err := s.delivery.GetMilestone(id)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				if body.ExecuteWorkerID != nil || body.X != nil || body.Y != nil || body.TestNote != nil {
+					if _, err := s.delivery.PatchMilestone(id, delivery.PatchMilestoneInput{
+						X:               body.X,
+						Y:               body.Y,
+						ExecuteWorkerID: body.ExecuteWorkerID,
+						TestNote:        body.TestNote,
+					}); err != nil {
+						http.Error(w, err.Error(), http.StatusBadRequest)
+						return
+					}
+				}
+				if _, err := s.preflightMilestonePhaseJob(id, body.ForceStub); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				m, err := s.delivery.PatchMilestone(id, delivery.PatchMilestoneInput{Execute: true})
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				if _, err := s.startMilestonePhaseJob(id, body.ForceStub); err != nil {
+					_ = s.delivery.RestoreMilestoneRun(id, prev.Status, prev.RunState)
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				m, err = s.delivery.GetMilestone(id)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				writeJSON(w, http.StatusOK, m)
+				return
+			}
+
 			m, err := s.delivery.PatchMilestone(id, delivery.PatchMilestoneInput{
 				X:               body.X,
 				Y:               body.Y,
 				ExecuteWorkerID: body.ExecuteWorkerID,
 				RunState:        body.RunState,
 				TestNote:        body.TestNote,
-				Execute:         exec,
 				SubmitTest:      submit,
 				PassTest:        pass,
 				FailTest:        fail,
@@ -716,17 +761,6 @@ func (s *Server) handleDelivery(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
-			}
-			if exec {
-				if _, err := s.startMilestonePhaseJob(id, body.ForceStub); err != nil {
-					http.Error(w, err.Error(), http.StatusBadRequest)
-					return
-				}
-				m, err = s.delivery.GetMilestone(id)
-				if err != nil {
-					http.Error(w, err.Error(), http.StatusBadRequest)
-					return
-				}
 			}
 			writeJSON(w, http.StatusOK, m)
 			return

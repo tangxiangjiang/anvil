@@ -302,11 +302,11 @@ window.api = {
     deliveryCreatePolish(body) {
       return api.req("POST", "/api/v1/delivery/polishes", body || {});
     },
-    deliveryRunPolish(id) {
+    deliveryRunPolish(id, body) {
       return api.req(
         "POST",
         "/api/v1/delivery/polishes/" + encodeURIComponent(id) + "/run",
-        {},
+        body || {},
       );
     },
     deliveryCreateBuglist(body) {
@@ -318,11 +318,11 @@ window.api = {
     deliveryRunTestCases(body) {
       return api.req("POST", "/api/v1/delivery/test-cases/run", body || {});
     },
-    deliveryFixBuglist(id) {
+    deliveryFixBuglist(id, body) {
       return api.req(
         "POST",
         "/api/v1/delivery/buglist/" + encodeURIComponent(id) + "/fix",
-        {},
+        body || {},
       );
     },
     deliveryRegressBuglist(body) {

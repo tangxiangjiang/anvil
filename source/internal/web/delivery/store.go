@@ -2992,6 +2992,30 @@ func (s *Store) GetMilestone(id string) (Milestone, error) {
 	return s.getMilestone(id)
 }
 
+// RestoreMilestoneRun restores status + run_state after a failed Execute start (and eng lifecycle).
+func (s *Store) RestoreMilestoneRun(id, status, runState string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("milestone id required")
+	}
+	rs := strings.TrimSpace(strings.ToLower(runState))
+	if rs == "" {
+		rs = RunIdle
+	}
+	norm, err := normalizeRunState(rs)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`UPDATE delivery_milestones SET status=?, run_state=? WHERE id=?`, status, norm, id)
+	if err != nil {
+		return err
+	}
+	if bind := parseMilestoneBind(id); bind != nil && status != "" {
+		_ = s.SetMilestoneLifecycle(bind.EngID, bind.Major, bind.Minor, status)
+	}
+	return nil
+}
+
 func (s *Store) getMilestone(id string) (Milestone, error) {
 	var m Milestone
 	err := s.db.QueryRow(`

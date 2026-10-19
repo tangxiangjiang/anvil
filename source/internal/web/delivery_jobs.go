@@ -197,6 +197,41 @@ func (s *Server) ensureJobHub() *jobHub {
 	return s.jobHub
 }
 
+// preflightMilestonePhaseJob validates Start can enqueue without mutating run_state.
+func (s *Server) preflightMilestonePhaseJob(msID string, forceStub bool) (delivery.Phase, error) {
+	if s.delivery == nil {
+		return delivery.Phase{}, fmt.Errorf("delivery store not configured")
+	}
+	ms, err := s.delivery.GetMilestone(msID)
+	if err != nil {
+		return delivery.Phase{}, err
+	}
+	workerID := strings.TrimSpace(ms.ExecuteWorkerID)
+	if workerID == "" {
+		return delivery.Phase{}, fmt.Errorf("execute_worker_id required")
+	}
+	if len(ms.Phases) == 0 {
+		return delivery.Phase{}, fmt.Errorf("milestone has no phases; Bootstrap from Designs first")
+	}
+	ph, err := s.delivery.NextRunnablePhase(msID)
+	if err != nil {
+		return delivery.Phase{}, err
+	}
+	if ph.JobStatus == delivery.JobRunning || ph.JobStatus == delivery.JobQueued {
+		return ph, nil
+	}
+	if err := s.delivery.AssertPhaseGateReady(msID, ph.ID); err != nil {
+		return delivery.Phase{}, err
+	}
+	if _, err := s.resolveWorkerTarget(workerID); err != nil {
+		allowLocal := forceStub || s.jobs != nil || len(s.cfg.Fleets) == 0
+		if !allowLocal {
+			return delivery.Phase{}, err
+		}
+	}
+	return ph, nil
+}
+
 // startMilestonePhaseJob enqueues the next runnable phase job asynchronously.
 func (s *Server) startMilestonePhaseJob(msID string, forceStub bool) (delivery.Phase, error) {
 	if s.delivery == nil {
@@ -223,11 +258,12 @@ func (s *Server) startMilestonePhaseJob(msID string, forceStub bool) (delivery.P
 	target, resolveErr := s.resolveWorkerTarget(workerID)
 	localStub := false
 	if resolveErr != nil {
-		if s.jobs == nil && !forceStub {
+		// Match campaign: allow local stub when forced, injected runner, or no fleets.
+		allowLocal := forceStub || s.jobs != nil || len(s.cfg.Fleets) == 0
+		if !allowLocal {
 			return delivery.Phase{}, resolveErr
 		}
-		// Injected runner (tests) or force_stub without inventory.
-		localStub = s.jobs == nil && forceStub
+		localStub = s.jobs == nil
 		target = WorkerTarget{RepoID: workerID, NodeID: ""}
 	}
 	prompt, err := s.delivery.BuildPhasePrompt(msID, ph.ID)
