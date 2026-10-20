@@ -395,27 +395,33 @@ Object.assign(window.Features.delivery, {
     const chat = this.polishChat(key, {
       id: key,
       title: "AI assist",
-      emptyHint: "Describe what to polish; mock AI appends a draft into the note.",
+      emptyHint: "Describe what to polish; the assistant proposes a draft note.",
       tall: false,
       rows: 2,
       allowDrop: false,
-      onSend: async ({ composed }, c) => {
-        const suggestion =
-          "(mock polish) Clarify acceptance: " +
-          String(composed || "").trim().slice(0, 280);
-        c.appendMessage("ai", suggestion);
+      // Real drafting (0.46.6): propose, then write into the note the operator is
+      // editing. Nothing reaches the store until they save the polish, which is the
+      // same propose-then-accept rule the record-editing surfaces follow.
+      onSend: async ({ composed, cites }, c) => {
         const modal = this.uiModal();
         const bodyEl = modal?.querySelector("#pol-body");
-        const titleEl = modal?.querySelector("#pol-title");
-        if (bodyEl) {
-          const cur = bodyEl.value.trim();
-          bodyEl.value = cur ? cur + "\n" + suggestion : suggestion;
-        }
-        if (titleEl && !titleEl.value.trim()) {
-          titleEl.value = "Polish " + (msTitle || `${major}.${minor}`);
-        }
-      },
-    });
+        await window.AnvilUI.assist.ask({
+          surface: "roadmap_polish",
+          field: "body",
+          instruction: composed,
+          cites,
+          current: { body: (bodyEl?.value || "").trim() },
+          host: modal?.querySelector("#pol-assist"),
+          chat: c,
+          onApply: async (_field, value) => {
+            if (bodyEl) bodyEl.value = value;
+            const titleEl = modal?.querySelector("#pol-title");
+            if (titleEl && !titleEl.value.trim()) {
+              titleEl.value = "Polish " + (msTitle || `${major}.${minor}`);
+            }
+          },
+        });
+      },    });
     this.showUiModal(`
       <div class="modal-card del-polish-modal">
         <h3 style="margin-top:0">Polish · ${this.esc(msTitle || `${major}.${minor}`)}</h3>
@@ -424,6 +430,7 @@ Object.assign(window.Features.delivery, {
         <input id="pol-title" placeholder="Short polish title" value="Polish ${this.esc(msTitle || `${major}.${minor}`)}" />
         <label>Polish note</label>
         <textarea id="pol-body" rows="5" placeholder="What to polish in requirements…"></textarea>
+        <div id="pol-assist" class="assist-host"></div>
         <div id="pol-chat-host" class="del-polish-chat">${chat.render()}</div>
         <div class="err" id="pol-err"></div>
         <div class="toolbar" style="margin-top:1rem;justify-content:flex-end">

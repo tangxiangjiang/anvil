@@ -1130,16 +1130,26 @@ Created by Anvil.
         placeholder: "How should the README describe this project?",
         rows: 2,
         tall: false,
-        sendLabel: "Polish README (mock)",
-        emptyHint: "Ask to polish the README for this new project.",
-        onSend: async ({ composed }, ch) => {
+        emptyHint: "Ask for a README for this new project.",
+        // Real drafting: the proposal fills the README field, and Create is still
+        // what writes it. Nothing here persists anything.
+        onSend: async ({ composed, cites }, ch) => {
           const ta = modal.querySelector("#c-readme");
-          const line = "\n\n## Notes\n\n" + composed.slice(0, 400);
-          ta.value = (ta.value || "").trim() + line;
-          ch.appendMessage("ai", "(mock) Appended notes to README. Review before Create.");
-        },
-      });
-      modal.querySelector("#c-ai-slot").innerHTML = chat.render();
+          await window.AnvilUI.assist.ask({
+            surface: "project_readme",
+            field: "readme",
+            instruction: composed,
+            cites,
+            current: { readme: (ta?.value || "").trim() },
+            host: modal.querySelector("#c-readme-assist"),
+            chat: ch,
+            onApply: async (_field, value) => {
+              if (ta) ta.value = value;
+            },
+          });
+        },      });
+      modal.querySelector("#c-ai-slot").innerHTML =
+        chat.render() + `<div id="c-readme-assist" class="assist-host"></div>`;
       chat.mount(modal);
     }
     syncMode();

@@ -523,21 +523,29 @@ Object.assign(window.Features.delivery, {
       tall: false,
       rows: 2,
       allowDrop: false,
-      onSend: async ({ composed }, c) => {
-        const hint = String(composed || "").trim().slice(0, 200);
-        const suggestion =
-          `Case: ${hint || "Acceptance check"}\n` +
-          `Given acceptance for ${msTitle || `${major}.${minor}`}` +
-          (acceptance ? ` — ${acceptance.slice(0, 120)}` : "") +
-          `\nWhen exercised\nThen expect pass criteria.`;
-        c.appendMessage("ai", suggestion);
-      },
-    });
+      // Real drafting: the proposals become the case text, and "Save cases" is
+      // still what puts them in the store. One scenario per proposal is the shape
+      // the paste path also uses, so both produce the same record.
+      onSend: async ({ composed, cites }, c) => {
+        const modal = this.uiModal();
+        await window.AnvilUI.assist.ask({
+          surface: "test_case",
+          field: "body",
+          instruction:
+            (composed || "") +
+            (acceptance ? "\n\nAcceptance the case must cover:\n" + acceptance.slice(0, 1200) : ""),
+          cites,
+          current: {},
+          host: modal?.querySelector("#tc-assist"),
+          chat: c,
+        });
+      },    });
     this.showUiModal(`
       <div class="modal-card modal-wide del-cases-modal">
         <h3>Draft cases · ${this.esc(msTitle || `${major}.${minor}`)}</h3>
         <p class="muted del-cases-lead">Use the chat below. Each AI reply becomes one case (or split a reply with <code>---</code>).</p>
         <div id="tc-chat-host" class="del-cases-chat">${chat.render()}</div>
+        <div id="tc-assist" class="assist-host"></div>
         <div class="err" id="tc-err"></div>
         <div class="toolbar del-cases-footer">
           <button type="button" class="ghost" data-close-ui>Cancel</button>

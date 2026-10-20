@@ -60,7 +60,6 @@
     "label",
     "label",
     "label",
-    "titleEl?.value ? ` “${titleEl.value}”` : \"\"",
     "chat.render()",
     "preview.milestone_count",
     "preview.version_count",
@@ -355,9 +354,6 @@
     "bugRows",
     "msId",
     "engId",
-    "hint || \"Acceptance check\"",
-    "msTitle || `${major}.${minor}`",
-    "acceptance.slice(0, 120)",
     "chat.render()",
     "i + 1"
   ],
@@ -384,7 +380,6 @@
     "versionsBody",
     "form",
     "chat.render()",
-    "c.title ? ` “${c.title}”` : \"\"",
     "maj",
     "e.is_dir ? \"📁\" : \"📄\""
   ],

@@ -52,17 +52,28 @@ Object.assign(window.Features.delivery, {
           window.AiChat.flash(field);
         }
       },
-      onSend: async ({ composed }, ch) => {
+      // Real drafting: the proposals land in the Title / Summary fields the operator
+      // is already editing. The modal's own Save is still what persists them, so a
+      // suggestion is an edit suggestion and never a write.
+      onSend: async ({ composed, cites }, ch) => {
         const modal = this.uiModal();
-        const reply = this.applyMajorChatAssist(
-          composed,
-          modal?.querySelector("#del-edit-maj-title"),
-          modal?.querySelector("#del-edit-maj-sum"),
-          { forceTitle: true },
-        );
-        ch.appendMessage("ai", reply);
-      },
-    });
+        await window.AnvilUI.assist.ask({
+          surface: "major",
+          instruction: composed,
+          cites,
+          current: {
+            title: (modal?.querySelector("#del-edit-maj-title")?.value || "").trim(),
+            summary: (modal?.querySelector("#del-edit-maj-sum")?.value || "").trim(),
+          },
+          host: modal?.querySelector("#maj-assist"),
+          chat: ch,
+          onApply: async (field, value) => {
+            const sel = field === "title" ? "#del-edit-maj-title" : "#del-edit-maj-sum";
+            const el = modal?.querySelector(sel);
+            if (el) el.value = value;
+          },
+        });
+      },    });
     this.showUiModal(`
       <div class="modal-card modal-chat del-maj-assist-modal">
         <div class="toolbar del-maj-assist-head">
@@ -74,6 +85,7 @@ Object.assign(window.Features.delivery, {
             <input id="del-edit-maj-title" value="${this.esc(m.title || "")}" data-cite-key="Title"
               placeholder="Short name for this generation" />
             <label>Summary</label>
+            <div id="maj-assist" class="assist-host"></div>
             <textarea id="del-edit-maj-sum" rows="8" data-cite-key="Summary"
               placeholder="What this generation covers, goals, and boundaries">${this.esc(m.summary || "")}</textarea>
             <div class="err" id="del-edit-maj-err"></div>
@@ -175,24 +187,6 @@ Object.assign(window.Features.delivery, {
     this.uiModal().querySelector("#del-adv-maj-ok").onclick = advance;
   },
 
-  applyMajorChatAssist(msg, titleEl, sumEl, opts = {}) {
-    const text = (msg || "").trim();
-    if (!text) return "Describe what this generation should cover.";
-    const short =
-      text.length > 56 ? text.slice(0, 53).replace(/\s+\S*$/, "") + "…" : text;
-    const cleaned = short.replace(/^["']|["']$/g, "");
-    if (titleEl && (opts.forceTitle || !(titleEl.value || "").trim())) {
-      titleEl.value = cleaned;
-    }
-    if (sumEl) {
-      const line = "· " + text;
-      sumEl.value = (sumEl.value || "").trim()
-        ? sumEl.value.trim() + "\n" + line
-        : "This generation covers:\n" + line;
-    }
-    return `Applied to Title${titleEl?.value ? ` “${titleEl.value}”` : ""} and Summary. Review, then save.`;
-  },
-
   openAddMajorModal() {
     const next =
       (this.data.majors || []).reduce((a, m) => Math.max(a, m.major), -1) + 1;
@@ -224,16 +218,28 @@ Object.assign(window.Features.delivery, {
           window.AiChat.flash(field);
         }
       },
-      onSend: async ({ composed }, ch) => {
+      // Real drafting: the proposals land in the Title / Summary fields the operator
+      // is already editing. The modal's own Save is still what persists them, so a
+      // suggestion is an edit suggestion and never a write.
+      onSend: async ({ composed, cites }, ch) => {
         const modal = this.uiModal();
-        const reply = this.applyMajorChatAssist(
-          composed,
-          modal?.querySelector("#del-add-maj-title"),
-          modal?.querySelector("#del-add-maj-sum"),
-        );
-        ch.appendMessage("ai", reply);
-      },
-    });
+        await window.AnvilUI.assist.ask({
+          surface: "major",
+          instruction: composed,
+          cites,
+          current: {
+            title: (modal?.querySelector("#del-add-maj-title")?.value || "").trim(),
+            summary: (modal?.querySelector("#del-add-maj-sum")?.value || "").trim(),
+          },
+          host: modal?.querySelector("#maj-assist"),
+          chat: ch,
+          onApply: async (field, value) => {
+            const sel = field === "title" ? "#del-add-maj-title" : "#del-add-maj-sum";
+            const el = modal?.querySelector(sel);
+            if (el) el.value = value;
+          },
+        });
+      },    });
     this.showUiModal(`
       <div class="modal-card modal-chat del-maj-assist-modal">
         <div class="toolbar del-maj-assist-head">
@@ -246,6 +252,7 @@ Object.assign(window.Features.delivery, {
             <input id="del-add-maj-title" value="" data-cite-key="Title"
               placeholder="Short name for this generation (e.g. first stable release)" />
             <label>Summary</label>
+            <div id="maj-assist" class="assist-host"></div>
             <textarea id="del-add-maj-sum" rows="8" data-cite-key="Summary"
               placeholder="What this generation covers, goals, and boundaries"></textarea>
             <div class="err" id="del-add-maj-err"></div>

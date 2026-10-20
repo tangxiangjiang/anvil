@@ -78,6 +78,27 @@ var assistSurfaces = map[string]struct {
 			{Name: "class_design", Label: "Class design", Hint: "The types and responsibilities this version introduces."},
 		},
 	},
+	"project_readme": {
+		Label: "Project README",
+		Fields: []AssistField{
+			{Name: "readme", Label: "README", Hint: "The whole README in markdown: what the project is, how to build and run it, and the conventions a newcomer needs."},
+		},
+	},
+	"major": {
+		Label: "Generation",
+		Fields: []AssistField{
+			{Name: "title", Label: "Title", Hint: "A short name for this generation, a few words at most."},
+			{Name: "summary", Label: "Summary", Hint: "What this generation covers and what it is for."},
+		},
+	},
+	"milestone": {
+		Label: "Milestone",
+		Fields: []AssistField{
+			{Name: "title", Label: "Milestone title", Hint: "What this milestone delivers, in a few words."},
+			{Name: "goals", Label: "Goals", Hint: "What the milestone achieves, as outcomes."},
+			{Name: "completion", Label: "Completion criteria", Hint: "What done means, testably. This is what the agent is told."},
+		},
+	},
 	"roadmap_polish": {
 		Label: "Polish note",
 		Fields: []AssistField{

@@ -70,7 +70,7 @@ window.AiChat = {
       allowDrop: opts.allowDrop !== false,
       showLog: opts.showLog !== false,
       citeNav: Array.isArray(opts.citeNav) ? opts.citeNav : [],
-      sendLabel: opts.sendLabel || "Send (mock)",
+      sendLabel: opts.sendLabel || "Send",
       onSend: typeof opts.onSend === "function" ? opts.onSend : async () => {},
       onCiteNav: typeof opts.onCiteNav === "function" ? opts.onCiteNav : () => {},
       onScrollCite: typeof opts.onScrollCite === "function" ? opts.onScrollCite : () => {},

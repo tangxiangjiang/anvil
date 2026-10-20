@@ -412,54 +412,39 @@ Object.assign(window.Features.delivery, {
         if (navId === "detail") this.openCiteDetailPicker(ch);
         else if (navId === "version") this.openCiteCreateVersionPicker(c, ch);
       },
-      onSend: async ({ composed }, ch) => {
+      // Real drafting for the create wizard: proposals fill the config fields, and
+      // the wizard's own submit is what creates the milestone. A proposal for a
+      // field the surface does not own is refused server-side.
+      onSend: async ({ composed, cites }, ch) => {
         const modal = this.el?.querySelector("#del-create-modal");
         this.captureMilestoneConfig(modal, c);
-        const reply = this.applyMilestoneChatAssist(c, composed);
-        ch.appendMessage("ai", reply);
-        this.renderCreateWizard();
-      },
-    });
+        await window.AnvilUI.assist.ask({
+          surface: "milestone",
+          instruction: composed,
+          cites,
+          current: {
+            title: (c.title || "").trim(),
+            goals: (c.goals || "").trim(),
+            completion: (c.completion || "").trim(),
+          },
+          host: modal?.querySelector("#ms-config-assist"),
+          chat: ch,
+          onApply: async (field, value) => {
+            if (field === "title") c.title = value;
+            else if (field === "goals") c.goals = value;
+            else if (field === "completion") c.completion = value;
+            this.renderCreateWizard();
+          },
+        });
+      },    });
     return `
       <div class="del-ms-config-split">
         <div class="del-ms-config-main">${form}</div>
-        ${chat.render()}
+        <div>
+          ${chat.render()}
+          <div id="ms-config-assist" class="assist-host"></div>
+        </div>
       </div>`;
-  },
-
-  /** Mock AI: turn a free-text brief into milestone field patches. */
-  applyMilestoneChatAssist(c, msg) {
-    const text = (msg || "").trim();
-    if (!text) return "Say what this milestone should deliver.";
-    const short =
-      text.length > 72 ? text.slice(0, 69).replace(/\s+\S*$/, "") + "…" : text;
-    if (!(c.title || "").trim()) {
-      c.title = short.replace(/^["']|["']$/g, "");
-    }
-    const goalLine = "· " + text;
-    c.goals = (c.goals || "").trim()
-      ? c.goals.trim() + "\n" + goalLine
-      : "Ship:\n" + goalLine;
-    if (!c.versions) c.versions = [];
-    const parts = text
-      .split(/[,;，；]|\band\b|\bwith\b|\bplus\b/i)
-      .map((s) => s.trim())
-      .filter((s) => s.length >= 3)
-      .slice(0, 4);
-    const seeds = parts.length ? parts : [text.slice(0, 80)];
-    for (const s of seeds) {
-      const title = s.length > 48 ? s.slice(0, 45) + "…" : s;
-      if (c.versions.some((v) => (v.title || "").toLowerCase() === title.toLowerCase())) {
-        continue;
-      }
-      c.versions.push({ title, delivery: s });
-    }
-    const crit = "· " + text.slice(0, 160) + (text.length > 160 ? "…" : "");
-    c.completion = (c.completion || "").trim()
-      ? c.completion.trim() + "\n" + crit
-      : "Capabilities that must work:\n" + crit;
-    const n = seeds.length;
-    return `Applied to this milestone: title${c.title ? ` “${c.title}”` : ""}, goals, ${n} version row(s), completion criteria. Edit the form, then Create.`;
   },
 
   captureMilestoneConfig(root, c) {
