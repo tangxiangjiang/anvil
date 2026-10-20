@@ -46,7 +46,7 @@ Versioned delivery for Anvil through product **0.40**, plus the **0.46** anvil-w
 | 0.38 | Session identity & transcript replay | done | [m_0.38_session_identity.md](m_0.38_session_identity.md) | [38](../../design/v1.0/38-session-identity-and-replay.md) |
 | 0.39 | Execute + Test campaign loop | done | [m_0.39_execute.md](m_0.39_execute.md) | [33](../../design/v1.0/33-delivery-ui.md) + vision §2 / §4.4 |
 | 0.40 | Editor alignment (Claude-class VS Code client) | done | [m_0.40_editor_alignment.md](m_0.40_editor_alignment.md) | [39](../../design/v1.0/39-editor-alignment.md) |
-| 0.46 | anvil-web Delivery polish | done | [m_0.46_web_polish.md](m_0.46_web_polish.md) | [33](../../design/v1.0/33-delivery-ui.md) / [25](../../design/v1.0/25-web-admin.md) |
+| 0.46 | anvil-web Delivery polish + operable console | in_progress | [m_0.46_web_polish.md](m_0.46_web_polish.md) | [33](../../design/v1.0/33-delivery-ui.md) / [25](../../design/v1.0/25-web-admin.md) |
 
 ## Naming
 
