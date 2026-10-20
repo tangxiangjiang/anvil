@@ -210,6 +210,12 @@ type Outbound =
   | { type: 'images'; images: string[] }
   | { type: 'vision'; enabled: boolean }
   /**
+   * The reader's text size in CSS pixels. Display only, and sent both when a
+   * document first listens and whenever the setting changes, so an open tab
+   * resizes without a reload.
+   */
+  | { type: 'fontSize'; size: number }
+  /**
    * The token meter's inputs. The window is display arithmetic only and never
    * travels to the host; `info` is the live session's own estimate, present
    * only when this host can answer `session.context`.
@@ -587,7 +593,12 @@ export class ChatPanel implements HostListener {
       enableScripts: true,
       localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, 'media')],
     };
-    panel.webview.html = renderHtml(panel.webview, this.context.extensionUri, this.focusView);
+    panel.webview.html = renderHtml(
+      panel.webview,
+      this.context.extensionUri,
+      this.focusView,
+      readSettings().fontSize,
+    );
     panel.webview.onDidReceiveMessage((msg: Inbound) => void this.onMessage(msg));
     this.active = panel.active;
     panel.onDidChangeViewState((event) => {
@@ -643,6 +654,16 @@ export class ChatPanel implements HostListener {
   /** Posts a banner line to this tab, from the window-level half. */
   notice(level: 'info' | 'warn' | 'error', message: string): void {
     this.post({ type: 'notice', level, message });
+  }
+
+  /**
+   * Applies the reader's text size to this tab, from the window-level half.
+   *
+   * A display-only setting: the document changes its base size and nothing
+   * else, so the session, the run in flight and the transcript are untouched.
+   */
+  setFontSize(size: number): void {
+    this.post({ type: 'fontSize', size });
   }
 
   /**
@@ -751,6 +772,10 @@ export class ChatPanel implements HostListener {
       this.post({ type: 'trust', trusted: vscode.workspace.isTrusted });
       this.post({ type: 'vision', enabled: readSettings().session.vision === true });
       this.reportContext();
+      // The size is already on the body as a data attribute, so this is the
+      // announcement that covers a setting changed while the document was
+      // hidden or being rebuilt.
+      this.post({ type: 'fontSize', size: readSettings().fontSize });
       this.postAgentId();
       this.postRoot();
       this.postMode();
@@ -2741,7 +2766,7 @@ export class ChatPanel implements HostListener {
 }
 
 /** Builds the webview document. Nothing here is fetched at runtime. */
-function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri, focus = false): string {
+function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri, focus = false, fontSize = 15): string {
   const nonce = makeNonce();
   const asset = (name: string): vscode.Uri =>
     webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', name));
@@ -2755,7 +2780,7 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri, focus = f
 <link rel="stylesheet" href="${asset('chat.css')}">
 <title>Anvil</title>
 </head>
-<body${focus ? ' class="focus-view"' : ''}>
+<body${focus ? ' class="focus-view"' : ''} data-font-size="${fontSize}">
   <!--
     The two announcements a turn needs beyond the transcript itself. They are
     visually hidden and empty until something is said, and they exist because

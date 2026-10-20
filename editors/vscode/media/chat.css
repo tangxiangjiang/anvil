@@ -22,6 +22,13 @@
    * length even if the script never gets to run.
    */
   --anvil-composer-h: 120px;
+  /*
+   * The reader's text size. chat.js overwrites it from `anvil.chatFontSize`;
+   * until it does, the editor's own UI font is the value every other webview
+   * uses, so the first paint is already the right size on a client that has
+   * not received the message.
+   */
+  --anvil-font-size: var(--vscode-font-size, 13px);
 }
 
 * {
@@ -59,7 +66,11 @@ body {
   display: flex;
   flex-direction: column;
   font-family: var(--vscode-font-family);
-  font-size: var(--vscode-font-size, 13px);
+  /*
+   * The reader's size, from the variable above. Declared in `:root` so the
+   * fallback is the editor's own UI font even before the script runs.
+   */
+  font-size: var(--anvil-font-size);
   line-height: var(--ui-line);
   color: var(--vscode-foreground);
   /*
@@ -183,8 +194,8 @@ body {
 .msg {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  margin-block: 4px;
+  gap: 8px;
+  margin-block: 8px;
 }
 
 /*
@@ -408,7 +419,10 @@ button.ghost[aria-pressed='true'] {
   font-size: 0.85em;
   color: var(--ui-muted);
   list-style: none;
-  padding: 2px 4px;
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  padding: 6px 6px;
   border-radius: var(--ui-radius-sm);
   line-height: var(--ui-line-tight);
 }
@@ -421,19 +435,30 @@ button.ghost[aria-pressed='true'] {
   display: none;
 }
 
+/* The dot the tool rows use, at the same size and in the same place, so work
+ * and reasoning start on one vertical line. */
 .msg .think > summary::before {
-  content: '\25B8';
-  margin-right: 6px;
-  opacity: 0.45;
+  --dot: var(--ui-muted);
+  content: '';
+  flex: 0 0 auto;
+  align-self: center;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--dot);
+  opacity: 0.55;
 }
 
 .msg .think[open] > summary::before {
-  content: '\25BE';
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--dot);
 }
 
 .msg .think .body {
-  margin-top: 2px;
-  padding: 2px 0 2px 10px;
+  margin-top: 4px;
+  /* The summary's left padding, dot and gap: reasoning starts under its own
+   * line rather than under the dot. */
+  padding: 4px 0 4px 22px;
   border-left: 1px solid var(--ui-hairline);
   font-size: 0.9em;
   color: var(--ui-muted);
@@ -456,9 +481,9 @@ button.ghost[aria-pressed='true'] {
 
 .tool > summary {
   cursor: pointer;
-  padding: 3px 4px;
+  padding: 6px 6px;
   display: flex;
-  gap: 8px;
+  gap: 10px;
   align-items: baseline;
   font-family: var(--ui-mono);
   font-size: 0.9em;
@@ -475,13 +500,44 @@ button.ghost[aria-pressed='true'] {
   display: none;
 }
 
+/*
+ * The dot. It says three things at once, all of them already in the row: a call
+ * is here (a mark rather than a caret's "there is more to read"), how it ended
+ * (the state sets `--dot`), and whether its body is open (the ring). The ring
+ * doubles as the mark for a call whose result never arrived: both mean the row
+ * does not tell the whole story.
+ */
 .tool > summary::before {
-  content: '\25B8';
+  --dot: var(--vscode-foreground);
+  content: '';
+  flex: 0 0 auto;
+  align-self: center;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--dot);
+  opacity: 0.6;
+}
+
+.tool.done > summary::before {
+  --dot: var(--ui-muted);
   opacity: 0.45;
 }
 
+.tool.failed > summary::before {
+  --dot: var(--vscode-errorForeground);
+  opacity: 1;
+}
+
+.tool.stopped > summary::before {
+  --dot: var(--ui-muted);
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--dot);
+}
+
 .tool[open] > summary::before {
-  content: '\25BE';
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--dot);
 }
 
 .tool .name {
@@ -517,7 +573,9 @@ button.ghost[aria-pressed='true'] {
 }
 
 .tool .pane {
-  padding: 0 0 6px 18px;
+  /* The dot (6px) and the summary's gap (10px) plus its left padding: the
+   * output starts under the name, not under the dot. */
+  padding: 0 0 10px 22px;
 }
 
 /*
@@ -532,7 +590,7 @@ button.ghost[aria-pressed='true'] {
 }
 
 .tool .section + .section {
-  margin-top: 8px;
+  margin-top: 12px;
 }
 
 /*
@@ -704,15 +762,45 @@ button.ghost[aria-pressed='true'] {
 }
 
 .tool .edit-diff {
-  margin: 0 0 8px;
+  margin: 2px 0 10px;
 }
 
+/*
+ * The file and how much of it changed, on one line above the comparison. The
+ * counts are the reader's first question about a diff ("is this a one-line
+ * fix?"), and they cost one row rather than a second heading.
+ */
 .tool .edit-diff .path {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
   font-family: var(--ui-mono);
   color: var(--ui-muted);
   font-size: 0.85em;
+  margin-bottom: 4px;
+}
+
+.tool .edit-diff .path .file {
+  min-width: 0;
   word-break: break-all;
-  margin-bottom: 2px;
+}
+
+.tool .edit-diff .path .stat {
+  margin-left: auto;
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.tool .edit-diff .path .stat .add {
+  color: var(--vscode-gitDecoration-addedResourceForeground, #3fb950);
+}
+
+.tool .edit-diff .path .stat .del {
+  color: var(--vscode-gitDecoration-deletedResourceForeground, #f85149);
+}
+
+.tool .edit-diff .path .stat .add + .del {
+  margin-left: 6px;
 }
 
 /*
@@ -727,7 +815,7 @@ button.ghost[aria-pressed='true'] {
   overflow-x: hidden;
   font-family: var(--ui-mono);
   font-size: 0.9em;
-  line-height: 1.55;
+  line-height: 1.6;
   white-space: pre;
   background: transparent;
   padding: 0;
@@ -742,7 +830,7 @@ button.ghost[aria-pressed='true'] {
   display: flex;
   align-items: baseline;
   min-width: 0;
-  padding: 0 6px;
+  padding: 0 8px;
 }
 
 .tool .edit-diff .diff .cell.old {
@@ -751,8 +839,8 @@ button.ghost[aria-pressed='true'] {
 
 .tool .edit-diff .diff .cell .ln {
   flex: 0 0 auto;
-  min-width: 3.2em;
-  margin-right: 0.75em;
+  min-width: 3.4em;
+  margin-right: 0.8em;
   text-align: right;
   color: var(--vscode-editorLineNumber-foreground, var(--ui-muted));
   user-select: none;
@@ -818,7 +906,9 @@ body.vscode-high-contrast-light .tool > summary {
 }
 
 body.vscode-high-contrast .tool > summary::before,
-body.vscode-high-contrast-light .tool > summary::before {
+body.vscode-high-contrast-light .tool > summary::before,
+body.vscode-high-contrast .msg .think > summary::before,
+body.vscode-high-contrast-light .msg .think > summary::before {
   opacity: 1;
 }
 

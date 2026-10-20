@@ -73,6 +73,11 @@ export interface ResolvedSettings {
    * a provider that never said.
    */
   cacheTtlSeconds: number;
+  /**
+   * The chat document's base text size, in CSS pixels. Display only: it never
+   * travels to the host, and a change to it alone must not restart one.
+   */
+  fontSize: number;
 }
 
 /** Reads the workspace configuration into a session config. */
@@ -169,6 +174,13 @@ export function readSettings(): ResolvedSettings {
   // default too, and it makes no caching promise a client could count on.
   const provider = (session.provider ?? emptyToUndefined(process.env.ANVIL_PROVIDER) ?? '').toLowerCase();
   const cacheTtlSeconds = cacheTtlOf(configuredTtl, provider);
+  // Display only, so it is clamped here rather than trusted: the panel writes
+  // the number into the document, and a value outside the range the setting
+  // offers would be a document nobody could size back.
+  const fontSizeRaw = cfg.get<number>('chatFontSize', 15) ?? 15;
+  const fontSize = Number.isFinite(fontSizeRaw)
+    ? Math.min(24, Math.max(10, Math.round(fontSizeRaw)))
+    : 15;
   return {
     hostPath: (cfg.get<string>('hostPath', '') ?? '').trim(),
     session,
@@ -179,7 +191,22 @@ export function readSettings(): ResolvedSettings {
     autoCompactAt,
     contextKeepRecent,
     cacheTtlSeconds,
+    fontSize,
   };
+}
+
+/**
+ * A reading reduced to the settings that reach the host, for change detection.
+ *
+ * The comparison is the point: a configuration listener that restarts the host
+ * on any `anvil.*` change would end a run to change a text size. Comparing the
+ * host-relevant fields means a new display setting is covered by deleting it
+ * here rather than by remembering to name it in the listener.
+ */
+export function settingsKey(settings: ResolvedSettings): string {
+  const hostRelevant: Partial<ResolvedSettings> = { ...settings };
+  delete hostRelevant.fontSize;
+  return JSON.stringify(hostRelevant);
 }
 
 /** A fraction in (0, 1], or the fallback when the setting is not one. */

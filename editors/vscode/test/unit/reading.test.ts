@@ -90,8 +90,11 @@ test('the focus flag is the document’s, merged into its saved state', () => {
   // The initial value comes from the page the host rendered, which is how a
   // reload comes back in the same view.
   assert.match(CHAT_JS, /let focusView = document\.body\.classList\.contains\('focus-view'\)/);
-  assert.match(CHAT_PANEL, /<body\$\{focus \? ' class="focus-view"' : ''\}>/);
-  assert.match(CHAT_PANEL, /renderHtml\(panel\.webview, this\.context\.extensionUri, this\.focusView\)/);
+  assert.match(CHAT_PANEL, /<body\$\{focus \? ' class="focus-view"' : ''\} data-font-size="\$\{fontSize\}">/);
+  assert.match(
+    CHAT_PANEL,
+    /renderHtml\(\s*panel\.webview,\s*this\.context\.extensionUri,\s*this\.focusView,\s*readSettings\(\)\.fontSize,?\s*\)/,
+  );
 });
 
 test('the palette command and Ctrl+Alt+F ask the document to flip', () => {

@@ -328,6 +328,13 @@
           "minimum": 0,
           "markdownDescription": "How long the provider keeps its prompt cache, in seconds, for the meter's countdown. 0 means the provider's default: 300 seconds for Anthropic, and no countdown for a provider whose cache lifetime is unknown. The countdown appears only after a run reports cached tokens."
         },
+        "anvil.chatFontSize": {
+          "type": "number",
+          "default": 15,
+          "minimum": 10,
+          "maximum": 24,
+          "markdownDescription": "The chat view's base text size, in pixels. Display only: changing it updates open conversations immediately and does not restart the agent. The default is two pixels larger than the editor's usual 13px UI font."
+        },
         "anvil.store": {
           "type": "string",
           "enum": [

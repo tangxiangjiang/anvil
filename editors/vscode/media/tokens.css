@@ -11,8 +11,8 @@
  * surface is what makes an extension unreadable in a high-contrast theme.
  */
 :root {
-  --ui-gap: 10px;
-  --ui-gap-tight: 6px;
+  --ui-gap: 12px;
+  --ui-gap-tight: 8px;
   --ui-radius: 6px;
   --ui-radius-sm: 4px;
   /* Prose reads at 1.6; dense tables and status lines at 1.5. */

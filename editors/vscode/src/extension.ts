@@ -25,6 +25,8 @@ import {
   clearWebSearchKey,
   promptForApiKey,
   promptForWebSearchKey,
+  readSettings,
+  settingsKey,
 } from './settings';
 
 /** The window's shared half, so `deactivate` can kill the child. */
@@ -77,6 +79,12 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   const tree = new SessionTreeProvider(hub);
+  /**
+   * The last reading the configuration listener saw. Kept outside the
+   * subscription list because it is state, not a disposable; a change is
+   * compared against it to tell a display-only edit from one the host needs.
+   */
+  let lastSettings = readSettings();
 
   context.subscriptions.push(
     vscode.window.createTreeView(SessionTreeProvider.viewType, {
@@ -366,9 +374,19 @@ export function activate(context: vscode.ExtensionContext): void {
       tree.refreshSoon();
     }),
 
-    // Configuration changes take effect on the next host, not mid-turn.
+    // Configuration changes take effect on the next host, not mid-turn — except
+    // the chat's text size, which is display-only: it reaches the open tabs at
+    // once, and a run in flight is not interrupted to change a number of pixels.
+    // The comparison is against the previous reading rather than a list of keys,
+    // so a setting added later is covered by `settingsKey` instead of by a list
+    // that has to be kept in step with `package.json`.
     vscode.workspace.onDidChangeConfiguration(async (e) => {
-      if (e.affectsConfiguration('anvil') && hub.running) {
+      if (!e.affectsConfiguration('anvil')) return;
+      const next = readSettings();
+      const previous = lastSettings;
+      lastSettings = next;
+      if (next.fontSize !== previous.fontSize) hub.setFontSize(next.fontSize);
+      if (hub.running && settingsKey(previous) !== settingsKey(next)) {
         await hub.restart();
       }
     }),

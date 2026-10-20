@@ -1179,7 +1179,6 @@
    */
   function renderEditDiff(change, anchor) {
     const box = el('div', 'edit-diff');
-    if (change.path) box.appendChild(el('div', 'path', change.path));
     const numbered = anchor && typeof anchor.startLine === 'number';
     const raw = [];
     if (numbered && Array.isArray(anchor.before)) {
@@ -1229,6 +1228,22 @@
     }
     const cap = 24;
     const rows = pairDiffRows(raw);
+    // The path and its counts sit above the comparison: the first question
+    // about an edit is what it touched and how much, and both are known before
+    // the rows are drawn.
+    if (change.path) {
+      const head = el('div', 'path');
+      head.appendChild(el('span', 'file', change.path));
+      const adds = raw.filter((row) => row.kind === 'add').length;
+      const dels = raw.filter((row) => row.kind === 'del').length;
+      if (adds > 0 || dels > 0) {
+        const stat = el('span', 'stat');
+        stat.appendChild(el('span', 'add', '+' + adds));
+        stat.appendChild(el('span', 'del', '−' + dels));
+        head.appendChild(stat);
+      }
+      box.appendChild(head);
+    }
     const pre = el('pre', numbered ? 'diff numbered side' : 'diff side');
     for (const pair of rows.slice(0, cap)) {
       const node = el('div', 'row ' + pair.kind);
@@ -3137,6 +3152,13 @@
 
   /** Below this content width, an edit diff is one column rather than two. */
   const DIFF_SIDE_MIN = 620;
+  /**
+   * The base size the threshold was chosen at. Two columns of a diff are only
+   * worth showing while each has a readable number of characters in it, and a
+   * character is wider at 20px than at 15 — so the threshold grows with the
+   * reader's size instead of switching to the narrow shape too late.
+   */
+  const DIFF_SIDE_BASE = 15;
 
   /**
    * Chooses the diff's shape from the width the transcript actually gives it.
@@ -3153,7 +3175,9 @@
     const inset = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
     const width = transcript.clientWidth - inset;
     if (width <= 0) return; // the tab is not visible yet
-    document.body.classList.toggle('diff-narrow', width < DIFF_SIDE_MIN);
+    const font = parseFloat(style.fontSize) || DIFF_SIDE_BASE;
+    const min = Math.round(DIFF_SIDE_MIN * (font / DIFF_SIDE_BASE));
+    document.body.classList.toggle('diff-narrow', width < min);
     scrollIfPinned(pinned);
   }
 
@@ -3507,6 +3531,24 @@
     }
   }
 
+  /**
+   * The reader's text size, from `anvil.chatFontSize` or from the value the
+   * extension rendered onto the body. It is a variable rather than a body rule
+   * so the stylesheet keeps its fallback to the editor's UI font, and so a
+   * change repaints without rebuilding the transcript.
+   *
+   * The range is clamped here as well as in the settings reader: this function
+   * is the last place before a number becomes pixels.
+   */
+  function applyFontSize(size) {
+    const px = Number(size);
+    if (!Number.isFinite(px) || px < 10 || px > 24) return;
+    document.documentElement.style.setProperty('--anvil-font-size', px + 'px');
+    // The diff's two-column threshold is in pixels and scales with the text, so
+    // a resize of the type is also a resize of the document's shape.
+    queueDiffWidth();
+  }
+
   window.addEventListener('message', (event) => {
     const msg = event.data;
     switch (msg.type) {
@@ -3563,6 +3605,9 @@
         return;
       case 'vision':
         vision = msg.enabled === true;
+        return;
+      case 'fontSize':
+        applyFontSize(msg.size);
         return;
       case 'changes':
         showChanges(msg.files);
@@ -3692,6 +3737,10 @@
     }
   });
 
+  // Before the first paint the extension writes the size onto the body; the
+  // `ready` answer repeats it, which covers a document that waited while the
+  // setting changed.
+  applyFontSize(document.body.dataset.fontSize);
   setRunning(false);
   renderChips();
   vscode.postMessage({ type: 'ready' });

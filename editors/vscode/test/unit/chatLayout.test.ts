@@ -234,6 +234,9 @@ test('an edit diff is two columns, and a body class narrows it without an at-rul
   // The script is the other half of the agreement: one threshold, one class,
   // and one throttled listener rather than a layout per card.
   assert.match(JS, /const DIFF_SIDE_MIN = \d+;/);
+  // Two columns stop paying for themselves sooner at a larger text size.
+  assert.match(JS, /const DIFF_SIDE_BASE = 15;/);
+  assert.match(JS, /DIFF_SIDE_MIN \* \(font \/ DIFF_SIDE_BASE\)/);
   assert.match(JS, /function syncDiffWidth\(\)/);
   assert.match(JS, /addEventListener\('resize', queueDiffWidth\)/);
   assert.match(JS, /classList\.toggle\('diff-narrow'/);
@@ -255,8 +258,8 @@ test('a tool is a row, not a card, and its output is inset', () => {
   assert.match(tool, /background:\s*transparent/);
   assert.doesNotMatch(tool, /border-radius:\s*var\(--anvil-radius\)/);
 
-  assert.match(bodiesOf('.tool > summary').join(';'), /padding:\s*3px 4px/);
-  assert.match(bodiesOf('.tool .pane').join(';'), /padding:\s*0 0 6px 18px/);
+  assert.match(bodiesOf('.tool > summary').join(';'), /padding:\s*6px 6px/);
+  assert.match(bodiesOf('.tool .pane').join(';'), /padding:\s*0 0 10px 22px/);
   assert.match(
     bodiesOf('.tool .section pre').join(';'),
     /border-left:\s*1px solid var\(--ui-hairline\)/,
@@ -265,6 +268,49 @@ test('a tool is a row, not a card, and its output is inset', () => {
     bodiesOf('.msg .think .body').join(';'),
     /border-left:\s*1px solid var\(--ui-hairline\)/,
   );
+});
+
+test('a row is marked by a state dot, not a caret', () => {
+  const dot = bodiesOf('.tool > summary::before').join(';');
+  assert.match(dot, /content:\s*''/);
+  assert.match(dot, /width:\s*6px/);
+  assert.match(dot, /height:\s*6px/);
+  assert.match(dot, /border-radius:\s*50%/);
+
+  // State is a colour on the same mark: a finished row is quiet, a failure is
+  // the error colour, and a row that never got a result is a ring. The row
+  // gains no second word or icon for any of them.
+  assert.match(
+    bodiesOf('.tool.done > summary::before').join(';'),
+    /--dot:\s*var\(--ui-muted\)/,
+  );
+  assert.match(
+    bodiesOf('.tool.failed > summary::before').join(';'),
+    /--dot:\s*var\(--vscode-errorForeground\)/,
+  );
+  assert.match(bodiesOf('.tool.stopped > summary::before').join(';'), /box-shadow:\s*inset/);
+  assert.match(bodiesOf('.tool[open] > summary::before').join(';'), /box-shadow:\s*inset/);
+
+  // The caret is gone from both grammars, so a search for it in the built
+  // stylesheet finds nothing a user could still see.
+  assert.doesNotMatch(SOURCE, /25B8|25BE/);
+  assert.match(
+    bodiesOf('.msg .think > summary::before').join(';'),
+    /border-radius:\s*50%/,
+  );
+});
+
+test('the chat text size is a variable the script writes and the body reads', () => {
+  // Declared so the first paint, before the script has run, is the editor's
+  // own size; overwritten by the script from `anvil.chatFontSize`.
+  assert.match(SOURCE, /--anvil-font-size:\s*var\(--vscode-font-size/);
+  assert.equal(valueOf('body', 'font-size'), 'var(--anvil-font-size)');
+  assert.match(JS, /function applyFontSize\(size\)/);
+  assert.match(JS, /setProperty\('--anvil-font-size', px \+ 'px'\)/);
+  assert.match(JS, /case 'fontSize':/);
+  // The rendered value is applied before `ready` is posted, so a document that
+  // waited through a settings change is not painted at the old size first.
+  assert.match(JS, /applyFontSize\(document\.body\.dataset\.fontSize\)/);
 });
 
 test('the textarea grows to fit instead of being dragged', () => {

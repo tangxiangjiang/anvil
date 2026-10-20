@@ -335,6 +335,16 @@ export class Hub {
     this.runningChanged.fire();
   }
 
+  /**
+   * The reader's text size changed: every open document resizes in place.
+   *
+   * Display-only, so this is a broadcast and not a restart — a number of pixels
+   * is not a reason to end a run.
+   */
+  setFontSize(size: number): void {
+    for (const panel of this.panels) panel.setFontSize(size);
+  }
+
   /** A conversation changed: the stored list may not describe it any more. */
   notifySessions(): void {
     this.sessionsChanged.fire();

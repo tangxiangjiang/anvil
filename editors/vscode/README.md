@@ -122,6 +122,7 @@ names both sides and stops rather than failing later inside a tool call.
 | `anvil.autoCompactAt` | How full that window may get before the host summarizes the conversation on its own, as a fraction (default `0.8`). The meter marks this point and counts down to it; ignored while the window is `0` |
 | `anvil.contextKeepRecent` | Messages a compaction keeps verbatim (default `8`, minimum `2`) |
 | `anvil.cacheTtlSeconds` | How long the provider keeps its prompt cache, for the meter's countdown. `0` (the default) means the provider's default: five minutes for Anthropic, and no countdown for a provider that never states one |
+| `anvil.chatFontSize` | The chat view's base text size in pixels (default `15`, range `10`–`24`). Display only: a change updates open conversations immediately and does not restart the host |
 | `anvil.store` | `jsonl`, `sqlite`, or empty for the host's default |
 | `anvil.vision` | Accept pasted images; on by default. Off means the composer warns on a paste and the host refuses the attachment, naming this setting. The model still has to accept images |
 | `anvil.rules` | Load `AGENTS.md` and `.anvil/rules/*.md`; on by default |
