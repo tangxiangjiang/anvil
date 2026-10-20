@@ -149,6 +149,7 @@ window.api = {
     classifyError(body) { return api.req("POST", "/api/v1/diagnostics/classify-error", body); },
     jobs(suffix) { return api.req("GET", "/api/v1/jobs" + (suffix || "")); },
     jobEvents(id) { return api.req("GET", "/api/v1/jobs/" + encodeURIComponent(id) + "/events"); },
+    deliveryAssist(body) { return api.req("POST", "/api/v1/delivery/assist", body); },
     deliveryAudit(kind, id, limit) {
       const q = new URLSearchParams({ kind, id, limit: String(limit || 50) }).toString();
       return api.req("GET", "/api/v1/delivery/audit?" + q);

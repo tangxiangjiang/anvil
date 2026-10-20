@@ -265,6 +265,31 @@ input { width: 100%; margin-bottom: 0.75rem; }
   .side { border-right: 0; border-bottom: 1px solid var(--border); }
 }
 
+/* Drafting assistant (p_0.46.6): proposals, never writes. */
+.assist-host:empty { display: none; }
+.assist-host { margin-top: 0.6rem; }
+.assist-list { display: flex; flex-direction: column; gap: 0.5rem; }
+.assist-card {
+  border: 1px solid var(--border); border-left: 3px solid var(--accent-dim);
+  border-radius: var(--radius); padding: 0.5rem 0.65rem; background: var(--panel);
+}
+.assist-head { display: flex; gap: 0.5rem; align-items: baseline; flex-wrap: wrap; margin-bottom: 0.35rem; }
+.assist-before summary { cursor: pointer; font-size: 0.78rem; }
+.assist-before pre, .assist-after {
+  margin: 0.3rem 0; padding: 0.45rem 0.5rem; font-family: var(--mono);
+  font-size: 0.78rem; white-space: pre-wrap; word-break: break-word;
+  max-height: 26vh; overflow: auto; border-radius: 6px; background: #0f1620;
+}
+.assist-after { border-left: 2px solid var(--ok); }
+.assist-actions { justify-content: flex-end; gap: 0.35rem; }
+.assist-actions button { padding: 0.22rem 0.6rem; font-size: 0.8rem; }
+.assist-foot { font-size: 0.75rem; }
+.assist-note {
+  padding: 0.45rem 0.6rem; border-radius: var(--radius);
+  border: 1px dashed var(--border); font-size: 0.82rem; color: var(--muted);
+}
+.assist-note.bad { border-color: var(--danger); color: #f3c7c7; }
+
 /* Connection banner (p_0.46.12): a stale stream that looks live is worse than
    a visible disconnection. */
 .wb-conn {

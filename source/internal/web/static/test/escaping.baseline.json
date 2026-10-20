@@ -524,6 +524,10 @@
   ],
   "js/shared/selection.js": [],
   "js/shared/stream.js": [],
+  "js/shared/assist.js": [
+    "res.usage ? ` · ${res.usage.prompt_tokens || 0}+${res.usage.completion_tokens || 0} tokens` : \"\"",
+    "p.label || p.field"
+  ],
   "js/components/ai_chat.js": [
     "items",
     "self._logHtml()",

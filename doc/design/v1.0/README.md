@@ -51,8 +51,10 @@ This tree is the **design cutoff** for 0.1–0.40 delivery. Later product lines 
 
 Parent index: [`doc/design/README.md`](../README.md).
 
-**0.46 anvil-web Delivery polish** has no design chapter of its own: it polishes surfaces that
-[33](33-delivery-ui.md) defines, under the shell contracts in [25](25-web-admin.md). See
+**0.46 anvil-web Delivery polish** mostly polishes surfaces that [33](33-delivery-ui.md) defines,
+under the shell contracts in [25](25-web-admin.md). One phase needed a chapter of its own: the drafting
+assistant crosses the boundary design [23](23-yaml-config.md) drew ("agentd is not an LLM proxy"), so
+it is written down as [40](40-web-assist.md) rather than assumed. See
 [m_0.46_web_polish.md](../../roadmaps/v1.0/m_0.46_web_polish.md).
 
 ## Relation to roadmaps

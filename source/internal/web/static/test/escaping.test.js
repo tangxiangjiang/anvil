@@ -49,6 +49,7 @@ const FILES = [
   "js/shared/shell.js",
   "js/shared/selection.js",
   "js/shared/stream.js",
+  "js/shared/assist.js",
   "js/components/ai_chat.js",
   "js/components/md_preview.js",
   "js/app.js",

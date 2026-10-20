@@ -837,30 +837,49 @@ Object.assign(window.Features.delivery, {
           window.AiChat.flash(card);
         }
       },
-      // A mock assistant must not write to the database.
-      //
-      // It used to append "· (AI mock) <your text>" straight into the ADR and,
-      // if a version was cited, into that version's Gate - on Send, with no
-      // confirmation. The reply looks like advice, so the text that landed in
-      // the record was the operator's own prose wearing an AI label, and the
-      // Gate it touched gates real phase jobs. Nothing is applied now: the
-      // draft is shown, and applying it is an explicit edit-and-save.
-      onSend: async ({ composed }, c) => {
+      // Real drafting (p_0.46.6). This surface used to append the operator's own
+      // text into the ADR Decision and, when a version was cited, into that
+      // version's Gate - on Send, with no confirmation. The Gate it touched
+      // gates real phase jobs. Now the assistant proposes and the operator
+      // applies; nothing reaches the record without that second act.
+      onSend: async ({ composed, cites }, c) => {
         if (approved) return;
-        const draft = String(composed || "").trim();
         const citeVer = vers.find(
           (v) =>
             composed.includes("@" + (v.title || "")) ||
             composed.includes(`@V${v.sort_order}.Gate`),
         );
-        const target = citeVer ? "Version " + citeVer.sort_order + " Gate" : "Decision";
-        c.appendMessage(
-          "ai",
-          "[mock assistant - nothing was saved]\n" +
-            "Draft for " + target + ":\n" +
-            draft +
-            "\n\nCopy it into the field and press Save.",
-        );
+        if (citeVer) {
+          await window.AnvilUI.assist.ask({
+            surface: "design_version",
+            field: "gate",
+            instruction: composed,
+            cites,
+            current: { gate: (citeVer.gate || "").trim() },
+            host: this.el.querySelector("#des-assist"),
+            chat: c,
+            onApply: async (_field, value) => {
+              await api.v1.deliveryPatchDesignVersion(d.id, citeVer.id, { gate: value });
+              await this.reload();
+              this.render();
+            },
+          });
+          return;
+        }
+        await window.AnvilUI.assist.ask({
+          surface: "design",
+          field: "adr_decision",
+          instruction: composed,
+          cites,
+          current: { adr_decision: (this.adrFieldValue(d, "adr_decision") || "").trim() },
+          host: this.el.querySelector("#des-assist"),
+          chat: c,
+          onApply: async (_field, value) => {
+            await api.v1.deliveryPatchDesign(d.id, { adr_decision: value });
+            await this.reload();
+            this.render();
+          },
+        });
       },
     });
     const actions = [];
@@ -889,9 +908,11 @@ Object.assign(window.Features.delivery, {
     const flowHint = approved
       ? "Approved — editing locked. Bootstrap roadmap to publish Versions as phases."
       : "Flow: Save (draft) → View (full Markdown) → Approve → Bootstrap roadmap.";
+    // The assist host sits beside the chat: the assistant proposes, and the
+    // proposals render here until applied or discarded.
     const chatHtml = approved
       ? ""
-      : chat.render();
+      : chat.render() + `<div id="des-assist" class="assist-host"></div>`;
     return `
       <p class="del-crumbs">
         <a href="#/delivery/designs">Generations</a>

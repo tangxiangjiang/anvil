@@ -338,15 +338,22 @@ Object.assign(window.Features.delivery, {
           this.openCiteVersionPicker(engId, major, minor, c);
         }
       },
-      // Same rule as the detail view: a mock drafts, it does not write.
-      onSend: async ({ composed }, c) => {
-        c.appendMessage(
-          "ai",
-          "[mock assistant - nothing was saved]\n" +
-            "Draft for Completion criteria:\n" +
-            String(composed || "").trim() +
-            "\n\nOpen a version and press Edit to apply it.",
-        );
+      // Same contract, same component: propose here, apply through the save.
+      onSend: async ({ composed, cites }, c) => {
+        await window.AnvilUI.assist.ask({
+          surface: "requirement_version",
+          field: "success",
+          instruction: composed,
+          cites,
+          current: { success: (head.success || "").trim() },
+          host: this.el.querySelector("#ms-assist"),
+          chat: c,
+          onApply: async (_field, value) => {
+            await api.v1.deliveryPatchVersion(engId, major, minor, head.patch, { success: value });
+            await this.reload();
+            this.render();
+          },
+        });
       },
     });
     return `
@@ -387,6 +394,7 @@ Object.assign(window.Features.delivery, {
           </div>
         </div>
         ${chat.render()}
+        <div id="ms-assist" class="assist-host"></div>
       </div>`;
   },
 
@@ -486,17 +494,24 @@ Object.assign(window.Features.delivery, {
           this.openCiteVersionPicker(engId, major, minor, c);
         }
       },
-      // Mock assistant: drafts only, never writes. See the note in designs.js -
-      // the previous version appended the operator's own text into Completion
-      // criteria on Send, which is a silent edit of a persisted requirement.
-      onSend: async ({ composed }, c) => {
-        c.appendMessage(
-          "ai",
-          "[mock assistant - nothing was saved]\n" +
-            "Draft for Completion criteria:\n" +
-            String(composed || "").trim() +
-            "\n\nCopy it into the field and press Save.",
-        );
+      // Real drafting (p_0.46.6): the assistant proposes, this applies through
+      // the surface's own save. It cannot write, which is the invariant the
+      // previous mock could not keep.
+      onSend: async ({ composed, cites }, c) => {
+        await window.AnvilUI.assist.ask({
+          surface: "requirement_version",
+          field: "success",
+          instruction: composed,
+          cites,
+          current: { success: (ver.success || "").trim() },
+          host: this.el.querySelector("#ver-assist"),
+          chat: c,
+          onApply: async (_field, value) => {
+            await api.v1.deliveryPatchVersion(engId, major, minor, patch, { success: value });
+            await this.reload();
+            this.render();
+          },
+        });
       },
     });
     return `
@@ -531,6 +546,7 @@ Object.assign(window.Features.delivery, {
           </div>
         </div>
         ${chat.render()}
+        <div id="ver-assist" class="assist-host"></div>
       </div>`;
   },
 
