@@ -244,6 +244,34 @@ test('an empty todo_write replays as an empty list, which is how a call clears i
   assert.deepEqual(todo.event.items, []);
 });
 
+test('a compaction boundary replays as the same row the live event draws', () => {
+  // The store keeps a summary record where the conversation was folded. It has
+  // the boundary and the text, but not the counts — so the replayed row says
+  // that it happened and nothing it cannot support.
+  const entries: TranscriptEntry[] = [
+    { kind: 'message', run_id: 'r1', role: 'user', content: 'first' },
+    { kind: 'run_end', run_id: 'r1', status: 'finished', steps: 1 },
+    { kind: 'summary', run_id: 'r1', content: 'Earlier turns were summarized.' },
+    { kind: 'message', run_id: 'r2', role: 'user', content: 'second' },
+  ];
+
+  const steps = replayOf(entries, 's1');
+  assert.deepEqual(kinds(steps), ['user', 'runEnd', 'event', 'user']);
+  const boundary = steps[2];
+  assert.ok(boundary.kind === 'event');
+  assert.equal(boundary.event.type, 'compact');
+  assert.equal(boundary.event.session_id, 's1');
+  assert.equal(boundary.event.run_id, 'r1');
+  // No counts, because the record has none: an invented "0 → 0" would be a
+  // divider claiming a compaction that moved nothing.
+  assert.equal(boundary.event.compact, undefined);
+  // The user's turn after the boundary is still the user's turn: a summary
+  // record is a note about the conversation, not a run.
+  const after = steps[3];
+  assert.ok(after.kind === 'user');
+  assert.equal(after.text, 'second');
+});
+
 test('a run boundary that never said how it ended replays as one that finished', () => {
   // The status decides a word on screen, and there is always one: an absent
   // status would otherwise print "undefined" over the middle of a transcript.

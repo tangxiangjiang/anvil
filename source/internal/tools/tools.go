@@ -21,6 +21,7 @@ import (
 	"github.com/anvil-dev/anvil/internal/llm"
 	"github.com/anvil-dev/anvil/internal/lsp"
 	"github.com/anvil-dev/anvil/internal/permissions"
+	"github.com/anvil-dev/anvil/internal/tasks"
 )
 
 const defaultMaxOutput = 64 * 1024
@@ -97,6 +98,14 @@ type Registry struct {
 	// capture off, so a bare Registry stays unaffected.
 	cpAgent string
 	cpRun   string
+	// agentID and depth identify the agent this registry executes for, so a
+	// permission request can say which agent is asking and how deep it is
+	// nested. Set once at creation; runID comes from SetRunContext.
+	agentID string
+	depth   int
+	// taskMgr is the agent tree's background table. It is set before any run
+	// starts; the task tools and a background shell read it at call time.
+	taskMgr *tasks.Manager
 }
 
 // PreExecFunc runs before every tool (hooks like beforeMCP / beforeRead).
@@ -128,8 +137,39 @@ func NewRegistry(cwd string, allowShell bool) *Registry {
 	r.register(&todoWriteTool{r: r})
 	if allowShell {
 		r.register(&shellTool{r: r})
+		r.EnsureTaskTools()
 	}
 	return r
+}
+
+// EnsureTaskTools registers task_list, task_output and task_cancel when they
+// are absent. NewRegistry calls it beside shell; buildRegistry calls it when
+// subagents are enabled, so a child without shell can still read the tree's
+// background work.
+func (r *Registry) EnsureTaskTools() {
+	if r == nil {
+		return
+	}
+	if _, ok := r.tools["task_list"]; !ok {
+		r.register(&taskListTool{r: r})
+		r.register(&taskOutputTool{r: r})
+		r.register(&taskCancelTool{r: r})
+	}
+}
+
+// SetTaskManager attaches the agent tree's background task table.
+func (r *Registry) SetTaskManager(mgr *tasks.Manager) {
+	if r != nil {
+		r.taskMgr = mgr
+	}
+}
+
+// TaskManager returns the table, or nil when the registry was built without one.
+func (r *Registry) TaskManager() *tasks.Manager {
+	if r == nil {
+		return nil
+	}
+	return r.taskMgr
 }
 
 // SetPreExec installs a gate that runs for all tools before execute.
@@ -160,6 +200,54 @@ func (r *Registry) SetRunContext(agentID, runID string) {
 		r.cpAgent = agentID
 		r.cpRun = runID
 	}
+}
+
+// SetIdentity names the agent this registry serves and its nesting depth. It is
+// called once, when the agent is created; a permission request carries both so a
+// client can say which subagent is asking.
+func (r *Registry) SetIdentity(agentID string, depth int) {
+	if r != nil {
+		r.agentID = agentID
+		r.depth = depth
+	}
+}
+
+// Identity returns the agent this registry executes for and its depth.
+func (r *Registry) Identity() (string, int) {
+	if r == nil {
+		return "", 0
+	}
+	return r.agentID, r.depth
+}
+
+// RunID returns the run currently executing, or "" outside one. It is the same
+// value capture is scoped to, read here so a permission request can name the run
+// that asked rather than the one a session happens to have active.
+func (r *Registry) RunID() string {
+	if r == nil {
+		return ""
+	}
+	return r.cpRun
+}
+
+// callIDKey is the context key for the executing tool call id.
+type callIDKey struct{}
+
+// WithCallID tags ctx with the tool call id the runtime is executing. A tool
+// that starts work on another agent's behalf (spawn_agent) reads it so the events
+// it bridges land under the card for that call.
+func WithCallID(ctx context.Context, id string) context.Context {
+	if id == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, callIDKey{}, id)
+}
+
+// CallID returns the tool call id in ctx, or "" when the call did not come from
+// the runtime's tool loop.
+func CallID(ctx context.Context) string {
+	id, _ := ctx.Value(callIDKey{}).(string)
+	return id
 }
 
 func (r *Registry) register(t Tool) {
@@ -1028,20 +1116,24 @@ const (
 	defaultShellTimeout = 60 * time.Second
 	minShellTimeout     = time.Second
 	maxShellTimeout     = 120 * time.Second
+	// A background job is unwaited, not unbounded; it may run for an hour.
+	maxBackgroundShellTimeout = 3600 * time.Second
 )
 
 func (t *shellTool) Def() llm.ToolDef {
 	return llm.ToolDef{
 		Name: "shell",
 		Description: "Run a shell command in the workspace cwd. Prefer targeted commands. " +
-			"Set timeout_seconds from how long this command should need (1–120, default 60). " +
+			"Set timeout_seconds from how long this command should need (1–120, default 60; up to 3600 in the background). " +
 			"When that time elapses, or the turn is stopped, the command and the processes it started are killed and this call returns. " +
-			"Use a short timeout for anything that might wait forever.",
+			"Set run_in_background for a long job: the call returns a task id at once and the job keeps running; " +
+			"read it with task_output and stop it with task_cancel.",
 		Parameters: mustSchema(`{
 			"type":"object",
 			"properties":{
 				"command":{"type":"string"},
-				"timeout_seconds":{"type":"integer","minimum":1,"maximum":120,"description":"Kill the command and its child processes after this many seconds. Default 60."}
+				"timeout_seconds":{"type":"integer","minimum":1,"description":"Kill the command and its child processes after this many seconds. Default 60; 1–120 in the foreground, up to 3600 in the background."},
+				"run_in_background":{"type":"boolean","description":"Start the command as a background task and return its task id instead of waiting."}
 			},
 			"required":["command"]
 		}`),
@@ -1050,8 +1142,9 @@ func (t *shellTool) Def() llm.ToolDef {
 
 func (t *shellTool) Execute(ctx context.Context, args json.RawMessage) Result {
 	var in struct {
-		Command        string `json:"command"`
-		TimeoutSeconds int    `json:"timeout_seconds"`
+		Command         string `json:"command"`
+		TimeoutSeconds  int    `json:"timeout_seconds"`
+		RunInBackground bool   `json:"run_in_background"`
 	}
 	if err := json.Unmarshal(args, &in); err != nil {
 		return Result{Content: err.Error(), IsError: true}
@@ -1059,6 +1152,35 @@ func (t *shellTool) Execute(ctx context.Context, args json.RawMessage) Result {
 	if in.Command == "" {
 		return Result{Content: "command is required", IsError: true}
 	}
+
+	if in.RunInBackground {
+		mgr := t.r.taskMgr
+		if mgr == nil {
+			return Result{Content: "background tasks are not available in this registry", IsError: true}
+		}
+		timeout := defaultShellTimeout
+		if in.TimeoutSeconds != 0 {
+			if in.TimeoutSeconds < 1 || in.TimeoutSeconds > int(maxBackgroundShellTimeout/time.Second) {
+				return Result{Content: "background timeout_seconds must be between 1 and 3600", IsError: true}
+			}
+			timeout = time.Duration(in.TimeoutSeconds) * time.Second
+		}
+		info, err := mgr.StartShell(tasks.ShellSpec{
+			Title:   in.Command,
+			Command: in.Command,
+			CWD:     t.r.cwd,
+			AgentID: t.r.agentID,
+			Timeout: timeout,
+			Prepare: configureShellCommand,
+		})
+		if err != nil {
+			return Result{Content: err.Error(), IsError: true}
+		}
+		return Result{Content: fmt.Sprintf(
+			"%s started in the background: %s\nRead it with task_output, stop it with task_cancel.",
+			info.ID, in.Command)}
+	}
+
 	timeout := defaultShellTimeout
 	if in.TimeoutSeconds != 0 {
 		if in.TimeoutSeconds < 1 || in.TimeoutSeconds > int(maxShellTimeout/time.Second) {

@@ -61,7 +61,7 @@ func main() {
 
 ## Status
 
-Product is at **0.38 delivered** — a session a person can recognise and come back to: it is named by its first message, every finished tool card opens the change it made, and a reloaded window re-attaches to its session and draws the stored conversation back. 0.35–0.38 are the editor line (VS Code extension, tool permissions, permission modes, session identity); **0.39** is in progress on the Delivery side (execute bind + test campaign loop), and **0.40** is in progress on the editor side — parallel tabs, session administration, partial acceptance, checkpoints and fork, plus the SDK capabilities the client never turned on. Full per-milestone index: [`doc/roadmaps/v1.0/README.md`](doc/roadmaps/v1.0/README.md).
+Product is at **0.44 delivered** — MCP servers have a real state in the editor: connected, connecting, failed or needing a sign-in, with their tool lists, and a manager panel that adds, edits, enables, disables, reconnects, signs in and out, writing `.cursor/mcp.json` without dropping what it does not own. 0.35–0.38 are the editor line (VS Code extension, tool permissions, permission modes, session identity); **0.39** is the Delivery execute/test campaign loop, **0.40** is the editor alignment, **0.41** is auto mode and the permissions manager, **0.42** is subagents, background tasks and workflows, **0.43** is context management, and **0.44** is MCP management. Full per-milestone index: [`doc/roadmaps/v1.0/README.md`](doc/roadmaps/v1.0/README.md).
 
 | Era | Milestones | What |
 |-----|-----------|------|
@@ -73,6 +73,10 @@ Product is at **0.38 delivered** — a session a person can recognise and come b
 | Permission modes | 0.37 | A complete mode ladder — `dont_ask` runs only what the rules allow and `bypass` no longer overrules a written `ask` rule — plus `"defaultMode"` in the same workspace file, resolved by the host and reported to the composer — [design 37](doc/design/v1.0/37-permission-modes.md) |
 | Session identity & replay | 0.38 | A session named by its first message, a reviewable change on every tool card, and a transcript that survives a reload — [design 38](doc/design/v1.0/38-session-identity-and-replay.md) |
 | Editor alignment | 0.40 | Parallel tabs, rename/delete/search, per-hunk acceptance, checkpoints, fork, MCP and web tools switched on, live usage, a task list — [design 39](doc/design/v1.0/39-editor-alignment.md) |
+| Auto & rules manager | 0.41 | An `auto` rung that runs what the analyzer can prove and asks about the rest, and a structured manager for `.anvil/permissions.json` — [design 40](doc/design/v1.0/40-permission-auto-and-manager.md) |
+| Subagents & workflows | 0.42 | `spawn_agent` creates a child agent with inherited permissions, background shell and subagents share one task table, `/tasks` draws it in the editor, and `run_workflow` evaluates a declarative DAG — [design 41](doc/design/v1.0/41-subagents-and-tasks.md) |
+| Context management | 0.43 | A declared token budget with a safe cut, auto-compaction at run start and mid-run, `Agent.Compact` and the editor's `/compact`, cached-token accounting, and a meter that counts context left and the cache's remaining life — [design 42](doc/design/v1.0/42-context-management.md) |
+| MCP management | 0.44 | A host-owned MCP runtime with per-server state and failure isolation, atomic edits to `.cursor/mcp.json` that preserve unknown fields, reconnect, Streamable HTTP, host-owned OAuth tokens, a manager panel and `/mcp` — [design 43](doc/design/v1.0/43-mcp-management.md) |
 
 ### VS Code extension (0.35)
 
@@ -159,9 +163,11 @@ In the editor, the approval card offers the rule shapes that would decide **this
 exact command, the leading tokens, anything read-only, the one file — and writes the choice
 into the same file; the call then runs without a second prompt, because the host re-reads the
 file and answers it. A tool card that ran unprompted says `allowed by rule 2: shell
-"git status:*"`. **Anvil: Open Permission Rules** opens or creates the file, and a file that
-will not compile is reported where it is edited — with a diagnostic on the line — instead of
-taking the session down. `anvil.permissions` turns the whole thing off for a workspace.
+"git status:*"`. **Anvil: Open Permission Rules** opens the manager — effects, tools, patterns,
+reasons and the workspace's starting mode as a form — and **Anvil: Open Permission Rules File**
+opens or creates the JSON itself; a file that will not compile is reported where it is edited —
+with a diagnostic on the line — and the manager goes read-only rather than overwriting it.
+`anvil.permissions` turns the whole thing off for a workspace.
 
 The library and the CLI read the files only when asked to, and the editor host and CLI
 default both switches on:

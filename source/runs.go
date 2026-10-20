@@ -99,9 +99,11 @@ func runsFromRecords(recs []store.Record) []RunInfo {
 			info.EndedAt = rec.Time
 			if rec.Usage != nil {
 				info.Usage = &Usage{
-					InputTokens:  rec.Usage.InputTokens,
-					OutputTokens: rec.Usage.OutputTokens,
-					TotalTokens:  rec.Usage.TotalTokens,
+					InputTokens:      rec.Usage.InputTokens,
+					OutputTokens:     rec.Usage.OutputTokens,
+					TotalTokens:      rec.Usage.TotalTokens,
+					CachedTokens:     rec.Usage.CachedTokens,
+					CacheWriteTokens: rec.Usage.CacheWriteTokens,
 				}
 			}
 		}

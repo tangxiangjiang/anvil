@@ -69,15 +69,45 @@ type openAITool struct {
 	} `json:"function"`
 }
 
+// openAIUsageWire is the usage object as OpenAI-compatible providers send it.
+// The cache shapes differ by provider and both are named: OpenAI reports input
+// tokens served from its own cache in prompt_tokens_details.cached_tokens,
+// while DeepSeek reports a prompt_cache_hit_tokens count for its disk cache.
+// Decoding both means a proxy or a compatible endpoint is accounted for without
+// a provider table.
+type openAIUsageWire struct {
+	PromptTokens        int `json:"prompt_tokens"`
+	CompletionTokens    int `json:"completion_tokens"`
+	TotalTokens         int `json:"total_tokens"`
+	PromptTokensDetails *struct {
+		CachedTokens int `json:"cached_tokens"`
+	} `json:"prompt_tokens_details"`
+	PromptCacheHitTokens int `json:"prompt_cache_hit_tokens"`
+}
+
+// usage projects the wire shape. The total stays the provider's own: OpenAI's
+// cached_tokens is a subset of prompt_tokens, so adding it would double-count.
+func (u *openAIUsageWire) usage() *Usage {
+	if u == nil {
+		return nil
+	}
+	cached := u.PromptCacheHitTokens
+	if u.PromptTokensDetails != nil && u.PromptTokensDetails.CachedTokens > 0 {
+		cached = u.PromptTokensDetails.CachedTokens
+	}
+	return &Usage{
+		InputTokens:  u.PromptTokens,
+		OutputTokens: u.CompletionTokens,
+		TotalTokens:  u.TotalTokens,
+		CachedTokens: cached,
+	}
+}
+
 type openAIResponse struct {
 	Choices []struct {
 		Message openAIMessage `json:"message"`
 	} `json:"choices"`
-	Usage *struct {
-		PromptTokens     int `json:"prompt_tokens"`
-		CompletionTokens int `json:"completion_tokens"`
-		TotalTokens      int `json:"total_tokens"`
-	} `json:"usage"`
+	Usage *openAIUsageWire `json:"usage"`
 	Error *struct {
 		Message string `json:"message"`
 		Type    string `json:"type"`
@@ -129,14 +159,7 @@ func (c *OpenAI) Complete(ctx context.Context, req Request) (*Response, error) {
 		return nil, &HTTPError{Status: httpResp.StatusCode, Message: "no choices in response", Retryable: false}
 	}
 	msg := fromOpenAIMessage(parsed.Choices[0].Message)
-	out := &Response{Message: msg}
-	if parsed.Usage != nil {
-		out.Usage = &Usage{
-			InputTokens:  parsed.Usage.PromptTokens,
-			OutputTokens: parsed.Usage.CompletionTokens,
-			TotalTokens:  parsed.Usage.TotalTokens,
-		}
-	}
+	out := &Response{Message: msg, Usage: parsed.Usage.usage()}
 	return out, nil
 }
 

@@ -61,9 +61,14 @@ test('the rows are text, and every status has a mark', () => {
 });
 
 test('the protocol carries the event and its items', () => {
-  // The union member ends the declaration; a comment inside it may carry a
-  // semicolon of its own, so the whole type is not sliced at the first one.
-  assert.match(PROTOCOL, /\|\s*'todo';/);
+  // The union member is somewhere in the declaration, not necessarily last: a
+  // later phase may append its own. A comment inside the type may carry a
+  // semicolon of its own, so the whole type is sliced by its end, not a `;`.
+  const eventType = PROTOCOL.slice(
+    PROTOCOL.indexOf('export type EventType ='),
+    PROTOCOL.indexOf('/** One streamed unit of a run. */'),
+  );
+  assert.match(eventType, /\|\s*'todo'/);
   const hostEvent = PROTOCOL.slice(PROTOCOL.indexOf('export interface HostEvent'));
   assert.match(hostEvent.slice(0, hostEvent.indexOf('\n}')), /items\?: TodoItem\[\]/);
   assert.match(PROTOCOL, /export interface TodoItem \{/);

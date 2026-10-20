@@ -465,6 +465,68 @@ body {
   font-size: 0.9em;
 }
 
+/* --- subagent spawn ------------------------------------------------------- */
+
+/*
+ * A spawn card holds a whole conversation, not one call's output. The body is
+ * inset behind a rule so the child's cards read as nested rather than as the
+ * parent's own work, and the nesting repeats at every depth because it is the
+ * same markup each time.
+ */
+.tool.spawn {
+  border-color: var(--vscode-charts-blue, #3794ff);
+}
+
+.tool.spawn .name {
+  color: var(--vscode-charts-blue, #3794ff);
+}
+
+.tool .spawn-body {
+  margin-top: 6px;
+  padding-left: 10px;
+  border-left: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* A replayed spawn has no child records, so its body has nothing to say and
+ * takes no space; the result's section speaks for it. */
+.tool .spawn-body:empty {
+  display: none;
+}
+
+.tool .spawn-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.tool .spawn-actions:first-child {
+  margin-top: 0;
+}
+
+.tool .spawn-note {
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.9em;
+}
+
+.tool .spawn-action {
+  background: none;
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
+  border-radius: 4px;
+  color: var(--vscode-textLink-foreground);
+  cursor: pointer;
+  padding: 2px 8px;
+  font-size: 0.9em;
+}
+
+.tool .spawn-action:hover {
+  background: var(--vscode-button-secondaryHoverBackground, rgba(128, 128, 128, 0.12));
+}
+
 /* --- approval ------------------------------------------------------------- */
 
 .approval {
@@ -1305,6 +1367,60 @@ body.dont-ask-mode .composer {
   font-size: 0.9em;
 }
 
+/* --- MCP card -----------------------------------------------------------------
+ * One dot per server, in the state's colour. The word is drawn beside it because
+ * a colour alone is not an answer to a person who cannot see it, and the row's
+ * classes carry the state so the manager's list can reuse the same vocabulary.
+ */
+
+.mcp-dot {
+  flex: none;
+  font-size: 0.62em;
+  line-height: 1;
+  color: var(--vscode-descriptionForeground);
+}
+
+.mcp-dot.connected {
+  color: var(--vscode-testing-iconPassed, #3fb950);
+}
+
+.mcp-dot.connecting {
+  color: var(--vscode-charts-yellow, #d29922);
+}
+
+.mcp-dot.auth_required {
+  color: var(--vscode-charts-yellow, #d29922);
+}
+
+.mcp-dot.failed {
+  color: var(--vscode-errorForeground, #f85149);
+}
+
+.mcp-dot.disabled {
+  opacity: 0.45;
+}
+
+/* A disabled entry is declared but not loaded; it stays legible, just quiet. */
+.command.mcp-disabled .cmd,
+.command.mcp-disabled .desc {
+  opacity: 0.65;
+}
+
+.mcp-state {
+  flex: none;
+}
+
+/* Why a server failed: the line under its row, in the same monospace a message
+ * is, because it is a child process's text and not this card's prose. */
+.mcp-error {
+  padding-left: 1.6em;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.85em;
+  color: var(--vscode-descriptionForeground);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* --- session marker ------------------------------------------------------- */
 
 .msg.session .body {
@@ -1339,4 +1455,17 @@ body.dont-ask-mode .composer {
   text-align: center;
   border-top: 1px dashed var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
   padding-top: 6px;
+}
+
+/*
+ * A compaction boundary: the conversation continues, but not from where it
+ * was. Two borders make it read as a seam in the flow rather than a message.
+ */
+.msg.compact .body {
+  font-size: 0.85em;
+  color: var(--vscode-descriptionForeground);
+  text-align: center;
+  border-top: 1px dashed var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
+  border-bottom: 1px dashed var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
+  padding: 4px 0;
 }

@@ -57,6 +57,21 @@ export interface ResolvedSettings {
    * window would make the percentage a guess too.
    */
   contextWindow: number;
+  /**
+   * Where the session compacts, as a fraction of the window. The host decides
+   * when the conversation is full; the fraction is the client's declaration of
+   * how much of the window counts as full.
+   */
+  autoCompactAt: number;
+  /** Recent messages a compaction keeps verbatim. */
+  contextKeepRecent: number;
+  /**
+   * The prompt cache's TTL for the meter's countdown, or 0 when none is known.
+   * Resolved here because the provider is: 0 in the setting means "whatever the
+   * provider does", which is 300 seconds for Anthropic and nothing to count for
+   * a provider that never said.
+   */
+  cacheTtlSeconds: number;
 }
 
 /** Reads the workspace configuration into a session config. */
@@ -88,6 +103,11 @@ export function readSettings(): ResolvedSettings {
   // in force. It is sent explicitly, both ways, because the host's default is
   // on and this is the one place a user turns it off.
   session.load_permissions = cfg.get<boolean>('permissions', true) ?? true;
+  // Subagents are on by default: a session that hands work to a child is the
+  // editor's normal shape. Sent explicitly both ways, because a host's default
+  // is not this client's to assume, and turning it off has to reach the session
+  // that was just opened rather than the next one.
+  session.subagents = cfg.get<boolean>('subagents', true) ?? true;
   // MCP is per source, with deliberately different defaults. The workspace file
   // is reviewed like the rest of the workspace, and the extension refuses
   // untrusted workspaces; a home-directory file a user may not remember writing
@@ -113,14 +133,58 @@ export function readSettings(): ResolvedSettings {
   // A window of zero, or a nonsense value, means the user has not told the
   // panel one: the meter then shows counts and no fraction.
   const window = cfg.get<number>('contextWindow', 0) ?? 0;
+  const contextWindow = Number.isFinite(window) && window > 0 ? Math.floor(window) : 0;
+  const compactShare = cfg.get<number>('autoCompactAt', 0.8) ?? 0.8;
+  const autoCompactAt = fractionOf(compactShare, 0.8);
+  const keepRaw = cfg.get<number>('contextKeepRecent', 8) ?? 8;
+  const contextKeepRecent = Number.isFinite(keepRaw) ? Math.max(2, Math.floor(keepRaw)) : 8;
+  // The budget travels only with a window: `window_tokens: 0` is the host's
+  // "nothing is full", so sending a fraction with it would declare a rule that
+  // can never fire. Omitted, the request is the one an older client sent.
+  if (contextWindow > 0) {
+    session.context = {
+      window_tokens: contextWindow,
+      auto_compact_at: autoCompactAt,
+      keep_recent: contextKeepRecent,
+    };
+  }
+  const ttlRaw = cfg.get<number>('cacheTtlSeconds', 0) ?? 0;
+  const configuredTtl = Number.isFinite(ttlRaw) && ttlRaw > 0 ? Math.floor(ttlRaw) : 0;
+  // "The provider's default" is the host's knowledge of the endpoint, so it is
+  // read the same way the host reads it: the session setting first, the
+  // environment second. An unset provider is OpenAI, which is the host's
+  // default too, and it makes no caching promise a client could count on.
+  const provider = (session.provider ?? emptyToUndefined(process.env.ANVIL_PROVIDER) ?? '').toLowerCase();
+  const cacheTtlSeconds = cacheTtlOf(configuredTtl, provider);
   return {
     hostPath: (cfg.get<string>('hostPath', '') ?? '').trim(),
     session,
     rules: { load_project: loadProject, load_cursor_rules: loadCursor },
     mcp,
     webSearch,
-    contextWindow: Number.isFinite(window) && window > 0 ? Math.floor(window) : 0,
+    contextWindow,
+    autoCompactAt,
+    contextKeepRecent,
+    cacheTtlSeconds,
   };
+}
+
+/** A fraction in (0, 1], or the fallback when the setting is not one. */
+function fractionOf(value: number, fallback: number): number {
+  if (!Number.isFinite(value) || value <= 0) return fallback;
+  return value > 1 ? 1 : value;
+}
+
+/**
+ * The TTL the meter counts against. An explicit setting wins; otherwise the
+ * only provider default this client knows is Anthropic's five minutes. Any
+ * other provider gets 0, which draws the cached share with no countdown — a
+ * countdown invented for a provider that never stated one would be a clock
+ * telling the time in a zone nobody named.
+ */
+function cacheTtlOf(configured: number, provider: string): number {
+  if (configured > 0) return configured;
+  return provider === 'anthropic' ? 300 : 0;
 }
 
 function emptyToUndefined(value: string | undefined): string | undefined {

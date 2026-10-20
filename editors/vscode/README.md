@@ -19,7 +19,7 @@ reports. The protocol between the two is chapter 35 of the design docs
 Download or build the VSIX for your platform and install it:
 
 ```bash
-code --install-extension anvil-vscode-0.40.10-win32-x64.vsix
+code --install-extension anvil-vscode-0.41.2-win32-x64.vsix
 ```
 
 Nothing else is needed: the `anvil-host` sidecar for that platform travels
@@ -58,7 +58,7 @@ The sidecar is found in this order, and the first hit wins:
 npm run package:vsix                 # this machine's platform
 npm run package:vsix -- --target linux-x64
 npm run package:all                  # one VSIX per target, in sequence
-npm run smoke:vsix -- --vsix anvil-vscode-0.40.10-win32-x64.vsix
+npm run smoke:vsix -- --vsix anvil-vscode-0.41.2-win32-x64.vsix
 ```
 
 Targets: `win32-x64`, `win32-arm64`, `linux-x64`, `linux-arm64`, `darwin-x64`,
@@ -112,7 +112,10 @@ names both sides and stops rather than failing later inside a tool call.
 | `anvil.model` | Model id; empty uses the host's default |
 | `anvil.baseUrl` | OpenAI-compatible base URL; empty uses the provider default |
 | `anvil.maxSteps` | Step limit per turn; `0` uses the host's default |
-| `anvil.contextWindow` | The window the token meter measures the last run against, in tokens. `0` (the default) means unknown, and the composer then shows counts only — Anvil does not guess a window from a model name |
+| `anvil.contextWindow` | The window the token meter measures against, in tokens, and the window the session auto-compacts within. `0` (the default) means unknown, and the composer then shows counts only — Anvil does not guess a window from a model name |
+| `anvil.autoCompactAt` | How full that window may get before the host summarizes the conversation on its own, as a fraction (default `0.8`). The meter marks this point and counts down to it; ignored while the window is `0` |
+| `anvil.contextKeepRecent` | Messages a compaction keeps verbatim (default `8`, minimum `2`) |
+| `anvil.cacheTtlSeconds` | How long the provider keeps its prompt cache, for the meter's countdown. `0` (the default) means the provider's default: five minutes for Anthropic, and no countdown for a provider that never states one |
 | `anvil.store` | `jsonl`, `sqlite`, or empty for the host's default |
 | `anvil.vision` | Accept pasted images; off by default |
 | `anvil.rules` | Load `AGENTS.md` and `.anvil/rules/*.md`; on by default |
@@ -162,19 +165,23 @@ spawned with.
   `allowed by rule N: …` on its card, and a refused one shows the rule's reason.
   A rules file that will not compile is opened where it is broken, with a
   diagnostic on the line, rather than failing the session with a bare error —
-  and **Anvil: Open Permission Rules** is how you get to the file.
+  and **Anvil: Open Permission Rules** is the manager that edits it without the
+  JSON; **Anvil: Open Permission Rules File** opens the file itself.
 - **Kills its child.** One host per window, stopped on deactivate, on a folder
   change, and on a settings change (the host reads its configuration at spawn).
 - **Tells you what it read.** The tab reports which rule files this workspace
   loaded — `AGENTS.md`, `.anvil/rules/*.md`, and optionally `.cursor/rules/*` —
   and says so plainly when one was skipped or cut short by the size budget.
   It does the same for MCP: a card lists the servers the enabled `mcp.json`
-  layers declare — name, transport, source file — and names a layer whose file
-  is not there. It says nothing about whether a server connected, because the
-  host can only report what a file says; a green dot from that would mean "the
-  file mentioned it", not "it works". A file that will not parse is reported as
-  an error, since an empty list would hide the one thing you can fix. Calls
-  through MCP tools stay behind the `mcp` permission group. When the web tools
+  layers declare — name, transport, source file — with a state dot and word for
+  each one and, once connected, how many tools it offers; a failure shows the
+  error instead of breaking the session, and a layer whose file is not there is
+  named. The dot is only drawn when the host can actually observe a connection:
+  a host from before this milestone reports configuration alone, and the card
+  then stays the plain list it was rather than inventing a status. A file that
+  will not parse is reported as an error, since an empty list would hide the one
+  thing you can fix. `/mcp` is where any of it is changed. Calls through MCP
+  tools stay behind the `mcp` permission group. When the web tools
   are on, the tab adds one row saying so and whether a key is stored — present
   or absent, never the value; when they are off there is no row at all. With
   the `mcp` provider it says what that really means: no built-in tools are
@@ -182,10 +189,16 @@ spawned with.
 - **Counts what the session spent.** A line under the composer adds up the input
   and output tokens of every finished run — live, or replayed from a stored
   `run_end` — and it resets when the tab moves to a new conversation. With
-  `anvil.contextWindow` set it also draws the last run's total as a share of
-  that window. With it unset there is no percentage: no catalogue in the
-  repository defines a window, and a guess from a model name would make the
-  fraction a number about Anvil rather than about the model.
+  `anvil.contextWindow` set it draws the conversation's estimated size against
+  that window, what is left, and where auto-compaction will fire
+  (`18k of 200k (9%) · 182k left · compact at 160k`); the estimate comes from the
+  host, so it is re-read after every run and when a compaction finishes. When a
+  provider reports cached input, the line adds the cached share and — with a
+  known TTL — counts the cache's remaining life down to **cache cold**. With no
+  window there is no percentage: no catalogue in the repository defines one, and
+  a guess from a model name would make the fraction a number about Anvil rather
+  than about the model. `/compact` folds the conversation on demand; the
+  transcript marks the boundary and says how much was summarized.
 - **Shows the plan as a checklist.** The built-in `todo_write` tool lets the
   model publish its task list, and the panel draws it below the composer — one
   row per item, with the current one in the normal text colour and finished ones
@@ -193,6 +206,30 @@ spawned with.
   empty list removes it. The call is an ordinary tool card too, so a reopened
   conversation shows the checklist it ended with, rebuilt from the stored
   arguments.
+- **Lets one agent hand work to another.** With `anvil.subagents` on (the
+  default) the session has `spawn_agent`: the model writes a brief, and a child
+  agent runs it in its own conversation with the parent's tools and permission
+  callback. The child's steps stream under the spawn card — assistant text,
+  reasoning and tool calls, drawn with the same renderer and indented rather
+  than redrawn. A child that needs approval stops the same person the parent
+  would, and its card names the child. Afterwards **Open subagent transcript**
+  opens the child's stored conversation, which is a session like any other;
+  replay shows the spawn call's brief and result, not steps the store never
+  wrote. With `background: true` the call returns a task id instead of waiting,
+  and the same table that lists shell jobs lists the child. `run_workflow` is
+  the same child agent, declared as a small DAG: steps, dependencies, literal
+  `{{step.result}}` substitution and one level of `for_each`, with one result
+  block listing every step's status. It is orchestration, not a scripting
+  language; a background workflow is one row in the Tasks panel.
+- **Shows work that outlived the call.** A background `shell` or subagent is a
+  row in the Tasks panel: kind, title, status, elapsed, and the actions that
+  apply — **View output** for a shell task, **Open transcript** for an agent
+  task, **Cancel** while it runs. `/tasks` opens it, and so does the status-bar
+  item that appears while anything is running; the item counts the window's
+  live sessions, because the panel is about the window rather than about one
+  tab. Closing a session stops its tasks, and the panel then says what they
+  became instead of showing a job that vanished. Output is text, read from the
+  host's ring on demand, with a note when older bytes were dropped.
 - **Takes the keyboard and the files.** <kbd>Escape</kbd> interrupts a running
   turn from anywhere in the panel (an idle Escape keeps its other meanings and
   never touches the draft). Files dropped on the panel become `@` references —
@@ -309,6 +346,13 @@ The list is cached and only re-read when something changes — a run starting or
 finishing, a session opening, the host restarting. The view never spawns a host
 just to draw itself.
 
+A subagent is a session too, and it hangs under the session that spawned it:
+collapsed, labelled with the description its spawn call gave the task, with the
+parent id and task in the tooltip. Opening one resumes and replays it through
+the same path as any other row. A child whose parent is no longer in the list is
+a root rather than a disappearance, and deleting a parent says how many child
+sessions go with it before anything is removed.
+
 ## Commands
 
 Type `/` in the composer for the catalogue. Built-ins:
@@ -319,12 +363,37 @@ Type `/` in the composer for the catalogue. Built-ins:
 | `/model [id]` | Choose the model this conversation uses |
 | `/resume [agent id]` | Continue a past session in this workspace |
 | `/clear` | Start a new conversation |
+| `/compact` | Summarize the conversation so far; handled by the host, nothing is sent to the model. Refused while a turn is running |
+| `/tasks` | Open the background tasks panel; sends nothing to the model |
+| `/mcp` | Open the MCP manager; sends nothing to the model |
 | `/help` | List the commands |
 
-**Anvil: Open Permission Rules** (also the **Permissions** button on the composer) opens this
-workspace's `.anvil/permissions.json`, creating it with an empty rule set if it is not there
-yet. That file is what decides whether a tool call runs, stops to ask you, or is refused
-outright — see *Permission modes and rules*.
+**Anvil: Open Permission Rules** (also the **Permissions** button on the composer) opens the
+rules manager: this workspace's rules as a list of effect, tool, pattern and reason rows, plus
+the mode new sessions start in. Save sends the whole list to the host, which compiles it with
+the same parser a session uses and writes the file atomically; a file that will not parse is
+read-only in the manager rather than overwritten. **Open JSON** in the manager, and
+**Anvil: Open Permission Rules File** in the palette, open `.anvil/permissions.json` itself —
+creating it with an empty rule set if it is not there yet. That file is what decides whether a
+tool call runs, stops to ask you, or is refused outright — see *Permission modes and rules*.
+
+**Anvil: Open MCP Servers** (also `/mcp`) opens the MCP manager: every server of both layers
+with its state dot and word — `connected` with its tool list, `connecting`, `failed` with the
+error, `needs sign-in` — its transport, the file it came from, the command or URL it runs, and
+the names (never the values) of the env vars and headers it declares. Each row has Enable or
+Disable, Reconnect, Delete (which asks again in place), and Sign out; a server that wants a
+sign-in also has Sign in, which opens the address the host answers with in your browser — the
+token is stored by the host, never by the editor. The form adds or edits a server in the
+project file or the user file: name, transport, and either a command, arguments and env vars or
+a URL and headers, one `KEY=value` per line. A blank env or header section means *keep what
+the file has*, which is why editing prefills key names rather than secrets. A write goes
+through the host, which rewrites the file atomically and preserves fields this build does not
+model; the manager then shows the host's own fresh reading, not the edit it sent. A file that
+will not parse turns the manager read-only and shows the parser's message, and **Open
+mcp.json** — also **Anvil: Open mcp.json** in the palette — opens the file itself, creating it
+when it is not there. The manager lists both layers even when a setting excludes one, and says
+so in a banner: those are the files it edits, and the setting only decides what a session
+reads.
 
 Skills in the workspace (`.anvil/skills/<id>/SKILL.md`) are listed as commands
 of their own: running one turns that skill on for the conversation. `@`
@@ -333,16 +402,22 @@ references a file or folder for the next prompt.
 ## Permission modes and rules
 
 The **mode** decides only whether a call stops to ask; the **rules** decide what it may do.
-The select in the composer has five modes and one entry that is not a mode:
+The select in the composer has six modes and one entry that is not a mode:
 
 | Mode | What it does |
 | --- | --- |
 | **Ask** | Every gated call waits for you |
 | **Accept edits** | In-workspace edits apply without asking; shell, verify, egress and external tools still ask |
+| **Auto** | Runs what it can prove harmless — read-only commands, in-workspace edits, your configured test/build commands — and asks about everything else |
 | **Plan** | The workspace-changing tools are withheld and the agent is told to plan |
 | **No asking** | For a run with nobody watching: only calls the rules already allow run, and nothing ever prompts |
 | **Bypass** | Nothing prompts — but a rule you wrote that says `ask` still does, and a `deny` still refuses |
 | **Workspace default** | No opinion: the mode is whatever `.anvil/permissions.json` declares, or `ask` |
+
+**Auto** classifies a call with the same facts a rule matches on and the same shell analyzer
+behind the `readonly` rule pattern — it makes no model call and reads no file. A command the
+analyzer cannot prove non-mutating asks, and so do egress, MCP and plugin tools. A rule you
+wrote that says `ask` opens its card here too.
 
 The mode is remembered per workspace; **Workspace default** gives that memory up, and the
 entry's label then shows the mode actually in force (*Workspace default (Plan)*). A mode that

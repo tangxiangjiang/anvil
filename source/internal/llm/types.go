@@ -20,8 +20,8 @@ const (
 
 // Message is a provider-agnostic chat message.
 type Message struct {
-	Role       Role
-	Content    string
+	Role    Role
+	Content string
 	// Parts are optional multimodal content parts (0.19+). When non-empty, providers
 	// prefer Parts over Content for user messages (Content may still hold plain text).
 	Parts      []ContentPart
@@ -41,9 +41,9 @@ type ContentPart struct {
 
 // ToolCall is a model-requested tool invocation.
 type ToolCall struct {
-	ID    string
-	Name  string
-	Args  json.RawMessage
+	ID   string
+	Name string
+	Args json.RawMessage
 }
 
 // ToolDef describes a tool schema for the model.
@@ -58,6 +58,10 @@ type Request struct {
 	Model    string
 	Messages []Message
 	Tools    []ToolDef
+	// PromptCache asks the adapter to place cache breakpoints where the provider
+	// supports them. Only the Anthropic adapter acts on it; OpenAI-compatible
+	// providers cache on their own and ignore the flag.
+	PromptCache bool
 }
 
 // Usage is token usage when available.
@@ -65,6 +69,13 @@ type Usage struct {
 	InputTokens  int
 	OutputTokens int
 	TotalTokens  int
+	// CachedTokens is how many input tokens the provider served from a prompt
+	// cache. Zero means the provider said nothing — not that nothing was cached:
+	// an older endpoint or a gateway may simply omit the field.
+	CachedTokens int
+	// CacheWriteTokens is how many input tokens the provider wrote into a cache
+	// (Anthropic only). Zero elsewhere.
+	CacheWriteTokens int
 }
 
 // Response is one completion step result.

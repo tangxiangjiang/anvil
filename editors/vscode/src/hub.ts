@@ -13,25 +13,44 @@
  * (the Stop command has to mean the one in front of them).
  */
 
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
+import { homedir } from 'node:os';
 import * as vscode from 'vscode';
 import { ChatPhase, phaseOf } from './chatStatus';
 import { ChatPanel } from './chatPanel';
 import { SlashCommand, commandCatalogue } from './commands';
 import { HostManager } from './hostManager';
+import { HostRpcError } from './hostClient';
+import { McpSettings } from './mcp';
+import { McpPanels } from './mcpPanel';
+import { PermissionsPanels } from './permissionsPanel';
+import { TaskRow, TasksPanels } from './tasksPanel';
 import {
   CheckpointRestoreResult,
   CheckpointRun,
+  CodeNoSession,
+  McpAddParams,
+  McpAuthenticateParams,
+  McpAuthenticateResult,
   McpListResult,
+  McpReconnectParams,
+  McpRemoveParams,
+  McpScope,
+  McpSetEnabledParams,
+  McpSignOutParams,
+  McpStatusParams,
+  McpUpdateParams,
   ModelEntry,
   PermissionsAddResult,
   PermissionsResult,
+  PermissionsSetParams,
   RuleFileInfo,
   RuleProblem,
   RuleSpec,
   SessionInfo,
   SessionTranscriptResult,
   SkillEntry,
+  TaskInfo,
 } from './protocol';
 import { PreviewDocuments } from './review';
 import { describeProblem, emptyRulesFile, problemPosition } from './rulesFile';
@@ -42,6 +61,21 @@ export class Hub {
   readonly manager: HostManager;
 
   private readonly panels = new Set<ChatPanel>();
+  /** The window's rules manager; one document, revealed rather than duplicated. */
+  private readonly permissions: PermissionsPanels;
+  /** The window's MCP manager; one document for every layer's servers. */
+  private readonly mcp: McpPanels;
+  /** The window's Tasks panel; one table of background work, revealed the same. */
+  private readonly tasks: TasksPanels;
+  /**
+   * The running background tasks of each live session, by session id.
+   *
+   * It exists for the status-bar count, which is a window-wide number while the
+   * table belongs to a session. The panel and the sidebar read the host for the
+   * rows themselves; this is only "how many are running", fed by the `task`
+   * notifications and never by a poll.
+   */
+  private readonly runningTasks = new Map<string, Set<string>>();
   /** The slash catalogue: built-ins plus this workspace's skills. */
   private catalogue: SlashCommand[] | undefined;
   /** The rule files the last session reported. Workspace-level, like the files. */
@@ -62,6 +96,9 @@ export class Hub {
   private readonly runningChanged = new vscode.EventEmitter<void>();
   /** A turn started or ended, in any tab, or the front tab changed. */
   readonly onRunningChanged = this.runningChanged.event;
+  private readonly tasksChanged = new vscode.EventEmitter<void>();
+  /** A background task started or ended, in any session of this window. */
+  readonly onTasksChanged = this.tasksChanged.event;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -76,6 +113,21 @@ export class Hub {
     });
     this.manager.onReset(() => {
       for (const panel of this.panels) panel.hostReset();
+      // The tasks belonged to the child that is gone; no terminal notification
+      // will arrive for them, so the count is dropped here rather than left
+      // claiming work nobody is doing.
+      this.forgetAllTasks();
+    });
+    this.permissions = new PermissionsPanels(context.extensionUri, this);
+    this.mcp = new McpPanels(context.extensionUri, this);
+    this.tasks = new TasksPanels(context.extensionUri, {
+      listTasks: () => this.listTasks(),
+      taskOutput: (sessionId, taskId, offset, limit) =>
+        this.manager.taskOutput(sessionId, taskId, offset, limit),
+      cancelTask: (sessionId, taskId) => this.manager.cancelTask(sessionId, taskId),
+      listSessions: () => this.listSessions(),
+      openSession: (agentId) => this.openSession(agentId),
+      onTasksChanged: (listener) => this.tasksChanged.event(listener),
     });
   }
 
@@ -284,6 +336,89 @@ export class Hub {
     this.tabsChanged.fire();
   }
 
+  // --- background tasks -------------------------------------------------------
+
+  /**
+   * A background task started or ended in one session tree.
+   *
+   * The notification carries the task's whole snapshot, so a terminal row is
+   * known by its status and not by a separate "removed" message. Every task
+   * notification fires the event, start or end: the panel re-lists on either,
+   * and the count only changes on the two edges.
+   */
+  noteTask(sessionId: string, task: TaskInfo): void {
+    let running = this.runningTasks.get(sessionId);
+    if (task.status === 'running') {
+      if (!running) {
+        running = new Set<string>();
+        this.runningTasks.set(sessionId, running);
+      }
+      running.add(task.id);
+    } else if (running) {
+      running.delete(task.id);
+      if (running.size === 0) this.runningTasks.delete(sessionId);
+    }
+    this.tasksChanged.fire();
+  }
+
+  /**
+   * Forgets one session's running tasks, when that session is closed.
+   *
+   * Closing a session stops its tasks on the host, which cannot notify for a
+   * session that is no longer there. Dropping the bucket is what keeps the
+   * status-bar count from outliving the tab that started the work.
+   */
+  forgetTasks(sessionId: string): void {
+    if (!this.runningTasks.delete(sessionId)) return;
+    this.tasksChanged.fire();
+  }
+
+  private forgetAllTasks(): void {
+    if (this.runningTasks.size === 0) return;
+    this.runningTasks.clear();
+    this.tasksChanged.fire();
+  }
+
+  /** How many background tasks are running across this window's sessions. */
+  get runningTaskCount(): number {
+    let count = 0;
+    for (const tasks of this.runningTasks.values()) count += tasks.size;
+    return count;
+  }
+
+  /**
+   * Every running or finished task of every live session, in start order.
+   *
+   * One table per session tree, rooted at the agent the person opened; this
+   * flattens them so the window's panel can show them together. A session the
+   * host no longer knows is dropped from the count rather than reported as a
+   * failure: it was closed between the tab and the question.
+   */
+  async listTasks(): Promise<TaskRow[]> {
+    const rows: TaskRow[] = [];
+    for (const session of this.manager.liveSessions()) {
+      const sessionId = session.id;
+      if (!sessionId) continue;
+      try {
+        for (const task of await this.manager.listTasks(sessionId)) {
+          rows.push({ sessionId, task });
+        }
+      } catch (err) {
+        if (err instanceof HostRpcError && err.code === CodeNoSession) {
+          this.forgetTasks(sessionId);
+          continue;
+        }
+        throw err;
+      }
+    }
+    return rows;
+  }
+
+  /** Opens the Tasks panel, or brings the open one to the front. */
+  openTasks(): void {
+    this.tasks.open();
+  }
+
   // --- catalogue --------------------------------------------------------------
 
   /**
@@ -370,15 +505,120 @@ export class Hub {
   }
 
   /**
-   * The MCP servers the given layers declare.
+   * The MCP servers the given layers declare, and what the host observed for each.
    *
    * Not cached, unlike the rules: the layers are the caller's, and a malformed
    * file is an answer the caller has to be able to see on every ask, not just
    * the first. The call reads two small files, so repeating it per tab costs
    * less than a cache that could answer for a different layer set.
    */
-  mcpServers(settingSources: string[]): Promise<McpListResult> {
-    return this.manager.mcpServers(settingSources);
+  mcpServers(settingSources: string[], includeTools?: boolean): Promise<McpListResult> {
+    return this.manager.mcpServers(settingSources, includeTools);
+  }
+
+  /**
+   * An MCP server changed state — connecting, connected, failed, needs a sign-in.
+   *
+   * Window-level, because the runtime behind it is: the transition happens in the
+   * host, not in a conversation. A listener is a view and must dispose what it
+   * gets back.
+   */
+  onMcpStatus(listener: (params: McpStatusParams) => void): vscode.Disposable {
+    return this.manager.onMcpStatus(listener);
+  }
+
+  /** Every management call answers with the listing as it stands after the write. */
+  addMcpServer(params: McpAddParams): Promise<McpListResult> {
+    return this.manager.addMcpServer(params);
+  }
+
+  updateMcpServer(params: McpUpdateParams): Promise<McpListResult> {
+    return this.manager.updateMcpServer(params);
+  }
+
+  removeMcpServer(params: McpRemoveParams): Promise<McpListResult> {
+    return this.manager.removeMcpServer(params);
+  }
+
+  setMcpServerEnabled(params: McpSetEnabledParams): Promise<McpListResult> {
+    return this.manager.setMcpServerEnabled(params);
+  }
+
+  reconnectMcpServer(params: McpReconnectParams): Promise<McpListResult> {
+    return this.manager.reconnectMcpServer(params);
+  }
+
+  /**
+   * Starts a sign-in and answers with the URL to open.
+   *
+   * The panel opens it with `vscode.env.openExternal`; the host is what completes
+   * the callback and reconnects. Completion arrives as an `mcp.status`, not as
+   * the resolution of this promise — the browser round trip is the user's, and
+   * how long it takes is not something to hold a request open for.
+   */
+  authenticateMcpServer(params: McpAuthenticateParams): Promise<McpAuthenticateResult> {
+    return this.manager.authenticateMcpServer(params);
+  }
+
+  signOutMcpServer(params: McpSignOutParams): Promise<McpListResult> {
+    return this.manager.signOutMcpServer(params);
+  }
+
+  /** Whether sessions load each MCP layer; the manager says so when one is off. */
+  loadMcpSettings(): McpSettings {
+    return readSettings().mcp;
+  }
+
+  /** Opens the MCP manager: every server, with what it is doing and what to do. */
+  openMcp(): void {
+    this.mcp.open();
+  }
+
+  /**
+   * Shows one layer's `mcp.json` where it lives, creating it when it is not
+   * there.
+   *
+   * The paths are the ones the host uses — the first folder's `.cursor/mcp.json`
+   * and `~/.cursor/mcp.json` — because a file the manager edits is the file a
+   * session reads, and a person sent to the wrong path would edit a file nothing
+   * looks at. The seed is the smallest document the writer accepts, so the next
+   * add has a file to write into rather than a directory to guess at.
+   *
+   * Hand editing stays one click away for the same reason the permissions
+   * manager keeps its Open JSON: an entry with an OAuth block or a field this
+   * milestone does not model is easier to see in the file than in the form.
+   */
+  async openMcpFile(scope: McpScope = 'project'): Promise<void> {
+    const path = mcpFilePath(scope);
+    if (path === undefined) {
+      this.notice('error', 'Could not find a workspace folder to resolve mcp.json against.');
+      return;
+    }
+    const uri = vscode.Uri.file(path);
+    const exists = await vscode.workspace.fs.stat(uri).then(
+      () => true,
+      () => false,
+    );
+    if (!exists) {
+      const create = 'Create it';
+      const answer = await vscode.window.showInformationMessage(
+        scope === 'user'
+          ? 'This user account has no MCP configuration yet.'
+          : 'This workspace has no MCP configuration yet.',
+        { modal: false, detail: path },
+        create,
+      );
+      if (answer !== create) return;
+      try {
+        await vscode.workspace.fs.createDirectory(vscode.Uri.file(dirname(path)));
+        await vscode.workspace.fs.writeFile(uri, Buffer.from('{\n  "mcpServers": {}\n}\n', 'utf8'));
+      } catch (err) {
+        this.notice('error', `Could not create ${path}: ${(err as Error).message}`);
+        return;
+      }
+    }
+    const document = await vscode.workspace.openTextDocument(uri);
+    await vscode.window.showTextDocument(document);
   }
 
   /** The provider's model catalogue, for a tab's /model picker. */
@@ -393,9 +633,40 @@ export class Hub {
 
   // --- permission rules -------------------------------------------------------
 
+  /** The workspace rule file as the host reads it, for the manager. */
+  permissionRules(): Promise<PermissionsResult> {
+    return this.manager.permissionRules();
+  }
+
+  /**
+   * Replaces the workspace rule file with the list the manager showed.
+   *
+   * It lives here rather than in the panel because the panel is a document: it
+   * knows what a form looks like, not that there is a host child behind it. The
+   * answer is the file read back, which the panel renders.
+   */
+  savePermissionRules(params: PermissionsSetParams): Promise<PermissionsResult> {
+    return this.manager.savePermissionRules(params);
+  }
+
+  /** Whether sessions read the rule file at all; the panel says so when they do not. */
+  loadPermissionsEnabled(): boolean {
+    return readSettings().session.load_permissions !== false;
+  }
+
+  /** Opens the manager: the rules as a form, without knowing the JSON. */
+  openPermissionRules(): void {
+    this.permissions.open();
+  }
+
   /**
    * Shows the workspace rule file where it lives, creating it when this
    * workspace has written no rules yet.
+   *
+   * The manager's Open JSON button and the `Anvil: Open Permission Rules File`
+   * command are this path. Hand editing is not the legacy way to edit a rule —
+   * a pattern with quoting in it is still easier to see in the file — so it stays
+   * one click from the form rather than behind an advanced setting.
    *
    * A file that will not compile is opened at the place the parser objected to,
    * reported against the file in the Problems panel, and said in every tab: it
@@ -404,7 +675,7 @@ export class Hub {
    * session itself reports the same problem as a failure to open, and this is
    * the way to it.
    */
-  async openPermissionRules(): Promise<void> {
+  async openPermissionRulesFile(): Promise<void> {
     let state: PermissionsResult;
     try {
       state = await this.manager.permissionRules();
@@ -473,9 +744,30 @@ export class Hub {
     this.tabsChanged.dispose();
     this.sessionsChanged.dispose();
     this.runningChanged.dispose();
+    this.tasksChanged.dispose();
     this.diagnostics?.dispose();
     this.diagnostics = undefined;
+    this.permissions.dispose();
+    this.tasks.dispose();
+    this.mcp.dispose();
     for (const panel of panels) await panel.dispose().catch(() => undefined);
     await this.manager.dispose();
   }
+}
+
+/**
+ * One layer's `mcp.json`, resolved the way the host resolves it.
+ *
+ * `undefined` when a project path has no workspace folder to sit in — the host
+ * would be launched without a cwd, so there is no file to open either.
+ *
+ * The paths are computed rather than asked for so this works when the file is
+ * the problem: `mcp.list` answers with a path only after it has parsed, and the
+ * button that opens a file that will not parse is the one worth having.
+ */
+function mcpFilePath(scope: McpScope): string | undefined {
+  if (scope === 'user') return join(homedir(), '.cursor', 'mcp.json');
+  const folder = vscode.workspace.workspaceFolders?.[0];
+  if (!folder || folder.uri.scheme !== 'file') return undefined;
+  return join(folder.uri.fsPath, '.cursor', 'mcp.json');
 }

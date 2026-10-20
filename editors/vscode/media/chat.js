@@ -50,6 +50,16 @@
    */
   const count = meterMath.short;
 
+  /**
+   * The same shorthand, except that zero is spelled out. `short(0)` is the empty
+   * string, which is right where a count is optional and wrong where it is the
+   * subject — "0 of 200k" is a fact, " of 200k" is a riddle.
+   */
+  function amount(value) {
+    const whole = meterMath.count(value);
+    return whole > 0 ? count(whole) : '0';
+  }
+
   /** Prompt recall, from `media/history.js` — another plain global script. */
   const historyMath = self.anvilHistory;
   const history = historyMath.create();
@@ -66,14 +76,43 @@
   /** True once a prompt has been sent: the empty state is gone for good. */
   let started = false;
   /**
-   * The assistant round being streamed, or null. One reference for its Thinking
-   * block and its answer, because they are one round: a user message, a tool
-   * call, an approval, a notice, a session marker, the end of the run and a
-   * transcript reset all end it. Reasoning that outlived its round would append
-   * to a block sitting *above* the tool cards, so the transcript would show
-   * thinking before the calls it actually followed.
+   * A render target: the window's transcript, or one spawn call's body.
+   *
+   * A child's events are drawn inside the card its parent's `spawn_agent` call
+   * made, not into the parent's transcript. Giving each target its own round
+   * and container is what lets the same primitives — text, reasoning, tool
+   * cards — draw both, rather than a second renderer that would drift from the
+   * first. `active` is the target the next block lands in; event dispatch
+   * switches it for a child and back.
    */
-  let round = null;
+  function makeScope(container) {
+    return { container, round: null };
+  }
+  const mainScope = makeScope(transcript);
+  let active = mainScope;
+  /**
+   * The target of each spawn call, by the `tool_call_id` of the call. A child's
+   * event names its spawn call, which is how it finds the card — at any depth,
+   * because a grandchild's spawn call is registered by the same code.
+   */
+  const spawnScopes = new Map();
+  /** Runs `fn` with `scope` as the target, and restores the previous one. */
+  function inScope(scope, fn) {
+    const previous = active;
+    active = scope;
+    try {
+      fn();
+    } finally {
+      active = previous;
+    }
+  }
+  /** The assistant round being streamed in the active target, or null. */
+  function currentRound() {
+    return active.round;
+  }
+  function setCurrentRound(state) {
+    active.round = state;
+  }
   /** Tool cards by tool_call_id, so a result can find its call. */
   const toolCards = new Map();
   /**
@@ -110,6 +149,20 @@
    * number about Anvil rather than about the model.
    */
   let contextWindow = 0;
+  /** Where the session compacts, as a fraction of the window. 0 means unset. */
+  let autoCompactAt = 0;
+  /** The prompt cache's TTL the client knows, or 0 when none is known. */
+  let cacheTtlSeconds = 0;
+  /**
+   * The host's last estimate of the conversation, or null before one arrives.
+   * It is an estimate of the next request, not the provider's count — the field
+   * names on the wire say so, and so does the meter's wording.
+   */
+  let contextInfo = null;
+  /** When the last run reached the provider, in ms since epoch, or null. */
+  let lastRequestAt = null;
+  /** The one-second cache countdown, or null while nothing needs counting. */
+  let cacheClock = null;
   /**
    * What this session has spent, and what its last run spent. Reset with the
    * transcript, because the two describe the same conversation: a meter outliving
@@ -149,7 +202,7 @@
   function append(node) {
     const pinned = atBottom();
     clearEmpty();
-    transcript.appendChild(node);
+    active.container.appendChild(node);
     scrollIfPinned(pinned);
   }
 
@@ -163,6 +216,10 @@
    * the user is no longer looking at.
    */
   function clearTranscript() {
+    // A card from the vanished conversation cannot receive a child's events any
+    // more, and its container is about to be detached with the transcript.
+    spawnScopes.clear();
+    active = mainScope;
     endRound();
     toolCards.clear();
     callFacts.clear();
@@ -223,13 +280,14 @@
    * rather than appending to one the reader has already read past.
    */
   function endRound() {
+    const round = currentRound();
     if (round && round.think && !round.thinkPinned) round.think.open = false;
     // Every ending gets the action — a text block, a tool call, the run's end —
     // because the bubble is complete the moment it stops growing, and a Copy
     // that only appeared after the whole turn would refuse to copy the answer
     // the reader is looking at while the agent works on the next step.
     if (round && round.text.trim() !== '') addCopy(round.wrap, round.text);
-    round = null;
+    setCurrentRound(null);
   }
 
   /**
@@ -270,12 +328,12 @@
    * because re-parsing only the new tail is exactly what it must not do.
    */
   function ensureRound() {
-    if (round) return round;
+    if (currentRound()) return currentRound();
     const wrap = el('div', 'msg assistant');
     wrap.appendChild(el('div', 'who', 'anvil'));
     const body = el('div', 'body md');
     wrap.appendChild(body);
-    round = {
+    const state = {
       wrap,
       body,
       text: '',
@@ -286,8 +344,9 @@
       thinkPinned: false,
       md: { node: body, settled: [], offset: 0, rendered: 0 },
     };
+    setCurrentRound(state);
     append(wrap);
-    return round;
+    return state;
   }
 
   function addAssistantChunk(text) {
@@ -688,6 +747,31 @@
     endRound();
   }
 
+  /**
+   * The boundary a compaction leaves in the conversation.
+   *
+   * A live compaction knows what it did — how many messages it summarized and
+   * what the estimate fell from and to — and says so. A replayed one comes from
+   * a stored summary record that keeps none of those numbers, so it says only
+   * that the boundary is there. Both are the same row in the same place, which
+   * is what makes the replay readable as the conversation it is.
+   */
+  function addCompact(info) {
+    const parts = ['context compacted'];
+    const summarized = info ? count(info.summarized) : '';
+    if (summarized) {
+      parts.push(summarized + (summarized === '1' ? ' message summarized' : ' messages summarized'));
+    }
+    const before = info ? count(info.before) : '';
+    const after = info ? count(info.after) : '';
+    if (before && after) parts.push(before + ' → ' + after);
+    const wrap = el('div', 'msg compact');
+    wrap.title = 'Earlier turns were summarized so the conversation fits its window.';
+    wrap.appendChild(el('div', 'body', parts.join(' · ')));
+    append(wrap);
+    endRound();
+  }
+
   // --- tool cards -----------------------------------------------------------
 
   /** A short one-line hint about what the call touches. */
@@ -723,31 +807,78 @@
     return wrap;
   }
 
+  /**
+   * The brief a spawn call carries: the description the person saw, then the
+   * whole prompt the child gets. The prompt is shown because the child sees
+   * nothing else from this conversation — a card that hid it would leave the
+   * reader guessing what was delegated.
+   */
+  function spawnBrief(args) {
+    if (!args || typeof args !== 'object') return '';
+    const lines = [];
+    if (typeof args.description === 'string' && args.description.trim() !== '') {
+      lines.push(args.description.trim());
+    }
+    if (typeof args.prompt === 'string' && args.prompt.trim() !== '') {
+      if (lines.length > 0) lines.push('');
+      lines.push(args.prompt.trim());
+    }
+    return lines.join('\n');
+  }
+
+  /** The one-line hint on a spawn card's summary. */
+  function spawnDescription(args) {
+    if (args && typeof args === 'object' && typeof args.description === 'string') {
+      const description = args.description.trim();
+      if (description !== '') return description;
+    }
+    return callHint('spawn_agent', args);
+  }
+
   function addToolCall(event, reviewable, anchor) {
     endRound();
-    const card = el('details', 'tool');
+    const spawn = event.name === 'spawn_agent';
+    const card = el('details', 'tool' + (spawn ? ' spawn' : ''));
     const summary = el('summary');
-    summary.appendChild(el('span', 'name', event.name || 'tool'));
-    summary.appendChild(el('span', 'hint', callHint(event.name, event.args)));
-    summary.appendChild(el('span', 'state', 'running…'));
+    summary.appendChild(el('span', 'name', spawn ? 'subagent' : event.name || 'tool'));
+    summary.appendChild(el('span', 'hint', spawn ? spawnDescription(event.args) : callHint(event.name, event.args)));
+    summary.appendChild(el('span', 'state', spawn ? 'starting…' : 'running…'));
     card.appendChild(summary);
 
     const pane = el('div', 'pane');
-    // An edit already carries both sides of the change, so the card shows that
-    // comparison instead of the raw arguments, and opens onto it. Every other
-    // call keeps the labelled IN block. Omitted rather than shown empty:
-    // `undefined` would otherwise be rendered as the string "undefined".
-    const edit = event.name === 'edit_file' ? editPair(event.args) : undefined;
-    if (edit) {
+    /** Where a spawn call's child events go; undefined for every other tool. */
+    let body;
+    // A spawn card starts open so the child's work is visible while it runs. A
+    // replayed spawn has no steps to show and is collapsed by its result.
+    if (spawn) {
       card.open = true;
-      pane.appendChild(renderEditDiff(edit, anchor));
+      const brief = spawnBrief(event.args);
+      if (brief !== '') pane.appendChild(section('task', 'TASK', brief));
+      body = el('div', 'spawn-body');
+      pane.appendChild(body);
+    } else if (event.name === 'edit_file') {
+      // An edit already carries both sides of the change, so the card shows that
+      // comparison instead of the raw arguments, and opens onto it.
+      const edit = editPair(event.args);
+      if (edit) {
+        card.open = true;
+        pane.appendChild(renderEditDiff(edit, anchor));
+      } else if (event.args !== undefined) {
+        pane.appendChild(section('in', 'IN', safeJson(event.args)));
+      }
     } else if (event.args !== undefined) {
+      // Every other call keeps the labelled IN block. Omitted rather than shown
+      // empty: `undefined` would otherwise be rendered as the string "undefined".
       pane.appendChild(section('in', 'IN', safeJson(event.args)));
     }
     card.appendChild(pane);
 
     if (event.tool_call_id) {
       toolCards.set(event.tool_call_id, card);
+      // A child's events name this call, so this is the card they land in — and
+      // a grandchild's spawn call is registered from inside this same body,
+      // which is what makes the nesting work at any depth.
+      if (spawn) spawnScopes.set(event.tool_call_id, makeScope(body));
       // Only for a call the extension said has a change to show. The button
       // itself waits for the result: a change that failed to apply is not a
       // change, and a diff of one would describe something that never happened.
@@ -917,6 +1048,10 @@
       addNotice(`tool result: ${event.content || ''}`);
       return;
     }
+    if (event.tool_call_id && spawnScopes.has(event.tool_call_id)) {
+      addSpawnResult(card, event);
+      return;
+    }
     const state = card.querySelector('.state');
     const failed = event.is_error === true;
     card.classList.add(failed ? 'failed' : 'done');
@@ -956,6 +1091,81 @@
       });
       out.appendChild(more);
     }
+  }
+
+  /** A button in a spawn card's action row. */
+  function spawnAction(label, onClick) {
+    const button = el('button', 'spawn-action', label);
+    button.type = 'button';
+    button.addEventListener('click', onClick);
+    return button;
+  }
+
+  /**
+   * Offers the child's stored conversation.
+   *
+   * The child is a session like any other — the store keeps it, the sidebar
+   * nests it — so this is the same open a sidebar click does. It is offered
+   * only when an id is known: a foreground spawn's result carries it, and a
+   * background spawn's child announced it on its own events.
+   */
+  function addSpawnTranscriptButton(pane, agentId) {
+    if (!agentId) return;
+    const row = el('div', 'spawn-actions');
+    row.appendChild(
+      spawnAction('Open subagent transcript', () =>
+        vscode.postMessage({ type: 'openAgentTranscript', agentId }),
+      ),
+    );
+    pane.appendChild(row);
+  }
+
+  /**
+   * Settles a spawn card.
+   *
+   * The result is the parent's half of the delegation: the child's id, its step
+   * count, and its final message. The child's own steps arrived as events and
+   * are already in the body. A replayed tab has no child records — the child's
+   * conversation is a separate stored agent — so the result's text is all there
+   * is, and the card says what happened rather than pretending the steps exist.
+   */
+  function addSpawnResult(card, event) {
+    const content = event.content || '';
+    const failed = event.is_error === true;
+    card.classList.add(failed ? 'failed' : 'done');
+    const state = card.querySelector('.state');
+    const pane = card.querySelector('.pane');
+    const body = card.querySelector('.spawn-body');
+    const scope = spawnScopes.get(event.tool_call_id);
+    const live = body !== null && body.childNodes.length > 0;
+
+    const lines = content.split('\n');
+    const first = lines[0] || '';
+    const rest = lines.slice(1).join('\n').trim();
+    const finished = /^(\S+) finished in (\d+) steps?\./.exec(first);
+    const background = /^(\S+) started in the background/.exec(first);
+
+    if (failed) {
+      state.textContent = 'failed';
+      pane.appendChild(section('out', 'OUT', content));
+      if (!live) card.open = false;
+      return;
+    }
+    if (background) {
+      state.textContent = 'background';
+      const row = el('div', 'spawn-actions');
+      row.appendChild(el('span', 'spawn-note', 'Running in the background.'));
+      row.appendChild(spawnAction('Open Tasks', () => vscode.postMessage({ type: 'openTasks' })));
+      pane.appendChild(row);
+      addSpawnTranscriptButton(pane, scope && scope.agentId);
+      return;
+    }
+    state.textContent = finished ? `done · ${finished[2]} steps` : 'done';
+    addSpawnTranscriptButton(pane, (scope && scope.agentId) || (finished ? finished[1] : ''));
+    // A live spawn already has the child's message in the body, streamed as the
+    // child's own events. A replayed one does not: its result is the only copy.
+    if (!live && rest !== '') pane.appendChild(section('result', 'RESULT', rest));
+    if (!live) card.open = false;
   }
 
   function safeJson(value) {
@@ -1554,6 +1764,7 @@
   const modeLabels = {
     ask: 'Ask',
     accept_edits: 'Accept edits',
+    auto: 'Auto',
     plan: 'Plan',
     dont_ask: 'No asking',
     bypass: 'Bypass',
@@ -1694,12 +1905,17 @@
 
   // --- mcp ------------------------------------------------------------------
 
+  /** The card the last `mcp` message drew, or null before one arrived. */
+  let mcpCard = null;
+
   /**
-   * What the enabled MCP layers will load, and from which file.
+   * What the enabled MCP layers declare, and — from a host with the runtime —
+   * what became of each.
    *
-   * It deliberately says nothing about whether a server connected: the host
-   * reports configuration only, so a green dot here would mean "the file
-   * mentioned it" — which is not the thing a person cares about.
+   * The state word and the tool count are the host's; this only draws them. A
+   * host from before 0.44 sends no `runtime` and no state, and the card stays the
+   * configuration listing it always was: a dot there would mean "the file
+   * mentioned it", which is not the thing a person cares about.
    */
   function showMcp(msg) {
     const card = el('div', 'commands mcp');
@@ -1711,18 +1927,23 @@
       endRound();
       return;
     }
+    const runtime = msg.runtime === true;
+    card.dataset.runtime = runtime ? '1' : '0';
     const servers = Array.isArray(msg.servers) ? msg.servers : [];
     for (const server of servers) {
-      const row = el('div', 'command');
-      row.appendChild(el('span', 'cmd', typeof server.name === 'string' ? server.name : ''));
-      row.appendChild(el('span', 'desc', typeof server.source === 'string' ? server.source : ''));
-      if (typeof server.transport === 'string' && server.transport !== '') {
-        row.appendChild(el('span', 'tag', server.transport));
-      }
+      const row = mcpRow(server, runtime);
       card.appendChild(row);
+      const reason = mcpErrorText(server);
+      if (reason !== '') card.appendChild(mcpErrorRow(reason));
     }
     if (servers.length === 0) {
       card.appendChild(el('div', 'command muted', 'No MCP servers are configured.'));
+    }
+    // A file that will not parse is the one thing here the user can fix, and the
+    // host still answered with whatever it last observed.
+    const problem = typeof msg.problem === 'string' ? msg.problem : '';
+    if (problem !== '') {
+      card.appendChild(el('div', 'command failed', 'Could not read the MCP configuration: ' + problem));
     }
     // Layers that are enabled but have no file. The path is the one the host
     // resolved, so it can be opened or created as printed.
@@ -1730,8 +1951,104 @@
     for (const note of notes) {
       if (typeof note === 'string' && note !== '') card.appendChild(el('div', 'command muted', note));
     }
+    // The card a later status is drawn onto. One per document: a second card
+    // would be a second conversation, and each document has its own here.
+    mcpCard = card;
     append(card);
     endRound();
+  }
+
+  /**
+   * One server's row: dot, name, file, transport, and the state in words.
+   *
+   * A legacy host gets the row it always got, with no dot and no word — not an
+   * empty span, which would take a gap in the row and shift everything after it.
+   */
+  function mcpRow(server, runtime) {
+    const row = el('div', 'command');
+    const name = typeof server.name === 'string' ? server.name : '';
+    row.dataset.name = name;
+    const state = typeof server.state === 'string' ? server.state : '';
+    if (runtime && state !== '') {
+      row.appendChild(el('span', 'mcp-dot ' + state, '●'));
+      row.classList.add('mcp-' + state);
+    }
+    row.appendChild(el('span', 'cmd', name));
+    row.appendChild(el('span', 'desc', typeof server.source === 'string' ? server.source : ''));
+    if (typeof server.transport === 'string' && server.transport !== '') {
+      row.appendChild(el('span', 'tag', server.transport));
+    }
+    if (runtime) {
+      const text = mcpStateText(server);
+      if (text !== '') row.appendChild(el('span', 'desc mcp-state', text));
+    }
+    return row;
+  }
+
+  /**
+   * The state in words, with the count only while it is a fact.
+   *
+   * A failed server's last tool count would read as though it still had them, so
+   * the number appears with `connected` and with nothing else.
+   */
+  function mcpStateText(server) {
+    const label = typeof server.state_label === 'string' ? server.state_label : '';
+    if (label === '') return '';
+    if (server.state !== 'connected') return label;
+    const tools = typeof server.tool_count === 'number' ? server.tool_count : 0;
+    return label + ' · ' + tools + (tools === 1 ? ' tool' : ' tools');
+  }
+
+  /** The line under a row that says why it is not working, if it is not. */
+  function mcpErrorText(server) {
+    const text = typeof server.error === 'string' ? server.error : '';
+    // Only a state that is not working has a reason worth the extra line; a
+    // connected server carries none, and a disabled one is disabled on purpose.
+    if (!(server.state === 'failed' || server.state === 'auth_required')) return '';
+    return text;
+  }
+
+  /**
+   * The reason as its own line.
+   *
+   * It is text, never markup: the host builds it from a child process's stderr.
+   */
+  function mcpErrorRow(text) {
+    const node = el('div', 'command muted mcp-error', text);
+    return node;
+  }
+
+  /**
+   * A state change lands on the row that already names the server.
+   *
+   * A server the card has no row for is one added after it was drawn — from the
+   * manager, in another tab — and the card grows a row rather than ignoring the
+   * news. A document with no card at all has nothing to update: its own listing
+   * will say the same thing when it arrives.
+   */
+  function updateMcp(server) {
+    if (!mcpCard) return;
+    const name = typeof server.name === 'string' ? server.name : '';
+    if (name === '' || mcpCard.dataset.runtime !== '1') return;
+    let row = null;
+    for (const child of mcpCard.children) {
+      if (child.dataset && child.dataset.name === name && child.classList.contains('command')) {
+        row = child;
+        break;
+      }
+    }
+    const reason = mcpErrorText(server);
+    const errorRow = row && row.nextElementSibling && row.nextElementSibling.classList.contains('mcp-error')
+      ? row.nextElementSibling
+      : null;
+    if (errorRow) mcpCard.removeChild(errorRow);
+    const fresh = mcpRow(server, true);
+    if (row) {
+      mcpCard.replaceChild(fresh, row);
+    } else {
+      mcpCard.appendChild(fresh);
+    }
+    if (reason !== '') mcpCard.insertBefore(mcpErrorRow(reason), fresh.nextSibling);
   }
 
   // --- web search -----------------------------------------------------------
@@ -1812,25 +2129,106 @@
    */
   function recordUsage(done) {
     meterMath.add(usageTotals, done);
+    recordContext(done);
     renderMeter();
+  }
+
+  /**
+   * Keeps the two per-run facts the meter needs beyond the counts: the host's
+   * estimate of the conversation, and when the run last reached the provider.
+   *
+   * An absent estimate leaves the previous one alone — the conversation has not
+   * changed — but an absent anchor is left alone too, on purpose: a run that
+   * never reached the provider did not refresh the cache, so the previous
+   * request is still the most recent one and its countdown goes on aging.
+   */
+  function recordContext(done) {
+    if (!done) return;
+    if (done.context && typeof done.context === 'object') contextInfo = done.context;
+    if (typeof done.last_request_at === 'string' && done.last_request_at !== '') {
+      const at = Date.parse(done.last_request_at);
+      if (isFinite(at)) lastRequestAt = at;
+    }
   }
 
   /** Forgets the session's totals, for a session that is replacing this one. */
   function resetUsage() {
     usageTotals = meterMath.empty();
+    contextInfo = null;
+    lastRequestAt = null;
     renderMeter();
   }
 
   /**
-   * Draws the one line under the composer. Counts always, and the last run's
-   * share of the window only when a window was configured.
+   * Draws the one line under the composer.
+   *
+   * Two numbers, two sources. Context comes from the host's estimate against the
+   * declared window; before the host has answered, the last run's total stands
+   * in, because it is measured rather than guessed. Cache comes from the last
+   * run's reported cached input and the TTL the client was told, counted from
+   * the run's own last request — so the line says "the cache is warm for this
+   * long", not "something is happening".
    */
   function renderMeter() {
     if (!meter) return;
-    const text = meterMath.label(usageTotals, contextWindow);
+    const parts = [];
+    const context = meterMath.remaining(usageTotals, contextInfo, autoCompactAt);
+    if (context) {
+      parts.push(
+        amount(context.used) +
+          ' of ' +
+          amount(context.window) +
+          ' (' +
+          meterMath.percent(context.used, context.window) +
+          '%)',
+      );
+      parts.push(amount(context.left) + ' left');
+      if (context.compactAt > 0) parts.push('compact at ' + amount(context.compactAt));
+    } else {
+      const spent = meterMath.label(usageTotals, contextWindow);
+      if (spent) parts.push(spent);
+    }
+    const cache = meterMath.cache(usageTotals, cacheTtlSeconds, lastRequestAt, Date.now());
+    if (cache.cached > 0) {
+      let item = 'cache ' + amount(cache.cached);
+      if (cache.remaining !== null) {
+        item += cache.remaining > 0 ? ' · ' + meterMath.clock(cache.remaining) : ' · cold';
+      }
+      parts.push(item);
+    }
+    const text = parts.join(' · ');
     meter.textContent = text;
     meter.hidden = text === '';
+    syncCacheClock(cache);
   }
+
+  /**
+   * Runs the one-second clock only while there is something to count: a known
+   * TTL, a run to count from, a cache worth watching, life left in it, and a tab
+   * the person can actually see. Everything else on the line moves on an event,
+   * so anything more than this would be a timer redrawing static text.
+   */
+  function syncCacheClock(cache) {
+    const wanted =
+      cacheTtlSeconds > 0 &&
+      lastRequestAt !== null &&
+      cache.cached > 0 &&
+      cache.remaining !== null &&
+      cache.remaining > 0 &&
+      !document.hidden;
+    if (wanted && cacheClock === null) {
+      cacheClock = setInterval(renderMeter, 1000);
+    } else if (!wanted && cacheClock !== null) {
+      clearInterval(cacheClock);
+      cacheClock = null;
+    }
+  }
+
+  // A hidden tab stops counting; coming back draws the truth at once, and
+  // `renderMeter` starts the clock again only if the TTL has time left.
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) renderMeter();
+  });
 
   /** The mark a status draws. An unknown status gets a plain one, not a guess. */
   const todoMarks = { pending: '○', in_progress: '◐', done: '✓' };
@@ -2006,6 +2404,17 @@
   composer.addEventListener('submit', (event) => {
     event.preventDefault();
     const text = input.value.trim();
+    // `/tasks` is this document's own command: it opens the window's task table
+    // and sends nothing. Checked before the running guard, because the table is
+    // most useful while a turn is running. The text is consumed; anything else
+    // in the composer was not sent, so it stays for the next prompt.
+    if (text === '/tasks') {
+      input.value = '';
+      growInput();
+      closePalette();
+      vscode.postMessage({ type: 'openTasks' });
+      return;
+    }
     if (text === '' || running) return;
     // The composer is emptied here but the turn keeps what was sent, so the
     // optimistic echo below is the record of it either way.
@@ -2280,6 +2689,27 @@
     composer.dispatchEvent(new Event('submit', { cancelable: true }));
   });
 
+  /**
+   * Draws one event on whichever scope is active.
+   *
+   * Split out from the listener so a child's events can be drawn inside the
+   * spawn card that started it: the listener picks the scope, this decides what
+   * the event means. Everything that appends goes through `active`.
+   */
+  function renderEvent(e, msg) {
+    if (e.type === 'assistant') addAssistantChunk(e.text || '');
+    else if (e.type === 'reasoning') addReasoning(e.text || '');
+    else if (e.type === 'tool_call') addToolCall(e, msg.reviewable === true, msg.edit);
+    else if (e.type === 'tool_result') addToolResult(e);
+    else if (e.type === 'todo') setTodos(e.items);
+    else if (e.type === 'compact') addCompact(e.compact);
+    else if (e.type === 'error') addNotice(e.text || 'The run reported an error.');
+    else if (e.type === 'progress' && e.text) {
+      statusLine.textContent = e.text;
+      statusLine.hidden = false;
+    }
+  }
+
   window.addEventListener('message', (event) => {
     const msg = event.data;
     switch (msg.type) {
@@ -2298,16 +2728,16 @@
         return;
       case 'event': {
         const e = msg.event;
-        if (e.type === 'assistant') addAssistantChunk(e.text || '');
-        else if (e.type === 'reasoning') addReasoning(e.text || '');
-        else if (e.type === 'tool_call') addToolCall(e, msg.reviewable === true, msg.edit);
-        else if (e.type === 'tool_result') addToolResult(e);
-        else if (e.type === 'todo') setTodos(e.items);
-        else if (e.type === 'error') addNotice(e.text || 'The run reported an error.');
-        else if (e.type === 'progress' && e.text) {
-          statusLine.textContent = e.text;
-          statusLine.hidden = false;
+        // A child's events name the spawn call that started them, so they are
+        // drawn in that card's body rather than in the parent's flow. The id is
+        // also how the card learns which stored session to offer afterwards.
+        const target = e.parent_tool_call_id ? spawnScopes.get(e.parent_tool_call_id) : undefined;
+        if (target) {
+          if (e.agent_id) target.agentId = e.agent_id;
+          inScope(target, () => renderEvent(e, msg));
+          return;
         }
+        renderEvent(e, msg);
         return;
       }
       case 'approval':
@@ -2374,6 +2804,9 @@
       case 'mcp':
         showMcp(msg);
         return;
+      case 'mcpStatus':
+        updateMcp(msg.server);
+        return;
       case 'webSearch':
         showWebSearch(msg);
         return;
@@ -2390,6 +2823,13 @@
         // 0 is "unknown", the same value the setting's absence means, so a
         // missing or malformed field falls back to counts only.
         contextWindow = typeof msg.window === 'number' ? msg.window : 0;
+        autoCompactAt = typeof msg.auto_compact_at === 'number' ? msg.auto_compact_at : 0;
+        cacheTtlSeconds = typeof msg.cache_ttl_seconds === 'number' ? msg.cache_ttl_seconds : 0;
+        // The estimate is the host's answer to `session.context`, and its
+        // absence means the host did not answer — not that the conversation is
+        // empty. Falling back to the last run's total is more honest than
+        // keeping a figure from a session that may have been replaced.
+        contextInfo = msg.info && typeof msg.info === 'object' ? msg.info : null;
         renderMeter();
         return;
       case 'reset':

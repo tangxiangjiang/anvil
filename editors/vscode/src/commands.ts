@@ -50,6 +50,21 @@ export const BUILTIN_COMMANDS: readonly SlashCommand[] = [
     source: 'builtin',
   },
   {
+    name: 'compact',
+    description: 'Summarize the conversation so far; nothing is sent to the model',
+    source: 'builtin',
+  },
+  {
+    name: 'tasks',
+    description: 'Show background commands and subagents',
+    source: 'builtin',
+  },
+  {
+    name: 'mcp',
+    description: 'Show MCP servers, their state, and add or edit them',
+    source: 'builtin',
+  },
+  {
     name: 'help',
     description: 'List the available commands',
     source: 'builtin',
@@ -150,6 +165,9 @@ export type CommandAction =
   | { kind: 'model'; model: string }
   | { kind: 'resume'; agentId: string }
   | { kind: 'clear' }
+  | { kind: 'compact' }
+  | { kind: 'tasks' }
+  | { kind: 'mcp' }
   | { kind: 'help' };
 
 export function route(text: string, commands: SlashCommand[]): CommandAction {
@@ -168,6 +186,12 @@ export function route(text: string, commands: SlashCommand[]): CommandAction {
       return { kind: 'resume', agentId: parsed.args };
     case 'clear':
       return { kind: 'clear' };
+    case 'compact':
+      return { kind: 'compact' };
+    case 'tasks':
+      return { kind: 'tasks' };
+    case 'mcp':
+      return { kind: 'mcp' };
     case 'help':
       return { kind: 'help' };
     default:

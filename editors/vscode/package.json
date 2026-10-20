@@ -2,7 +2,7 @@
   "name": "anvil-vscode",
   "displayName": "Anvil",
   "description": "Anvil agent in VS Code: streaming chat, tool cards, per-call approvals.",
-  "version": "0.40.10",
+  "version": "0.41.2",
   "publisher": "anvil-dev",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -145,6 +145,26 @@
         "command": "anvil.openPermissionRules",
         "title": "Anvil: Open Permission Rules",
         "category": "Anvil"
+      },
+      {
+        "command": "anvil.openPermissionRulesFile",
+        "title": "Anvil: Open Permission Rules File",
+        "category": "Anvil"
+      },
+      {
+        "command": "anvil.openTasks",
+        "title": "Anvil: Open Tasks",
+        "category": "Anvil"
+      },
+      {
+        "command": "anvil.openMcp",
+        "title": "Anvil: Open MCP Servers",
+        "category": "Anvil"
+      },
+      {
+        "command": "anvil.openMcpFile",
+        "title": "Anvil: Open mcp.json",
+        "category": "Anvil"
       }
     ],
     "menus": {
@@ -259,7 +279,26 @@
           "type": "number",
           "default": 0,
           "minimum": 0,
-          "markdownDescription": "The context window the token meter measures the last run against, in tokens. 0 means unknown: the composer then shows cumulative input and output counts with no fraction. Anvil does not guess a window from the model name, so a percentage appears only when this is set."
+          "markdownDescription": "The context window the token meter measures against, in tokens. 0 means unknown: the composer then shows cumulative input and output counts with no fraction, and the session does not auto-compact. Anvil does not guess a window from the model name, so a percentage appears only when this is set."
+        },
+        "anvil.autoCompactAt": {
+          "type": "number",
+          "default": 0.8,
+          "minimum": 0.1,
+          "maximum": 1,
+          "markdownDescription": "How full the context window may get before the host summarizes the conversation on its own, as a fraction of `anvil.contextWindow`. The meter marks this point and counts down to it. Ignored while the window is 0."
+        },
+        "anvil.contextKeepRecent": {
+          "type": "number",
+          "default": 8,
+          "minimum": 2,
+          "markdownDescription": "Messages a compaction keeps verbatim; everything older may be summarized. A transcript needs the recent turns as they were, or the model loses the thread it is holding."
+        },
+        "anvil.cacheTtlSeconds": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "markdownDescription": "How long the provider keeps its prompt cache, in seconds, for the meter's countdown. 0 means the provider's default: 300 seconds for Anthropic, and no countdown for a provider whose cache lifetime is unknown. The countdown appears only after a run reports cached tokens."
         },
         "anvil.store": {
           "type": "string",
@@ -290,6 +329,11 @@
           "type": "boolean",
           "default": true,
           "markdownDescription": "Read this workspace's `.anvil/permissions.json`: the rules that let a tool call run, stop to ask about it, or refuse it outright. Off means the session ignores the file, and an approval card has nothing to offer under \"always allow\" — a rule written into a file this session does not read would not be in force."
+        },
+        "anvil.subagents": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Let a session hand work to child agents: `spawn_agent` runs a brief in its own conversation, and `background: true` starts it in the task table. Children inherit the parent's tools and permissions, and a child's mutating call still stops for approval. Off means the tool is not registered at all, so the model is told it does not exist."
         },
         "anvil.mcp.project": {
           "type": "boolean",

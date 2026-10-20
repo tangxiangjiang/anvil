@@ -36,6 +36,10 @@ type Config struct {
 	Model    string
 	// CWD pre-seeds the workspace root. initialize may still override it.
 	CWD string
+	// MCPTokenDir is where the host keeps MCP OAuth tokens. Empty means the
+	// SDK's default (~/.anvil/mcp/oauth). Tests point it at a temp directory so
+	// a sign-in never touches the user's real tokens.
+	MCPTokenDir string
 	// Logf receives host diagnostics. Defaults to stderr.
 	Logf func(format string, args ...any)
 }
@@ -54,6 +58,12 @@ type Server struct {
 	inited    bool
 	sessions  map[string]*session
 	sessionID []string
+
+	// mcpMu guards the runtime registry, which lives apart from sessions: one
+	// runtime serves every session that reads the same file layers, and it can
+	// exist before any of them (a panel opened first).
+	mcpMu sync.Mutex
+	mcp   map[string]*hostMCPRuntime
 }
 
 // New builds a server bound to the given streams.
@@ -70,6 +80,7 @@ func New(cfg Config, in io.Reader, out io.Writer) *Server {
 		cfg:       cfg,
 		cwd:       cfg.CWD,
 		sessions:  map[string]*session{},
+		mcp:       map[string]*hostMCPRuntime{},
 	}
 }
 
@@ -171,6 +182,10 @@ func (s *Server) dispatch(ctx context.Context, req *Request) (any, *RPCError) {
 		return s.handleSessionDelete(ctx, req.Params)
 	case MethodSessionFork:
 		return s.handleSessionFork(ctx, req.Params)
+	case MethodSessionCompact:
+		return s.handleSessionCompact(ctx, req.Params)
+	case MethodSessionContext:
+		return s.handleSessionContext(req.Params)
 	case MethodCheckpointList:
 		return s.handleCheckpointList(ctx, req.Params)
 	case MethodCheckpointRestore:
@@ -187,10 +202,32 @@ func (s *Server) dispatch(ctx context.Context, req *Request) (any, *RPCError) {
 		return s.handleRulesList(ctx, req.Params)
 	case MethodMCPList:
 		return s.handleMCPList(ctx, req.Params)
+	case MethodMCPAdd:
+		return s.handleMCPAdd(ctx, req.Params)
+	case MethodMCPUpdate:
+		return s.handleMCPUpdate(ctx, req.Params)
+	case MethodMCPRemove:
+		return s.handleMCPRemove(ctx, req.Params)
+	case MethodMCPSetEnabled:
+		return s.handleMCPSetEnabled(ctx, req.Params)
+	case MethodMCPReconnect:
+		return s.handleMCPReconnect(ctx, req.Params)
+	case MethodMCPAuthenticate:
+		return s.handleMCPAuthenticate(ctx, req.Params)
+	case MethodMCPSignOut:
+		return s.handleMCPSignOut(ctx, req.Params)
 	case MethodPermissionsGet:
 		return s.handlePermissionsGet(ctx, req.Params)
 	case MethodPermissionsAdd:
 		return s.handlePermissionsAdd(ctx, req.Params)
+	case MethodPermissionsSet:
+		return s.handlePermissionsSet(ctx, req.Params)
+	case MethodTasksList:
+		return s.handleTasksList(req.Params)
+	case MethodTasksOutput:
+		return s.handleTasksOutput(req.Params)
+	case MethodTasksCancel:
+		return s.handleTasksCancel(req.Params)
 	case MethodApprovalResponse:
 		return s.handleApprovalResponse(req.Params)
 	default:
@@ -246,7 +283,7 @@ func (s *Server) handleInitialize(params json.RawMessage) (any, *RPCError) {
 }
 
 func capabilities() []string {
-	return []string{"streaming", "sessions", "resume", "cancel", "models", "approval", "context", "vision", "plan", "skills", "rules", "permissions", "mcp"}
+	return []string{"streaming", "sessions", "resume", "cancel", "models", "approval", "context", "vision", "plan", "skills", "rules", "permissions", "mcp", "mcp.runtime", "subagents", "tasks"}
 }
 
 // ---------------------------------------------------------------------------
@@ -274,7 +311,7 @@ func (s *Server) handleSessionNew(ctx context.Context, params json.RawMessage) (
 	sess.loadPermissions = loadPermissions
 	sess.modeSource = source
 	sess.modeRefused = refused
-	opts, rpcErr := s.buildOptions(p, sess)
+	opts, rpcErr := s.buildOptions(ctx, p, sess)
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
@@ -309,7 +346,7 @@ func (s *Server) handleSessionResume(ctx context.Context, params json.RawMessage
 	sess.loadPermissions = loadPermissions
 	sess.modeSource = source
 	sess.modeRefused = refused
-	opts, rpcErr := s.buildOptions(p, sess)
+	opts, rpcErr := s.buildOptions(ctx, p, sess)
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
@@ -345,6 +382,11 @@ func (s *Server) handleSessionList(ctx context.Context, params json.RawMessage) 
 			LastStatus: in.LastStatus,
 			LastRunID:  in.LastRunID,
 			Runs:       in.Runs,
+
+			ParentAgentID: in.ParentAgentID,
+			Depth:         in.Depth,
+			Subagent:      in.Kind == "subagent",
+			TaskTitle:     in.TaskTitle,
 		}
 		if !in.CreatedAt.IsZero() {
 			entry.CreatedAt = in.CreatedAt.UTC().Format("2006-01-02T15:04:05Z")
@@ -352,13 +394,9 @@ func (s *Server) handleSessionList(ctx context.Context, params json.RawMessage) 
 		if !in.UpdatedAt.IsZero() {
 			entry.UpdatedAt = in.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z")
 		}
-		if in.Usage != nil {
-			entry.Usage = &Usage{
-				InputTokens:  in.Usage.InputTokens,
-				OutputTokens: in.Usage.OutputTokens,
-				TotalTokens:  in.Usage.TotalTokens,
-			}
-		}
+		// One projection for every usage on the wire, so a field added to the
+		// shape cannot appear in `done` and be missing from the list.
+		entry.Usage = usageWire(in.Usage)
 		out.Sessions = append(out.Sessions, entry)
 	}
 	if p.Limit > 0 && len(out.Sessions) > p.Limit {
@@ -547,13 +585,7 @@ func (s *Server) handleSessionTranscript(ctx context.Context, params json.RawMes
 				Args: tc.Args,
 			})
 		}
-		if in.Usage != nil {
-			entry.Usage = &Usage{
-				InputTokens:  in.Usage.InputTokens,
-				OutputTokens: in.Usage.OutputTokens,
-				TotalTokens:  in.Usage.TotalTokens,
-			}
-		}
+		entry.Usage = usageWire(in.Usage)
 		out.Entries = append(out.Entries, entry)
 	}
 	return out, nil
@@ -679,6 +711,84 @@ func (s *Server) handleCancel(ctx context.Context, params json.RawMessage) (any,
 	return map[string]any{}, nil
 }
 
+// ---------------------------------------------------------------------------
+// session.compact / session.context
+// ---------------------------------------------------------------------------
+
+// handleSessionCompact summarizes an idle session's older turns on request. It
+// is the wire behind /compact.
+//
+// Refusing a busy session is the same rule prompt follows: compaction rewrites
+// the message slice a run is reading. Agent.Compact refuses again under its own
+// lock, so this check is about the answer — -32003 says "stop the run first",
+// where a raw SDK error would not.
+func (s *Server) handleSessionCompact(ctx context.Context, params json.RawMessage) (any, *RPCError) {
+	p, err := decode[SessionRefParams](params)
+	if err != nil {
+		return nil, errInvalidParams("session.compact: " + err.Error())
+	}
+	sess, ok := s.session(p.SessionID)
+	if !ok {
+		return nil, errCode(CodeNoSession, "unknown session: "+p.SessionID)
+	}
+	if _, runID := sess.activeRun(); runID != "" {
+		return nil, errCode(CodeRunInProgress, "session already has an active run: "+runID)
+	}
+	agent := sess.sdk()
+	if agent == nil {
+		return nil, errCode(CodeNoSession, "session is not open: "+p.SessionID)
+	}
+	res, err := agent.Compact(ctx)
+	if err != nil {
+		return nil, errHost(err)
+	}
+	out := SessionCompactResult{
+		SessionID:  sess.id,
+		Compacted:  res.Compacted,
+		Before:     res.Before,
+		After:      res.After,
+		Summarized: res.Summarized,
+		Context:    contextInfo(agent.ContextUsage()),
+	}
+	if res.Compacted {
+		// A manual compaction has no run, so it cannot ride the event stream —
+		// every event there is keyed by run_id. It gets its own notification,
+		// with the same inner shape, and the client draws the same divider.
+		s.notify(NotifyCompact, EventParams{
+			SessionID: sess.id,
+			Type:      "compact",
+			AgentID:   sess.agentIdentity(),
+			Compact: &CompactInfo{
+				Reason:     "manual",
+				Before:     res.Before,
+				After:      res.After,
+				Summarized: res.Summarized,
+				Window:     out.Context.WindowTokens,
+			},
+		})
+	}
+	s.logf("session.compact id=%s compacted=%v before=%d after=%d", sess.id, res.Compacted, res.Before, res.After)
+	return out, nil
+}
+
+// handleSessionContext answers a live session's estimate against its declared
+// budget, so a tab that has run nothing can still draw its meter.
+func (s *Server) handleSessionContext(params json.RawMessage) (any, *RPCError) {
+	p, err := decode[SessionRefParams](params)
+	if err != nil {
+		return nil, errInvalidParams("session.context: " + err.Error())
+	}
+	sess, ok := s.session(p.SessionID)
+	if !ok {
+		return nil, errCode(CodeNoSession, "unknown session: "+p.SessionID)
+	}
+	agent := sess.sdk()
+	if agent == nil {
+		return nil, errCode(CodeNoSession, "session is not open: "+p.SessionID)
+	}
+	return contextInfo(agent.ContextUsage()), nil
+}
+
 // drain pumps one run: SDK events out as `event` notifications, then the
 // terminal `done`. It owns the run until endRun.
 func (s *Server) drain(sess *session, run *anvil.Run) {
@@ -686,6 +796,7 @@ func (s *Server) drain(sess *session, run *anvil.Run) {
 	// Run.Stream ignores its context; ranging to close is the documented contract.
 	for ev := range run.Stream(context.Background()) {
 		if p, ok := projectEvent(sess.id, runID, ev); ok {
+			p.AgentID = sess.agentIdentity()
 			s.notify(NotifyEvent, p)
 		}
 	}
@@ -697,8 +808,160 @@ func (s *Server) drain(sess *session, run *anvil.Run) {
 	// stops accepting messages and drops anything pushed after it. Released
 	// first, a shutdown-cancelled run could therefore lose the very `done` the
 	// client is waiting for. push never blocks, so there is nothing to deadlock.
-	s.notify(NotifyDone, projectDone(sess.id, runID, res, err))
+	s.notify(NotifyDone, doneWithContext(sess, projectDone(sess.id, runID, res, err)))
 	sess.endRun(run)
+}
+
+// doneWithContext appends the post-run estimate to a terminal envelope.
+//
+// It is read here, after Wait returned, because that is when the agent has
+// folded the run — including any compaction it performed — into its history.
+// A session whose agent is already gone (shutdown) sends no context rather than
+// a zero, which a meter would draw as an empty conversation.
+func doneWithContext(sess *session, done DoneParams) DoneParams {
+	if agent := sess.sdk(); agent != nil {
+		ci := contextInfo(agent.ContextUsage())
+		done.Context = &ci
+	}
+	return done
+}
+
+// forwardSubagentEvent projects one child event onto the `event` notification
+// with the identity that places it under its spawn card.
+//
+// It deliberately does not go through drain: the parent's run is blocked on the
+// spawn call, and a background child's run is not the session's run at all.
+// The session id is still the routing key — one session, one event stream —
+// and parent_tool_call_id is what the panel groups by.
+func (s *Server) forwardSubagentEvent(sess *session, ev anvil.SubagentEvent) {
+	if _, ok := s.session(sess.id); !ok {
+		// A closed session's children are cancelled with it; what they emit
+		// while unwinding has no reader, and the client asked not to hear it.
+		return
+	}
+	p, ok := projectEvent(sess.id, ev.RunID, ev.Event)
+	if !ok {
+		return
+	}
+	p.AgentID = ev.AgentID
+	p.ParentToolCallID = ev.ToolCallID
+	p.Depth = ev.Depth
+	s.notify(NotifyEvent, p)
+}
+
+// forwardTask reports one background task changing state, so a panel and a
+// status bar can follow the tree without polling. A task that ends after its
+// session closed is dropped: the lookup fails, and there is no surface left to
+// tell.
+func (s *Server) forwardTask(sess *session, info anvil.TaskInfo) {
+	if _, ok := s.session(sess.id); !ok {
+		return
+	}
+	s.notify(NotifyTask, TaskNotification{SessionID: sess.id, Task: taskInfo(info)})
+}
+
+// taskInfo projects one public task snapshot onto the wire shape.
+func taskInfo(t anvil.TaskInfo) TaskInfo {
+	out := TaskInfo{
+		ID:        t.ID,
+		Kind:      string(t.Kind),
+		Title:     t.Title,
+		Status:    string(t.Status),
+		AgentID:   t.AgentID,
+		StartedAt: t.StartedAt,
+		ExitCode:  t.ExitCode,
+	}
+	if !t.EndedAt.IsZero() {
+		ended := t.EndedAt
+		out.EndedAt = &ended
+	}
+	return out
+}
+
+// ---------------------------------------------------------------------------
+// tasks.list / tasks.output / tasks.cancel
+// ---------------------------------------------------------------------------
+
+// taskAgent resolves a session to the live agent that owns its task table.
+// An unknown session and a session whose agent has closed are both "no
+// session": the rows live on the agent, so asking after the close is asking
+// about work nobody can list.
+func (s *Server) taskAgent(sessionID string) (*anvil.Agent, *RPCError) {
+	sess, ok := s.session(sessionID)
+	if !ok {
+		return nil, errCode(CodeNoSession, "unknown session: "+sessionID)
+	}
+	agent := sess.sdk()
+	if agent == nil {
+		return nil, errCode(CodeNoSession, "session is not open: "+sessionID)
+	}
+	return agent, nil
+}
+
+func (s *Server) handleTasksList(params json.RawMessage) (any, *RPCError) {
+	p, err := decode[TasksListParams](params)
+	if err != nil {
+		return nil, errInvalidParams("tasks.list: " + err.Error())
+	}
+	agent, rpcErr := s.taskAgent(p.SessionID)
+	if rpcErr != nil {
+		return nil, rpcErr
+	}
+	infos := agent.Tasks()
+	out := TasksListResult{Tasks: make([]TaskInfo, 0, len(infos))}
+	for _, info := range infos {
+		out.Tasks = append(out.Tasks, taskInfo(info))
+	}
+	return out, nil
+}
+
+func (s *Server) handleTasksOutput(params json.RawMessage) (any, *RPCError) {
+	p, err := decode[TasksOutputParams](params)
+	if err != nil {
+		return nil, errInvalidParams("tasks.output: " + err.Error())
+	}
+	if strings.TrimSpace(p.TaskID) == "" {
+		return nil, errInvalidParams("tasks.output: task_id is required")
+	}
+	agent, rpcErr := s.taskAgent(p.SessionID)
+	if rpcErr != nil {
+		return nil, rpcErr
+	}
+	info, err := agent.Task(p.TaskID)
+	if err != nil {
+		return nil, errCode(CodeNoTask, err.Error())
+	}
+	chunk, err := agent.TaskOutput(p.TaskID, p.Offset, p.Limit)
+	if err != nil {
+		return nil, errCode(CodeNoTask, err.Error())
+	}
+	return TasksOutputResult{
+		Status:      string(info.Status),
+		ExitCode:    info.ExitCode,
+		Output:      chunk.Text,
+		NextOffset:  int(chunk.NextOffset),
+		FirstOffset: int(chunk.FirstOffset),
+		Truncated:   chunk.Truncated,
+	}, nil
+}
+
+func (s *Server) handleTasksCancel(params json.RawMessage) (any, *RPCError) {
+	p, err := decode[TasksCancelParams](params)
+	if err != nil {
+		return nil, errInvalidParams("tasks.cancel: " + err.Error())
+	}
+	if strings.TrimSpace(p.TaskID) == "" {
+		return nil, errInvalidParams("tasks.cancel: task_id is required")
+	}
+	agent, rpcErr := s.taskAgent(p.SessionID)
+	if rpcErr != nil {
+		return nil, rpcErr
+	}
+	info, err := agent.CancelTask(p.TaskID)
+	if err != nil {
+		return nil, errCode(CodeNoTask, err.Error())
+	}
+	return TasksCancelResult{Task: taskInfo(info)}, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -793,50 +1056,6 @@ func (s *Server) handleRulesList(ctx context.Context, params json.RawMessage) (a
 			Bytes:     f.Bytes,
 			Included:  f.Included,
 			Truncated: f.Truncated,
-		})
-	}
-	return out, nil
-}
-
-// handleMCPList reports what the selected file layers declare.
-//
-// It is configuration, not connection: nothing here says a server started. The
-// listing exists so a person can see which file would launch what before a turn
-// runs, and so a file that will not parse fails loudly here rather than as MCP
-// tools that silently do not exist.
-//
-// The response carries no status field on purpose. The SDK has no introspection
-// for a connected server, and a state inferred from "the file listed it" would
-// claim the one thing a green dot is supposed to mean.
-func (s *Server) handleMCPList(_ context.Context, params json.RawMessage) (any, *RPCError) {
-	p, err := decode[MCPListParams](params)
-	if err != nil {
-		return nil, errInvalidParams("mcp.list: " + err.Error())
-	}
-	sources, rpcErr := settingSourcesFrom(p.SettingSources)
-	if rpcErr != nil {
-		return nil, errInvalidParams("mcp.list: " + rpcErr.Message)
-	}
-	listed, err := anvil.ListMCPServers(s.cwdPath(), sources)
-	if err != nil {
-		return nil, errHost(err)
-	}
-	out := MCPListResult{
-		Servers: make([]MCPServerInfo, 0, len(listed.Servers)),
-		Sources: make([]MCPSourceInfo, 0, len(listed.Sources)),
-	}
-	for _, server := range listed.Servers {
-		out.Servers = append(out.Servers, MCPServerInfo{
-			Name:      server.Name,
-			Transport: server.Transport,
-			Source:    server.Source,
-		})
-	}
-	for _, source := range listed.Sources {
-		out.Sources = append(out.Sources, MCPSourceInfo{
-			Source: string(source.Source),
-			Path:   source.Path,
-			Exists: source.Exists,
 		})
 	}
 	return out, nil
@@ -966,6 +1185,65 @@ func (s *Server) handlePermissionsAdd(_ context.Context, params json.RawMessage)
 	return out, nil
 }
 
+// handlePermissionsSet replaces the workspace rule file with the list a person
+// approved in the manager.
+//
+// It is a replacement, not an append, so it makes the append's refusals again
+// and adds one: every rule must compile, the declared mode must be one a project
+// file may declare, and the file on disk must read — replacing a policy this
+// build could not parse would discard the very text the user was told to go and
+// fix. The write is whole-file and atomic, and the answer is the file read back
+// the way permissions.get reads it, so the panel shows what a new session will
+// open under rather than merely what it sent.
+func (s *Server) handlePermissionsSet(ctx context.Context, params json.RawMessage) (any, *RPCError) {
+	p, err := decode[PermissionsSetParams](params)
+	if err != nil {
+		return nil, errInvalidParams("permissions.set: " + err.Error())
+	}
+	rules := make([]anvil.PermissionRule, 0, len(p.Rules))
+	for i, r := range p.Rules {
+		tool := strings.TrimSpace(r.Tool)
+		if tool == "" {
+			return nil, errInvalidParams(fmt.Sprintf("permissions.set: rule %d: tool is required", i+1))
+		}
+		// A row the manager left on its default is an allow; a file written by hand
+		// sends the word it wants either way.
+		effect := strings.TrimSpace(r.Effect)
+		if effect == "" {
+			effect = anvil.PermissionEffectAllow
+		}
+		rules = append(rules, anvil.PermissionRule{
+			Effect:  effect,
+			Tool:    tool,
+			Pattern: r.Pattern,
+			Reason:  r.Reason,
+		})
+	}
+	mode := strings.TrimSpace(p.DefaultMode)
+	if mode != "" && honouredMode(mode) == "" {
+		// One wording for "this declaration will not be honoured", whichever of
+		// get, the session result or a save is asking. A save is refused in
+		// advance; the sentence reads the same because the rule is the same.
+		return nil, errInvalidParams("permissions.set: " + refusedMode(mode))
+	}
+
+	cwd := s.cwdPath()
+	// Read before writing. The manager shows the problem and disables Save in this
+	// state, so reaching here means a client skipped that step — and the old file
+	// still gets the benefit of the doubt.
+	if _, err := anvil.LoadPermissionRuleFile(cwd); err != nil {
+		return nil, errCode(CodeInvalidRequest, "permissions.set: "+err.Error())
+	}
+	if err := anvil.SavePermissionRuleFile(cwd, rules, mode); err != nil {
+		var perr *anvil.PermissionRuleError
+		if errors.As(err, &perr) {
+			return nil, errInvalidParams("permissions.set: " + perr.Error())
+		}
+		return nil, errHost(err)
+	}
+	return s.handlePermissionsGet(ctx, nil)
+}
+
 // ruleInfos names the rules of a set for the wire: where each one sits and how
 // the SDK cites it, in the order the file lists them.
 func ruleInfos(rules []anvil.PermissionRule) []RuleInfo {
@@ -1000,7 +1278,7 @@ func ruleProblem(err error) *RuleProblem {
 // APIKey is intentionally never set here: the SDK reads ANVIL_API_KEY from the
 // process environment, which the client populates from SecretStorage. The key
 // does not cross the protocol.
-func (s *Server) buildOptions(p SessionParams, sess *session) (anvil.Options, *RPCError) {
+func (s *Server) buildOptions(ctx context.Context, p SessionParams, sess *session) (anvil.Options, *RPCError) {
 	groups := groupsForMode(sess.mode, p.PermissionGroups)
 	// loadPermissions was resolved by the caller, before the mode, because the
 	// mode resolution reads the same file. It is read here, not recomputed: two
@@ -1036,6 +1314,17 @@ func (s *Server) buildOptions(p SessionParams, sess *session) (anvil.Options, *R
 		// SDK defaults ({cwd}/.anvil/checkpoints, 100 runs, 30 days).
 		Checkpoints: &anvil.CheckpointOptions{},
 	}
+	// Agent-in-agent is on for the editor unless the client sends subagents:
+	// false. The two callbacks name the session rather than the agent: they are
+	// installed before the agent exists, and every child in the tree — however
+	// deep — reports through the same options.
+	if boolOr(p.Subagents, true) {
+		opts.Subagents = anvil.SubagentOptions{
+			Enabled: true,
+			OnEvent: func(ev anvil.SubagentEvent) { s.forwardSubagentEvent(sess, ev) },
+			OnTask:  func(info anvil.TaskInfo) { s.forwardTask(sess, info) },
+		}
+	}
 	if len(p.TestCommand) > 0 {
 		opts.Test = anvil.TestOptions{Command: p.TestCommand}
 	}
@@ -1054,12 +1343,34 @@ func (s *Server) buildOptions(p SessionParams, sess *session) (anvil.Options, *R
 	if rpcErr != nil {
 		return opts, rpcErr
 	}
+	sources = canonicalSources(sources)
 	opts.Local.SettingSources = sources
+	// A session that reads a file layer gets the host's shared runtime for that
+	// pair, connected before the agent is built so its first turn already has the
+	// tools. A failure in Reload is deliberately ignored: an unreachable server is
+	// a status the panel reports, not a reason to refuse the session.
+	if len(sources) > 0 {
+		h := s.mcpRuntimeFor(s.cwdPath(), sources)
+		_ = h.reload(ctx)
+		opts.MCPRuntime = h.rt
+		sess.settingSources = sources
+		sess.mcpKey = h.key
+	}
 	web, rpcErr := webSearchFrom(p.WebSearch)
 	if rpcErr != nil {
 		return opts, rpcErr
 	}
 	opts.WebSearch = web
+	// The budget is the client's declaration. Absent keeps every field at zero,
+	// which is "no window", which is exactly the behaviour before this field
+	// existed — an older client cannot start compacting behind the user's back.
+	if p.Context != nil {
+		opts.Context = anvil.ContextOptions{
+			WindowTokens:  p.Context.WindowTokens,
+			AutoCompactAt: p.Context.AutoCompactAt,
+			KeepRecent:    p.Context.KeepRecent,
+		}
+	}
 	if sess.mode == ModePlan {
 		// Plan mode removes the tools that can change the workspace, so the
 		// model produces a plan instead of acting on it. The instruction that
@@ -1251,6 +1562,8 @@ func (s *Server) permissionHookForMode(mode string, sess *session, timeout time.
 	switch mode {
 	case ModeBypass:
 		return s.bypassHook(sess, timeout)
+	case ModeAuto:
+		return s.autoHook(sess, timeout)
 	case ModeDontAsk:
 		return s.dontAskHook(sess)
 	default:
@@ -1337,6 +1650,13 @@ func (s *Server) permissionHook(sess *session, timeout time.Duration) anvil.Perm
 			// written into a file this session ignores would be a button that lies.
 			Remember:  rememberOptions(sess, call),
 			TimeoutMS: int(timeout / time.Millisecond),
+			// The child that asked, when one did. run_id stays the session's
+			// active run, so session.cancel still withdraws the prompts that
+			// belong to the turn; a background child asking while the session is
+			// idle carries an empty run_id and is withdrawn by session.close or
+			// by cancelling its task.
+			AgentID: req.AgentID,
+			Depth:   req.Depth,
 		})
 
 		resp := s.approvals.wait(ctx, requestID, p)
@@ -1372,6 +1692,32 @@ func (s *Server) bypassHook(sess *session, timeout time.Duration) anvil.Permissi
 			return ask(ctx, req)
 		}
 		return anvil.PermissionDecision{Allow: true}, nil
+	}
+}
+
+// autoHook is what ModeAuto installs: it answers the calls the SDK can prove
+// harmless, and asks about the rest.
+//
+// The classifier is anvil.AutoApproveCall, and it sits in the SDK for the same
+// reason the rule matcher does: it reads the facts a rule is matched on, so the
+// explanation for an auto-approved call and for a rule-approved call cannot
+// disagree. A rule of effect "ask" is a written statement about this one tool,
+// so it opens the card even here — the same precedence bypass uses. A rule of
+// effect "allow" never reaches this function at all, because the registry
+// decides it first, and a "deny" never reaches it either.
+//
+// Everything not proved harmless goes to the ordinary hook rather than a
+// refusal: auto is a mode that skips some asking, not one that answers no.
+func (s *Server) autoHook(sess *session, timeout time.Duration) anvil.PermissionFunc {
+	ask := s.permissionHook(sess, timeout)
+	return func(ctx context.Context, req anvil.PermissionRequest) (anvil.PermissionDecision, error) {
+		if req.Rule != nil && req.Rule.Effect == anvil.PermissionEffectAsk {
+			return ask(ctx, req)
+		}
+		if anvil.AutoApproveCall(req.ToolName, req.Args) {
+			return anvil.PermissionDecision{Allow: true}, nil
+		}
+		return ask(ctx, req)
 	}
 }
 
@@ -1550,6 +1896,10 @@ func (s *Server) closeAll() {
 			}
 		}
 	}
+	// The runtimes outlive individual sessions but not the host: they own the
+	// processes every agent borrowed. Closed last, after the agents that call
+	// into them are gone.
+	s.closeMCPRuntimes()
 }
 
 func (s *Server) ready() bool {

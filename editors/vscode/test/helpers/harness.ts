@@ -10,7 +10,7 @@
 
 import { ChildProcess } from 'node:child_process';
 import * as path from 'node:path';
-import { ApprovalRequest, Decision, DoneParams, HostEvent, SessionResult } from '../../src/protocol';
+import { ApprovalRequest, CompactInfo, Decision, DoneParams, HostEvent, SessionResult } from '../../src/protocol';
 import { HostClient } from '../../src/hostClient';
 import { ChatSession, SessionConfig } from '../../src/session';
 
@@ -27,6 +27,8 @@ export interface Harness {
   events: HostEvent[];
   approvals: ApprovalRequest[];
   withdrawn: string[];
+  /** Every compaction the host announced, with the session it belongs to. */
+  compacts: Array<{ info: CompactInfo; sessionId: string }>;
   dones: Array<{ done: DoneParams; failure: { kind: string; message: string; isError: boolean } }>;
   states: Array<{ state: string; runId?: string }>;
   /** Every session the extension opened, as the host described it. */
@@ -52,6 +54,7 @@ export async function startFakeHost(scenario: Scenario, options: HarnessOptions 
   const events: HostEvent[] = [];
   const approvals: ApprovalRequest[] = [];
   const withdrawn: string[] = [];
+  const compacts: Harness['compacts'] = [];
   const dones: Harness['dones'] = [];
   const states: Array<{ state: string; runId?: string }> = [];
   const sessions: SessionResult[] = [];
@@ -69,6 +72,7 @@ export async function startFakeHost(scenario: Scenario, options: HarnessOptions 
     onEvent: (event) => events.push(event),
     onApproval: (request) => approvals.push(request),
     onApprovalWithdrawn: (id) => withdrawn.push(id),
+    onCompact: (info, sessionId) => compacts.push({ info, sessionId }),
     onDone: (done, failure) => dones.push({ done, failure }),
     onState: (state, runId) => states.push({ state, runId }),
     onSession: (result) => sessions.push(result),
@@ -87,6 +91,7 @@ export async function startFakeHost(scenario: Scenario, options: HarnessOptions 
     events,
     approvals,
     withdrawn,
+    compacts,
     dones,
     states,
     sessions,

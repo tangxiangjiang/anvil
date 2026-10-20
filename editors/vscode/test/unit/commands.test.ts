@@ -65,6 +65,9 @@ test('the catalogue lists built-ins first and a skill never shadows one', () => 
     'model',
     'resume',
     'clear',
+    'compact',
+    'tasks',
+    'mcp',
     'help',
   ]);
   assert.equal(names.filter((name) => name === 'plan').length, 1);
@@ -126,7 +129,25 @@ test('every built-in routes to the capability it names', () => {
   assert.deepEqual(route('/resume', catalogue), { kind: 'resume', agentId: '' });
   assert.deepEqual(route('/resume a7', catalogue), { kind: 'resume', agentId: 'a7' });
   assert.deepEqual(route('/clear', catalogue), { kind: 'clear' });
+  assert.deepEqual(route('/tasks', catalogue), { kind: 'tasks' });
+  // The manager covers both layers, so nothing after `/mcp` is carried: there is
+  // no per-conversation filter for it to be one.
+  assert.deepEqual(route('/mcp', catalogue), { kind: 'mcp' });
+  assert.deepEqual(route('/MCP servers', catalogue), { kind: 'mcp' });
   assert.deepEqual(route('/help', catalogue), { kind: 'help' });
+});
+
+test('/compact is a host request, never a prompt', () => {
+  const catalogue = commandCatalogue(SKILLS);
+  assert.deepEqual(route('/compact', catalogue), { kind: 'compact' });
+  assert.deepEqual(route('/COMPACT', catalogue), { kind: 'compact' });
+  // Whatever follows the command is neither a prompt nor an argument: there is
+  // nothing for the model to be asked, so the text is not carried anywhere.
+  assert.deepEqual(route('/compact keep the last turn', catalogue), { kind: 'compact' });
+  // It is a built-in, so a skill with the same id cannot take the name.
+  const colliding = commandCatalogue([skill({ id: 'compact', description: 'not this' })]);
+  assert.equal(findCommand(colliding, 'compact')?.source, 'builtin');
+  assert.equal(findCommand(colliding, 'compact')?.description.includes('Summarize'), true);
 });
 
 test('a skill routes to the skill, with whatever followed it as the prompt', () => {
