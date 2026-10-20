@@ -265,6 +265,21 @@ input { width: 100%; margin-bottom: 0.75rem; }
   .side { border-right: 0; border-bottom: 1px solid var(--border); }
 }
 
+/* Pre-flight blockers (p_0.46.11): why a button is disabled, next to it. */
+.del-blockers {
+  margin: 0.45rem 0 0; padding: 0.4rem 0.55rem;
+  border-radius: var(--radius); font-size: 0.82rem;
+}
+.del-blockers.hard {
+  border: 1px solid var(--danger); background: #2a1616; color: #f3c7c7;
+}
+.del-blockers.advisory {
+  border: 1px solid var(--warn); background: #2a2317; color: #f0dcb8;
+}
+.del-blocker + .del-blocker { margin-top: 0.25rem; }
+.del-blocker a { margin-left: 0.25rem; }
+button[disabled][aria-describedby] { opacity: 0.65; cursor: not-allowed; }
+
 /* Global search (p_0.46.10): one box for the whole planning record. */
 .side-search { position: relative; }
 .side-search input { margin: 0; width: 100%; font-size: 0.85rem; padding: 0.35rem 0.55rem; }

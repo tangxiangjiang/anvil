@@ -12,6 +12,77 @@ window.Features.delivery = window.Features.delivery || {};
 Object.assign(window.Features.delivery, {
   _activeJob: null,
 
+  // ------------------------------------------------------------- preflight
+  //
+  // A transition that would be refused is refused *before* the click: each
+  // guarded button asks the server what is missing and renders the reasons
+  // beside itself. The same check runs server-side as the enforcement, from one
+  // implementation, so a preview cannot disagree with a refusal.
+
+  /** _preflight asks and caches per (transition,target) for this render. */
+  async preflight(transition, target) {
+    if (!this._pfCache) this._pfCache = {};
+    const key = transition + ":" + target;
+    if (this._pfCache[key]) return this._pfCache[key];
+    let res = { ok: true, blockers: [] };
+    try {
+      res = await api.v1.deliveryPreflight(transition, target);
+    } catch (_) {
+      // A failed preview must not block the action: the server will refuse it
+      // with the same reason, and a broken preview endpoint is not a policy.
+      res = { ok: true, blockers: [] };
+    }
+    this._pfCache[key] = res;
+    return res;
+  },
+
+  /**
+   * applyPreflight disables a button and lists why.
+   *
+   * `annotations` maps transition → target for every guarded button on the page.
+   * Hard blockers disable; advisory ones (open_work on a seal) are shown but do
+   * not disable, because sealing a generation with open work is a decision the
+   * operator is allowed to make.
+   */
+  async applyPreflight(el, annotations) {
+    if (!el || !annotations || !annotations.length) return;
+    this._pfCache = {};
+    for (const a of annotations) {
+      const res = await this.preflight(a.transition, a.target);
+      const btn = el.querySelector(a.selector);
+      if (!btn) continue;
+      const advisory = (res.blockers || []).filter((b) => b.code === "open_work");
+      const hard = (res.blockers || []).filter((b) => b.code !== "open_work");
+      if (hard.length) {
+        btn.disabled = true;
+        btn.setAttribute("aria-describedby", a.selector.replace(/[^a-z0-9]/gi, "") + "-why");
+        btn.title = hard.map((b) => b.message).join("\n");
+      }
+      const show = hard.length ? hard : advisory;
+      if (!show.length) continue;
+      const why = document.createElement("div");
+      why.className = "del-blockers" + (hard.length ? " hard" : " advisory");
+      why.id = a.selector.replace(/[^a-z0-9]/gi, "") + "-why";
+      // Built as nodes rather than one template: the link is conditional and
+      // the message is operator-visible text, so escaping each piece at the
+      // point of use is clearer than escaping a pre-joined string.
+      show.forEach((b) => {
+        const row = document.createElement("div");
+        row.className = "del-blocker";
+        row.appendChild(document.createTextNode(b.message));
+        if (b.href) {
+          row.appendChild(document.createTextNode(" "));
+          const link = document.createElement("a");
+          link.href = b.href;
+          link.textContent = "open";
+          row.appendChild(link);
+        }
+        why.appendChild(row);
+      });
+      btn.closest(".card, .del-ms-card, .del-test-card")?.appendChild(why);
+    }
+  },
+
   /** setActiveJob records what is running; null clears the bar. */
   setActiveJob(job) {
     const same =

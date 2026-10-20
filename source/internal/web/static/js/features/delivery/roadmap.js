@@ -103,6 +103,35 @@ Object.assign(window.Features.delivery, {
   },
 
   bindMilestoneCardControls(el) {
+    // Ask before offering: a Start that would be refused is disabled with its
+    // reasons listed, rather than failing after the click.
+    const annotations = [];
+    el.querySelectorAll("[data-ms-start]").forEach((btn) => {
+      const t = btn.getAttribute("data-ms-start");
+      annotations.push({
+        transition: "start_phase",
+        target: t,
+        selector: '[data-ms-start="' + t + '"]',
+      });
+    });
+    el.querySelectorAll("[data-ms-submit-test]").forEach((btn) => {
+      const t = btn.getAttribute("data-ms-submit-test");
+      annotations.push({
+        transition: "submit_test",
+        target: t,
+        selector: '[data-ms-submit-test="' + t + '"]',
+      });
+    });
+    el.querySelectorAll("[data-ms-accept]").forEach((btn) => {
+      const t = btn.getAttribute("data-ms-accept");
+      annotations.push({
+        transition: "accept_milestone",
+        target: t,
+        selector: '[data-ms-accept="' + t + '"]',
+      });
+    });
+    void this.applyPreflight(el, annotations);
+
     el.querySelectorAll(".del-ms-worker").forEach((sel) => {
       sel.addEventListener("change", async () => {
         const msId = sel.getAttribute("data-ms");

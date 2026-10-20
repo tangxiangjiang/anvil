@@ -146,7 +146,11 @@ window.api = {
     usage() { return api.req("GET", "/api/v1/usage"); },
     search(q) { return api.req("GET", "/api/v1/search?q=" + encodeURIComponent(q)); },
     jobs(suffix) { return api.req("GET", "/api/v1/jobs" + (suffix || "")); },
-    jobEvents(id) { return api.req("GET", "/api/v1/jobs/" + encodeURIComponent(id) + "/events"); },    delivery() { return api.req("GET", "/api/v1/delivery"); },
+    jobEvents(id) { return api.req("GET", "/api/v1/jobs/" + encodeURIComponent(id) + "/events"); },
+    deliveryPreflight(transition, target) {
+      const q = new URLSearchParams({ transition, target }).toString();
+      return api.req("GET", "/api/v1/delivery/preflight?" + q);
+    },    delivery() { return api.req("GET", "/api/v1/delivery"); },
 
     // Workbench (0.46.7): the console's interactive session surface.
     workbenchSessions() { return api.req("GET", "/api/v1/workbench/sessions"); },
