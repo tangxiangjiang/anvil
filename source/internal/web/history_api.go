@@ -1,0 +1,354 @@
+// Copyright (c) 2026 TangXiangjiang.
+// SPDX-License-Identifier: MIT
+
+package web
+
+import (
+	"bytes"
+	"io"
+	"net/http"
+	"strings"
+
+	"github.com/anvil-dev/anvil/internal/web/delivery"
+)
+
+// auditMiddleware attributes every mutating delivery call (p_0.46.10).
+//
+// One middleware rather than a call in each handler: a handler that forgets is
+// exactly how an audit trail becomes a half-truth, and there are 15 mutating
+// routes today with more coming.
+//
+// It infers the entity from the path. That is deliberately shallow — the row says
+// "PATCH designs id=des_7" plus the actor — because a deeper claim would need each
+// handler's knowledge, which is what writing it per-handler avoided. The detail
+// field carries the request body for the mutations where that is the whole story
+// (a field edit), truncated.
+func (s *Server) auditDelivery(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet || s.delivery == nil {
+			next(w, r)
+			return
+		}
+		// Capture the body so it can be recorded, then hand the same bytes to the
+		// handler: a middleware that consumes a body is a middleware that breaks
+		// every POST behind it.
+		body := readAndRestoreBody(r)
+		next(w, r)
+		rec := auditFromRequest(r, body, userFrom(r.Context()).Username)
+		if rec.EntityKind != "" {
+			_ = s.delivery.RecordAudit(rec)
+		}
+	}
+}
+
+// auditFromRequest turns a mutating delivery request into an audit row.
+func auditFromRequest(r *http.Request, body, actor string) delivery.AuditEntry {
+	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/delivery"), "/")
+	parts := strings.Split(path, "/")
+	kind, id, action := inferEntity(r.Method, parts)
+	detail := ""
+	if body != "" && len(body) <= 4000 {
+		detail = body
+	}
+	return delivery.AuditEntry{
+		Actor:      actor,
+		Action:     r.Method + " " + path,
+		EntityKind: kind,
+		EntityID:   id,
+		Summary:    action,
+		Detail:     detail,
+	}
+}
+
+// inferEntity maps a path to (kind, id, human summary). Unknown shapes return an
+// empty kind, which the caller treats as "do not record" rather than recording a
+// meaningless row.
+func inferEntity(method string, parts []string) (kind, id, summary string) {
+	if len(parts) == 0 || parts[0] == "" {
+		return "", "", ""
+	}
+	verb := map[string]string{
+		http.MethodPost:   "created",
+		http.MethodPatch:  "updated",
+		http.MethodDelete: "deleted",
+	}[method]
+	if verb == "" {
+		verb = "changed"
+	}
+	switch parts[0] {
+	case "eng-reqs":
+		if len(parts) >= 2 && parts[1] != "" {
+			if len(parts) >= 5 && parts[2] == "versions" {
+				return "requirement_version", strings.Join(parts[1:5], ":"), "version " + verb
+			}
+			return "requirement", parts[1], "requirement " + verb
+		}
+		return "requirement", "", "requirement " + verb
+	case "majors":
+		if len(parts) >= 2 {
+			if len(parts) >= 3 && parts[2] == "advance" {
+				return "major", parts[1], "generation advanced"
+			}
+			return "major", parts[1], "generation " + verb
+		}
+		return "major", "", "generation " + verb
+	case "designs":
+		if len(parts) >= 2 {
+			if len(parts) >= 3 && parts[2] == "approve" {
+				return "design", parts[1], "design approved"
+			}
+			if len(parts) >= 3 && parts[2] == "bootstrap" {
+				return "design", parts[1], "roadmap bootstrapped"
+			}
+			if len(parts) >= 4 && parts[2] == "versions" {
+				if len(parts) >= 5 && parts[4] == "gate-check" {
+					return "design_version", parts[1] + ":" + parts[3], "gate checkbox toggled"
+				}
+				return "design_version", parts[1] + ":" + parts[3], "design version " + verb
+			}
+			return "design", parts[1], "design " + verb
+		}
+	case "roadmap":
+		if len(parts) >= 3 && parts[1] == "milestones" {
+			if len(parts) >= 4 && parts[3] == "acceptance-check" {
+				return "milestone", parts[2], "acceptance checkbox toggled"
+			}
+			if len(parts) >= 4 && parts[3] == "merge" {
+				return "milestone", parts[2], "merged to main"
+			}
+			return "milestone", parts[2], "milestone " + verb
+		}
+	case "test-cases", "buglist", "polishes":
+		if len(parts) >= 3 {
+			return strings.TrimSuffix(parts[0], "s"), parts[2], parts[0] + " " + verb
+		}
+		return strings.TrimSuffix(parts[0], "s"), "", parts[0] + " " + verb
+	case "trash":
+		if len(parts) >= 2 {
+			return "trash", parts[1], "trash " + verb
+		}
+	}
+	return "", "", ""
+}
+
+// readAndRestoreBody consumes the request body and puts it back, unwrapped.
+//
+// A middleware that consumes a body breaks every POST behind it, so the same
+// bytes are handed on. The cap bounds what the audit row can store; a body
+// larger than it is truncated for the record but passed through whole.
+func readAndRestoreBody(r *http.Request) string {
+	if r.Body == nil {
+		return ""
+	}
+	const maxAuditBody = 8192
+	all, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	_ = r.Body.Close()
+	r.Body = io.NopCloser(bytes.NewReader(all))
+	if err != nil {
+		return ""
+	}
+	if len(all) > maxAuditBody {
+		return string(all[:maxAuditBody])
+	}
+	return string(all)
+}
+
+// ---------------------------------------------------------------------------
+// Job history + search endpoints
+// ---------------------------------------------------------------------------
+
+func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
+	if s.delivery == nil {
+		http.Error(w, "delivery store not configured", http.StatusServiceUnavailable)
+		return
+	}
+	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/jobs"), "/")
+	if path != "" && r.Method == http.MethodGet {
+		// /api/v1/jobs/{id}/events
+		parts := strings.Split(path, "/")
+		if len(parts) == 2 && parts[1] == "events" {
+			events, err := s.delivery.JobEvents(parts[0])
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"job_id": parts[0], "events": events})
+			return
+		}
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	filter := delivery.JobFilter{
+		MilestoneID: r.URL.Query().Get("milestone_id"),
+		WorkerID:    r.URL.Query().Get("worker_id"),
+		Status:      r.URL.Query().Get("status"),
+	}
+	jobs, err := s.delivery.ListJobs(filter)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"jobs": jobs})
+}
+
+// SearchHit is one result from the cross-surface search.
+type SearchHit struct {
+	Kind    string `json:"kind"`
+	ID      string `json:"id"`
+	Title   string `json:"title"`
+	Excerpt string `json:"excerpt"`
+	Href    string `json:"href"`
+	Scope   string `json:"scope,omitempty"`
+}
+
+// handleSearch answers GET /api/v1/search?q=.
+//
+// It searches bodies, not only titles: a search of a planning document that only
+// matches titles is not a search. The matching is done in Go over the snapshot
+// rather than in SQL because the fields live in several tables and the snapshot
+// already joins them — one query over a projection that exists beats five LIKEs
+// over tables that do not carry a shared text column.
+func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
+	if s.delivery == nil {
+		http.Error(w, "delivery store not configured", http.StatusServiceUnavailable)
+		return
+	}
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	if q == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"q": "", "hits": []SearchHit{}})
+		return
+	}
+	snap, err := s.delivery.Snapshot()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	hits := searchSnapshot(snap, q, 60)
+	writeJSON(w, http.StatusOK, map[string]any{"q": q, "hits": hits})
+}
+
+// searchSnapshot is the matcher, kept separate so it is testable without HTTP.
+func searchSnapshot(snap delivery.Snapshot, q string, limit int) []SearchHit {
+	needle := strings.ToLower(q)
+	hits := []SearchHit{}
+	add := func(kind, id, title, body, href, scope string) bool {
+		hay := strings.ToLower(title + "\n" + body)
+		if !strings.Contains(hay, needle) {
+			return true
+		}
+		hits = append(hits, SearchHit{
+			Kind:    kind,
+			ID:      id,
+			Title:   title,
+			Excerpt: excerptAround(body, q, 120),
+			Href:    href,
+			Scope:   scope,
+		})
+		return len(hits) < limit
+	}
+
+	for _, eng := range snap.EngReqs {
+		for _, v := range eng.Versions {
+			href := "#/delivery/requirements/" + eng.ID + "/" +
+				itoa(v.Major) + "/" + itoa(v.Minor) + "/" + itoa(v.Patch)
+			body := v.Title + "\n" + v.Problem + "\n" + v.Goals + "\n" + v.Success
+			if !add("requirement_version", eng.ID+":"+itoa(v.Major)+"."+itoa(v.Minor)+"."+itoa(v.Patch),
+				v.Title, body, href, eng.Title) {
+				return hits
+			}
+		}
+	}
+	for _, d := range snap.Designs {
+		href := "#/delivery/designs/" + d.ID
+		body := d.Title + "\n" + d.ADR + "\n" + d.AdrContext + "\n" + d.AdrDecision + "\n" + d.AdrConsequences
+		for _, v := range d.Versions {
+			body += "\n" + v.Title + "\n" + v.Gate + "\n" + v.SubArchitecture + "\n" + v.ClassDesign
+		}
+		if !add("design", d.ID, d.Title, body, href, itoa(d.Major)+"."+itoa(d.Minor)) {
+			return hits
+		}
+	}
+	for _, m := range snap.Roadmap.Milestones {
+		href := "#/delivery/roadmap/m/" + itoa(majorOfMilestone(snap, m.ID))
+		body := m.Title + "\n" + m.Acceptance + "\n" + m.TestNote
+		if !add("milestone", m.ID, m.Title, body, href, "") {
+			return hits
+		}
+	}
+	for _, c := range snap.TestCases {
+		body := c.Title + "\n" + c.Body
+		if !add("test_case", c.ID, c.Title, body, "#/delivery/test", "") {
+			return hits
+		}
+	}
+	for _, b := range snap.BuglistItems {
+		body := b.Title + "\n" + b.Body
+		if !add("bug", b.ID, b.Title, body, "#/delivery/test", "") {
+			return hits
+		}
+	}
+	return hits
+}
+
+// excerptAround returns a window of body around the first match.
+func excerptAround(body, q string, width int) string {
+	if body == "" {
+		return ""
+	}
+	lower := strings.ToLower(body)
+	idx := strings.Index(lower, strings.ToLower(q))
+	if idx < 0 {
+		if len(body) <= width {
+			return strings.TrimSpace(body)
+		}
+		return strings.TrimSpace(body[:width]) + "…"
+	}
+	start := idx - width/3
+	if start < 0 {
+		start = 0
+	}
+	end := start + width
+	if end > len(body) {
+		end = len(body)
+	}
+	out := body[start:end]
+	if start > 0 {
+		out = "…" + out
+	}
+	if end < len(body) {
+		out = out + "…"
+	}
+	return strings.TrimSpace(strings.ReplaceAll(out, "\n", " "))
+}
+
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	neg := n < 0
+	if neg {
+		n = -n
+	}
+	var b [20]byte
+	i := len(b)
+	for n > 0 {
+		i--
+		b[i] = byte('0' + n%10)
+		n /= 10
+	}
+	if neg {
+		i--
+		b[i] = '-'
+	}
+	return string(b[i:])
+}
+
+// majorOfMilestone finds the generation a milestone belongs to, via its bind id.
+func majorOfMilestone(snap delivery.Snapshot, msID string) int {
+	if bind := parseMsBind(msID); bind != nil {
+		return bind.major
+	}
+	return 0
+}

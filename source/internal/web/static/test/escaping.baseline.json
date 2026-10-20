@@ -559,6 +559,23 @@
     "it.text",
     "done.error"
   ],
+  "js/features/jobhistory.js": [
+    "this.skeleton(4)",
+    "out",
+    "q",
+    "j.duration_secs",
+    "window.AnvilUI.badgeClass(j.status)",
+    "when",
+    "dur",
+    "j.event_count || 0",
+    "j.truncated ? \" (trimmed)\" : \"\"",
+    "window.AnvilUI.badgeClass(j.status)",
+    "events.length",
+    "rows",
+    "\"\"",
+    "ev.is_error ? \" wb-tool-error\" : \"\"",
+    "ev.is_error ? \"✗\" : \"✓\""
+  ],
   "js/features/nodes.js": [
     "w.id",
     "w.status",
@@ -606,7 +623,14 @@
     "this.inline(h[2])",
     "level + 2"
   ],
-  "js/app.js": [],
+  "js/app.js": [
+    "escapeAttr(h.href)",
+    "escapeAttr(h.kind)",
+    "escapeAttr(h.title || h.id)",
+    "escapeAttr(h.excerpt || \"\")",
+    "escapeAttr(q)",
+    "escapeAttr(e.message || String(e))"
+  ],
   "js/nav.js": [
     "open ? \"▼\" : \"▶\""
   ]

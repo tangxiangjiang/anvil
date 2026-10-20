@@ -143,7 +143,10 @@ window.api = {
         { worker_id: workerId },
       );
     },
-    usage() { return api.req("GET", "/api/v1/usage"); },    delivery() { return api.req("GET", "/api/v1/delivery"); },
+    usage() { return api.req("GET", "/api/v1/usage"); },
+    search(q) { return api.req("GET", "/api/v1/search?q=" + encodeURIComponent(q)); },
+    jobs(suffix) { return api.req("GET", "/api/v1/jobs" + (suffix || "")); },
+    jobEvents(id) { return api.req("GET", "/api/v1/jobs/" + encodeURIComponent(id) + "/events"); },    delivery() { return api.req("GET", "/api/v1/delivery"); },
 
     // Workbench (0.46.7): the console's interactive session surface.
     workbenchSessions() { return api.req("GET", "/api/v1/workbench/sessions"); },

@@ -14,6 +14,7 @@ import (
 
 	"github.com/anvil-dev/anvil/internal/daemon"
 	"github.com/anvil-dev/anvil/internal/id"
+	"github.com/anvil-dev/anvil/internal/web/delivery"
 	"github.com/anvil-dev/anvil/internal/web/schedclient"
 )
 
@@ -374,6 +375,17 @@ func (s *Server) handleWorkbenchStart(w http.ResponseWriter, r *http.Request) {
 	s.workbench.add(sess)
 	s.log.Printf("workbench.session id=%s worker=%s job=%s", sess.ID, workerID, sess.JobID)
 
+	// Persist the job header up front, so its events have a row to belong to and
+	// the history list knows about a session that is still running (p_0.46.10).
+	if s.delivery != nil {
+		_ = s.delivery.BeginJob(delivery.JobRecord{
+			JobID:    sess.JobID,
+			Kind:     "workbench",
+			WorkerID: workerID,
+			Status:   "running",
+		})
+	}
+
 	go s.runWorkbenchSession(sess, schedclient.JobCreate{
 		JobID:    sess.JobID,
 		RepoID:   repoID,
@@ -424,6 +436,21 @@ func (s *Server) runWorkbenchSession(sess *workbenchSession, in schedclient.JobC
 			ev.JobID = sess.JobID
 		}
 		sess.publish(ev)
+		// Persist alongside the in-memory ring rather than instead of it: the ring
+		// is the fast path for a live subscriber, the table is what makes the run
+		// readable after the process that ran it is gone.
+		if s.delivery != nil {
+			_ = s.delivery.AppendJobEvent(delivery.JobEvent{
+				JobID:   ev.JobID,
+				Type:    ev.Type,
+				Text:    ev.Text,
+				Name:    ev.Name,
+				Args:    string(ev.Args),
+				Content: ev.Content,
+				IsError: ev.IsError,
+				Step:    ev.Step,
+			})
+		}
 	})
 	errText := ""
 	if err != nil {
@@ -435,6 +462,13 @@ func (s *Server) runWorkbenchSession(sess *workbenchSession, in schedclient.JobC
 		}
 	}
 	sess.finish(done, errText)
+	if s.delivery != nil {
+		status := done.Status
+		if status == "" {
+			status = "finished"
+		}
+		_ = s.delivery.FinishJob(sess.JobID, status, done.Error)
+	}
 }
 
 func (s *Server) handleWorkbenchEvents(w http.ResponseWriter, r *http.Request, sess *workbenchSession) {

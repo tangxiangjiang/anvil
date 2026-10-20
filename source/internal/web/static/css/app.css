@@ -265,6 +265,48 @@ input { width: 100%; margin-bottom: 0.75rem; }
   .side { border-right: 0; border-bottom: 1px solid var(--border); }
 }
 
+/* Global search (p_0.46.10): one box for the whole planning record. */
+.side-search { position: relative; }
+.side-search input { margin: 0; width: 100%; font-size: 0.85rem; padding: 0.35rem 0.55rem; }
+.gs-results {
+  position: absolute; left: 0; right: 0; top: calc(100% + 0.25rem); z-index: 30;
+  max-height: 60vh; overflow: auto;
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.35); padding: 0.25rem;
+}
+.gs-hit {
+  display: flex; flex-direction: column; gap: 0.1rem;
+  padding: 0.4rem 0.5rem; border-radius: 6px; color: var(--text);
+}
+.gs-hit:hover, .gs-hit:focus { background: #223040; }
+.gs-kind { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em; }
+.gs-title { font-size: 0.9rem; }
+.gs-excerpt { font-size: 0.78rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gs-none { padding: 0.5rem; margin: 0; font-size: 0.85rem; }
+
+/* Job history (p_0.46.10). */
+.jh-list { display: flex; flex-direction: column; gap: 0.3rem; }
+.jh-row {
+  display: grid; grid-template-columns: 0.6rem minmax(0,1fr) auto auto auto auto;
+  gap: 0.6rem; align-items: center; width: 100%; text-align: left;
+  background: var(--panel); border: 1px solid var(--border); color: var(--text);
+  padding: 0.45rem 0.65rem; border-radius: var(--radius);
+}
+.jh-row:hover { border-color: var(--accent-dim); }
+.jh-state { width: 0.5rem; height: 0.5rem; border-radius: 50%; background: var(--muted); }
+.jh-state.ok { background: var(--ok); }
+.jh-state.warn { background: var(--warn); }
+.jh-state.bad { background: var(--danger); }
+.jh-main { display: flex; flex-direction: column; min-width: 0; }
+.jh-kind { font-size: 0.9rem; }
+.jh-id { font-family: var(--mono); font-size: 0.72rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.jh-meta { font-size: 0.75rem; white-space: nowrap; }
+.jh-progress, .jh-other { font-size: 0.8rem; }
+@media (max-width: 900px) {
+  .jh-row { grid-template-columns: 0.6rem minmax(0,1fr) auto; }
+  .jh-row .jh-meta:nth-of-type(2), .jh-row .jh-meta:nth-of-type(3) { display: none; }
+}
+
 /* Workbench (0.46.7): the interactive surface. */
 .wb-grid {
   display: grid; grid-template-columns: minmax(240px, 300px) 1fr;

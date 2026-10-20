@@ -256,7 +256,17 @@ CREATE TABLE IF NOT EXISTS delivery_trash (
 	if err := s.ensureMilestoneAcceptColumns(); err != nil {
 		return err
 	}
-	return s.ensurePolishesTable()
+	if err := s.ensurePolishesTable(); err != nil {
+		return err
+	}
+	// p_0.46.10: keep the work.
+	if err := s.ensureJobEventTables(); err != nil {
+		return err
+	}
+	if err := s.ensureAuditTable(); err != nil {
+		return err
+	}
+	return s.ensureTrashProvenance()
 }
 
 func (s *Store) ensureMilestoneAcceptColumns() error {

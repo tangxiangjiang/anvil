@@ -77,8 +77,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/nodes", s.requireAuth(s.handleNodes))
 	mux.HandleFunc("/api/v1/nodes/", s.requireAuth(s.handleNodePatch))
 	mux.HandleFunc("/api/v1/usage", s.requireAuth(s.handleUsage))
-	mux.HandleFunc("/api/v1/delivery", s.requireAuth(s.handleDelivery))
-	mux.HandleFunc("/api/v1/delivery/", s.requireAuth(s.handleDelivery))
+	mux.HandleFunc("/api/v1/delivery", s.requireAuth(s.auditDelivery(s.handleDelivery)))
+	mux.HandleFunc("/api/v1/delivery/", s.requireAuth(s.auditDelivery(s.handleDelivery)))
+	mux.HandleFunc("/api/v1/jobs", s.requireAuth(s.handleJobs))
+	mux.HandleFunc("/api/v1/jobs/", s.requireAuth(s.handleJobs))
+	mux.HandleFunc("/api/v1/search", s.requireAuth(s.handleSearch))
 	mux.HandleFunc("/api/v1/workbench", s.requireAuth(s.handleWorkbench))
 	mux.HandleFunc("/api/v1/workbench/", s.requireAuth(s.handleWorkbench))
 

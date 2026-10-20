@@ -40,6 +40,9 @@
 
   <div id="view-shell" class="shell" hidden>
     <aside class="side">
+      <div class="side-search">
+        <input id="global-search" type="search" placeholder="Search the plan…" aria-label="Search the planning record" />
+      </div>
       <div class="brand">Anvil<span>cluster console</span></div>
       <nav class="nav" id="nav"></nav>
       <div class="side-foot">
@@ -64,6 +67,7 @@
   <script src="/js/components/md_preview.js"></script>
   <script src="/js/features/clusters.js"></script>
   <script src="/js/features/workbench.js"></script>
+  <script src="/js/features/jobhistory.js"></script>
   <!--
     Delivery: eleven files, each assigning onto window.Features.delivery.
     Order matters — core defines the router, helpers/modals/jobs are its
