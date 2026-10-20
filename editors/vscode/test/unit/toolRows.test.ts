@@ -19,6 +19,8 @@ const EXTENSION_ROOT = join(__dirname, '..', '..', '..');
 const CHAT_JS = readFileSync(join(EXTENSION_ROOT, 'media', 'chat.js'), 'utf8');
 const CHAT_CSS = readFileSync(join(EXTENSION_ROOT, 'media', 'chat.css'), 'utf8');
 const CHAT_PANEL = readFileSync(join(EXTENSION_ROOT, 'src', 'chatPanel.ts'), 'utf8');
+const EXTENSION = readFileSync(join(EXTENSION_ROOT, 'src', 'extension.ts'), 'utf8');
+const HUB = readFileSync(join(EXTENSION_ROOT, 'src', 'hub.ts'), 'utf8');
 
 /** A top-level function of the renderer, from its declaration to the next one. */
 function bodyOf(source: string, name: string): string {
@@ -147,4 +149,48 @@ test('the operation is the loud part of the row', () => {
   // shrink away with the file.
   assert.match(CHAT_CSS, /\.tool \.hint \.file \{[^}]*--vscode-textLink-foreground/);
   assert.match(CHAT_CSS, /\.tool \.hint \.meta \{[^}]*flex:\s*0 0 auto/);
+});
+
+test('a result offers its whole output in a tab', () => {
+  // The caption counts lines, not characters: "3 lines of output" is how a
+  // reader decides whether to open it. A trailing newline is not a line.
+  const count = bodyOf(CHAT_JS, 'lineCount');
+  assert.match(count, /replace\(\/\\r\?\\n\+\$\/, ''\)/);
+  assert.match(count, /split\(\/\\r\?\\n\/\)\.length/);
+
+  const link = bodyOf(CHAT_JS, 'addOutputLink');
+  assert.match(link, /const count = lineCount\(content\)/);
+  assert.match(link, /count === 1 \? '1 line of output' : count \+ ' lines of output'/);
+  // It is a sibling of the details, not a child: a folded row hides its
+  // children, and this caption has to be readable while the row is closed.
+  assert.match(link, /card\.parentNode\.insertBefore\(note, card\.nextSibling\)/);
+  assert.match(link, /type: 'openOutput'/);
+  assert.match(link, /id: event\.tool_call_id/);
+  assert.match(link, /text: content/);
+  assert.match(link, /syncRail\(card\.parentElement\)/);
+
+  assert.match(bodyOf(CHAT_JS, 'addToolResult'), /addOutputLink\(card, event, content\)/);
+
+  const note = /\.output-link \{\r?\n {2}display: block;([\s\S]*?)\}/.exec(CHAT_CSS);
+  assert.ok(note, 'the caption has a rule');
+  assert.match(note[1], /font-size:\s*0\.85em/);
+  assert.match(note[1], /color:\s*var\(--ui-muted\)/);
+  assert.match(note[1], /padding:\s*2px 6px 2px 22px/);
+  // It belongs to the reply's rail, so the line does not break around it.
+  assert.match(CHAT_CSS, /\.output-link\.rail::after/);
+
+  // The extension opens a document the webview cannot: the provider is created
+  // once for the window and reaches every tab through the hub.
+  assert.match(CHAT_PANEL, /case 'openOutput':/);
+  const open = methodOf(CHAT_PANEL, 'private async openOutput(');
+  assert.match(open, /typeof text !== 'string' \|\| text === ''/);
+  assert.match(open, /this\.outputs\.open\(tool, call, text\)/);
+  assert.match(EXTENSION, /new ToolOutputDocuments\(\)/);
+  assert.match(EXTENSION, /context\.subscriptions\.push\(outputs\)/);
+  assert.match(EXTENSION, /new Hub\(context, log, previews, plans, outputs\)/);
+  assert.match(HUB, /private readonly outputs: ToolOutputDocuments/);
+  assert.match(
+    HUB,
+    /new ChatPanel\(this\.context, this\.log, this\.previews, this\.plans, this\.outputs, this, agentId, focus\)/,
+  );
 });

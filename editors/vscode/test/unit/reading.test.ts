@@ -69,13 +69,19 @@ test('the renderer is used so that no HTML is assigned', () => {
 });
 
 test('the focus view hides the agent’s side and keeps the question', () => {
-  assert.match(CHAT_CSS, /body\.focus-view \.tool,\s*\nbody\.focus-view \.think \{/);
+  assert.match(
+    CHAT_CSS,
+    /body\.focus-view \.tool,\r?\nbody\.focus-view \.think,\r?\nbody\.focus-view \.output-link \{/,
+  );
   // An approval card is a question to the reader. Hiding it would leave a turn
   // waiting behind a view the reader cannot see through.
   assert.doesNotMatch(CHAT_CSS, /body\.focus-view \.approval/);
   // The script's anchor rule has to agree with the stylesheet's, or the reader
   // is re-anchored to an element with no box.
-  assert.match(CHAT_JS, /node\.classList\.contains\('tool'\) \|\| node\.classList\.contains\('think'\)/);
+  assert.match(CHAT_JS, /function hiddenInFocus\(node\) \{[\s\S]*?node\.classList\.contains\('tool'\)/);
+  // The output caption is part of the agent's side too; a hidden row with a
+  // visible caption under it would be a line about nothing.
+  assert.match(CHAT_JS, /node\.classList\.contains\('output-link'\)/);
 });
 
 test('the focus flag is the document’s, merged into its saved state', () => {

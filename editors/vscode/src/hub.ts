@@ -25,6 +25,7 @@ import { McpSettings } from './mcp';
 import { McpPanels } from './mcpPanel';
 import { PermissionsPanels } from './permissionsPanel';
 import { PlanDocuments } from './planDocument';
+import { ToolOutputDocuments } from './toolOutput';
 import { TaskRow, TasksPanels } from './tasksPanel';
 import {
   CheckpointRestoreResult,
@@ -111,6 +112,9 @@ export class Hub {
     // and run, so two tabs reviewing plans get two documents rather than a
     // second registry.
     private readonly plans: PlanDocuments,
+    // Tool output is addressed by the tool call, which is unique across the
+    // window, so every tab shares this one store as well.
+    private readonly outputs: ToolOutputDocuments,
   ) {
     // A crash or a restart ends every session this window holds. Each panel
     // drops its handle and opens a new one for its agent on the next prompt;
@@ -148,7 +152,7 @@ export class Hub {
    * now starts in the full view.
    */
   createPanel(agentId?: string, focus = false): ChatPanel {
-    const panel = new ChatPanel(this.context, this.log, this.previews, this.plans, this, agentId, focus);
+    const panel = new ChatPanel(this.context, this.log, this.previews, this.plans, this.outputs, this, agentId, focus);
     this.panels.add(panel);
     this.tabsChanged.fire();
     return panel;

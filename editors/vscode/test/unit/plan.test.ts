@@ -93,7 +93,7 @@ test('the document is registered read-only and disposed with the window', () => 
   assert.equal(EXTENSION.split('new PlanDocuments()').length, 2);
   assert.match(EXTENSION, /const plans = new PlanDocuments\(\);/);
   assert.match(EXTENSION, /context\.subscriptions\.push\(plans\)/);
-  assert.match(EXTENSION, /new Hub\(context, log, previews, plans\)/);
+  assert.match(EXTENSION, /new Hub\(context, log, previews, plans, outputs\)/);
 });
 
 test('the three commands exist in both halves', () => {

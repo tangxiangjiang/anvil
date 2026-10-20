@@ -38,6 +38,7 @@ import { ChatSession, SessionConfig, SessionState } from './session';
 import { PreviewDocuments } from './review';
 import { PLAN_APPROVED_PROMPT } from './plan';
 import { PlanDocuments } from './planDocument';
+import { ToolOutputDocuments } from './toolOutput';
 import { dedupeMentions, relativeMention } from './mentions';
 import { McpCardServer, cardServer, hasRuntime, mcpEnabled, missingMcpSources, settingSourcesFor } from './mcp';
 import { shouldReattach } from './reattach';
@@ -141,6 +142,12 @@ type Inbound =
   /** A link the transcript rendered. The URL is re-checked before it is opened. */
   | { type: 'openLink'; url: string }
   | { type: 'openPath'; path: string; line?: number }
+  /**
+   * A tool result the reader asked to see whole. The webview sends the text it
+   * holds in the card; this side only supplies the read-only document around
+   * it, because only the extension can register one.
+   */
+  | { type: 'openOutput'; title: string; id: string; text: string }
   /**
    * "Put this answer on the clipboard." The text is the raw Markdown the bubble
    * holds; the host writes it, because the clipboard belongs to the editor.
@@ -534,6 +541,7 @@ export class ChatPanel implements HostListener {
     private readonly log: (line: string) => void,
     private readonly previews: PreviewDocuments,
     private readonly plans: PlanDocuments,
+    private readonly outputs: ToolOutputDocuments,
     private readonly hub: Hub,
     agentId?: string,
     /**
@@ -880,6 +888,9 @@ export class ChatPanel implements HostListener {
       case 'openPath':
         await this.openPath(msg.path, msg.line);
         return;
+      case 'openOutput':
+        await this.openOutput(msg.title, msg.id, msg.text);
+        return;
       case 'copy':
         await this.copy(msg.text);
         return;
@@ -947,6 +958,29 @@ export class ChatPanel implements HostListener {
     } catch {
       // A path the row offered but the disk no longer has is not worth a
       // notification: the file may have been renamed since the call.
+    }
+  }
+
+  /**
+   * Opens a tool result as a read-only document.
+   *
+   * The title is a display name the webview derived from the tool, never a
+   * path: the provider sanitises it and the call id is what identifies the
+   * document, so a hostile name cannot address anything outside this store.
+   * Empty text has nothing to show and opens nothing.
+   */
+  private async openOutput(title: unknown, id: unknown, text: unknown): Promise<void> {
+    if (typeof text !== 'string' || text === '') return;
+    const tool = typeof title === 'string' ? title : '';
+    const call = typeof id === 'string' ? id : '';
+    try {
+      await this.outputs.open(tool, call, text);
+    } catch (err) {
+      this.post({
+        type: 'notice',
+        level: 'error',
+        message: `Could not open the output: ${(err as Error).message}`,
+      });
     }
   }
 

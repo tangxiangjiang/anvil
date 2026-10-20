@@ -390,7 +390,8 @@ body {
  * silently waits forever.
  */
 body.focus-view .tool,
-body.focus-view .think {
+body.focus-view .think,
+body.focus-view .output-link {
   display: none;
 }
 
@@ -446,7 +447,26 @@ button.ghost[aria-pressed='true'] {
   height: 6px;
   border-radius: 50%;
   background: var(--dot);
-  opacity: 0.55;
+  opacity: 0.7;
+}
+
+/*
+ * A chevron, because the dot says "this is reasoning" and says nothing about
+ * the row opening. It is a pseudo-element so the summary still reads as
+ * "Thinking" to a screen reader.
+ */
+.msg .think > summary::after {
+  content: '›';
+  flex: 0 0 auto;
+  margin-left: -6px;
+  font-size: 1.1em;
+  line-height: 1;
+  color: var(--ui-muted);
+  transition: transform 120ms ease;
+}
+
+.msg .think[open] > summary::after {
+  transform: rotate(90deg);
 }
 
 .msg .think[open] > summary::before {
@@ -457,9 +477,9 @@ button.ghost[aria-pressed='true'] {
 .msg .think .body {
   margin-top: 4px;
   /* The summary's left padding, dot and gap: reasoning starts under its own
-   * line rather than under the dot. */
+   * line rather than under the dot. The rail at 9px is the one vertical line;
+   * a border here would be a second one at a different distance. */
   padding: 4px 0 4px 22px;
-  border-left: 1px solid var(--ui-hairline);
   font-size: 0.9em;
   color: var(--ui-muted);
   line-height: var(--ui-line);
@@ -544,48 +564,96 @@ button.ghost[aria-pressed='true'] {
 }
 
 /*
- * The rail through a run of steps.
+ * The rail through one assistant reply.
  *
- * `syncRail` gives a row `rail-up` / `rail-down` only where another step
- * follows, so a single step draws nothing and the line begins and ends on a
- * dot. The segment sits at 9px — the summary's 6px padding and half the 6px
- * dot — and reaches 10px into the gap on a side where the run continues. Ten
- * pixels on each side meet across the 20px a message's margin and the
- * transcript's gap add up to.
+ * `syncRail` gives every block of a reply `rail`, and `rail-up` / `rail-down`
+ * only where another block is on that side; a reply of one block still draws
+ * its full-height line. The segment sits at 9px — the summary's 6px padding and
+ * half the 6px dot. A row reaches 10px into the gap; a message reaches 14px,
+ * because two messages are 28px apart (12px gap plus two 8px margins) while a
+ * message and a row are 20px apart.
  */
 .tool,
-.msg .think {
+.msg.assistant,
+.output-link {
   position: relative;
 }
 
 .tool::after,
-.msg .think::after {
+.msg.assistant::after,
+.output-link::after {
   content: '';
   position: absolute;
   left: 9px;
-  top: 9px;
-  bottom: 9px;
+  top: 0;
+  bottom: 0;
   width: 1px;
   background: var(--ui-hairline);
   pointer-events: none;
   display: none;
 }
 
-.tool.rail-up::after,
-.tool.rail-down::after,
-.msg .think.rail-up::after,
-.msg .think.rail-down::after {
+.tool.rail::after,
+.msg.assistant.rail::after,
+.output-link.rail::after {
   display: block;
 }
 
 .tool.rail-up::after,
-.msg .think.rail-up::after {
+.output-link.rail-up::after {
   top: -10px;
 }
 
 .tool.rail-down::after,
-.msg .think.rail-down::after {
+.output-link.rail-down::after {
   bottom: -10px;
+}
+
+.msg.assistant.rail-up::after {
+  top: -14px;
+}
+
+.msg.assistant.rail-down::after {
+  bottom: -14px;
+}
+
+/*
+ * Prose is part of the reply, not a break in it: it sits right of the rail,
+ * where a row's name starts (6px padding + 6px dot + 10px gap).
+ */
+.msg.assistant.rail > .who,
+.msg.assistant.rail > .body,
+.msg.assistant.rail > .copy {
+  padding-left: 22px;
+}
+
+/*
+ * A result's caption. It is a sibling of the folded row, so it stays readable
+ * while the row is closed, and its text starts where the row's name does.
+ */
+.output-link {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 2px 6px 2px 22px;
+  border: 0;
+  background: transparent;
+  color: var(--ui-muted);
+  font: inherit;
+  font-size: 0.85em;
+  line-height: var(--ui-line-tight);
+  text-align: left;
+  cursor: pointer;
+}
+
+.output-link:hover {
+  color: var(--vscode-foreground);
+  text-decoration: underline;
+}
+
+.output-link:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
 }
 
 /*
@@ -974,8 +1042,10 @@ body.vscode-high-contrast-light .msg .think > summary::before {
 /* The hairline may be too quiet to read as a line in high contrast. */
 body.vscode-high-contrast .tool::after,
 body.vscode-high-contrast-light .tool::after,
-body.vscode-high-contrast .msg .think::after,
-body.vscode-high-contrast-light .msg .think::after {
+body.vscode-high-contrast .msg.assistant::after,
+body.vscode-high-contrast-light .msg.assistant::after,
+body.vscode-high-contrast .output-link::after,
+body.vscode-high-contrast-light .output-link::after {
   background: var(--vscode-foreground);
   opacity: 0.6;
 }
@@ -988,9 +1058,7 @@ body.vscode-high-contrast-light .tool .state {
 }
 
 body.vscode-high-contrast .tool .section pre,
-body.vscode-high-contrast-light .tool .section pre,
-body.vscode-high-contrast .msg .think .body,
-body.vscode-high-contrast-light .msg .think .body {
+body.vscode-high-contrast-light .tool .section pre {
   border-left-color: var(--vscode-contrastBorder, var(--vscode-panel-border));
 }
 

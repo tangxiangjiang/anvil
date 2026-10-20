@@ -295,16 +295,18 @@ which is how the extension already degrades (`runtime`, `permission_mode_source`
 | [p_0.47.11](../../roadmaps/v1.0/m_0.47/p_0.47.11.md) | One visual grammar for all five webviews: shared tokens and panel chrome |
 | [p_0.47.12](../../roadmaps/v1.0/m_0.47/p_0.47.12.md) | Dot markers, more air, a configurable chat text size |
 | [p_0.47.13](../../roadmaps/v1.0/m_0.47/p_0.47.13.md) | A step rail, coloured operations, human tool titles and file links |
+| [p_0.47.14](../../roadmaps/v1.0/m_0.47/p_0.47.14.md) | One rail per reply, a folded Thought, tool output in a read-only tab |
 
-0.47.9–0.47.13 were written after the milestone was accepted. Their findings came from the
+0.47.9–0.47.14 were written after the milestone was accepted. Their findings came from the
 first real use of the panel, not from a test: a capability that existed and was never turned
 on, an error that only reached the log, a block with no way out — and then a transcript that
 was tiring to read, followed by four manager panels that each declared their own copy of the
 same document chrome, and finally a row marker, a spacing and a text size that the reader
 named directly, and then the rail, operation colour and human names that the same reader
-recognised from another editor. The lesson is recorded here rather than in a commit message —
-the manual passes the earlier phases wrote down as "still worth doing" are the ones that
-would have found all of these.
+recognised from another editor, and then the reply-wide rail, the folded Thought and the
+output tab that the same reader asked of the first rail. The lesson is recorded here rather
+than in a commit message — the manual passes the earlier phases wrote down as "still worth
+doing" are the ones that would have found all of these.
 
 ## 15. The visual grammar after use
 
@@ -386,3 +388,29 @@ run of steps a sequence, and makes the row say what the step was.
   columns, its own line numbers and the narrow fallback. The old path line inside the diff is
   gone rather than duplicated.
 
+## 17. The reply, the thought, and the output
+
+p_0.47.13 read a run of calls as a sequence of adjacent steps. The same reader then asked for
+the line to be the reply's first-level boundary instead: one answer, one column, prose
+included. §17 records that unit and the two things that hang from it.
+
+- **The rail belongs to the reply.** A run is every consecutive `.tool` and
+  `.msg.assistant` child of a transcript container, not just the runs where a paragraph
+  happens to be absent. Prose is part of the answer, so the line crosses it; the line stops
+  where the conversation changes hands — a user message, a notice, an approval. Every block
+  in the run carries its own full-height segment and reaches into the gap only where the run
+  continues, so a one-block reply still has a line and a reply with prose is still one line.
+  Prose is inset 22px, which is where a row's name starts; a Thinking dot stays at 9px and
+  the line passes through it.
+- **A thought is a folded row.** The summary is a grey dot, the word, and a chevron that
+  turns when the block opens. The reasoning sits under it, at the same inset, with no second
+  vertical bar: the rail is the one line, and the body's old hairline was a duplicate at the
+  wrong distance. Thinking is collapsed by default and is not announced; opening it is the
+  reader's choice.
+- **A result is a document when it does not fit a row.** A finished tool row with text shows
+  `N line(s) of output` in small grey under the summary. Clicking it opens the full result in
+  a read-only tab titled `<Tool> output (<suffix>)`, supplied by a
+  `TextDocumentContentProvider` under `anvil-tool-output:` — no file is written and nothing
+  can edit it. The suffix is a hash of the tool call id and the URI carries the id itself, so
+  a second click reveals the same tab. The row's OUT pane keeps its display cap and its
+  "show all" button; the tab is where the rest is read.

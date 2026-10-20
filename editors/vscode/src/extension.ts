@@ -28,6 +28,7 @@ import {
   readSettings,
   settingsKey,
 } from './settings';
+import { ToolOutputDocuments } from './toolOutput';
 
 /** The window's shared half, so `deactivate` can kill the child. */
 let active: Hub | undefined;
@@ -53,7 +54,12 @@ export function activate(context: vscode.ExtensionContext): void {
   const plans = new PlanDocuments();
   context.subscriptions.push(plans);
 
-  const hub = new Hub(context, log, previews, plans);
+  // Tool output is the same shape of read-only document, but it is created on
+  // demand from the result the webview already holds rather than from a file.
+  const outputs = new ToolOutputDocuments();
+  context.subscriptions.push(outputs);
+
+  const hub = new Hub(context, log, previews, plans, outputs);
   active = hub;
 
   // Registered before anything can await: VS Code hands a restored panel to the

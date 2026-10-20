@@ -283,7 +283,11 @@
 
   /** Whether the focus view hides this block. Kept beside the stylesheet's rule. */
   function hiddenInFocus(node) {
-    return node.classList.contains('tool') || node.classList.contains('think');
+    return (
+      node.classList.contains('tool') ||
+      node.classList.contains('think') ||
+      node.classList.contains('output-link')
+    );
   }
 
   /**
@@ -317,26 +321,25 @@
   }
 
   /**
-   * The vertical line through a run of steps.
+   * The vertical line through one assistant reply.
    *
-   * A rail belongs to a run, not to the transcript: a user message or an
-   * assistant paragraph is not a step and the line stops at it. A `.tool` is a
-   * step; a `.msg` contributes its direct `.think` children and is a step only
-   * while it has no prose. Each step draws its own `::after` segment, extended
-   * into the gap on a side where the run continues — a single step draws
-   * nothing, so the line begins and ends on a dot rather than in mid-air.
-   *
-   * The markup stays flat. A wrapper per run would have to be learned by the
-   * replay, the spawn scopes and the focus view; two classes per row are enough
-   * for one line.
+   * A reply is everything the agent puts on screen between two hands of the
+   * conversation: its prose, its Thinking and every tool row. The rail belongs
+   * to that whole turn, not to a run of adjacent calls, because the turn is the
+   * first-level grouping a reader recognises. A user message, a notice or an
+   * approval ends it. Each block draws its own full-height segment, so the
+   * markup stays flat and the replay, the spawn scopes and the focus view need
+   * to learn nothing.
    */
   function syncRail(container) {
     if (!container) return;
     let run = [];
     const flush = () => {
       for (let i = 0; i < run.length; i += 1) {
-        run[i].classList.toggle('rail-up', i > 0);
-        run[i].classList.toggle('rail-down', i < run.length - 1);
+        const block = run[i];
+        block.classList.add('rail');
+        block.classList.toggle('rail-up', i > 0);
+        block.classList.toggle('rail-down', i < run.length - 1);
       }
       run = [];
     };
@@ -345,13 +348,14 @@
         run.push(child);
         continue;
       }
-      if (child.classList.contains('msg')) {
-        const thinks = [...child.querySelectorAll(':scope > .think')];
-        for (const think of thinks) run.push(think);
-        // Prose after the reasoning is where the run ends: the next call is
-        // after an answer, not after this thought.
-        const body = child.querySelector(':scope > .body');
-        if (body && body.textContent.trim() !== '') flush();
+      // The output line is part of the reply even though it is not a step: it
+      // sits between a row and whatever comes next, and the rail crosses it.
+      if (child.classList.contains('output-link')) {
+        run.push(child);
+        continue;
+      }
+      if (child.classList.contains('msg') && child.classList.contains('assistant')) {
+        run.push(child);
         continue;
       }
       flush();
@@ -603,7 +607,6 @@
       state.think = think;
       state.thinkBody = body;
       state.thinkSealed = false;
-      syncRail(state.wrap.parentElement);
     }
     const pinned = atBottom();
     state.thinkBody.textContent += text;
@@ -972,9 +975,6 @@
       state.paintQueued = false;
       const pinned = atBottom();
       paintMarkdown(state.md, state.text);
-      // Prose on the body is what turns a Thinking-only message from a step
-      // into an answer, and that is the moment the rail's run changes.
-      syncRail(state.wrap.parentElement);
       scrollIfPinned(pinned);
     });
   }
@@ -1508,6 +1508,12 @@
     return parts.join(', ');
   }
 
+  /** How many lines a result holds, not counting a trailing newline. */
+  function lineCount(text) {
+    const trimmed = text.replace(/\r?\n+$/, '');
+    return trimmed === '' ? 0 : trimmed.split(/\r?\n/).length;
+  }
+
   /** Line comparison of the two sides. A huge pair is clipped rather than diffed. */
   function lineDiffRows(before, after) {
     const a = splitLines(before);
@@ -1645,6 +1651,7 @@
     }
 
     const content = event.content || '';
+    addOutputLink(card, event, content);
     const limit = 4000;
     const truncated = content.length > limit;
     // The result goes in OUT, and the "show all" button has to name *that* pane:
@@ -1662,6 +1669,38 @@
       });
       out.appendChild(more);
     }
+  }
+
+  /**
+   * The small grey line under a finished row that opens the whole result.
+   *
+   * It is a sibling of the `<details>`, not a child: a folded details hides
+   * everything but its summary, and this line has to be readable while the row
+   * is closed. The rail pass treats it as part of the reply, so the line does
+   * not stop around it.
+   */
+  function addOutputLink(card, event, content) {
+    const count = lineCount(content);
+    if (count === 0) return;
+    const label = card.querySelector('.name');
+    const name = label ? label.textContent.trim() : 'Tool';
+    const note = el(
+      'button',
+      'output-link',
+      count === 1 ? '1 line of output' : count + ' lines of output',
+    );
+    note.type = 'button';
+    note.title = 'Open the full output in a new tab';
+    note.addEventListener('click', () =>
+      vscode.postMessage({
+        type: 'openOutput',
+        title: name,
+        id: event.tool_call_id || '',
+        text: content,
+      }),
+    );
+    card.parentNode.insertBefore(note, card.nextSibling);
+    syncRail(card.parentElement);
   }
 
   /** A button in a spawn card's action row. */

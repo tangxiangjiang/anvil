@@ -264,10 +264,9 @@ test('a tool is a row, not a card, and its output is inset', () => {
     bodiesOf('.tool .section pre').join(';'),
     /border-left:\s*1px solid var\(--ui-hairline\)/,
   );
-  assert.match(
-    bodiesOf('.msg .think .body').join(';'),
-    /border-left:\s*1px solid var\(--ui-hairline\)/,
-  );
+  // Thinking has one line — the rail — and no second bar beside its text.
+  assert.match(bodiesOf('.msg .think .body').join(';'), /padding:\s*4px 0 4px 22px/);
+  assert.doesNotMatch(bodiesOf('.msg .think .body').join(';'), /border-left/);
 });
 
 test('a row is marked by a state dot, not a caret', () => {
@@ -302,28 +301,64 @@ test('a row is marked by a state dot, not a caret', () => {
   );
 });
 
-test('a run of steps is joined by one rail', () => {
-  // The segment is a pseudo-element on the row, so the markup stays flat and
+test('a reply is one rail, prose included', () => {
+  // The segment is a pseudo-element on the block, so the markup stays flat and
   // the replay, the spawn scopes and the focus view need to learn nothing.
   const rail = bodiesOf('.tool::after').join(';');
   assert.match(rail, /content:\s*''/);
   assert.match(rail, /left:\s*9px/);
   assert.match(rail, /width:\s*1px/);
   assert.match(rail, /display:\s*none/);
+  // Prose and the output caption are blocks of the reply too.
+  assert.match(bodiesOf('.msg.assistant::after').join(';'), /left:\s*9px/);
+  assert.match(bodiesOf('.output-link::after').join(';'), /left:\s*9px/);
+  assert.match(bodiesOf('.tool.rail::after').join(';'), /display:\s*block/);
+  assert.match(bodiesOf('.msg.assistant.rail::after').join(';'), /display:\s*block/);
+  // A row reaches 10px into the gap; two messages are 28px apart, so they
+  // reach 14px each.
   assert.match(bodiesOf('.tool.rail-up::after').join(';'), /top:\s*-10px/);
   assert.match(bodiesOf('.tool.rail-down::after').join(';'), /bottom:\s*-10px/);
+  assert.match(bodiesOf('.msg.assistant.rail-up::after').join(';'), /top:\s*-14px/);
+  assert.match(bodiesOf('.msg.assistant.rail-down::after').join(';'), /bottom:\s*-14px/);
 
-  // The class pass: a tool is a step, a message contributes its thinking, and
-  // anything else ends the run — so prose is never crossed by the line. A run
-  // of one draws nothing, which is why the line begins and ends on a dot.
+  // Prose sits right of the line, where a row's name starts; the copy action
+  // belongs to the message and moves with it.
+  assert.match(
+    bodiesOf('.msg.assistant.rail > .body').join(';'),
+    /padding-left:\s*22px/,
+  );
+  assert.match(
+    bodiesOf('.msg.assistant.rail > .who').join(';'),
+    /padding-left:\s*22px/,
+  );
+
+  // The class pass: an assistant message is a block of the reply rather than
+  // an ending, and a block with a neighbour on a side reaches into that gap.
   assert.match(JS, /function syncRail\(container\)/);
-  assert.match(JS, /run\[i\]\.classList\.toggle\('rail-up', i > 0\)/);
-  assert.match(JS, /run\[i\]\.classList\.toggle\('rail-down', i < run\.length - 1\)/);
-  assert.match(JS, /child\.classList\.contains\('tool'\)/);
-  assert.match(JS, /querySelectorAll\(':scope > \.think'\)/);
+  assert.match(JS, /child\.classList\.contains\('msg'\) && child\.classList\.contains\('assistant'\)/);
+  assert.match(JS, /child\.classList\.contains\('output-link'\)/);
+  assert.match(JS, /block\.classList\.add\('rail'\)/);
+  assert.match(JS, /block\.classList\.toggle\('rail-up', i > 0\)/);
+  assert.match(JS, /block\.classList\.toggle\('rail-down', i < run\.length - 1\)/);
   assert.match(JS, /syncRail\(active\.container\)/);
-  // A Thinking-only message stops being a step when its body gains prose.
-  assert.match(JS, /syncRail\(state\.wrap\.parentElement\)/);
+  // Prose no longer ends the run, so the old think-only step walk is gone.
+  assert.doesNotMatch(JS, /:scope > \.think/);
+});
+
+test('a thought is folded behind a grey chevron', () => {
+  // The dot says "reasoning", not "operation": it stays grey in every theme.
+  const dot = bodiesOf('.msg .think > summary::before').join(';');
+  assert.match(dot, /--dot:\s*var\(--ui-muted\)/);
+  assert.doesNotMatch(dot, /testing-iconPassed|charts-green/);
+
+  // The chevron is the fold affordance; a pseudo-element keeps the summary's
+  // accessible name as "Thinking".
+  assert.match(bodiesOf('.msg .think > summary::after').join(';'), /content:\s*'›'/);
+  assert.match(
+    bodiesOf('.msg .think[open] > summary::after').join(';'),
+    /transform:\s*rotate\(90deg\)/,
+  );
+  assert.match(JS, /think\.open = false/);
 });
 
 test('the chat text size is a variable the script writes and the body reads', () => {
