@@ -126,6 +126,24 @@ test('focus is visible in the ordinary and the high-contrast themes', () => {
   assert.doesNotMatch(CHAT_CSS, /outline: none/);
 });
 
+test('the quiet rows keep a non-colour cue in high contrast', () => {
+  // A tinted line background is not guaranteed in a high-contrast theme; the
+  // two-pixel edge is what survives there, and the summary is drawn in the
+  // normal foreground rather than the muted one.
+  assert.match(
+    CHAT_CSS,
+    /body\.vscode-high-contrast \.tool \.edit-diff \.diff \.cell\.add,\s*\nbody\.vscode-high-contrast-light[^{]*\{[^}]*border-left:\s*2px solid/,
+  );
+  assert.match(
+    CHAT_CSS,
+    /body\.vscode-high-contrast \.tool \.edit-diff \.diff \.cell\.del,\s*\nbody\.vscode-high-contrast-light[^{]*\{[^}]*border-left:\s*2px solid/,
+  );
+  assert.match(
+    CHAT_CSS,
+    /body\.vscode-high-contrast \.tool > summary,\s*\nbody\.vscode-high-contrast-light \.tool > summary \{[^}]*color:\s*var\(--vscode-foreground\)/,
+  );
+});
+
 test('the keyboard path through the composer and the slash menu is intact', () => {
   // Arrows, Enter/Tab and Escape on the palette; Enter sends; Escape stops a
   // run from anywhere.

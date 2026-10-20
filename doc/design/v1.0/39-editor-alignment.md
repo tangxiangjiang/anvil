@@ -130,6 +130,11 @@ by replacing the first occurrence of `old_string` ([preview.go:69-100](../../../
 `write_file` sends `after` as the whole new content. So the client holds both ends of the change
 as bytes, and the unified `diff` in the same preview is enough to describe the middle.
 
+> **Later, p_0.47.10.** This contract is unchanged: the approval preview is still the host's
+> unified diff, and partial acceptance still computes against `before`. What changed is only
+> the *call's* short comparison in the transcript — it is now drawn old beside new, from the
+> same before/after the client already holds. See [44](44-editor-polish.md) §15.
+
 The contract:
 
 1. **The accepted subset is computed against `before`, never by editing the diff.** Selected hunks

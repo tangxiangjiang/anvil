@@ -213,6 +213,60 @@ test('the stylesheet has no at-rules, which is what lets it be parsed as text', 
   assert.doesNotMatch(SOURCE, /@[a-z-]+\s*[({]/, 'chat.css must stay free of at-rules');
 });
 
+test('an edit diff is two columns, and a body class narrows it without an at-rule', () => {
+  assert.match(
+    SOURCE,
+    /\.tool \.edit-diff \.diff \.row \{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) minmax\(0, 1fr\)/,
+  );
+  assert.match(
+    SOURCE,
+    /body\.diff-narrow \.tool \.edit-diff \.diff \.row \{[^}]*display:\s*block/,
+  );
+  assert.match(
+    SOURCE,
+    /body\.diff-narrow \.tool \.edit-diff \.diff \.cell\.empty \{[^}]*display:\s*none/,
+  );
+  assert.match(
+    SOURCE,
+    /body\.diff-narrow \.tool \.edit-diff \.diff \.row\.ctx \.cell\.new \{[^}]*display:\s*none/,
+  );
+
+  // The script is the other half of the agreement: one threshold, one class,
+  // and one throttled listener rather than a layout per card.
+  assert.match(JS, /const DIFF_SIDE_MIN = \d+;/);
+  assert.match(JS, /function syncDiffWidth\(\)/);
+  assert.match(JS, /addEventListener\('resize', queueDiffWidth\)/);
+  assert.match(JS, /classList\.toggle\('diff-narrow'/);
+  assert.match(JS, /requestAnimationFrame\(\(\) => \{[\s\S]{0,200}syncDiffWidth\(\)/);
+});
+
+test('the diff takes its line colours from the editor theme', () => {
+  // Whitespace after `var(` is allowed: a nested fallback is written across
+  // lines, and the point is which variables the stylesheet reads.
+  assert.match(SOURCE, /var\(\s*--vscode-diffEditor-insertedLineBackground/);
+  assert.match(SOURCE, /var\(\s*--vscode-diffEditor-removedLineBackground/);
+  assert.match(SOURCE, /var\(\s*--vscode-diffEditor-insertedTextBackground/);
+  assert.match(SOURCE, /var\(\s*--vscode-diffEditor-removedTextBackground/);
+});
+
+test('a tool is a row, not a card, and its output is inset', () => {
+  const tool = bodiesOf('.tool').join(';');
+  assert.match(tool, /border:\s*0/);
+  assert.match(tool, /background:\s*transparent/);
+  assert.doesNotMatch(tool, /border-radius:\s*var\(--anvil-radius\)/);
+
+  assert.match(bodiesOf('.tool > summary').join(';'), /padding:\s*3px 4px/);
+  assert.match(bodiesOf('.tool .pane').join(';'), /padding:\s*0 0 6px 18px/);
+  assert.match(
+    bodiesOf('.tool .section pre').join(';'),
+    /border-left:\s*1px solid var\(--ui-hairline\)/,
+  );
+  assert.match(
+    bodiesOf('.msg .think .body').join(';'),
+    /border-left:\s*1px solid var\(--ui-hairline\)/,
+  );
+});
+
 test('the textarea grows to fit instead of being dragged', () => {
   // A manual resize grip on a box whose height the layout reserves would leave
   // the reservation describing a size the script overwrites on the next

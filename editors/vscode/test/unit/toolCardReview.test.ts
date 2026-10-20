@@ -55,12 +55,39 @@ test('an edit card opens onto a short comparison, and the button stays under it'
   assert.match(diff, /el\('span', 'ln', String\(row\.line\)\)/);
   assert.match(diff, /el\('span', 'code'/);
   assert.doesNotMatch(diff, /innerHTML/);
+  // Two cells per row, old and new, and the cap counts what the reader sees.
+  assert.match(diff, /const rows = pairDiffRows\(raw\);/);
+  assert.match(diff, /el\('div', 'row ' \+ pair\.kind\)/);
+  assert.match(diff, /for \(const side of \['old', 'new'\]\)/);
+  assert.match(diff, /el\('span', 'cell ' \+ side/);
+  assert.match(diff, /const cap = 24;/);
   // Under the comparison, not above the pane: the card is already open, and
   // the click is still the same reviewCall the other cards send.
   const button = bodyOf(CHAT_JS, 'addReviewButton');
   assert.match(button, /querySelector\('\.edit-diff'\)/);
   assert.match(button, /card\.appendChild\(open\)/);
   assert.match(button, /type: 'reviewCall'/);
+});
+
+test('a change block is zipped old side to new side', () => {
+  const pair = bodyOf(CHAT_JS, 'pairDiffRows');
+  assert.match(pair, /const dels = \[\];/);
+  assert.match(pair, /const adds = \[\];/);
+  // Pair by position inside the block, not by the order the LCS emitted them.
+  assert.match(pair, /const n = Math\.max\(dels\.length, adds\.length\)/);
+  assert.match(pair, /kind: d && a \? 'change' : d \? 'del' : 'add'/);
+  // A one-sided row is a half row, not a guess about the other side.
+  assert.match(pair, /old: d \? \{ kind: 'del', line: d\.oldLine/);
+  assert.match(pair, /new: a \? \{ kind: 'add', line: a\.newLine/);
+});
+
+test('both sides keep their own line number', () => {
+  const diff = bodyOf(CHAT_JS, 'renderEditDiff');
+  assert.match(diff, /oldLine: numbered \? oldNo : undefined/);
+  assert.match(diff, /newLine: numbered \? newNo : undefined/);
+  // The after-context belongs to both images: old from the pre-image counter,
+  // new from the post-image counter.
+  assert.match(diff, /oldLine: oldNo \+ i,\s+newLine: newNo \+ i/);
 });
 
 test('the button is a sibling of the summary, never inside it', () => {

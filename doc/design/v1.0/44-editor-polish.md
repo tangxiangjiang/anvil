@@ -291,9 +291,45 @@ which is how the extension already degrades (`runtime`, `permission_mode_source`
 | [p_0.47.7](../../roadmaps/v1.0/m_0.47/p_0.47.7.md) | One root per window, explicit in multi-root |
 | [p_0.47.8](../../roadmaps/v1.0/m_0.47/p_0.47.8.md) | Version alignment and documentation |
 | [p_0.47.9](../../roadmaps/v1.0/m_0.47/p_0.47.9.md) | Acceptance fixes: vision on by default, a refused turn visible, the plan block closable |
+| [p_0.47.10](../../roadmaps/v1.0/m_0.47/p_0.47.10.md) | The transcript's visual grammar: rows instead of cards, calmer type, a side-by-side edit diff |
+| [p_0.47.11](../../roadmaps/v1.0/m_0.47/p_0.47.11.md) | One visual grammar for all five webviews: shared tokens and panel chrome |
 
-p_0.47.9 is the one phase written after the milestone was accepted. Its three findings came
-from the first real use of the panel, not from a test: a capability that existed and was never
-turned on, an error that only reached the log, and a block with no way out. The lesson is
-recorded here rather than in a commit message — the manual passes the earlier phases wrote
-down as "still worth doing" are the ones that would have found all three.
+0.47.9–0.47.11 were written after the milestone was accepted. Their findings came from the
+first real use of the panel, not from a test: a capability that existed and was never turned
+on, an error that only reached the log, a block with no way out — and then a transcript that
+was tiring to read, followed by four manager panels that each declared their own copy of the
+same document chrome. The lesson is recorded here rather than in a commit message — the manual
+passes the earlier phases wrote down as "still worth doing" are the ones that would have found
+all of these.
+
+## 15. The visual grammar after use
+
+The first phase of the polish line designed each surface on its own; real use showed that the
+surfaces did not read as one product. §15 records the grammar p_0.47.10 and p_0.47.11 settle
+on, so a later change to one panel has something to agree with.
+
+- **A tool call is a row.** The bordered card with a per-state left edge made a run of work
+  read as a wall of frames, and the green of a succeeded call made the normal case look like a
+  notification. A call is now one line — caret, name, hint, state — that opens onto inset
+  output behind a single hairline. Thinking uses the same row so reasoning is not a different
+  species. Failure keeps a colour; success and "stopped" do not.
+- **The constants live in one file.** `media/tokens.css` declares the gap, radius, two line
+  heights, the mono family, the hairline and the muted colour as `--ui-*`. The chat stylesheet
+  keeps its older `--anvil-*` names as aliases because its tests read them, and no other
+  stylesheet may redeclare a `--ui-*` value.
+- **The four manager panels share their chrome.** Permissions, Tasks, MCP and Review each used
+  to declare `body`, `#root`, the title, the path line, the banner, inputs and buttons. That
+  document shell is now `media/panel.css`; each panel styles only its own sections. Sections
+  are separated by hairlines and hover, not by nested frames, and a finished status is muted —
+  only running and failed carry colour.
+- **An edit is compared old beside new.** Inside an `edit_file` call the short comparison is
+  two columns with the editor's own inserted/removed line backgrounds, each column scrolling
+  its own long lines. The fallback is a body class (`diff-narrow`) toggled from one throttled
+  resize listener measuring the transcript's content width, because `chat.css` is parsed by
+  splitting on `}` in its test and may not contain an at-rule; the markup does not change when
+  the shape does.
+- **Approval previews stay unified.** The surface that decides what is applied keeps the
+  host's unified diff. Only the call's own short comparison — read, not decided — is paired.
+- **High contrast gets a non-colour cue.** A tinted line background is not guaranteed there,
+  so added and removed rows also carry a 2px left edge, and the quiet rows switch to the
+  normal foreground. The focus rings the accessibility phase pinned are untouched.

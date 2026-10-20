@@ -1181,11 +1181,17 @@
     const box = el('div', 'edit-diff');
     if (change.path) box.appendChild(el('div', 'path', change.path));
     const numbered = anchor && typeof anchor.startLine === 'number';
-    const rows = [];
+    const raw = [];
     if (numbered && Array.isArray(anchor.before)) {
       const start = anchor.startLine - anchor.before.length;
       for (let i = 0; i < anchor.before.length; i += 1) {
-        rows.push({ kind: 'ctx', line: start + i, text: anchor.before[i] });
+        raw.push({
+          kind: 'ctx',
+          text: anchor.before[i],
+          sign: ' ',
+          oldLine: start + i,
+          newLine: start + i,
+        });
       }
     }
     let oldNo = numbered ? anchor.startLine : 0;
@@ -1193,35 +1199,53 @@
     for (const row of lineDiffRows(change.before, change.after)) {
       const text = row.text.slice(1);
       if (row.kind === 'add') {
-        rows.push({ kind: 'add', line: numbered ? newNo : undefined, text });
+        raw.push({ kind: 'add', text, sign: '+', newLine: numbered ? newNo : undefined });
         newNo += 1;
       } else if (row.kind === 'del') {
-        rows.push({ kind: 'del', line: numbered ? oldNo : undefined, text });
+        raw.push({ kind: 'del', text, sign: '-', oldLine: numbered ? oldNo : undefined });
         oldNo += 1;
       } else {
-        rows.push({ kind: 'ctx', line: numbered ? oldNo : undefined, text });
+        raw.push({
+          kind: 'ctx',
+          text,
+          sign: ' ',
+          oldLine: numbered ? oldNo : undefined,
+          newLine: numbered ? newNo : undefined,
+        });
         oldNo += 1;
         newNo += 1;
       }
     }
     if (numbered && Array.isArray(anchor.after)) {
       for (let i = 0; i < anchor.after.length; i += 1) {
-        rows.push({ kind: 'ctx', line: newNo + i, text: anchor.after[i] });
+        raw.push({
+          kind: 'ctx',
+          text: anchor.after[i],
+          sign: ' ',
+          oldLine: oldNo + i,
+          newLine: newNo + i,
+        });
       }
     }
     const cap = 24;
-    const pre = el('pre', numbered ? 'diff numbered' : 'diff');
-    for (const row of rows.slice(0, cap)) {
-      const cls = row.kind === 'add' ? 'add' : row.kind === 'del' ? 'del' : 'ctx';
-      const sign = row.kind === 'add' ? '+' : row.kind === 'del' ? '-' : ' ';
-      const node = el('div', cls);
-      if (numbered) node.appendChild(el('span', 'ln', String(row.line)));
-      node.appendChild(el('span', 'code', sign + ' ' + row.text));
+    const rows = pairDiffRows(raw);
+    const pre = el('pre', numbered ? 'diff numbered side' : 'diff side');
+    for (const pair of rows.slice(0, cap)) {
+      const node = el('div', 'row ' + pair.kind);
+      for (const side of ['old', 'new']) {
+        const row = pair[side];
+        const cell = el('span', 'cell ' + side + (row ? ' ' + row.kind : ' empty'));
+        if (row) {
+          if (numbered) cell.appendChild(el('span', 'ln', String(row.line)));
+          cell.appendChild(el('span', 'code', row.sign + ' ' + row.text));
+        }
+        node.appendChild(cell);
+      }
       pre.appendChild(node);
     }
     box.appendChild(pre);
     if (rows.length > cap) {
-      box.appendChild(el('div', 'more-note', 'Showing the first ' + cap + ' lines of this change.'));
+      box.appendChild(el('div', 'more-note', 'Showing the first ' + cap + ' rows of this change.'));
     }
     return box;
   }
@@ -1275,6 +1299,49 @@
     const lines = text.split('\n');
     if (lines.length > 0 && lines[lines.length - 1] === '' && text.endsWith('\n')) lines.pop();
     return lines;
+  }
+
+  /**
+   * Zips a change block's deletions with its insertions, old side beside new.
+   *
+   * The LCS decides which lines are gone and which arrived but not that a block
+   * is a replacement; pairing by position inside the block is what makes a
+   * two-column row read as one change. A block with no counterpart on one side
+   * becomes a half row, and context keeps both numbers so each side can show
+   * its own.
+   */
+  function pairDiffRows(raw) {
+    const rows = [];
+    for (let i = 0; i < raw.length; ) {
+      if (raw[i].kind === 'ctx') {
+        const row = raw[i];
+        rows.push({
+          kind: 'ctx',
+          old: { kind: 'ctx', line: row.oldLine, text: row.text, sign: ' ' },
+          new: { kind: 'ctx', line: row.newLine, text: row.text, sign: ' ' },
+        });
+        i += 1;
+        continue;
+      }
+      const dels = [];
+      const adds = [];
+      while (i < raw.length && raw[i].kind !== 'ctx') {
+        if (raw[i].kind === 'del') dels.push(raw[i]);
+        else adds.push(raw[i]);
+        i += 1;
+      }
+      const n = Math.max(dels.length, adds.length);
+      for (let k = 0; k < n; k += 1) {
+        const d = dels[k];
+        const a = adds[k];
+        rows.push({
+          kind: d && a ? 'change' : d ? 'del' : 'add',
+          old: d ? { kind: 'del', line: d.oldLine, text: d.text, sign: '-' } : null,
+          new: a ? { kind: 'add', line: a.newLine, text: a.text, sign: '+' } : null,
+        });
+      }
+    }
+    return rows;
   }
 
   function addToolResult(event) {
@@ -3065,6 +3132,43 @@
     // value is replaced with the real measurement.
     new ResizeObserver(() => syncComposerHeight()).observe(dock);
   }
+
+  // --- diff width -----------------------------------------------------------
+
+  /** Below this content width, an edit diff is one column rather than two. */
+  const DIFF_SIDE_MIN = 620;
+
+  /**
+   * Chooses the diff's shape from the width the transcript actually gives it.
+   *
+   * `chat.css` must stay free of at-rules for `chatLayout.test.ts` to parse it,
+   * so the narrow fallback is a class on the body: the DOM is the same in both
+   * modes and CSS decides which cell is visible. The padding is subtracted
+   * because the reading column is capped at `--anvil-read-width`, so a wide
+   * window and a 52em column are not the same thing.
+   */
+  function syncDiffWidth() {
+    const pinned = atBottom();
+    const style = getComputedStyle(transcript);
+    const inset = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
+    const width = transcript.clientWidth - inset;
+    if (width <= 0) return; // the tab is not visible yet
+    document.body.classList.toggle('diff-narrow', width < DIFF_SIDE_MIN);
+    scrollIfPinned(pinned);
+  }
+
+  let diffWidthQueued = false;
+  function queueDiffWidth() {
+    if (diffWidthQueued) return;
+    diffWidthQueued = true;
+    requestAnimationFrame(() => {
+      diffWidthQueued = false;
+      syncDiffWidth();
+    });
+  }
+
+  window.addEventListener('resize', queueDiffWidth);
+  syncDiffWidth(); // first paint; the listener is the throttled path
 
   // --- wiring ---------------------------------------------------------------
 

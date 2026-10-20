@@ -1,0 +1,25 @@
+/*
+ * The product's visual grammar, in one place.
+ *
+ * Every webview links this stylesheet first and then its own, so a gap, a
+ * radius or the line height is one number rather than five copies that drift.
+ * Nothing here styles an element: the documents have different layouts (the
+ * chat is a full-height column, a manager is a scrolling page) and sharing a
+ * body rule would either break one of them or be overridden everywhere.
+ *
+ * Colours stay VS Code theme variables, including the fallbacks: a hardcoded
+ * surface is what makes an extension unreadable in a high-contrast theme.
+ */
+:root {
+  --ui-gap: 10px;
+  --ui-gap-tight: 6px;
+  --ui-radius: 6px;
+  --ui-radius-sm: 4px;
+  /* Prose reads at 1.6; dense tables and status lines at 1.5. */
+  --ui-line: 1.6;
+  --ui-line-tight: 1.5;
+  --ui-mono: var(--vscode-editor-font-family, monospace);
+  /* The rule that separates things without drawing a box around them. */
+  --ui-hairline: var(--vscode-panel-border, rgba(128, 128, 128, 0.28));
+  --ui-muted: var(--vscode-descriptionForeground);
+}

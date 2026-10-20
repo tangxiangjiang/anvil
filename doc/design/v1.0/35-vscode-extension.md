@@ -264,6 +264,10 @@ The transcript rendered assistant prose as escaped text in a `pre-wrap` box and 
 - **Tool cards label their sections.** `IN` is the arguments, `OUT` is the result, and the "show all" button targets the OUT pane specifically rather than the card's only pane. The IN section is still omitted when the call carried no arguments, because `undefined` would otherwise render as the string `undefined`.
 - **The thinking UI is honest about being provider-dependent.** A session whose provider sends no reasoning shows no block, not an empty one. Anthropic is the case that matters: its extended thinking is neither requested nor carried (see [05](05-llm-provider.md)), so a Claude-provider session will not show thinking in this release.
 
+> **Later, p_0.47.10.** The card became a compact row. This section's behaviour — the labelled
+> IN/OUT sections, the per-round thinking state, the omitted empty IN — is unchanged; only the
+> frame changed. See [44](44-editor-polish.md) §15.
+
 ### Permission rules on the card as built (p_0.36.2)
 
 The SDK's rule table and shell analyzer (p_0.36.1, [36](36-tool-permissions.md)) decide; this
