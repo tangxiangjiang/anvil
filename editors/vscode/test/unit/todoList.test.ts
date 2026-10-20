@@ -30,7 +30,7 @@ function bodyOf(source: string, name: string): string {
 
 test('the block exists below the composer, and an empty one is hidden', () => {
   const form = CHAT_PANEL.indexOf('<form id="composer"');
-  const block = CHAT_PANEL.indexOf('<div id="todos" class="todos" hidden');
+  const block = CHAT_PANEL.indexOf('<div id="todos" class="todos" role="list" hidden');
   assert.ok(block > form, 'the checklist is below the composer');
   assert.match(CHAT_JS, /const todoBlock = document\.getElementById\('todos'\)/);
   assert.match(CHAT_CSS, /\.todos\s*\{/);

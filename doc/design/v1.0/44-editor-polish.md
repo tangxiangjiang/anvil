@@ -165,7 +165,8 @@ functional requirement, not decoration. The milestone fixes:
 
 - live regions: `polite` for "answer finished", `assertive` only for approval requests and
   errors, with the streaming updates throttled so a screen reader is not asked to read every
-  token;
+  token. The transcript keeps its `log` role but is not itself live: the announced text is a
+  finished block, and the log is what the reader browses afterwards;
 - roles and labels: the transcript is `role="log"`, every icon-only control has an
   `aria-label`, approval controls are a named group;
 - keyboard: the composer, send, and toolbar are reachable in that order; `Esc` closes panels

@@ -23,6 +23,24 @@
   box-sizing: border-box;
 }
 
+/*
+ * Text for the ear and not the eye: the live regions. It is clipped rather than
+ * `display: none` or `visibility: hidden`, because both of those take the text
+ * out of the accessibility tree as well, which is the one thing a live region
+ * may not be. One pixel of it stays on screen so the browser still lays it out.
+ */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
 html,
 body {
   height: 100%;
@@ -789,6 +807,44 @@ button.secondary:hover:not(:disabled) {
 button:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+/* --- focus visibility ----------------------------------------------------- */
+
+/*
+ * The user-agent ring is drawn from the system accent rather than the theme; on
+ * a dark surface it can sit a shade away from what is behind it, and an
+ * invisible ring makes the keyboard path unusable. `:focus-visible` keeps this
+ * off a mouse click, which is the only case where the ring is noise.
+ */
+button:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+summary:focus-visible,
+.md-link:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 1px;
+}
+
+/*
+ * High contrast is the theme where the outline *is* the affordance: VS Code
+ * publishes a contrast border for exactly this, and a two-pixel ring survives
+ * the tinted backgrounds the theme paints under the controls.
+ */
+body.vscode-high-contrast button:focus-visible,
+body.vscode-high-contrast select:focus-visible,
+body.vscode-high-contrast textarea:focus-visible,
+body.vscode-high-contrast summary:focus-visible,
+body.vscode-high-contrast .md-link:focus-visible,
+body.vscode-high-contrast .body.md .md-link:focus-visible,
+body.vscode-high-contrast-light button:focus-visible,
+body.vscode-high-contrast-light select:focus-visible,
+body.vscode-high-contrast-light textarea:focus-visible,
+body.vscode-high-contrast-light summary:focus-visible,
+body.vscode-high-contrast-light .md-link:focus-visible,
+body.vscode-high-contrast-light .body.md .md-link:focus-visible {
+  outline: 2px solid var(--vscode-contrastActiveBorder, var(--vscode-focusBorder));
+  outline-offset: 1px;
 }
 
 /* --- status --------------------------------------------------------------- */

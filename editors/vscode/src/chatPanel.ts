@@ -342,6 +342,13 @@ type Outbound =
    * message about it.
    */
   | { type: 'toggleFocus' }
+  /**
+   * A replay is being drawn: everything the tab says to a screen reader is held
+   * back until it ends, because a restored conversation is history the reader
+   * did not just ask for. The two messages bracket the steps below.
+   */
+  | { type: 'replayStart' }
+  | { type: 'replayEnd' }
   | { type: 'notice'; level: 'info' | 'warn' | 'error'; message: string };
 
 /** Where the chosen permission mode is remembered between windows. */
@@ -1372,20 +1379,31 @@ export class ChatPanel implements HostListener {
     } catch (err) {
       this.log(`no checkpoints for ${agentId}: ${(err as Error).message}`);
     }
-    for (const step of steps) {
-      if (step.kind === 'user') this.post({ type: 'user', text: step.text });
-      else if (step.kind === 'notice') this.post({ type: 'note', text: step.text });
-      else if (step.kind === 'runEnd') {
-        this.post({ type: 'runEnd', done: step.done });
-        const runId = step.done.run_id;
-        if (runId) this.post({ type: 'rewindState', runId, files: checkpoints.get(runId) ?? [] });
-      } else await this.postEvent(step.event);
-    }
-    if (this.dropped(result) > 0) {
-      this.post({
-        type: 'note',
-        text: `Earlier turns are not shown: the store keeps the newest ${steps.length} records of this conversation.`,
-      });
+    // A replay is history, not a turn in flight. The brackets tell the document
+    // to keep the screen-reader regions quiet: announcing every block as it is
+    // drawn would read the whole conversation aloud the moment it is opened.
+    this.post({ type: 'replayStart' });
+    try {
+      for (const step of steps) {
+        if (step.kind === 'user') this.post({ type: 'user', text: step.text });
+        else if (step.kind === 'notice') this.post({ type: 'note', text: step.text });
+        else if (step.kind === 'runEnd') {
+          this.post({ type: 'runEnd', done: step.done });
+          const runId = step.done.run_id;
+          if (runId) this.post({ type: 'rewindState', runId, files: checkpoints.get(runId) ?? [] });
+        } else await this.postEvent(step.event);
+      }
+      if (this.dropped(result) > 0) {
+        this.post({
+          type: 'note',
+          text: `Earlier turns are not shown: the store keeps the newest ${steps.length} records of this conversation.`,
+        });
+      }
+    } finally {
+      // The document is quiet only for this loop, even if reading one step from
+      // disk failed: a conversation left muted is worse than one that announces
+      // a turn it should have skipped.
+      this.post({ type: 'replayEnd' });
     }
   }
 
@@ -2688,8 +2706,20 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri, focus = f
 <title>Anvil</title>
 </head>
 <body${focus ? ' class="focus-view"' : ''}>
+  <!--
+    The two announcements a turn needs beyond the transcript itself. They are
+    visually hidden and empty until something is said, and they exist because
+    the transcript cannot carry both jobs: it is mutated token by token, and a
+    live region there would ask a reader to hear every one of them.
+  -->
+  <div id="srStatus" class="sr-only" role="status" aria-live="polite" aria-atomic="false"></div>
+  <div id="srAlert" class="sr-only" role="alert" aria-live="assertive" aria-atomic="true"></div>
   <div id="banner" class="banner" hidden></div>
-  <div id="transcript" class="transcript" role="log" aria-live="polite">
+  <!--
+    The transcript is a log a reader browses, not a live region: chat.js writes
+    each finished answer block into the polite region above instead, once.
+  -->
+  <div id="transcript" class="transcript" role="log" aria-live="off" aria-label="Conversation">
     <div id="empty" class="empty">
       <p>Ask for a change. Anvil reads, edits, and runs commands in this workspace.</p>
       <p class="hint">Mutating calls stop for your approval. The button sends, and stops a turn while one is running.</p>
@@ -2736,7 +2766,7 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri, focus = f
         -->
         <button id="focus" type="button" class="ghost" aria-pressed="${focus ? 'true' : 'false'}" title="Show only the conversation: hide tool cards and thinking (Ctrl+Alt+F)">Focus</button>
         <span class="spacer"></span>
-        <button id="attach" type="button" class="secondary" title="Reference a file or folder">@</button>
+        <button id="attach" type="button" class="secondary" aria-label="Reference a file or folder" title="Reference a file or folder">@</button>
         <!--
           The picker the paste path already accepts: a button because a paste
           needs an image in the clipboard first, and a file on disk is the
@@ -2765,7 +2795,7 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri, focus = f
       todo event carries the whole list and replaces this block; an empty list
       hides it.
     -->
-    <div id="todos" class="todos" hidden aria-label="Task list"></div>
+    <div id="todos" class="todos" role="list" hidden aria-label="Task list"></div>
   </div>
   <!--
     The Markdown parser first, because it is a plain script assigning a global

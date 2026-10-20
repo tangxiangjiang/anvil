@@ -291,6 +291,19 @@ spawned with.
   to your settings: it survives a reload and comes back with the restored tab,
   and reopening the conversation later starts in the ordinary view. Toggling it
   keeps your draft and the place you were reading.
+- **Works without a mouse or a screen.** A turn announces itself to a screen
+  reader: a finished answer and the end of the turn politely, an approval
+  request and an error assertively, and never token by token — a block is said
+  once, when it stops growing, and progress lines are throttled to at most two
+  a second. An approval card takes the keyboard when it appears, because the
+  composer is disabled while a turn runs, and answering it hands focus back to
+  the stop button. Every icon-only control has a spoken name — send and stop, a
+  chip's remove cross, the banner's dismiss, the `@` button — and focus rings
+  are drawn from the theme's own focus colour, two pixels wide in the
+  high-contrast themes. The transcript stays a log a reader can browse rather
+  than a live region. Arrow keys and <kbd>Enter</kbd> drive the `/` menu,
+  <kbd>Esc</kbd> closes it and stops a running turn, and <kbd>Enter</kbd> in
+  the composer sends.
 - **Reopens the change a call made.** Every finished card for a call that wrote
   or edited a file offers **Review changes**, which opens VS Code's own diff
   editor. It is deliberately not the same thing as the prompt's preview: a call
@@ -566,6 +579,11 @@ and asserts the CSP kept its one source per directive, the renderer was asked
 for MathML with `trust: false`, no HTML is assigned anywhere, the focus view
 hides the tool cards and thinking but not an approval, and the export writes
 through `vscode.workspace.fs` only after the dialog returned a target.
+`test/unit/accessibility.test.ts` reads the same three files for the
+screen-reader path: the two live regions and their urgencies, the transcript
+kept out of them, the 500 ms throttle, the accessible name of every icon-only
+control, the approval group and the focus rings in the ordinary and the
+high-contrast themes.
 
 The packaging step has its own check, since it is the part no unit test can
 reach: `npm run smoke:vsix` extracts a built VSIX to a temporary directory,

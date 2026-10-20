@@ -37,6 +37,13 @@
   const dock = document.getElementById('composerDock');
   const meter = document.getElementById('meter');
   const todoBlock = document.getElementById('todos');
+  /**
+   * The page's two live regions. `srStatus` is polite — a finished answer and
+   * the end of a turn; `srAlert` is assertive and reserved for the two things
+   * that cannot wait: an approval request, and an error.
+   */
+  const srStatus = document.getElementById('srStatus');
+  const srAlert = document.getElementById('srAlert');
 
   /**
    * The meter's arithmetic, from `media/meter.js`. It is a plain script that
@@ -74,6 +81,13 @@
 
   /** Run in flight, if any. */
   let running = false;
+  /**
+   * A stored conversation is being drawn. Everything said to a screen reader is
+   * held back while it is: a replay is history the reader did not just ask for,
+   * and announcing it block by block would read the whole session aloud the
+   * moment it is opened.
+   */
+  let replaying = false;
   /** True once a prompt has been sent: the empty state is gone for good. */
   let started = false;
   /**
@@ -312,7 +326,9 @@
     // more, and its container is about to be detached with the transcript.
     spawnScopes.clear();
     active = mainScope;
-    endRound();
+    // The block about to be cleared is not this conversation's answer any more,
+    // so it is ended without being announced.
+    endRound(true);
     toolCards.clear();
     callFacts.clear();
     approvals.clear();
@@ -373,11 +389,61 @@
     endRound();
   }
 
+  // --- announcements --------------------------------------------------------
+
+  /**
+   * How often a streaming update may reach the polite region.
+   *
+   * A token arrives every few milliseconds. A screen reader asked to read each
+   * one is unusable, and one that re-reads the whole region on every change is
+   * worse. Five hundred milliseconds is long enough to be a phrase rather than
+   * a syllable, and short enough that progress still reads as progress.
+   */
+  const ANNOUNCE_INTERVAL_MS = 500;
+  /** When the polite region last changed, for the throttle above. */
+  let announcedAt = 0;
+
+  /**
+   * Says something politely, once, when the thing happened.
+   *
+   * Each call appends its own node rather than replacing the region's text: a
+   * live region announces the content that changed, so replacing `textContent`
+   * would ask the reader to hear everything already said a second time. Old
+   * nodes are dropped from the front so the region does not grow for the life
+   * of the session.
+   */
+  function announce(text) {
+    if (!srStatus || !text || replaying) return;
+    srStatus.appendChild(el('div', null, text));
+    while (srStatus.childNodes.length > 4) srStatus.removeChild(srStatus.firstChild);
+  }
+
+  /** The throttled form, for text that arrives while a turn is still running. */
+  function announceProgress(text) {
+    const now = Date.now();
+    if (now - announcedAt < ANNOUNCE_INTERVAL_MS) return;
+    announcedAt = now;
+    announce(text);
+  }
+
+  /**
+   * Says something urgently: an approval request, or an error. Deliberately not
+   * throttled — by the time one of these arrives the reader needs to stop doing
+   * what they were doing.
+   */
+  function announceAlert(text) {
+    if (!srAlert || !text || replaying) return;
+    srAlert.textContent = text;
+  }
+
   /**
    * Ends the assistant round, so the next reasoning or text starts a new bubble
    * rather than appending to one the reader has already read past.
+   *
+   * `silent` ends it without announcing the block, for the one caller whose
+   * block is about to be wiped from the screen.
    */
-  function endRound() {
+  function endRound(silent) {
     const round = currentRound();
     if (round && round.think && !round.thinkPinned) round.think.open = false;
     // Every ending gets the action — a text block, a tool call, the run's end —
@@ -385,6 +451,13 @@
     // that only appeared after the whole turn would refuse to copy the answer
     // the reader is looking at while the agent works on the next step.
     if (round && round.text.trim() !== '') addCopy(round.wrap, round.text);
+    // The block is finished, so this is the first moment it can be said as a
+    // whole. A child agent's text is not this conversation's answer and is not
+    // announced; its card in the transcript is where it is read.
+    if (!silent && round && round.body && active === mainScope) {
+      const said = round.body.textContent.trim();
+      if (said !== '') announce(said);
+    }
     setCurrentRound(null);
   }
 
@@ -886,6 +959,8 @@
     const wrap = el('div', 'msg error');
     wrap.appendChild(el('div', 'body', text));
     append(wrap);
+    // An error is one of the two things that interrupts rather than waits.
+    announceAlert(text);
     endRound();
   }
 
@@ -1443,11 +1518,18 @@
     return box;
   }
 
+  /** Counts approval cards so each can label its own group of buttons. */
+  let approvalSeq = 0;
+
   function showApproval(request) {
     endRound();
     const card = el('div', 'approval');
 
     const head = el('div', 'head');
+    // The buttons below are a group named by this question, so a reader that
+    // reaches "Allow once" is also told what it is allowing.
+    const headId = 'approval-head-' + ++approvalSeq;
+    head.id = headId;
     head.appendChild(el('span', null, 'Allow '));
     head.appendChild(el('span', 'tool-name', request.tool));
     head.appendChild(el('span', null, '?'));
@@ -1463,6 +1545,8 @@
     card.appendChild(describePreview(request));
 
     const buttons = el('div', 'buttons');
+    buttons.setAttribute('role', 'group');
+    buttons.setAttribute('aria-labelledby', headId);
     const scope = request.preview && request.preview.path ? request.preview.path : undefined;
     buttons.appendChild(
       decisionButton(request, 'allow', 'Allow once', 'primary', scope),
@@ -1478,6 +1562,14 @@
     approvals.set(request.request_id, card);
     transcript.appendChild(card);
     transcript.scrollTop = transcript.scrollHeight;
+    // A card that only appears is a turn waiting behind a reader's back. The
+    // turn is running, so the composer is disabled and nothing else owns the
+    // keyboard: saying it, and putting focus on the first answer, is the whole
+    // keyboard path to deciding it.
+    const preview = request.preview || {};
+    announceAlert('Approval needed: ' + request.tool + (preview.summary ? '. ' + preview.summary : ''));
+    const first = buttons.querySelector('button');
+    if (first) first.focus();
   }
 
   function decisionButton(request, decision, label, cls, scope) {
@@ -1568,6 +1660,7 @@
     if (msg.error) {
       for (const button of card.querySelectorAll('button')) button.disabled = false;
       card.appendChild(el('div', 'why', 'Nothing was written: ' + msg.error));
+      announceAlert('Nothing was written: ' + msg.error);
       return;
     }
     if (msg.approved === true) {
@@ -1579,6 +1672,7 @@
       const verdict = el('div', 'why', 'Allowed, and remembered: ');
       verdict.appendChild(el('code', null, ruleText(msg.rule)));
       card.appendChild(verdict);
+      announce('Allowed, and remembered.');
       return;
     }
     // Written, but not deciding. Another rule cannot help — precedence is by
@@ -1597,24 +1691,42 @@
     card.appendChild(why);
   }
 
+  /**
+   * Where focus goes after a decision. The button just pressed is disabled by
+   * the answer, which takes it out of the document; the turn is still running,
+   * so the stop control is the one control that still means something.
+   *
+   * `hadFocus` is read before the buttons are disabled, because that is the
+   * moment the browser moves focus to the body.
+   */
+  function refocusAfter(hadFocus) {
+    if (hadFocus) sendButton.focus();
+  }
+
   function resolveApproval(requestId, decision, scope) {
     const card = approvals.get(requestId);
     if (!card) return;
+    const hadFocus = card.contains(document.activeElement);
     approvals.delete(requestId);
     card.classList.add('resolved');
     for (const button of card.querySelectorAll('button')) button.disabled = true;
     const verdict = el('div', 'why', decision === 'deny' ? 'Denied.' : 'Allowed.');
     card.appendChild(verdict);
+    announce(verdict.textContent);
+    refocusAfter(hadFocus);
     vscode.postMessage({ type: 'answer', requestId, decision, scope });
   }
 
   function withdrawApproval(requestId) {
     const card = approvals.get(requestId);
     if (!card) return;
+    const hadFocus = card.contains(document.activeElement);
     approvals.delete(requestId);
     card.classList.add('resolved');
     for (const button of card.querySelectorAll('button')) button.disabled = true;
     card.appendChild(el('div', 'why', 'This request is no longer pending.'));
+    announce('This approval request is no longer pending.');
+    refocusAfter(hadFocus);
   }
 
   /**
@@ -1631,6 +1743,7 @@
     for (const button of card.querySelectorAll('button')) button.disabled = true;
     if (msg.decision === 'deny') {
       card.appendChild(el('div', 'why', 'Denied.'));
+      announce('Denied.');
       return;
     }
     const kept = typeof msg.kept === 'number' ? msg.kept : NaN;
@@ -1640,6 +1753,7 @@
         ? 'Allowed, keeping ' + kept + ' of ' + total + ' parts.'
         : 'Allowed.';
     card.appendChild(el('div', 'why', text));
+    announce(text);
   }
 
   // --- composer chips -------------------------------------------------------
@@ -1656,6 +1770,9 @@
     const button = el('button', 'chip-x', '×');
     button.type = 'button';
     button.title = title;
+    // "×" is a picture of a cross, not a name; the title already reads as the
+    // action ("Stop referencing src/x.ts"), so it is also what is announced.
+    button.setAttribute('aria-label', title);
     button.addEventListener('click', onRemove);
     return button;
   }
@@ -2549,6 +2666,11 @@
 
 
   function setRunning(next) {
+    // Disabling the textarea takes focus out of the document, and a keyboard
+    // user is then one Tab away from restarting at the top of the transcript.
+    // The field they were in becomes a control that still does something — the
+    // stop button — so focus moves there instead of nowhere.
+    const hadInputFocus = document.activeElement === input;
     running = next;
     // One button: a paper plane sends, and the same control stops a turn that
     // is already running. It stays enabled either way — disabling it while a
@@ -2557,6 +2679,7 @@
     sendButton.setAttribute('aria-label', running ? 'Stop' : 'Send');
     sendButton.title = running ? 'Stop' : 'Send';
     input.disabled = running;
+    if (running && hadInputFocus) sendButton.focus();
     attachButton.disabled = running;
     if (imageButton) imageButton.disabled = running;
     // The mode is a session option, so the extension refuses a change mid-turn
@@ -2700,6 +2823,9 @@
       if (text === '') continue;
       const status = item && typeof item.status === 'string' ? item.status : '';
       const row = el('div', 'todo-row');
+      // The container is a list, so its rows say what they are; without the
+      // role a generic div inside a list is a row no reader can count.
+      row.setAttribute('role', 'listitem');
       if (todoMarks[status]) row.dataset.status = status;
       row.appendChild(el('span', 'todo-mark', todoMarks[status] || '·'));
       row.appendChild(el('span', 'todo-text', text));
@@ -2748,6 +2874,11 @@
     // "Stopped." is not a failure, but it is still something the user asked
     // for and should see once: a run that ends silently reads as a hang.
     if (failure && failure.message) addNotice(failure.message);
+    // The end of the turn is the one fact a reader should not have to discover
+    // by tabbing around. It is said after the last block, so the two arrive in
+    // the order they happened.
+    if (failure && failure.isError) announce('Turn ended with an error.');
+    else announce(failure && failure.kind === 'cancelled' ? 'Turn stopped.' : 'Answer finished.');
     noteRun(done && done.run_id);
     showRunActions(done && done.run_id);
   }
@@ -2799,11 +2930,17 @@
     const dismiss = el('button', 'dismiss', '✕');
     dismiss.type = 'button';
     dismiss.title = 'Dismiss';
+    // The glyph is the whole visible label; `title` is a tooltip, not a name.
+    dismiss.setAttribute('aria-label', 'Dismiss');
     dismiss.addEventListener('click', () => {
       banner.hidden = true;
     });
     banner.appendChild(dismiss);
     banner.hidden = false;
+    // The banner is in the reading flow but not in a live region, so it is said
+    // here: an error interrupts, a warning waits its turn.
+    if (level === 'error') announceAlert(message);
+    else announce(message);
   }
 
   // --- composer height ------------------------------------------------------
@@ -3162,6 +3299,10 @@
     else if (e.type === 'progress' && e.text) {
       statusLine.textContent = e.text;
       statusLine.hidden = false;
+      // The line is what the eye reads; the polite region is what the ear
+      // hears, and the throttle is what keeps a run of them from becoming
+      // noise.
+      if (active === mainScope) announceProgress(e.text);
     }
   }
 
@@ -3306,6 +3447,12 @@
         // keeping a figure from a session that may have been replaced.
         contextInfo = msg.info && typeof msg.info === 'object' ? msg.info : null;
         renderMeter();
+        return;
+      case 'replayStart':
+        replaying = true;
+        return;
+      case 'replayEnd':
+        replaying = false;
         return;
       case 'reset':
         clearTranscript();
