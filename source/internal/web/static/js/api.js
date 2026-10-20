@@ -145,7 +145,6 @@ window.api = {
     },
     usage() { return api.req("GET", "/api/v1/usage"); },
     delivery() { return api.req("GET", "/api/v1/delivery"); },
-    deliveryReset() { return api.req("POST", "/api/v1/delivery/reset", {}); },
     deliveryCreateEng(body) { return api.req("POST", "/api/v1/delivery/eng-reqs", body); },
     deliveryEnsureProject(body) {
       return api.req("POST", "/api/v1/delivery/eng-reqs/ensure-project", body);

@@ -107,19 +107,6 @@ func TestSnapshotSeedAndApprove(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := s.Reset(); err != nil {
-		t.Fatal(err)
-	}
-	snap, err = s.Snapshot()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(snap.EngReqs) != 1 || snap.EngReqs[0].ID != "eng_1" {
-		t.Fatalf("reset seed mismatch: %+v", snap.EngReqs)
-	}
-	if len(snap.Majors) < 2 {
-		t.Fatal("majors missing after reset")
-	}
 }
 
 func TestDeleteVersionRenumber(t *testing.T) {

@@ -40,21 +40,6 @@ func (s *Server) handleDelivery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if path == "reset" && r.Method == http.MethodPost {
-		if err := s.delivery.Reset(); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		snap, err := s.delivery.Snapshot()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		snap.Workers = mergeWorkerHelpers(snap.Workers)
-		writeJSON(w, http.StatusOK, snap)
-		return
-	}
-
 	if path == "majors" && r.Method == http.MethodGet {
 		list, err := s.delivery.ListMajors()
 		if err != nil {
