@@ -78,7 +78,13 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionNode>
   }
 
   async getChildren(element?: SessionNode): Promise<SessionNode[]> {
-    if (element) return element.kind === 'group' ? element.rows : [];
+    if (element) {
+      if (element.kind === 'group') return element.rows;
+      // A parent's children are subagent sessions: the spawn calls this agent
+      // made. They are rows in their own right, so the same click opens them.
+      if (element.kind === 'session') return element.children;
+      return [];
+    }
 
     // Checked before the call rather than after it fails: an untrusted
     // workspace cannot start the host at all, and asking would be a spawn
@@ -162,7 +168,11 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionNode>
 }
 
 function sessionItem(row: SessionRow): vscode.TreeItem {
-  const item = new vscode.TreeItem(row.label, vscode.TreeItemCollapsibleState.None);
+  // A parent with subagents collapses; a leaf is not given an expander it would
+  // answer with nothing.
+  const state =
+    row.children.length > 0 ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None;
+  const item = new vscode.TreeItem(row.label, state);
   item.id = row.id;
   item.description = row.description;
   item.tooltip = row.tooltip;

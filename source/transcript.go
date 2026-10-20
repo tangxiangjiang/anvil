@@ -18,6 +18,11 @@ const (
 	TranscriptMessage = "message"
 	// TranscriptRunEnd is where a run ended, with its status and usage.
 	TranscriptRunEnd = "run_end"
+	// TranscriptSummary is a compaction boundary (0.43+): the summary the model
+	// continued from, at the point in the conversation where it replaced the
+	// turns before it. The turns themselves are still listed — compaction is a
+	// marker in an append-only store, not a deletion.
+	TranscriptSummary = "summary"
 )
 
 // DefaultTranscriptLimit caps LoadTranscript when the caller asks for no
@@ -140,6 +145,14 @@ func transcriptFromRecords(recs []store.Record, limit int) TranscriptResult {
 				})
 			}
 			entries = append(entries, entry)
+		case store.TypeSummary:
+			entries = append(entries, TranscriptEntry{
+				Kind:    TranscriptSummary,
+				RunID:   rec.RunID,
+				Role:    rec.Role,
+				Content: rec.Content,
+				Name:    rec.Name,
+			})
 		case store.TypeRunEnd:
 			entry := TranscriptEntry{
 				Kind:   TranscriptRunEnd,
@@ -149,9 +162,11 @@ func transcriptFromRecords(recs []store.Record, limit int) TranscriptResult {
 			}
 			if rec.Usage != nil {
 				entry.Usage = &Usage{
-					InputTokens:  rec.Usage.InputTokens,
-					OutputTokens: rec.Usage.OutputTokens,
-					TotalTokens:  rec.Usage.TotalTokens,
+					InputTokens:      rec.Usage.InputTokens,
+					OutputTokens:     rec.Usage.OutputTokens,
+					TotalTokens:      rec.Usage.TotalTokens,
+					CachedTokens:     rec.Usage.CachedTokens,
+					CacheWriteTokens: rec.Usage.CacheWriteTokens,
 				}
 			}
 			entries = append(entries, entry)

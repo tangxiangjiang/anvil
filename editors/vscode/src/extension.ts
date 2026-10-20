@@ -80,6 +80,25 @@ export function activate(context: vscode.ExtensionContext): void {
       hub.revealChat();
     }),
 
+    // The background tasks of this window, in their own document. It is not a
+    // chat tab: the table belongs to every live session rather than to one
+    // conversation, and the same command is the status-bar item's click.
+    vscode.commands.registerCommand('anvil.openTasks', () => {
+      hub.openTasks();
+    }),
+
+    // The MCP manager: every server of both layers with what it is doing, and the
+    // form that changes it. `/mcp` in a composer opens the same document.
+    vscode.commands.registerCommand('anvil.openMcp', () => {
+      hub.openMcp();
+    }),
+
+    // One layer's `mcp.json`, created when it is not there. The manager's Open
+    // mcp.json button takes this path for whichever layer it is looking at.
+    vscode.commands.registerCommand('anvil.openMcpFile', async () => {
+      await hub.openMcpFile();
+    }),
+
     // Built here rather than in `activate`'s body so its lifetime is the
     // extension's: the item and its two subscriptions are disposed together.
     new ChatStatusBar(hub),
@@ -121,12 +140,23 @@ export function activate(context: vscode.ExtensionContext): void {
       const agentId = agentIdOf(arg);
       if (agentId === undefined) return;
       const label = sessionRowOf(arg)?.label ?? agentId;
+      // The host deletes a parent's subagent sessions with it. Saying so before
+      // the click is the only warning there will be: the children are rows the
+      // person may not have opened, and they are stored conversations.
+      const children = sessionRowOf(arg)?.children.length ?? 0;
+      const childNote =
+        children === 0
+          ? ''
+          : children === 1
+            ? ' 1 subagent session it started is deleted too.'
+            : ` ${children} subagent sessions it started are deleted too.`;
       const answer = await vscode.window.showWarningMessage(
         `Delete “${label}”?`,
         {
           modal: true,
           detail:
-            'Its stored conversation is removed from this workspace. Files it changed are left as they are. This cannot be undone.',
+            'Its stored conversation is removed from this workspace. Files it changed are left as they are. This cannot be undone.' +
+            childNote,
         },
         'Delete',
       );
@@ -209,11 +239,17 @@ export function activate(context: vscode.ExtensionContext): void {
       await hub.restart();
     }),
 
-    // Opens — or creates — the file that says what the agent may do without
-    // asking. The same layers the SDK reads, so a rule written here is a rule
-    // the next session obeys.
+    // Opens the rules as a form: effect, tool, pattern and reason, plus the mode
+    // new sessions start in. The file is still one click away, because a pattern
+    // with quoting in it is easier to see in JSON than in a one-line input.
     vscode.commands.registerCommand('anvil.openPermissionRules', async () => {
-      await hub.openPermissionRules();
+      hub.openPermissionRules();
+    }),
+
+    // The JSON itself, created when the workspace has none. This is the path the
+    // manager's Open JSON button takes too.
+    vscode.commands.registerCommand('anvil.openPermissionRulesFile', async () => {
+      await hub.openPermissionRulesFile();
     }),
 
     vscode.commands.registerCommand('anvil.setApiKey', async () => {

@@ -733,6 +733,96 @@ func TestBypassDoesNotAskWhenNoRuleDoes(t *testing.T) {
 	}
 }
 
+// --- auto --------------------------------------------------------------------
+//
+// The mode that asks nobody about what it can prove harmless. Each test below
+// pins one side of that sentence: what runs without a card, what still gets one,
+// and the written rule that outranks both.
+
+func TestAutoRunsWhatItCanProve(t *testing.T) {
+	llm := newStubLLM(t,
+		toolTurn("call_1", "shell", `{"command":"echo hi"}`),
+		toolTurn("call_2", "write_file", `{"path":"a.txt","content":"one"}`),
+		textTurn("done"),
+	)
+	h, dir := initHost(t, llm.baseURL())
+	sessionID := startSession(t, h, SessionParams{PermissionMode: ModeAuto})
+
+	out := promptRun(t, h, sessionID, "look and write", autoApprove)
+
+	if len(out.approvals) != 0 {
+		t.Fatalf("a read-only command and an in-workspace write must not ask, got %d cards", len(out.approvals))
+	}
+	results := toolResultsOf(t, out.events)
+	if len(results) != 2 {
+		t.Fatalf("want two tool results, got %v", results)
+	}
+	for _, res := range results {
+		if res["is_error"] == true {
+			t.Fatalf("auto must let the proved calls run, got %v", res)
+		}
+	}
+	// The write went through, and it is the sandbox — not this mode — that kept
+	// it in the workspace.
+	if _, err := os.Stat(filepath.Join(dir, "a.txt")); err != nil {
+		t.Fatalf("the write should have landed: %v", err)
+	}
+}
+
+func TestAutoAsksAboutWhatItCannotProve(t *testing.T) {
+	llm := newStubLLM(t,
+		toolTurn("call_1", "shell", `{"command":"rm -rf build"}`),
+		textTurn("done"),
+	)
+	h, dir := initHost(t, llm.baseURL())
+	if err := os.MkdirAll(filepath.Join(dir, "build"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sessionID := startSession(t, h, SessionParams{PermissionMode: ModeAuto})
+
+	var asked []string
+	promptRun(t, h, sessionID, "clean up", func(req map[string]any) map[string]any {
+		tool, _ := req["tool"].(string)
+		asked = append(asked, tool)
+		return map[string]any{"decision": DecisionDeny}
+	})
+
+	if len(asked) != 1 || asked[0] != "shell" {
+		t.Fatalf("a mutating command must still open a card, got %v", asked)
+	}
+}
+
+// Same precedence as bypass: a rule whose only purpose is to interrupt is a
+// narrower statement than a mode, so it opens the card the mode would skip.
+func TestAutoAsksWhenARuleAsks(t *testing.T) {
+	llm := newStubLLM(t,
+		toolTurn("call_1", "shell", `{"command":"echo hi"}`),
+		textTurn("done"),
+	)
+	h, dir := initHost(t, llm.baseURL())
+	writePolicy(t, dir, `{"version":1,"rules":[
+		{"effect":"ask","tool":"shell","pattern":"echo hi","reason":"this one always gets a look"}
+	]}`)
+	sessionID := startSession(t, h, SessionParams{PermissionMode: ModeAuto})
+
+	var cards []map[string]any
+	promptRun(t, h, sessionID, "say hi", func(req map[string]any) map[string]any {
+		cards = append(cards, req)
+		return map[string]any{"decision": DecisionAllow}
+	})
+
+	if len(cards) != 1 {
+		t.Fatalf("the ask rule must open the card under auto, got %d", len(cards))
+	}
+	rule, _ := cards[0]["rule"].(map[string]any)
+	describe, _ := rule["describe"].(string)
+	for _, want := range []string{".anvil/permissions.json rule 1", `ask shell "echo hi"`} {
+		if !strings.Contains(describe, want) {
+			t.Errorf("the card's rule %q does not mention %q", describe, want)
+		}
+	}
+}
+
 // A mode does not overrule an answer a person already gave, so the callback
 // consults the session allowlist before it refuses.
 //
@@ -771,7 +861,7 @@ func TestDontAskHonoursASessionAllowance(t *testing.T) {
 // live in two switches. This is what keeps a mode from being added to one of them
 // and forgotten in the other, where it would quietly behave like ask.
 func TestEveryModeResolvesToAHook(t *testing.T) {
-	accepted := []string{ModeAsk, ModeAcceptEdits, ModePlan, ModeBypass, ModeDontAsk}
+	accepted := []string{ModeAsk, ModeAcceptEdits, ModeAuto, ModePlan, ModeBypass, ModeDontAsk}
 	for _, mode := range accepted {
 		canonical, rpcErr := permissionMode(mode)
 		if rpcErr != nil {
@@ -1033,6 +1123,13 @@ func TestGroupsForMode(t *testing.T) {
 		if g == "write" || g == "edit" {
 			t.Fatalf("accept_edits still gates %q: %v", g, edits)
 		}
+	}
+	// auto gates the same set as ask: the gate is what makes the classifier
+	// reachable, so narrowing it would turn the mode into a no-op for the calls
+	// it is meant to decide about.
+	auto := groupsForMode(ModeAuto, nil)
+	if len(auto) != len(DefaultPermissionGroups) {
+		t.Fatalf("auto must gate the default groups, got %v", auto)
 	}
 	named := groupsForMode(ModeAsk, []string{"shell"})
 	if len(named) != 1 || named[0] != "shell" {

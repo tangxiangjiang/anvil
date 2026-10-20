@@ -1,8 +1,8 @@
 # Design v1.0 (cutoff)
 
-Anvil **local-only** Go Agent SDK design through product milestone **0.40**. The chapters end at **39** (editor alignment): 0.39 is the Delivery **execute / test campaign loop**, and it is designed by [33](33-delivery-ui.md) together with [DELIVERY_PIPELINE_VISION.md](../../../DELIVERY_PIPELINE_VISION.md) rather than by a chapter of its own. Read chapters in order before implementing the matching roadmap phase.
+Anvil **local-only** Go Agent SDK design through product milestone **0.44**. The chapters end at **43** (MCP management): 0.39 is the Delivery **execute / test campaign loop**, and it is designed by [33](33-delivery-ui.md) together with [DELIVERY_PIPELINE_VISION.md](../../../DELIVERY_PIPELINE_VISION.md) rather than by a chapter of its own. Read chapters in order before implementing the matching roadmap phase.
 
-This tree is the **design cutoff** for 0.1–0.40 delivery. Later product lines get a new `doc/design/v…/` directory.
+This tree is the **design cutoff** for 0.1–0.44 delivery. Later product lines get a new `doc/design/v…/` directory.
 
 ## Read order
 
@@ -48,6 +48,10 @@ This tree is the **design cutoff** for 0.1–0.40 delivery. Later product lines 
 | 37 | [37-permission-modes.md](37-permission-modes.md) | The complete mode ladder, and where a session's starting mode comes from → **0.37** |
 | 38 | [38-session-identity-and-replay.md](38-session-identity-and-replay.md) | A session's title, a reviewable change on every tool card, and a transcript that survives a reload → **0.38** |
 | 39 | [39-editor-alignment.md](39-editor-alignment.md) | Parallel tabs, session administration, partial acceptance, checkpoints, fork, and the SDK capabilities the client never turned on → **0.40** |
+| 40 | [40-permission-auto-and-manager.md](40-permission-auto-and-manager.md) | A deterministic `auto` rung, and a structured permissions manager → **0.41** |
+| 41 | [41-subagents-and-tasks.md](41-subagents-and-tasks.md) | Agent-in-agent, background tasks and `/tasks`, and declarative workflows → **0.42** |
+| 42 | [42-context-management.md](42-context-management.md) | A token budget, safe compaction at run start and mid-run, `/compact`, and the cache clock → **0.43** |
+| 43 | [43-mcp-management.md](43-mcp-management.md) | A host-owned MCP runtime with observable state, safe config edits, reconnect, Streamable HTTP and OAuth → **0.44** |
 
 Parent index: [`doc/design/README.md`](../README.md).
 
@@ -61,4 +65,4 @@ it is written down as [40](40-web-assist.md) rather than assumed. See
 
 - Design describes **what** and **why** for this cutoff.
 - [`doc/roadmaps/v1.0/`](../../roadmaps/v1.0/) describes **when**.
-- Chapters 11–39 map to [m_0.11](../../roadmaps/v1.0/m_0.11_worker_daemon.md) … [m_0.40](../../roadmaps/v1.0/m_0.40_editor_alignment.md). [m_0.39](../../roadmaps/v1.0/m_0.39_execute.md) maps back to chapter 33.
+- Chapters 11–43 map to [m_0.11](../../roadmaps/v1.0/m_0.11_worker_daemon.md) … [m_0.44](../../roadmaps/v1.0/m_0.44_mcp_management.md). [m_0.39](../../roadmaps/v1.0/m_0.39_execute.md) maps back to chapter 33.

@@ -2,7 +2,15 @@ import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import { HostRpcError } from '../../src/hostClient';
 import { ChatSession, Transport } from '../../src/session';
-import { ApprovalRequest, CodeNoApproval, DoneParams, HostEvent, Notify, SessionResult } from '../../src/protocol';
+import {
+  ApprovalRequest,
+  CodeNoApproval,
+  CompactInfo,
+  DoneParams,
+  HostEvent,
+  Notify,
+  SessionResult,
+} from '../../src/protocol';
 
 /** A transport that answers from a table and records what it was asked. */
 class FakeTransport implements Transport {
@@ -55,6 +63,7 @@ interface Built {
   withdrawn: string[];
   dones: DoneParams[];
   states: string[];
+  compacts: Array<{ info: CompactInfo; sessionId: string }>;
 }
 
 function build(config: Record<string, unknown> = {}): Built {
@@ -75,16 +84,18 @@ function build(config: Record<string, unknown> = {}): Built {
   const withdrawn: string[] = [];
   const dones: DoneParams[] = [];
   const states: string[] = [];
+  const compacts: Array<{ info: CompactInfo; sessionId: string }> = [];
 
   const session = new ChatSession(transport, '/workspace', config, {
     onEvent: (event) => events.push(event),
     onApproval: (request) => approvals.push(request),
     onApprovalWithdrawn: (id) => withdrawn.push(id),
+    onCompact: (info, sessionId) => compacts.push({ info, sessionId }),
     onDone: (done) => dones.push(done),
     onState: (state) => states.push(state),
   });
 
-  return { session, transport, events, approvals, withdrawn, dones, states };
+  return { session, transport, events, approvals, withdrawn, dones, states, compacts };
 }
 
 function event(over: Partial<HostEvent>): HostEvent {
@@ -216,6 +227,76 @@ test('cancel names the run that is actually in flight', async () => {
     method: 'cancel',
     params: { session_id: 's1', run_id: 'r1' },
   });
+});
+
+test('context() asks the open session, and nothing before one exists', async () => {
+  const built = build();
+  // No session means there is nothing to measure, and opening one to ask would
+  // start host work nobody requested.
+  await assert.rejects(() => built.session.context(), /no session is open/);
+  assert.deepEqual(built.transport.methods(), []);
+
+  built.transport.answer('session.context', () => ({
+    estimated_tokens: 1200,
+    window_tokens: 200000,
+    compact_at_tokens: 160000,
+    messages: 6,
+  }));
+  await built.session.open();
+  const info = await built.session.context();
+  assert.deepEqual(info, {
+    estimated_tokens: 1200,
+    window_tokens: 200000,
+    compact_at_tokens: 160000,
+    messages: 6,
+  });
+  assert.deepEqual(built.transport.calls[built.transport.calls.length - 1], {
+    method: 'session.context',
+    params: { session_id: 's1' },
+  });
+});
+
+test('compact() asks the host, and refuses in words while a turn is running', async () => {
+  const built = build();
+  await assert.rejects(() => built.session.compact(), /no session is open/);
+
+  const context = { estimated_tokens: 12000, window_tokens: 200000, compact_at_tokens: 160000, messages: 8 };
+  built.transport.answer('session.compact', () => ({
+    session_id: 's1',
+    compacted: true,
+    before: 41000,
+    after: 12000,
+    summarized: 24,
+    context,
+  }));
+  await built.session.open();
+  const result = await built.session.compact();
+  assert.equal(result.compacted, true);
+  assert.equal(result.before, 41000);
+  assert.deepEqual(result.context, context);
+  assert.deepEqual(built.transport.calls[built.transport.calls.length - 1], {
+    method: 'session.compact',
+    params: { session_id: 's1' },
+  });
+
+  // In flight, the refusal is local: the host's -32003 would arrive without the
+  // advice that makes it actionable, and compacting a running conversation is
+  // not something the host could do even if it were asked.
+  const running = build();
+  running.transport.answer('session.compact', () => ({}));
+  await running.session.send('go');
+  await assert.rejects(() => running.session.compact(), /a turn is running \(r1\); stop it first/);
+  assert.equal(running.transport.methods().includes('session.compact'), false);
+});
+
+test('a compact notification reaches the handler, and another session’s does not', async () => {
+  const built = build();
+  await built.session.open();
+  const info: CompactInfo = { reason: 'manual', before: 41000, after: 12000, summarized: 24 };
+  built.session.handle(Notify.Compact, { session_id: 's1', type: 'compact', compact: info });
+  built.session.handle(Notify.Compact, { session_id: 'other', type: 'compact', compact: info });
+
+  assert.deepEqual(built.compacts, [{ info, sessionId: 's1' }]);
 });
 
 test('an answer to a prompt the host already dropped reports false', async () => {

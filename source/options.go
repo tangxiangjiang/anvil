@@ -7,6 +7,9 @@ import (
 	"context"
 	"encoding/json"
 	"time"
+
+	"github.com/anvil-dev/anvil/internal/llm"
+	"github.com/anvil-dev/anvil/internal/tasks"
 )
 
 // Provider selects the LLM wire protocol.
@@ -47,6 +50,13 @@ type Options struct {
 	// When SettingSources load file MCP, inline entries override same-named file servers.
 	MCPServers map[string]MCPServerConfig
 
+	// MCPRuntime, when set, is the sole source of MCP tools (0.44+): the agent
+	// registers tools from the runtime instead of starting servers, and it
+	// refreshes them before a turn when the runtime's version moved. The agent
+	// never closes the runtime's sessions — whoever created the runtime does.
+	// File layers are not read while it is set; the runtime already did.
+	MCPRuntime *MCPRuntime
+
 	// Permission is invoked before a gated tool call. Which calls that covers is
 	// set by PermissionGroups; with no groups it is the historical set of
 	// mutating built-ins (write_file, edit_file, apply_patch, shell).
@@ -79,6 +89,17 @@ type Options struct {
 	// HistoryKeepRecent is how many trailing messages to keep verbatim when compressing.
 	// 0 defaults to 6.
 	HistoryKeepRecent int
+
+	// Context declares the token budget (0.43+). Unlike HistoryMaxChars it is
+	// measured in estimated tokens and enforced before the run and between its
+	// steps, and its tail always begins at a user message so a tool result is
+	// never separated from its call. Both budgets may be set; whichever triggers
+	// first compacts. WindowTokens 0 turns the budget off.
+	//
+	// WindowTokens is a declaration, not a lookup: the SDK does not know a
+	// model's window and does not guess one. A client that does not know it
+	// leaves this zero and keeps the old behaviour.
+	Context ContextOptions
 
 	// ParallelTools runs same-turn tool_calls concurrently when all are non-mutating (0.9+).
 	ParallelTools bool
@@ -141,6 +162,71 @@ type Options struct {
 	// be put back (0.40+). Nil means off, which is what an embedder that does
 	// not offer an undo gets: nothing is read and nothing is written.
 	Checkpoints *CheckpointOptions
+
+	// Subagents enables agent-in-agent execution (0.42+). Off by default: a tool
+	// that creates agents and spends tokens is an opt-in, like WebSearch.
+	Subagents SubagentOptions
+
+	// agentID, depth and budget are set by Create before the registry is built.
+	// They are unexported because an embedder asks for a child with spawn_agent,
+	// not by handing the runtime an id: identity is the runtime's to assign.
+	agentID string
+	depth   int
+	budget  *subagentBudget
+	// skipFileMCP tells Create to discard servers loaded from .cursor/mcp.json.
+	// A child without the mcp selector inherits SettingSources (they also carry
+	// rules and hooks) but must not start the file's servers.
+	skipFileMCP bool
+	// completer is the provider client a child runs with. It is the parent's,
+	// not a new one: every agent in a tree talks through the same client, which
+	// is also what lets a test script a parent and its children together.
+	completer llm.Completer
+	// taskMgr is the agent tree's background task table. The root creates it in
+	// buildRegistry; a child inherits the parent's, so one tree has one table
+	// however deep the work goes.
+	taskMgr *tasks.Manager
+}
+
+// SubagentOptions configures the spawn_agent built-in and the work its children
+// start. Zero values are the defaults (see the field comments); Enabled is the
+// only switch, and it is false unless set.
+type SubagentOptions struct {
+	// Enabled registers spawn_agent. A child at the last depth has no such tool.
+	Enabled bool
+	// MaxDepth bounds nesting. 0 means 2: a root (depth 0) and one level of
+	// children (depth 1). A child at depth+1 >= MaxDepth cannot spawn again.
+	MaxDepth int
+	// MaxAgents bounds how many agents one root run tree may create. 0 means 8.
+	// The counter resets with each top-level run.
+	MaxAgents int
+	// MaxBackground bounds concurrent background tasks in the tree. 0 means 4.
+	MaxBackground int
+	// OnEvent, when set, receives every event a child emits, tagged with the
+	// parent's identity and the spawn call so a client can draw it under the
+	// card that started it.
+	OnEvent func(SubagentEvent)
+	// OnTask, when set, is called when a task starts and when it ends. It is a
+	// table-change callback, not a progress stream.
+	OnTask func(TaskInfo)
+}
+
+// SubagentEvent is one event a child agent emitted, with the identity needed to
+// place it under the parent's card.
+type SubagentEvent struct {
+	// ParentAgentID and ParentRunID name the agent whose tool call created the
+	// child and the run that call belongs to.
+	ParentAgentID string
+	ParentRunID   string
+	// ToolCallID is the spawn_agent (or run_workflow) call.
+	ToolCallID string
+	// AgentID and RunID name the child and the run that emitted Event.
+	AgentID string
+	RunID   string
+	// Depth is the child's nesting level: 1 for a root's child, 2 for its
+	// grandchild. It is what lets a client draw a grandchild under the card that
+	// started its parent rather than at the top level (0.42+).
+	Depth int
+	Event Event
 }
 
 // CheckpointOptions says where run pre-images are kept and how many survive.
@@ -167,9 +253,9 @@ type PluginPolicy struct {
 
 // VisionOptions controls image attachments / read_image (0.19+).
 type VisionOptions struct {
-	Enabled            bool
-	MaxSide            int  // longest side before downscale; 0 = 2048
-	MaxBytes           int  // max base64 payload bytes; 0 = 4MiB
+	Enabled             bool
+	MaxSide             int  // longest side before downscale; 0 = 2048
+	MaxBytes            int  // max base64 payload bytes; 0 = 4MiB
 	AllowRemoteImageURL bool // reserved; remote https fetch stays off in 0.19
 }
 
@@ -311,8 +397,24 @@ type MCPServerConfig struct {
 	Args      []string
 	Env       []string // KEY=VAL for stdio process
 	URL       string   // http / sse base URL
-	// Headers are sent on HTTP/SSE requests (0.9+). Ignored for stdio. Not for OAuth flows.
+	// Headers are sent on HTTP/SSE requests (0.9+). Ignored for stdio. OAuth
+	// tokens do not belong here: the runtime owns them (0.44+, chapter 43).
 	Headers map[string]string
+	// Enabled is carried from a file entry so a caller can see what the file
+	// said (0.44+). Entries merged from a file with `enabled: false` are not
+	// started; an inline config is the caller's direct intent and is always
+	// started, whatever this says.
+	Enabled *bool
+	// OAuth supplies a client registration for authorization servers that do
+	// not support dynamic registration (0.44+). Nil lets the runtime register.
+	OAuth *MCPOAuthConfig
+}
+
+// MCPOAuthConfig is a manual OAuth client registration (0.44+).
+type MCPOAuthConfig struct {
+	ClientID     string
+	ClientSecret string
+	Scope        string
 }
 
 // PermissionFunc decides whether a gated tool may run.
@@ -330,6 +432,14 @@ type PermissionRequest struct {
 	// (0.36+). It is nil when the mode gate alone is the reason the client is
 	// being asked, so a prompt can always say why it appeared.
 	Rule *PermissionRuleMatch
+	// AgentID and RunID name the agent whose call is being decided and the run it
+	// belongs to (0.42+). For a child agent, AgentID is the child — which is what
+	// lets an approval card say that a subagent is asking. Empty only for a
+	// callback installed outside Create/Resume.
+	AgentID string
+	RunID   string
+	// Depth is 0 for the session's own agent, 1 for its child, and so on.
+	Depth int
 }
 
 // ToolPreview is a description of a pending tool call's effect.

@@ -52,6 +52,16 @@ type stubLLM struct {
 	// blockUntilCancel makes every request hang until the client goes away,
 	// which is how the cancel path is exercised.
 	blockUntilCancel bool
+	// route, when set, chooses a response from the request body. It exists for
+	// background subagents: the child's request and the parent's next request
+	// race, so a fixed call order cannot say which agent a turn belongs to.
+	// Routed requests do not advance the script cursor.
+	route func(body string) (turn, bool)
+	// script is the cursor into turns for requests route does not claim.
+	script int
+	// cached, when positive, is reported as prompt_tokens_details.cached_tokens
+	// on every usage chunk, so the cache-accounting path can be exercised.
+	cached int
 }
 
 func newStubLLM(t *testing.T, turns ...turn) *stubLLM {
@@ -68,6 +78,20 @@ func (s *stubLLM) callCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.calls
+}
+
+// setRoute installs a body-based response chooser.
+func (s *stubLLM) setRoute(fn func(body string) (turn, bool)) {
+	s.mu.Lock()
+	s.route = fn
+	s.mu.Unlock()
+}
+
+// setCachedTokens makes every subsequent usage chunk report cached input.
+func (s *stubLLM) setCachedTokens(n int) {
+	s.mu.Lock()
+	s.cached = n
+	s.mu.Unlock()
 }
 
 func (s *stubLLM) lastRequestBody(t *testing.T) string {
@@ -89,9 +113,20 @@ func (s *stubLLM) serve(w http.ResponseWriter, r *http.Request) {
 
 	s.mu.Lock()
 	var current turn
-	if s.calls < len(s.turns) {
-		current = s.turns[s.calls]
+	routed := false
+	if s.route != nil {
+		if t, ok := s.route(string(body)); ok {
+			current = t
+			routed = true
+		}
 	}
+	if !routed {
+		if s.script < len(s.turns) {
+			current = s.turns[s.script]
+		}
+		s.script++
+	}
+	cached := s.cached
 	s.calls++
 	s.lastBody = string(body)
 	s.mu.Unlock()
@@ -123,9 +158,13 @@ func (s *stubLLM) serve(w http.ResponseWriter, r *http.Request) {
 			}}})
 		}
 	}
+	usage := map[string]any{"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}
+	if cached > 0 {
+		usage["prompt_tokens_details"] = map[string]any{"cached_tokens": cached}
+	}
 	write(map[string]any{
 		"choices": []any{},
-		"usage":   map[string]any{"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+		"usage":   usage,
 	})
 	fmt.Fprint(w, "data: [DONE]\n\n")
 	flusher.Flush()
@@ -289,6 +328,7 @@ func (h *harness) next(timeout time.Duration) map[string]any {
 type runOutcome struct {
 	events    []map[string]any
 	approvals []map[string]any
+	tasks     []map[string]any
 	done      map[string]any
 }
 
@@ -309,6 +349,8 @@ func (h *harness) collectRun(timeout time.Duration, answer func(req map[string]a
 		switch m["method"] {
 		case NotifyEvent:
 			out.events = append(out.events, m)
+		case NotifyTask:
+			out.tasks = append(out.tasks, m)
 		case NotifyApprovalRequest:
 			out.approvals = append(out.approvals, m)
 			if answer == nil {

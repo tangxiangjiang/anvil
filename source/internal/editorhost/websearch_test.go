@@ -5,6 +5,7 @@ package editorhost
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -21,7 +22,7 @@ func TestBuildOptionsCarriesTheWebSearchConfiguration(t *testing.T) {
 	srv := New(Config{CWD: dir, Model: "stub-model"}, strings.NewReader(""), &bytes.Buffer{})
 	sess := newSession("sess-test", srv.cwdPath(), ModeAsk, false)
 
-	opts, rpcErr := srv.buildOptions(SessionParams{WebSearch: &WebSearchParams{
+	opts, rpcErr := srv.buildOptions(context.Background(), SessionParams{WebSearch: &WebSearchParams{
 		Provider:   "http",
 		BaseURL:    "https://search.example.test/v1",
 		MaxResults: 3,
@@ -60,7 +61,7 @@ func TestBuildOptionsLeavesWebSearchOffUnlessAsked(t *testing.T) {
 	srv := New(Config{CWD: dir, Model: "stub-model"}, strings.NewReader(""), &bytes.Buffer{})
 	sess := newSession("sess-test", srv.cwdPath(), ModeAsk, false)
 
-	opts, rpcErr := srv.buildOptions(SessionParams{}, sess)
+	opts, rpcErr := srv.buildOptions(context.Background(), SessionParams{}, sess)
 	if rpcErr != nil {
 		t.Fatalf("buildOptions: %s", rpcErr.Message)
 	}
@@ -76,7 +77,7 @@ func TestBuildOptionsRefusesWebSearchWithoutAnEndpoint(t *testing.T) {
 	srv := New(Config{CWD: dir, Model: "stub-model"}, strings.NewReader(""), &bytes.Buffer{})
 	sess := newSession("sess-test", srv.cwdPath(), ModeAsk, false)
 
-	_, rpcErr := srv.buildOptions(SessionParams{WebSearch: &WebSearchParams{Provider: "http"}}, sess)
+	_, rpcErr := srv.buildOptions(context.Background(), SessionParams{WebSearch: &WebSearchParams{Provider: "http"}}, sess)
 	if rpcErr == nil {
 		t.Fatal("an endpoint-less http provider was accepted")
 	}
@@ -90,7 +91,7 @@ func TestBuildOptionsRefusesAnUnknownWebSearchProvider(t *testing.T) {
 	srv := New(Config{CWD: dir, Model: "stub-model"}, strings.NewReader(""), &bytes.Buffer{})
 	sess := newSession("sess-test", srv.cwdPath(), ModeAsk, false)
 
-	_, rpcErr := srv.buildOptions(SessionParams{WebSearch: &WebSearchParams{Provider: "galaxy"}}, sess)
+	_, rpcErr := srv.buildOptions(context.Background(), SessionParams{WebSearch: &WebSearchParams{Provider: "galaxy"}}, sess)
 	if rpcErr == nil || rpcErr.Code != CodeInvalidParams {
 		t.Fatalf("error=%v want invalid params", rpcErr)
 	}

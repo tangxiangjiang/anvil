@@ -28,6 +28,7 @@ import (
 	"github.com/anvil-dev/anvil/internal/runtime"
 	"github.com/anvil-dev/anvil/internal/skills"
 	"github.com/anvil-dev/anvil/internal/store"
+	"github.com/anvil-dev/anvil/internal/tasks"
 	"github.com/anvil-dev/anvil/internal/tools"
 	"github.com/anvil-dev/anvil/internal/verify"
 	"github.com/anvil-dev/anvil/internal/vision"
@@ -43,6 +44,14 @@ type Agent struct {
 	cwd    string
 	closed bool
 
+	// depth is 0 for the session's own agent and grows with each spawn; the
+	// budget is shared by every agent in one root run's tree (0.42+).
+	depth  int
+	budget *subagentBudget
+	// taskMgr is the tree's background table. A child shares its parent's, so
+	// one tree has one table; closing the root cancels what is still running.
+	taskMgr *tasks.Manager
+
 	store store.Backend
 	// lock is the exclusive claim on this agent id. Two live handles on one id
 	// interleave their runs into a single transcript, which is what strands a
@@ -50,13 +59,21 @@ type Agent struct {
 	// caller-supplied store) or when the handle never took one (Create).
 	lock *store.SessionLock
 
-	mu           sync.Mutex
-	running      bool
-	activeRun    *Run
-	history      []llm.Message
-	complete     llm.Completer
-	registry     *tools.Registry
-	mcp          []*mcp.Session
+	mu sync.Mutex
+	// running is a turn in flight; compacting is a manual compaction, which is
+	// also a model call and therefore must not overlap a turn. They are separate
+	// flags because a refused Send and a refused Compact say different things.
+	running    bool
+	compacting bool
+	activeRun  *Run
+	history    []llm.Message
+	complete   llm.Completer
+	registry   *tools.Registry
+	mcp        []*mcp.Session
+	// mcpTools is the set of registry names the last refresh registered, and
+	// mcpVersion the runtime version that produced it (0.44+).
+	mcpTools     []string
+	mcpVersion   int64
 	plugins      *plugin.Manager
 	lsp          *lsp.Supervisor
 	systemPrompt string
@@ -65,34 +82,61 @@ type Agent struct {
 
 // Create validates options and returns a new local agent (no LLM call).
 func Create(ctx context.Context, opts Options) (*Agent, error) {
+	return createAgent(ctx, opts, subagentIdentity{})
+}
+
+// createAgent is Create with the identity a subagent has. A top-level caller
+// passes the zero value and writes exactly the meta record it wrote before.
+func createAgent(ctx context.Context, opts Options, ident subagentIdentity) (*Agent, error) {
 	opts, cwd, err := normalizeOptions(opts)
 	if err != nil {
 		return nil, err
 	}
-	opts, err = mergeMCPFromSources(cwd, opts)
-	if err != nil {
-		return nil, err
+	// A runtime already resolved the file layers; reading them again would
+	// start a second set of processes behind its back.
+	if opts.MCPRuntime == nil {
+		opts, err = mergeMCPFromSources(cwd, opts)
+		if err != nil {
+			return nil, err
+		}
 	}
-	completer, err := newCompleter(opts)
-	if err != nil {
-		return nil, err
+	if opts.skipFileMCP {
+		opts.MCPServers = nil
+	}
+	// A child reuses the parent's client; only a top-level agent builds one.
+	completer := opts.completer
+	if completer == nil {
+		completer, err = newCompleter(opts)
+		if err != nil {
+			return nil, err
+		}
+	}
+	// The id is chosen before the registry is built so the registry can name the
+	// agent in every permission request it forwards (0.42+).
+	agentID := "agent-" + id.New()
+	opts.agentID = agentID
+	opts.depth = ident.Depth
+	if opts.budget == nil {
+		opts.budget = newSubagentBudget(opts.Subagents.MaxAgents)
 	}
 	reg, sessions, plugMgr, hookFile, lspSup, err := buildRegistry(ctx, cwd, opts)
 	if err != nil {
 		cleanupRegistry(sessions, plugMgr, lspSup)
 		return nil, err
 	}
+	// Keep the table on the options too: childOptions hands the same pointer to
+	// every child, which is what makes the tree's table one table.
+	opts.taskMgr = reg.TaskManager()
 	st, err := store.Open(cwd, opts.Local.Store)
 	if err != nil {
 		cleanupRegistry(sessions, plugMgr, lspSup)
 		return nil, newError("open store", false, err)
 	}
-	agentID := "agent-" + id.New()
 	// An agent's history is trimmed when it opens, so the bound is honoured even
 	// by embedders that never list checkpoints.
 	pruneCheckpoints(cwd, agentID, opts.Checkpoints)
 	allowShell := opts.Local.AllowShellEnabled()
-	if err := st.Append(agentID, store.Record{
+	meta := store.Record{
 		Type:       store.TypeMeta,
 		AgentID:    agentID,
 		CWD:        cwd,
@@ -100,7 +144,17 @@ func Create(ctx context.Context, opts Options) (*Agent, error) {
 		Model:      opts.Model.ID,
 		MaxSteps:   opts.MaxSteps,
 		AllowShell: &allowShell,
-	}); err != nil {
+
+		ParentAgentID:    ident.ParentAgentID,
+		ParentRunID:      ident.ParentRunID,
+		ParentToolCallID: ident.ParentToolCallID,
+		Depth:            ident.Depth,
+		TaskTitle:        ident.TaskTitle,
+	}
+	if ident.ParentAgentID != "" {
+		meta.Kind = "subagent"
+	}
+	if err := st.Append(agentID, meta); err != nil {
 		_ = st.Close()
 		cleanupRegistry(sessions, plugMgr, lspSup)
 		return nil, newError("persist agent meta", false, err)
@@ -111,14 +165,20 @@ func Create(ctx context.Context, opts Options) (*Agent, error) {
 		cleanupRegistry(sessions, plugMgr, lspSup)
 		return nil, newError("load project rules", false, err)
 	}
+	mcpTools, mcpVersion := runtimeMCPState(opts)
 	return &Agent{
 		id:           agentID,
 		opts:         opts,
 		cwd:          cwd,
+		depth:        opts.depth,
+		budget:       opts.budget,
+		taskMgr:      opts.taskMgr,
 		store:        st,
 		complete:     completer,
 		registry:     reg,
 		mcp:          sessions,
+		mcpTools:     mcpTools,
+		mcpVersion:   mcpVersion,
 		plugins:      plugMgr,
 		lsp:          lspSup,
 		history:      nil,
@@ -155,19 +215,29 @@ func Resume(ctx context.Context, agentID string, opts Options) (*Agent, error) {
 	if agentID == "" {
 		return nil, newError("agent id is required", false, nil)
 	}
-	opts, err = mergeMCPFromSources(cwd, opts)
-	if err != nil {
-		return nil, err
+	if opts.MCPRuntime == nil {
+		opts, err = mergeMCPFromSources(cwd, opts)
+		if err != nil {
+			return nil, err
+		}
 	}
 	completer, err := newCompleter(opts)
 	if err != nil {
 		return nil, err
+	}
+	// Resume does not know a depth until it has read the file, and the registry is
+	// built first; a resumed session is a top-level conversation (a child is
+	// resumed through its parent's transcript or not at all).
+	opts.agentID = agentID
+	if opts.budget == nil {
+		opts.budget = newSubagentBudget(opts.Subagents.MaxAgents)
 	}
 	reg, sessions, plugMgr, hookFile, lspSup, err := buildRegistry(ctx, cwd, opts)
 	if err != nil {
 		cleanupRegistry(sessions, plugMgr, lspSup)
 		return nil, err
 	}
+	opts.taskMgr = reg.TaskManager()
 	st, err := store.Open(cwd, opts.Local.Store)
 	if err != nil {
 		cleanupRegistry(sessions, plugMgr, lspSup)
@@ -206,15 +276,21 @@ func Resume(ctx context.Context, agentID string, opts Options) (*Agent, error) {
 		return nil, newError("load project rules", false, err)
 	}
 	pruneCheckpoints(cwd, agentID, opts.Checkpoints)
+	mcpTools, mcpVersion := runtimeMCPState(opts)
 	return &Agent{
 		id:           agentID,
 		opts:         opts,
 		cwd:          cwd,
+		depth:        opts.depth,
+		budget:       opts.budget,
+		taskMgr:      opts.taskMgr,
 		store:        st,
 		lock:         lock,
 		complete:     completer,
 		registry:     reg,
 		mcp:          sessions,
+		mcpTools:     mcpTools,
+		mcpVersion:   mcpVersion,
 		plugins:      plugMgr,
 		lsp:          lspSup,
 		history:      historyFromRecords(records),
@@ -354,6 +430,23 @@ func toPluginPolicy(p *PluginPolicy) *plugin.Policy {
 
 func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Registry, []*mcp.Session, *plugin.Manager, *hooks.File, *lsp.Supervisor, error) {
 	reg := tools.NewRegistry(cwd, opts.Local.AllowShellEnabled())
+	// Every call this registry executes belongs to one agent; saying which lets a
+	// permission prompt point at a child instead of the session (0.42+).
+	reg.SetIdentity(opts.agentID, opts.depth)
+	// One table per agent tree. The root creates it; a child inherits it through
+	// opts.taskMgr, so a child's shell job and a grandchild's subagent are rows
+	// in the same list. The limit is written only where the table is created.
+	mgr := opts.taskMgr
+	if mgr == nil {
+		mgr = tasks.NewManager()
+		if n := opts.Subagents.MaxBackground; n > 0 {
+			mgr.Limit = n
+		}
+	}
+	if on := opts.Subagents.OnTask; on != nil {
+		mgr.SetOnChange(func(info tasks.Info) { on(toTaskInfo(info)) })
+	}
+	reg.SetTaskManager(mgr)
 	if opts.Checkpoints != nil {
 		// Capture is named but not yet scoped to a run: SetRunContext in
 		// executeRun is what turns a call from "no pre-image" into one.
@@ -431,6 +524,7 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 	// preExec now, so that a rule that allows a call cannot skip them.
 	if perm := opts.Permission; perm != nil {
 		reg.SetPermission(func(ctx context.Context, call tools.GatedCall) (json.RawMessage, error) {
+			agentID, depth := reg.Identity()
 			dec, err := perm(ctx, PermissionRequest{
 				ToolName: call.Name,
 				Args:     call.Args,
@@ -438,6 +532,11 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 				// Which rule asked, when one did. A client shows it, so a prompt
 				// never appears without a reason the user can act on.
 				Rule: permissionRuleMatch(call.Rule),
+				// Who is asking: a subagent's call is decided by the same callback
+				// as its parent's, and the card must be able to say whose it is.
+				AgentID: agentID,
+				RunID:   reg.RunID(),
+				Depth:   depth,
 			})
 			if err != nil {
 				return nil, err
@@ -520,36 +619,65 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 			return nil, nil, nil, nil, nil, newError(err.Error(), false, nil)
 		}
 	}
-	var sessions []*mcp.Session
-	for name, cfg := range opts.MCPServers {
-		sess, err := mcp.Start(ctx, mcp.ServerConfig{
-			Name:      name,
-			Transport: cfg.Transport,
-			Command:   cfg.Command,
-			Args:      cfg.Args,
-			Env:       cfg.Env,
-			URL:       cfg.URL,
-			Headers:   cfg.Headers,
-		})
-		if err != nil {
-			cleanupRegistry(sessions, nil, lspSup)
-			return nil, nil, nil, nil, nil, newError("mcp server "+name, false, err)
-		}
-		sessions = append(sessions, sess)
-		for _, t := range sess.Tools() {
-			toolName := "mcp_" + sanitizeName(name) + "_" + sanitizeName(t.Name)
-			mcpName := t.Name
-			session := sess
-			if err := reg.Register(&tools.FuncTool{
-				Name:        toolName,
-				Description: fmt.Sprintf("[mcp:%s] %s", name, t.Description),
-				Parameters:  t.InputSchema,
-				Handler: func(ctx context.Context, args json.RawMessage) (string, error) {
-					return session.Call(ctx, mcpName, args)
-				},
-			}); err != nil {
-				cleanupRegistry(sessions, nil, lspSup)
+	// spawn_agent is a tool the runtime ships but implements as a function,
+	// because it needs the agent executing it. A child at the last depth has no
+	// such tool: the limit is enforced by absence, not by a runtime check.
+	if opts.Subagents.Enabled && opts.depth+1 < subagentMaxDepth(opts.Subagents) {
+		// run_workflow orchestrates the same children spawn_agent creates, so it
+		// shares the depth rule: a workflow cannot be used to get around it.
+		for _, tool := range []*tools.FuncTool{subagentTool(reg), workflowTool(reg)} {
+			if err := reg.Register(tool); err != nil {
+				if lspSup != nil {
+					lspSup.Close()
+				}
 				return nil, nil, nil, nil, nil, newError(err.Error(), false, nil)
+			}
+		}
+	}
+	// A read-only child has no shell, but it can still read the tree's
+	// background work; the task tools are how the model polls it.
+	if opts.Subagents.Enabled {
+		reg.EnsureTaskTools()
+	}
+	var sessions []*mcp.Session
+	if opts.MCPRuntime != nil {
+		// The runtime owns the processes. The handlers proxy by server and tool
+		// name, so a reconnect replaces the session under a live tool.
+		if _, err := registerMCPRuntimeTools(reg, opts.MCPRuntime); err != nil {
+			cleanupRegistry(nil, nil, lspSup)
+			return nil, nil, nil, nil, nil, err
+		}
+	} else {
+		for name, cfg := range opts.MCPServers {
+			sess, err := mcp.Start(ctx, mcp.ServerConfig{
+				Name:      name,
+				Transport: cfg.Transport,
+				Command:   cfg.Command,
+				Args:      cfg.Args,
+				Env:       cfg.Env,
+				URL:       cfg.URL,
+				Headers:   cfg.Headers,
+			})
+			if err != nil {
+				cleanupRegistry(sessions, nil, lspSup)
+				return nil, nil, nil, nil, nil, newError("mcp server "+name, false, err)
+			}
+			sessions = append(sessions, sess)
+			for _, t := range sess.Tools() {
+				toolName := "mcp_" + sanitizeName(name) + "_" + sanitizeName(t.Name)
+				mcpName := t.Name
+				session := sess
+				if err := reg.Register(&tools.FuncTool{
+					Name:        toolName,
+					Description: fmt.Sprintf("[mcp:%s] %s", name, t.Description),
+					Parameters:  t.InputSchema,
+					Handler: func(ctx context.Context, args json.RawMessage) (string, error) {
+						return session.Call(ctx, mcpName, args)
+					},
+				}); err != nil {
+					cleanupRegistry(sessions, nil, lspSup)
+					return nil, nil, nil, nil, nil, newError(err.Error(), false, nil)
+				}
 			}
 		}
 	}
@@ -891,6 +1019,19 @@ func (a *Agent) Send(ctx context.Context, message string, opts ...SendOption) (*
 		a.mu.Unlock()
 		return nil, newError("another run is already in progress", false, nil)
 	}
+	if a.compacting {
+		a.mu.Unlock()
+		return nil, newError("a compaction is in progress", false, nil)
+	}
+	// A runtime may have reconnected, added or removed a server since the last
+	// turn. The swap happens here — idle, under a.mu, before running is set — so
+	// no turn ever sees the registry change under it.
+	if a.opts.MCPRuntime != nil && a.opts.MCPRuntime.Version() != a.mcpVersion {
+		if err := a.refreshMCPLocked(); err != nil {
+			a.mu.Unlock()
+			return nil, err
+		}
+	}
 	a.running = true
 	historyCopy := append([]llm.Message(nil), a.history...)
 	wall := a.opts.MaxWallTime
@@ -922,9 +1063,12 @@ func (a *Agent) Reload(ctx context.Context) error {
 	oldLSP := a.lsp
 	a.mu.Unlock()
 
-	opts, err := mergeMCPFromSources(cwd, opts)
-	if err != nil {
-		return err
+	if opts.MCPRuntime == nil {
+		merged, err := mergeMCPFromSources(cwd, opts)
+		if err != nil {
+			return err
+		}
+		opts = merged
 	}
 	reg, sessions, plugMgr, hookFile, lspSup, err := buildRegistry(ctx, cwd, opts)
 	if err != nil {
@@ -955,11 +1099,67 @@ func (a *Agent) Reload(ctx context.Context) error {
 	a.opts = opts
 	a.registry = reg
 	a.mcp = sessions
+	if opts.MCPRuntime != nil {
+		a.mcpTools, a.mcpVersion = runtimeMCPState(opts)
+	} else {
+		a.mcpTools, a.mcpVersion = nil, 0
+	}
 	a.plugins = plugMgr
 	a.lsp = lspSup
 	a.systemPrompt = sysPrompt
 	a.hookFile = hookFile
 	return nil
+}
+
+// RefreshMCP re-registers the runtime's tools without disposing the agent
+// (0.44+). It refuses while a run or a compaction is in progress: a running
+// turn keeps the registry it started with. The next Send picks the change up
+// on its own, so a refusal is a deferral, not a loss.
+func (a *Agent) RefreshMCP() error {
+	if a == nil {
+		return newError("nil agent", false, nil)
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.closed {
+		return newError("agent is closed", false, nil)
+	}
+	if a.opts.MCPRuntime == nil {
+		return newError("agent has no MCP runtime", false, nil)
+	}
+	if a.running || a.compacting {
+		return newError("cannot refresh MCP tools while a run is in progress", false, nil)
+	}
+	return a.refreshMCPLocked()
+}
+
+// refreshMCPLocked swaps only the mcp_* names. Built-in, plugin and caller
+// tools are untouched; the allow/deny lists are re-applied so a filtered tool
+// does not come back through a refresh.
+func (a *Agent) refreshMCPLocked() error {
+	rt := a.opts.MCPRuntime
+	if rt == nil || a.registry == nil {
+		return nil
+	}
+	for _, name := range a.mcpTools {
+		a.registry.Unregister(name)
+	}
+	names, err := registerMCPRuntimeTools(a.registry, rt)
+	if err != nil {
+		a.mcpTools = nil
+		return err
+	}
+	applyBuiltinToolFilters(a.registry, a.opts)
+	a.mcpTools = names
+	a.mcpVersion = rt.Version()
+	return nil
+}
+
+// promptCacheEnabled reports whether the adapter should place cache
+// breakpoints. normalizeOptions has resolved nil already; this keeps the
+// runtime call site free of a pointer.
+func promptCacheEnabled(opts Options) bool {
+	return opts.Context.PromptCache != nil && *opts.Context.PromptCache
 }
 
 // usageInfo projects the runtime's usage onto the public type. It is nil in,
@@ -969,7 +1169,13 @@ func usageInfo(u *llm.Usage) *Usage {
 	if u == nil {
 		return nil
 	}
-	return &Usage{InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, TotalTokens: u.TotalTokens}
+	return &Usage{
+		InputTokens:      u.InputTokens,
+		OutputTokens:     u.OutputTokens,
+		TotalTokens:      u.TotalTokens,
+		CachedTokens:     u.CachedTokens,
+		CacheWriteTokens: u.CacheWriteTokens,
+	}
 }
 
 // todoItemsInfo projects the model's task list onto the public type. A nil list
@@ -986,6 +1192,20 @@ func todoItemsInfo(items []tools.TodoItem) []TodoItem {
 	return out
 }
 
+// compactInfo projects a runtime compaction onto the public event.
+func compactInfo(in *runtime.CompactInfo) *CompactInfo {
+	if in == nil {
+		return nil
+	}
+	return &CompactInfo{
+		Reason:     in.Reason,
+		Before:     in.Before,
+		After:      in.After,
+		Summarized: in.Summarized,
+		Window:     in.Window,
+	}
+}
+
 func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseFunc, wall time.Duration, run *Run, message string, history []llm.Message, userParts []llm.ContentPart) {
 	defer func() {
 		// The run is over, so its pre-images stop being written: a tool call made
@@ -993,12 +1213,7 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 		// checkpoint and must not be filed under this run.
 		a.registry.SetRunContext("", "")
 		cancelCause(nil)
-		a.mu.Lock()
-		a.running = false
-		if a.activeRun == run {
-			a.activeRun = nil
-		}
-		a.mu.Unlock()
+		a.clearRunState(run)
 	}()
 
 	loopCtx := ctx
@@ -1006,6 +1221,13 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 		var wallCancel context.CancelFunc
 		loopCtx, wallCancel = context.WithTimeoutCause(ctx, wall, runtime.ErrMaxWallTime)
 		defer wallCancel()
+	}
+	// The tools that act for the agent find it here; the registry is shared by
+	// the agent's runs, and a back-reference would be a cycle for no gain.
+	loopCtx = withAgent(loopCtx, a)
+	if a.depth == 0 {
+		// One root run is one tree: the agent budget begins again with it.
+		a.budget.reset()
 	}
 
 	a.persist(store.Record{Type: store.TypeRunStart, RunID: run.id})
@@ -1026,26 +1248,51 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 		RunID:             run.id,
 		HistoryMaxChars:   a.opts.HistoryMaxChars,
 		HistoryKeepRecent: a.opts.HistoryKeepRecent,
-		SystemPrompt:      sysPrompt,
-		ParallelTools:     a.opts.ParallelTools,
-		ParallelToolsMax:  a.opts.ParallelToolsMax,
-		Sink:              func(m llm.Message) { a.persistMessage(run.id, m) },
+		Context: runtime.ContextBudget{
+			WindowTokens:  a.opts.Context.WindowTokens,
+			AutoCompactAt: a.opts.Context.AutoCompactAt,
+			KeepRecent:    a.opts.Context.KeepRecent,
+		},
+		PromptCache:      promptCacheEnabled(a.opts),
+		SystemPrompt:     sysPrompt,
+		ParallelTools:    a.opts.ParallelTools,
+		ParallelToolsMax: a.opts.ParallelToolsMax,
+		Sink:             func(m llm.Message) { a.persistMessage(run.id, m) },
 	}, func(ev runtime.Event) {
-		run.emit(Event{
-			Type:       EventType(ev.Type),
-			Text:       ev.Text,
-			ToolCallID: ev.ToolCallID,
-			Name:       ev.Name,
-			Args:       json.RawMessage(ev.Args),
-			Content:    ev.Content,
-			IsError:    ev.IsError,
-			Step:       ev.Step,
-			MaxSteps:   ev.MaxSteps,
-			Code:       Code(ev.Code),
-			Rule:       permissionRuleMatch(ev.Rule),
-			Usage:      usageInfo(ev.Usage),
-			Items:      todoItemsInfo(ev.Items),
-		})
+		out := Event{
+			Type:          EventType(ev.Type),
+			Text:          ev.Text,
+			ToolCallID:    ev.ToolCallID,
+			Name:          ev.Name,
+			Args:          json.RawMessage(ev.Args),
+			Content:       ev.Content,
+			IsError:       ev.IsError,
+			Step:          ev.Step,
+			MaxSteps:      ev.MaxSteps,
+			Code:          Code(ev.Code),
+			Rule:          permissionRuleMatch(ev.Rule),
+			Usage:         usageInfo(ev.Usage),
+			Items:         todoItemsInfo(ev.Items),
+			Compact:       compactInfo(ev.Compact),
+			LastRequestAt: ev.LastRequestAt,
+		}
+		run.emit(out)
+		// A child's events travel to whoever asked for the child, tagged with the
+		// call that started it. They do not travel through the parent's stream:
+		// the parent's conversation never sees them, and neither should its card.
+		if origin, ok := subagentOriginFromContext(loopCtx); ok {
+			if on := a.opts.Subagents.OnEvent; on != nil {
+				on(SubagentEvent{
+					ParentAgentID: origin.parentAgentID,
+					ParentRunID:   origin.parentRunID,
+					ToolCallID:    origin.toolCallID,
+					AgentID:       a.id,
+					RunID:         run.id,
+					Depth:         a.depth,
+					Event:         out,
+				})
+			}
+		}
 	})
 
 	a.mu.Lock()
@@ -1053,13 +1300,14 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 	a.mu.Unlock()
 
 	rr := &RunResult{
-		ID:     result.ID,
-		Status: RunStatus(result.Status),
-		Result: result.Result,
-		Steps:  result.Steps,
-		Usage:  usageInfo(result.Usage),
-		Err:    result.Err,
-		Code:   Code(result.Code),
+		ID:            result.ID,
+		Status:        RunStatus(result.Status),
+		Result:        result.Result,
+		Steps:         result.Steps,
+		Usage:         usageInfo(result.Usage),
+		Err:           result.Err,
+		Code:          Code(result.Code),
+		LastRequestAt: result.LastRequestAt,
 	}
 	if rr.ID == "" {
 		rr.ID = run.id
@@ -1070,9 +1318,11 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 	var usage *store.Usage
 	if result.Usage != nil {
 		usage = &store.Usage{
-			InputTokens:  result.Usage.InputTokens,
-			OutputTokens: result.Usage.OutputTokens,
-			TotalTokens:  result.Usage.TotalTokens,
+			InputTokens:      result.Usage.InputTokens,
+			OutputTokens:     result.Usage.OutputTokens,
+			TotalTokens:      result.Usage.TotalTokens,
+			CachedTokens:     result.Usage.CachedTokens,
+			CacheWriteTokens: result.Usage.CacheWriteTokens,
 		}
 	}
 	a.persist(store.Record{
@@ -1087,7 +1337,24 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 	if rr.Status == StatusError {
 		err = newError(rr.Err, false, nil)
 	}
+	// Release the slot before publishing the result. Wait wakes on finish, so a
+	// caller that waits and immediately sends again would otherwise race this
+	// goroutine's deferred cleanup and be told a run is already in progress.
+	// The defer clears it again, which is harmless: activeRun is already nil.
+	a.clearRunState(run)
 	run.finish(rr, err)
+}
+
+// clearRunState releases an agent's run slot. The deferred call is the normal
+// path; executeRun also calls it before finishing a Run so the state is true
+// by the time a waiter observes the result.
+func (a *Agent) clearRunState(run *Run) {
+	a.mu.Lock()
+	a.running = false
+	if a.activeRun == run {
+		a.activeRun = nil
+	}
+	a.mu.Unlock()
 }
 
 func (a *Agent) persistMessage(runID string, m llm.Message) {
@@ -1151,8 +1418,18 @@ func (a *Agent) Close() error {
 	a.plugins = nil
 	lspSup := a.lsp
 	a.lsp = nil
+	taskMgr := a.taskMgr
+	a.taskMgr = nil
 	a.mu.Unlock()
 
+	// Background work ends first: a closed conversation must not leave a process
+	// or a child agent writing into the workspace. The grace is short because a
+	// task that ignores it is not worth holding the close open for; the rows
+	// stay in the table as cancelled. Only the root owns the tree's table: a
+	// child closing when its turn ends must not cancel its siblings' work.
+	if taskMgr != nil && a.depth == 0 {
+		taskMgr.Close(2 * time.Second)
+	}
 	if st != nil {
 		_ = st.Close()
 	}
@@ -1225,6 +1502,25 @@ func normalizeOptions(opts Options) (Options, string, error) {
 	// MaxSteps 0 = unlimited; loop guard stops runaway tool repetition.
 	if opts.HistoryKeepRecent < 0 {
 		opts.HistoryKeepRecent = 0
+	}
+	// A declared budget normalizes here so every reader — the runtime, the
+	// transcript, a client's meter — agrees on the same threshold.
+	if opts.Context.WindowTokens < 0 {
+		opts.Context.WindowTokens = 0
+	}
+	if opts.Context.AutoCompactAt <= 0 || opts.Context.AutoCompactAt > 1 {
+		opts.Context.AutoCompactAt = 0.8
+	}
+	if opts.Context.KeepRecent < 2 {
+		opts.Context.KeepRecent = 8
+	}
+	// Prompt caching is on by default for Anthropic: it costs no extra input
+	// (a cache read is cheaper, a write is the same tokens) and it is what the
+	// client's countdown reads. An OpenAI-compatible endpoint caches on its own
+	// and ignores the flag, so turning it on there changes nothing.
+	if opts.Context.PromptCache == nil {
+		on := opts.Provider == ProviderAnthropic
+		opts.Context.PromptCache = &on
 	}
 	return opts, abs, nil
 }

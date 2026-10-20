@@ -13,6 +13,10 @@
  *    replayed, so a reload adds them up again from the stored `run_end`s;
  *  - a fraction needs a window somebody configured. There is no table here and
  *    no guess from a model name.
+ *  - both clocks are the caller's to anchor: remaining context comes from the
+ *    host's estimate, and the cache countdown runs from the run's last request
+ *    against a TTL the client knows. Neither is invented when the input is
+ *    absent.
  */
 (function () {
   /**
@@ -55,15 +59,31 @@
     state.output += output;
     state.total += total;
     state.last = { input: input, output: output, total: total };
+    // Cached input is recorded only when the provider reported it. The field
+    // is absent otherwise, so a provider that says nothing cannot be mistaken
+    // for one whose cache is always empty — the same rule as the counts.
+    const cached = count(usage.cached_tokens);
+    if (cached > 0) state.last.cached = cached;
     return state;
   }
 
   /**
-   * The meter's one line, or the empty string when there is nothing to say.
+   * A percentage with the precision the number deserves: below ten percent a
+   * fraction of a percent is worth a decimal, above it a whole number is all
+   * anybody wants. One spelling for every place the meter says a share.
+   */
+  function percent(used, window) {
+    const total = count(window);
+    if (total <= 0) return '';
+    const pct = (count(used) / total) * 100;
+    return pct >= 10 ? String(Math.round(pct)) : pct.toFixed(1);
+  }
+
+  /**
+   * The meter's one line for the session's spend, or the empty string.
    *
    * Without a window the line is counts only. With one, the last run's total is
-   * also drawn against it: below ten percent a fraction of a percent is worth a
-   * decimal, and above it a whole number is all anybody wants.
+   * also drawn against it.
    */
   function label(state, contextWindow) {
     const parts = [];
@@ -73,12 +93,80 @@
     }
     const window = count(contextWindow);
     if (window > 0 && state && state.last && state.last.total > 0) {
-      const pct = (state.last.total / window) * 100;
-      const shown = pct >= 10 ? String(Math.round(pct)) : pct.toFixed(1);
-      parts.push('last ' + short(state.last.total) + ' of ' + short(window) + ' (' + shown + '%)');
+      parts.push('last ' + short(state.last.total) + ' of ' + short(window) + ' (' + percent(state.last.total, window) + '%)');
     }
     return parts.join(' · ');
   }
 
-  globalThis.anvilMeter = { empty, add, label, count, short };
+  /**
+   * Where the conversation stands against its declared window, or null when
+   * nobody declared one.
+   *
+   * `info` is the host's `ContextInfo` — an estimate of the next request, not
+   * the provider's count. When the host did not answer with one, the last run's
+   * total is the only measured figure there is, and it is used rather than a
+   * zero. The auto-compact mark comes from the host when it states it and is
+   * computed from the declared fraction otherwise; the fraction is the same
+   * declaration either way, so neither is a guess.
+   */
+  function remaining(state, info, autoCompactAt) {
+    const window = count(info && info.window_tokens);
+    if (window <= 0) return null;
+    const estimate = info && info.estimated_tokens;
+    const measured =
+      typeof estimate === 'number' && isFinite(estimate) && estimate >= 0
+        ? Math.floor(estimate)
+        : state && state.last
+          ? count(state.last.total)
+          : 0;
+    const declared = count(info && info.compact_at_tokens);
+    const share = fraction(autoCompactAt);
+    const compactAt = declared > 0 ? declared : share > 0 ? Math.round(window * share) : 0;
+    return {
+      used: measured,
+      window: window,
+      left: Math.max(0, window - measured),
+      compactAt: compactAt,
+      leftUntilCompact: compactAt > 0 ? Math.max(0, compactAt - measured) : 0,
+      percent: (measured / window) * 100,
+    };
+  }
+
+  /**
+   * The provider cache's share and, when its TTL is known, its remaining life.
+   *
+   * `remaining` is null when no TTL is known or the run has no anchor — a
+   * countdown needs both. At or past the TTL it is 0, which the caller draws as
+   * cold: the cache is information even when it has expired. `cached` is the
+   * last run's cached input, and 0 when the provider said nothing.
+   */
+  function cache(state, ttlSeconds, lastRequestAt, now) {
+    const cached = state && state.last ? count(state.last.cached) : 0;
+    const ttl = count(ttlSeconds);
+    const anchor =
+      typeof lastRequestAt === 'number' && isFinite(lastRequestAt) ? lastRequestAt : null;
+    let remaining = null;
+    if (ttl > 0 && anchor !== null) {
+      const clockNow = typeof now === 'number' && isFinite(now) ? now : Date.now();
+      remaining = Math.max(0, Math.ceil((anchor + ttl * 1000 - clockNow) / 1000));
+    }
+    return { cached: cached, ttl: ttl, remaining: remaining };
+  }
+
+  /** A fractional setting in (0, 1], or 0 when it is not one. */
+  function fraction(value) {
+    if (typeof value !== 'number' || !isFinite(value) || value <= 0) return 0;
+    return value > 1 ? 1 : value;
+  }
+
+  /** Seconds as `m:ss`, or the empty string when there is nothing to count. */
+  function clock(seconds) {
+    if (typeof seconds !== 'number' || !isFinite(seconds) || seconds <= 0) return '';
+    const total = Math.ceil(seconds);
+    const minutes = Math.floor(total / 60);
+    const rest = total % 60;
+    return minutes + ':' + (rest < 10 ? '0' : '') + rest;
+  }
+
+  globalThis.anvilMeter = { empty, add, label, count, short, percent, remaining, cache, clock };
 })();

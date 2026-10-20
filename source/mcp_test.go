@@ -4,6 +4,7 @@
 package anvil
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -112,14 +113,24 @@ func TestListMCPServersReportsAMissingFile(t *testing.T) {
 // is the only thing that tells the user which file to fix.
 func TestListMCPServersFailsOnAMalformedFile(t *testing.T) {
 	dir := t.TempDir()
-	writeMCPFile(t, filepath.Join(dir, ".cursor", "mcp.json"), `{"mcpServers": {`)
+	path := filepath.Join(dir, ".cursor", "mcp.json")
+	writeMCPFile(t, path, `{"mcpServers": {`)
 
 	_, err := ListMCPServers(dir, []SettingSource{SettingSourceProject})
 	if err == nil {
 		t.Fatal("a malformed file was accepted")
 	}
-	if !strings.Contains(err.Error(), "parse") || !strings.Contains(err.Error(), "mcp.json") {
-		t.Fatalf("error=%q want it to name the parse failure and the file", err)
+	// The error is a typed config problem, so a client can open the file at the
+	// line the parser stopped on instead of showing a dialog.
+	var cfgErr *MCPConfigError
+	if !errors.As(err, &cfgErr) {
+		t.Fatalf("error=%v want an *MCPConfigError", err)
+	}
+	if cfgErr.Path != path || cfgErr.Line < 1 || cfgErr.Column < 1 {
+		t.Fatalf("config error=%+v want the path and position", cfgErr)
+	}
+	if !strings.Contains(err.Error(), "mcp.json") {
+		t.Fatalf("error=%q want it to name the file", err)
 	}
 }
 

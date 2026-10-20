@@ -346,7 +346,9 @@ the CLI does the same. A malformed file therefore fails session creation with th
   file the user can read: the card writes `.anvil/permissions.json`, and there is no second,
   hidden place a decision is kept.
 - A rule editor beyond appending one well-formed entry — no graphical builder, no reordering,
-  no sync, no user-level or managed rule sources.
+  no sync, no user-level or managed rule sources. (0.41 adds a structured manager for the rows
+  this file already holds — [40](40-permission-auto-and-manager.md); reordering, search, sync
+  and user/global scopes stay out of scope.)
 
 ## Roadmap mapping
 

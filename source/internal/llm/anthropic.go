@@ -40,14 +40,14 @@ func NewAnthropic(cfg Config) *Anthropic {
 type anthropicRequest struct {
 	Model     string             `json:"model"`
 	MaxTokens int                `json:"max_tokens"`
-	System    string             `json:"system,omitempty"`
+	System    any                `json:"system,omitempty"`
 	Messages  []anthropicMessage `json:"messages"`
 	Tools     []anthropicTool    `json:"tools,omitempty"`
 }
 
 type anthropicMessage struct {
-	Role    string        `json:"role"`
-	Content []any         `json:"content"`
+	Role    string `json:"role"`
+	Content []any  `json:"content"`
 }
 
 type anthropicTool struct {
@@ -56,13 +56,34 @@ type anthropicTool struct {
 	InputSchema json.RawMessage `json:"input_schema"`
 }
 
+// anthropicUsageWire is the Messages API usage object. Unlike OpenAI, Anthropic
+// reports input_tokens as the *uncached* part only, with cache reads and writes
+// beside it; the total has to add all three input counts or a cached request
+// would look cheaper than it was.
+type anthropicUsageWire struct {
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+}
+
+func (u *anthropicUsageWire) usage() *Usage {
+	if u == nil {
+		return nil
+	}
+	return &Usage{
+		InputTokens:      u.InputTokens,
+		OutputTokens:     u.OutputTokens,
+		TotalTokens:      u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens + u.OutputTokens,
+		CachedTokens:     u.CacheReadInputTokens,
+		CacheWriteTokens: u.CacheCreationInputTokens,
+	}
+}
+
 type anthropicResponse struct {
-	Content []json.RawMessage `json:"content"`
-	Usage   *struct {
-		InputTokens  int `json:"input_tokens"`
-		OutputTokens int `json:"output_tokens"`
-	} `json:"usage"`
-	Error *struct {
+	Content []json.RawMessage   `json:"content"`
+	Usage   *anthropicUsageWire `json:"usage"`
+	Error   *struct {
 		Type    string `json:"type"`
 		Message string `json:"message"`
 	} `json:"error"`
@@ -73,7 +94,7 @@ func (c *Anthropic) Complete(ctx context.Context, req Request) (*Response, error
 	if c.cfg.APIKey == "" {
 		return nil, &HTTPError{Status: 401, Message: "missing API key", Retryable: false}
 	}
-	system, messages := toAnthropicMessages(req.Messages)
+	system, messages := toAnthropicMessages(req.Messages, req.PromptCache)
 	body := anthropicRequest{
 		Model:     firstNonEmpty(req.Model, c.cfg.Model),
 		MaxTokens: 8192,
@@ -117,18 +138,19 @@ func (c *Anthropic) Complete(ctx context.Context, req Request) (*Response, error
 	if err != nil {
 		return nil, err
 	}
-	out := &Response{Message: msg}
-	if parsed.Usage != nil {
-		out.Usage = &Usage{
-			InputTokens:  parsed.Usage.InputTokens,
-			OutputTokens: parsed.Usage.OutputTokens,
-			TotalTokens:  parsed.Usage.InputTokens + parsed.Usage.OutputTokens,
-		}
-	}
+	out := &Response{Message: msg, Usage: parsed.Usage.usage()}
 	return out, nil
 }
 
-func toAnthropicMessages(in []Message) (system string, out []anthropicMessage) {
+// toAnthropicMessages folds the system messages into the request's system text
+// and groups tool results into user turns.
+//
+// With promptCache it also places the two breakpoints a cached conversation
+// needs: one on the system text and one on the last content block of the last
+// message. Two is deliberate — every breakpoint is a cache write the provider
+// may charge for, and the pair is what lets the next request read the system
+// prompt and the whole conversation up to that point from cache.
+func toAnthropicMessages(in []Message, promptCache bool) (system any, out []anthropicMessage) {
 	// Anthropic requires alternating user/assistant; tool results are user content blocks.
 	var pendingToolResults []any
 	flushTools := func() {
@@ -139,13 +161,14 @@ func toAnthropicMessages(in []Message) (system string, out []anthropicMessage) {
 		pendingToolResults = nil
 	}
 
+	var systemText string
 	for _, m := range in {
 		switch m.Role {
 		case RoleSystem:
-			if system != "" {
-				system += "\n\n"
+			if systemText != "" {
+				systemText += "\n\n"
 			}
-			system += m.Content
+			systemText += m.Content
 		case RoleUser:
 			flushTools()
 			out = append(out, anthropicMessage{
@@ -156,7 +179,7 @@ func toAnthropicMessages(in []Message) (system string, out []anthropicMessage) {
 			flushTools()
 			blocks := make([]any, 0, 1+len(m.ToolCalls))
 			if m.Content != "" {
-				blocks = append(blocks, map[string]string{"type": "text", "text": m.Content})
+				blocks = append(blocks, map[string]any{"type": "text", "text": m.Content})
 			}
 			for _, tc := range m.ToolCalls {
 				var input any
@@ -174,7 +197,7 @@ func toAnthropicMessages(in []Message) (system string, out []anthropicMessage) {
 				})
 			}
 			if len(blocks) == 0 {
-				blocks = append(blocks, map[string]string{"type": "text", "text": ""})
+				blocks = append(blocks, map[string]any{"type": "text", "text": ""})
 			}
 			out = append(out, anthropicMessage{Role: "assistant", Content: blocks})
 		case RoleTool:
@@ -186,22 +209,50 @@ func toAnthropicMessages(in []Message) (system string, out []anthropicMessage) {
 		}
 	}
 	flushTools()
+
+	if systemText != "" {
+		if promptCache {
+			system = []any{map[string]any{
+				"type":          "text",
+				"text":          systemText,
+				"cache_control": map[string]any{"type": "ephemeral"},
+			}}
+		} else {
+			system = systemText
+		}
+	}
+	if promptCache && len(out) > 0 {
+		markAnthropicCache(out[len(out)-1].Content)
+	}
 	return system, out
+}
+
+// markAnthropicCache puts the ephemeral marker on the last block. Blocks are
+// built as maps so this can add a key without rebuilding the message; a block
+// of any other shape is left alone rather than sent with a marker the provider
+// would reject.
+func markAnthropicCache(blocks []any) {
+	if len(blocks) == 0 {
+		return
+	}
+	if b, ok := blocks[len(blocks)-1].(map[string]any); ok {
+		b["cache_control"] = map[string]any{"type": "ephemeral"}
+	}
 }
 
 func anthropicUserContent(m Message) []any {
 	if len(m.Parts) == 0 {
-		return []any{map[string]string{"type": "text", "text": m.Content}}
+		return []any{map[string]any{"type": "text", "text": m.Content}}
 	}
 	blocks := make([]any, 0, len(m.Parts)+1)
 	if m.Content != "" {
-		blocks = append(blocks, map[string]string{"type": "text", "text": m.Content})
+		blocks = append(blocks, map[string]any{"type": "text", "text": m.Content})
 	}
 	for _, p := range m.Parts {
 		switch p.Type {
 		case "text":
 			if p.Text != "" {
-				blocks = append(blocks, map[string]string{"type": "text", "text": p.Text})
+				blocks = append(blocks, map[string]any{"type": "text", "text": p.Text})
 			}
 		case "image":
 			mime := p.MIME
@@ -223,7 +274,7 @@ func anthropicUserContent(m Message) []any {
 		}
 	}
 	if len(blocks) == 0 {
-		return []any{map[string]string{"type": "text", "text": m.Content}}
+		return []any{map[string]any{"type": "text", "text": m.Content}}
 	}
 	return blocks
 }

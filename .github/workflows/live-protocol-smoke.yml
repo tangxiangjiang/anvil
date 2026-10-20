@@ -1,0 +1,41 @@
+# Long, real-LLM editor-host protocol smoke (p_0.45.2).
+# Opt-in: never part of the default push/PR CI. Requires repository secrets:
+#   ANVIL_API_KEY, ANVIL_MODEL, and optionally ANVIL_BASE_URL / ANVIL_PROVIDER.
+# When secrets are missing the Go test skips and the job still succeeds.
+
+name: Live protocol smoke
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Nightly 02:00 UTC
+    - cron: "0 2 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-protocol-smoke
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: source/go.mod
+          cache-dependency-path: source/go.sum
+
+      - name: Live protocol smoke
+        working-directory: source
+        env:
+          ANVIL_LIVE_SMOKE: "1"
+          ANVIL_API_KEY: ${{ secrets.ANVIL_API_KEY }}
+          ANVIL_MODEL: ${{ secrets.ANVIL_MODEL }}
+          ANVIL_BASE_URL: ${{ secrets.ANVIL_BASE_URL }}
+          ANVIL_PROVIDER: ${{ secrets.ANVIL_PROVIDER }}
+        run: go test -tags=livesmoke ./internal/editorhost/ -run TestLiveProtocolSmoke -count=1 -timeout 40m -v

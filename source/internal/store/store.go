@@ -51,6 +51,10 @@ type Usage struct {
 	InputTokens  int `json:"input_tokens,omitempty"`
 	OutputTokens int `json:"output_tokens,omitempty"`
 	TotalTokens  int `json:"total_tokens,omitempty"`
+	// Cache counts are additive fields (0.43+): older files simply lack them,
+	// and zero keeps its honest meaning — the provider reported nothing.
+	CachedTokens     int `json:"cached_tokens,omitempty"`
+	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`
 }
 
 // Record is one JSONL line. Only the fields relevant to Type are populated.
@@ -69,6 +73,15 @@ type Record struct {
 	// as a new meta record, so the store stays append-only and the records that
 	// came before it are untouched.
 	Title string `json:"title,omitempty"`
+	// Subagent identity (0.42+). A child agent records where it came from, so a
+	// listing can nest it under its parent and a delete can take it away with the
+	// conversation it belongs to. All empty on a top-level session.
+	ParentAgentID    string `json:"parent_agent_id,omitempty"`
+	ParentRunID      string `json:"parent_run_id,omitempty"`
+	ParentToolCallID string `json:"parent_tool_call_id,omitempty"`
+	Depth            int    `json:"depth,omitempty"`
+	Kind             string `json:"kind,omitempty"`       // "subagent" for a child
+	TaskTitle        string `json:"task_title,omitempty"` // the brief's description
 
 	// message
 	Role       string     `json:"role,omitempty"`
@@ -217,6 +230,14 @@ type Summary struct {
 	LastRunID  string
 	Runs       int
 	Usage      *Usage
+	// Subagent identity, carried from the meta record so a listing can nest a
+	// child under its parent without reading every transcript.
+	ParentAgentID    string
+	ParentRunID      string
+	ParentToolCallID string
+	Depth            int
+	Kind             string
+	TaskTitle        string
 }
 
 // ListIDs returns agent ids that have store files (filename without .jsonl).
@@ -284,6 +305,27 @@ func Summarize(records []Record) Summary {
 			if rec.Title != "" {
 				sum.Title = titleOf(rec.Title)
 			}
+			// Identity is written once, by Create. A later meta record (a rename)
+			// carries none of it, so an empty field never erases what the first
+			// record said.
+			if rec.ParentAgentID != "" {
+				sum.ParentAgentID = rec.ParentAgentID
+			}
+			if rec.ParentRunID != "" {
+				sum.ParentRunID = rec.ParentRunID
+			}
+			if rec.ParentToolCallID != "" {
+				sum.ParentToolCallID = rec.ParentToolCallID
+			}
+			if rec.Depth > 0 {
+				sum.Depth = rec.Depth
+			}
+			if rec.Kind != "" {
+				sum.Kind = rec.Kind
+			}
+			if rec.TaskTitle != "" {
+				sum.TaskTitle = titleOf(rec.TaskTitle)
+			}
 		case TypeMessage:
 			// The first thing a person typed is what the session is about. A
 			// later message is a follow-up, not a better name, and a session
@@ -300,6 +342,8 @@ func Summarize(records []Record) Summary {
 				usage.InputTokens += rec.Usage.InputTokens
 				usage.OutputTokens += rec.Usage.OutputTokens
 				usage.TotalTokens += rec.Usage.TotalTokens
+				usage.CachedTokens += rec.Usage.CachedTokens
+				usage.CacheWriteTokens += rec.Usage.CacheWriteTokens
 			}
 		}
 	}

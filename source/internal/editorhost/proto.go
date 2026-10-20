@@ -24,7 +24,7 @@ import (
 const ProtocolVersion = 1
 
 // Version is the host build version, overridable at link time.
-var Version = "0.40.0-dev"
+var Version = "0.41.0-dev"
 
 // Client to host request methods.
 const (
@@ -49,6 +49,15 @@ const (
 	// new agent, and answers its id. Additive: a host without it answers -32601,
 	// which a client reads as "no fork here".
 	MethodSessionFork = "session.fork"
+	// MethodSessionCompact summarizes an idle session's older turns on request.
+	// It is the wire behind /compact, and answers the same counts the runtime's
+	// automatic compaction reports. Additive: a host without it answers -32601,
+	// which a client reads as "no manual compaction here".
+	MethodSessionCompact = "session.compact"
+	// MethodSessionContext reports where a live session stands against its
+	// declared window, so a tab that has not run anything can still draw a meter.
+	// Additive for the same reason as the rest of this group.
+	MethodSessionContext = "session.context"
 	// MethodCheckpointList lists the runs of a stored session that captured a
 	// pre-image, so a client can offer to put those files back. Additive: a host
 	// without it answers -32601, which a client reads as "no checkpoints here".
@@ -61,10 +70,30 @@ const (
 	MethodSkillsList        = "skills.list"
 	MethodRulesList         = "rules.list"
 	// MethodMCPList reports the MCP servers the selected file layers declare,
-	// and which of those files exist. It is configuration, not connection: the
-	// SDK exposes no state for a server that failed to start. Additive: a host
+	// and which of those files exist. Since 0.44 it also reports the state the
+	// host observed, marked by `runtime: true`; an older host omits that field
+	// and the client falls back to the configuration-only card. Additive: a host
 	// without it answers -32601, which a client reads as "no listing here".
 	MethodMCPList = "mcp.list"
+	// MethodMCPAdd and MethodMCPUpdate write one entry to the selected scope and
+	// answer a fresh listing. The host delegates the write to the public SDK
+	// writers, so validation and unknown-field preservation are the same rules a
+	// caller of the SDK gets.
+	MethodMCPAdd    = "mcp.add"
+	MethodMCPUpdate = "mcp.update"
+	// MethodMCPRemove deletes one entry from the selected scope.
+	MethodMCPRemove = "mcp.remove"
+	// MethodMCPSetEnabled turns one entry off or on without deleting it.
+	MethodMCPSetEnabled = "mcp.set_enabled"
+	// MethodMCPReconnect restarts one server's connection.
+	MethodMCPReconnect = "mcp.reconnect"
+	// MethodMCPAuthenticate starts a sign-in for a remote server and answers the
+	// URL a browser should open. The flow completes in the background; the
+	// result is announced by mcp.status, not by this reply.
+	MethodMCPAuthenticate = "mcp.authenticate"
+	// MethodMCPSignOut deletes a server's stored tokens and puts it back in
+	// auth_required.
+	MethodMCPSignOut = "mcp.sign_out"
 	// MethodPermissionsGet reads the workspace rule file — the effective policy
 	// for this workspace, and the place to put a squiggle when it will not
 	// compile.
@@ -72,7 +101,20 @@ const (
 	// MethodPermissionsAdd appends one rule to that file, and answers the pending
 	// approval it was written for when the new file decides it.
 	MethodPermissionsAdd = "permissions.add"
-	MethodShutdown       = "shutdown"
+	// MethodPermissionsSet replaces the whole file with the list a client showed
+	// a person. It is the writer behind the rules manager: the host compiles the
+	// text with the same parser a session uses before touching the disk. Additive:
+	// a host without it answers -32601, which a client reads as "no manager here".
+	MethodPermissionsSet = "permissions.set"
+	// MethodTasksList reports the session tree's background work, shell jobs and
+	// subagents alike. Additive: a host without it answers -32601, which a client
+	// reads as "no task surface here".
+	MethodTasksList = "tasks.list"
+	// MethodTasksOutput pages one task's output from a byte offset.
+	MethodTasksOutput = "tasks.output"
+	// MethodTasksCancel stops one running task and answers its final state.
+	MethodTasksCancel = "tasks.cancel"
+	MethodShutdown    = "shutdown"
 
 	// MethodApprovalResponse answers a pending approval.request. It is the only
 	// client request that resolves a notification the host sent earlier.
@@ -85,6 +127,19 @@ const (
 	NotifyDone            = "done"
 	NotifyLog             = "log"
 	NotifyApprovalRequest = "approval.request"
+	// NotifyTask reports a background task starting, ending, or changing state.
+	// It is a table-change signal, not a progress stream: the payload is one
+	// snapshot, and a client that wants more asks tasks.list / tasks.output.
+	NotifyTask = "task"
+	// NotifyCompact reports a manual compaction finishing. A run's automatic
+	// compaction travels as an `event` of type compact, because it has a run to
+	// belong to; this one has no run, and a client that replays the transcript
+	// finds the divider in the store instead.
+	NotifyCompact = "compact"
+	// NotifyMCPStatus reports one MCP server's state changing: connecting,
+	// connected, failed, auth_required or disabled. It is the push half of
+	// mcp.list; a client that keeps a panel open does not poll.
+	NotifyMCPStatus = "mcp.status"
 )
 
 // JSON-RPC 2.0 standard error codes.
@@ -109,6 +164,10 @@ const (
 	// CodeNoApproval reports an approval.response naming a request that is not
 	// pending — already answered, timed out, or aborted by a cancel.
 	CodeNoApproval = -32004
+	// CodeNoTask reports tasks.output / tasks.cancel naming a task that is not in
+	// this session's table. A task id belonging to another session lands here
+	// rather than being served.
+	CodeNoTask = -32005
 )
 
 // Request is one inbound JSON-RPC call or notification. A nil ID marks a
@@ -223,6 +282,12 @@ type SessionParams struct {
 	// refused, so a client never gets a run that quietly ignores the image.
 	Vision bool `json:"vision,omitempty"`
 
+	// Subagents registers spawn_agent and the background task tools. It is on
+	// for the editor unless sent as false, which is the one way a user turns
+	// agent-in-agent off for a workspace. The pointer distinguishes "not sent"
+	// from "sent as false" for the same reason the load flags use one.
+	Subagents *bool `json:"subagents,omitempty"`
+
 	// WebSearch turns on the SDK's web tools for this session. Absent means
 	// off, and off means the tools are not registered at all: a tool the model
 	// can see but cannot authenticate is worse than no tool, because the model
@@ -232,6 +297,20 @@ type SessionParams struct {
 	// environment as ANVIL_WEB_SEARCH_API_KEY, the same discipline the model
 	// key follows: credentials do not cross the pipe.
 	WebSearch *WebSearchParams `json:"web_search,omitempty"`
+
+	// Context is the session's declared token budget. Absent means the zero
+	// value, which keeps automatic compaction off exactly as before this field
+	// existed: a client that never declares a window cannot have its session
+	// summarized behind its back. Negative values are normalized by the SDK.
+	Context *ContextParams `json:"context,omitempty"`
+}
+
+// ContextParams is the wire form of anvil.ContextOptions. The SDK fills the
+// defaults, so an omitted fraction or keep count means 0.8 and 8.
+type ContextParams struct {
+	WindowTokens  int     `json:"window_tokens,omitempty"`
+	AutoCompactAt float64 `json:"auto_compact_at,omitempty"`
+	KeepRecent    int     `json:"keep_recent,omitempty"`
 }
 
 // WebSearchParams configures the web tools. Presence is the switch — a client
@@ -378,6 +457,21 @@ type PermissionsAddResult struct {
 	Approved bool `json:"approved,omitempty"`
 }
 
+// PermissionsSetParams replaces the workspace rule file with exactly these
+// rules and this declaration.
+//
+// It is a replacement, not a patch: a client sends the list it showed a person,
+// and the file becomes that list. The host refuses rather than guesses when the
+// existing file cannot be read — replacing a policy this build could not parse
+// is the failure the rule file is arranged against.
+type PermissionsSetParams struct {
+	Rules []RuleSpec `json:"rules"`
+	// DefaultMode is a ladder word, or empty to remove the declaration. The host
+	// refuses a word the ladder does not have and refuses bypass, in the same
+	// words get and the session result use.
+	DefaultMode string `json:"default_mode,omitempty"`
+}
+
 // RememberOption is one "always allow" a client may offer on an approval card.
 //
 // Every option was evaluated against the very call being shown, so a button
@@ -403,6 +497,14 @@ const (
 	// that path-taking tools stay inside the workspace, so "in workspace" needs
 	// no extra check here.
 	ModeAcceptEdits = "accept_edits"
+	// ModeAuto installs a classifier that approves the calls it can prove
+	// harmless and leaves the rest to the ordinary card. It is a deterministic
+	// classifier — anvil.AutoApproveCall — rather than a model call: read-only
+	// shell lines (proved by the same analyzer the "readonly" rule uses),
+	// in-workspace writes and edits, and the operator-configured test/build
+	// commands run without asking; egress, MCP, plugins and anything unknown
+	// still do. A rule of effect "ask" opens the card, as it does in bypass.
+	ModeAuto = "auto"
 	// ModePlan removes the tools that can change the workspace, so the model
 	// produces a plan and stops.
 	ModePlan = "plan"
@@ -427,13 +529,15 @@ const (
 // select renders — test/unit/permissionModes.test.ts reads this and protocol.ts
 // and the panel's markup as text, because a mode this side has and the client
 // does not is a silent hole in what a person can choose.
-var PermissionModes = []string{ModeAsk, ModeAcceptEdits, ModePlan, ModeDontAsk, ModeBypass}
+var PermissionModes = []string{ModeAsk, ModeAcceptEdits, ModeAuto, ModePlan, ModeDontAsk, ModeBypass}
 
 // DefaultPermissionGroups is what ModeAsk and ModeAcceptEdits gate when the
 // client names no groups. It closes the historical gap: before 0.35 only
 // write_file, edit_file, apply_patch, and shell were gated, leaving run_tests,
-// build, egress, MCP, plugin, and custom tools able to run unattended.
-var DefaultPermissionGroups = []string{"write", "edit", "shell", "verify", "web", "mcp"}
+// build, egress, MCP, plugin, and custom tools able to run unattended. The
+// agent group joined in 0.42: a call that spends tokens and creates an agent
+// with this session's permissions is exactly what a card is for.
+var DefaultPermissionGroups = []string{"write", "edit", "shell", "verify", "web", "mcp", "agent"}
 
 // DefaultApprovalTimeout bounds an unanswered approval. On expiry the call is
 // denied, so a run can never hang forever on a closed editor window.
@@ -495,6 +599,12 @@ type ApprovalRequestParams struct {
 	Remember []RememberOption `json:"remember,omitempty"`
 	// TimeoutMS is how long the host will wait, for a UI countdown.
 	TimeoutMS int `json:"timeout_ms,omitempty"`
+	// AgentID and Depth name the agent whose call is being decided, so a card can
+	// say a subagent is asking instead of implying the session's own agent is.
+	// AgentID is empty only for a callback installed outside Create/Resume, and
+	// Depth is 0 and omitted for the session's own agent.
+	AgentID string `json:"agent_id,omitempty"`
+	Depth   int    `json:"depth,omitempty"`
 }
 
 // ApprovalResponseParams answers an approval.request.
@@ -547,6 +657,13 @@ type SessionInfo struct {
 	// any. The store is the only place a past session's tokens exist: the
 	// terminal `done` of a run that has already ended is gone.
 	Usage *Usage `json:"usage,omitempty"`
+	// Subagent identity (0.42+). Empty on a top-level session. ParentAgentID is
+	// what the tree nests a child under, and TaskTitle is the description its
+	// spawn call carried — the name a person gave the work, not a derived one.
+	ParentAgentID string `json:"parent_agent_id,omitempty"`
+	Depth         int    `json:"depth,omitempty"`
+	Subagent      bool   `json:"subagent,omitempty"`
+	TaskTitle     string `json:"task_title,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
@@ -618,6 +735,36 @@ type SessionForkResult struct {
 }
 
 // ---------------------------------------------------------------------------
+// session.compact / session.context
+// ---------------------------------------------------------------------------
+
+// SessionCompactResult is what a manual compaction did. Compacted false means
+// there was nothing old enough to summarize — the call is a no-op, not an
+// error, because a person who asks twice should get an answer, not a failure.
+type SessionCompactResult struct {
+	SessionID  string `json:"session_id"`
+	Compacted  bool   `json:"compacted"`
+	Before     int    `json:"before,omitempty"`
+	After      int    `json:"after,omitempty"`
+	Summarized int    `json:"summarized,omitempty"`
+	// Context is the state after the compaction, so a client does not have to
+	// follow with session.context to redraw its meter.
+	Context ContextInfo `json:"context"`
+}
+
+// ContextInfo describes where a session's conversation stands against its
+// declared budget. Every figure is an estimate of the next request's size, never
+// the provider's token count; the field names say so by saying "estimated".
+type ContextInfo struct {
+	EstimatedTokens int `json:"estimated_tokens"`
+	// WindowTokens is 0 when the session did not declare a window, which is also
+	// why CompactAtTokens is 0 and automatic compaction is off.
+	WindowTokens    int `json:"window_tokens"`
+	CompactAtTokens int `json:"compact_at_tokens"`
+	Messages        int `json:"messages"`
+}
+
+// ---------------------------------------------------------------------------
 // checkpoint.list / checkpoint.restore
 // ---------------------------------------------------------------------------
 
@@ -678,7 +825,10 @@ type SessionTranscriptResult struct {
 // what can be rendered and nothing else: the reader never had reasoning or an
 // API key to hand back.
 type TranscriptEntry struct {
-	Kind  string `json:"kind"` // message | run_end
+	// Kind is "message", "run_end", or "summary" (0.43+). A summary entry is the
+	// compaction boundary: it carries the text the model kept and the run it
+	// belongs to, and the turns before it stay in the replay below it.
+	Kind  string `json:"kind"`
 	RunID string `json:"run_id,omitempty"`
 
 	// message
@@ -762,16 +912,51 @@ type RulesResult struct {
 // read that the session would not read.
 type MCPListParams struct {
 	SettingSources []string `json:"setting_sources,omitempty"`
+	// IncludeTools asks for each connected server's tool catalogue. The chat
+	// card does not need it; the manager draws it.
+	IncludeTools bool `json:"include_tools,omitempty"`
 }
 
-// MCPServerInfo is one declared MCP server. There is deliberately no connected
-// or status field: the SDK does not expose connection state, and a field filled
-// from "the file mentioned it" would be a false green light.
+// MCPServerInfo is one declared MCP server and — from a host that answers with
+// Runtime true — the state the host observed for it.
+//
+// The launch fields are what a manager needs to show and edit the entry; EnvNames
+// and HeaderNames are keys only, because those maps commonly hold bearer tokens
+// and API keys.
 type MCPServerInfo struct {
 	Name      string `json:"name"`
 	Transport string `json:"transport,omitempty"`
 	// Source is the config file that declared this server.
-	Source string `json:"source"`
+	Source  string `json:"source"`
+	Enabled bool   `json:"enabled"`
+	// State is disabled | connecting | connected | failed | auth_required. Empty
+	// on a host that predates the runtime.
+	State string `json:"state,omitempty"`
+	// ToolCount is the number of tools the connected server listed. It is
+	// meaningful only when State is connected.
+	ToolCount int `json:"tool_count"`
+	// Tools is present only when the request asked for include_tools and the
+	// server is connected.
+	Tools []MCPToolInfo `json:"tools,omitempty"`
+	// Error is the start or transport failure, in words. It never contains a
+	// token or a secret header value.
+	Error string `json:"error,omitempty"`
+	// ConnectedAt is when the current session was established, RFC 3339 in UTC.
+	ConnectedAt string `json:"connected_at,omitempty"`
+
+	Command string   `json:"command,omitempty"`
+	Args    []string `json:"args,omitempty"`
+	URL     string   `json:"url,omitempty"`
+	// EnvNames and HeaderNames are the keys, sorted. Values never leave the file
+	// through a listing.
+	EnvNames    []string `json:"env_names,omitempty"`
+	HeaderNames []string `json:"header_names,omitempty"`
+}
+
+// MCPToolInfo is one tool a connected server offers.
+type MCPToolInfo struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
 }
 
 // MCPSourceInfo is one config file the listing looked at.
@@ -782,10 +967,107 @@ type MCPSourceInfo struct {
 	Exists bool `json:"exists"`
 }
 
-// MCPListResult is what the selected layers declare.
+// MCPProblem is a malformed enabled config file. It is a result, not an RPC
+// error: the panel has to keep showing the last good statuses beside the parser
+// error, and make the document read-only until a person fixes the file.
+type MCPProblem struct {
+	Path    string `json:"path"`
+	Message string `json:"message"`
+	Line    int    `json:"line,omitempty"`
+	Column  int    `json:"column,omitempty"`
+}
+
+// MCPListResult is what the selected layers declare and what the host observed.
 type MCPListResult struct {
+	// Runtime marks a host that can observe connection state. An older host
+	// omits it and a client falls back to configuration only.
+	Runtime bool            `json:"runtime"`
 	Servers []MCPServerInfo `json:"servers"`
 	Sources []MCPSourceInfo `json:"sources"`
+	Problem *MCPProblem     `json:"problem,omitempty"`
+}
+
+// MCPStatusParams is one server's state transition. The server object is the
+// same shape the listing uses, and the source set says which runtime it belongs
+// to — a client shows two runtimes' servers apart.
+type MCPStatusParams struct {
+	Server         MCPServerInfo `json:"server"`
+	SettingSources []string      `json:"setting_sources,omitempty"`
+}
+
+// MCPServerDraftWire is one entry as a client wants it written. Env and Headers
+// follow "nil means keep" on update: an omitted map leaves the file's values
+// alone, and an explicit empty map clears them.
+type MCPServerDraftWire struct {
+	Name      string            `json:"name"`
+	Transport string            `json:"transport,omitempty"`
+	Command   string            `json:"command,omitempty"`
+	Args      []string          `json:"args,omitempty"`
+	Env       map[string]string `json:"env,omitempty"`
+	Headers   map[string]string `json:"headers,omitempty"`
+	URL       string            `json:"url,omitempty"`
+	Enabled   *bool             `json:"enabled,omitempty"`
+}
+
+// MCPAddParams writes one new entry.
+type MCPAddParams struct {
+	Scope          string             `json:"scope"` // project | user
+	Server         MCPServerDraftWire `json:"server"`
+	SettingSources []string           `json:"setting_sources,omitempty"`
+	IncludeTools   bool               `json:"include_tools,omitempty"`
+}
+
+// MCPUpdateParams replaces the fields a draft names on an existing entry.
+type MCPUpdateParams struct {
+	Scope          string             `json:"scope"`
+	Server         MCPServerDraftWire `json:"server"`
+	SettingSources []string           `json:"setting_sources,omitempty"`
+	IncludeTools   bool               `json:"include_tools,omitempty"`
+}
+
+// MCPRemoveParams deletes one entry from one scope.
+type MCPRemoveParams struct {
+	Scope          string   `json:"scope"`
+	Name           string   `json:"name"`
+	SettingSources []string `json:"setting_sources,omitempty"`
+	IncludeTools   bool     `json:"include_tools,omitempty"`
+}
+
+// MCPSetEnabledParams turns one entry off or on.
+type MCPSetEnabledParams struct {
+	Scope          string   `json:"scope"`
+	Name           string   `json:"name"`
+	Enabled        bool     `json:"enabled"`
+	SettingSources []string `json:"setting_sources,omitempty"`
+	IncludeTools   bool     `json:"include_tools,omitempty"`
+}
+
+// MCPReconnectParams restarts one server.
+type MCPReconnectParams struct {
+	Name           string   `json:"name"`
+	SettingSources []string `json:"setting_sources,omitempty"`
+	IncludeTools   bool     `json:"include_tools,omitempty"`
+}
+
+// MCPAuthenticateParams starts a sign-in for one server.
+type MCPAuthenticateParams struct {
+	Name           string   `json:"name"`
+	SettingSources []string `json:"setting_sources,omitempty"`
+}
+
+// MCPAuthenticateResult is the URL a browser should open. The reply does not
+// wait for the sign-in: completion arrives as mcp.status.
+type MCPAuthenticateResult struct {
+	Server    string `json:"server"`
+	AuthURL   string `json:"auth_url"`
+	ExpiresAt string `json:"expires_at,omitempty"`
+}
+
+// MCPSignOutParams deletes one server's stored tokens.
+type MCPSignOutParams struct {
+	Name           string   `json:"name"`
+	SettingSources []string `json:"setting_sources,omitempty"`
+	IncludeTools   bool     `json:"include_tools,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
@@ -880,6 +1162,83 @@ type CancelParams struct {
 }
 
 // ---------------------------------------------------------------------------
+// tasks.list / tasks.output / tasks.cancel
+// ---------------------------------------------------------------------------
+
+// TaskInfo mirrors anvil.TaskInfo in host vocabulary: one row of the session
+// tree's background work.
+type TaskInfo struct {
+	ID string `json:"id"`
+	// Kind is "shell" or "agent".
+	Kind string `json:"kind"`
+	// Title is the command for a shell task, the description for an agent task.
+	Title  string `json:"title"`
+	Status string `json:"status"` // running | finished | failed | cancelled
+	// AgentID is the agent whose tool call started the task. For an agent task
+	// it is the starter, not the child: the child does not exist yet when the
+	// row is created.
+	AgentID   string    `json:"agent_id,omitempty"`
+	StartedAt time.Time `json:"started_at"`
+	// EndedAt is absent while the task runs.
+	EndedAt *time.Time `json:"ended_at,omitempty"`
+	// ExitCode is the process exit code of a shell task, -1 when it did not
+	// exit on its own. It is 0 for an agent task.
+	ExitCode int `json:"exit_code"`
+}
+
+// TasksListParams names the session whose tree to report. A task id from
+// another session's tree is never served.
+type TasksListParams struct {
+	SessionID string `json:"session_id"`
+}
+
+// TasksListResult is the whole tree's tasks in start order.
+type TasksListResult struct {
+	Tasks []TaskInfo `json:"tasks"`
+}
+
+// TasksOutputParams pages one task's output. Offset is a byte offset into the
+// ring; Limit caps the chunk (0 means the host's per-call cap).
+type TasksOutputParams struct {
+	SessionID string `json:"session_id"`
+	TaskID    string `json:"task_id"`
+	Offset    int    `json:"offset,omitempty"`
+	Limit     int    `json:"limit,omitempty"`
+}
+
+// TasksOutputResult is one read. Truncated says the requested offset had
+// already been dropped, so the client shows a gap rather than pretending the
+// output starts where it asked.
+type TasksOutputResult struct {
+	Status      string `json:"status"`
+	ExitCode    int    `json:"exit_code"`
+	Output      string `json:"output,omitempty"`
+	NextOffset  int    `json:"next_offset"`
+	FirstOffset int    `json:"first_offset"`
+	Truncated   bool   `json:"truncated,omitempty"`
+}
+
+// TasksCancelParams names the task to stop. Cancelling a task that already
+// ended answers its final state and no error.
+type TasksCancelParams struct {
+	SessionID string `json:"session_id"`
+	TaskID    string `json:"task_id"`
+}
+
+// TasksCancelResult is the task's state after the cancel.
+type TasksCancelResult struct {
+	Task TaskInfo `json:"task"`
+}
+
+// TaskNotification reports one task changing state. It is additive: a client
+// that does not know the method ignores it, and one that never asks
+// tasks.list still learns nothing it did not ask for.
+type TaskNotification struct {
+	SessionID string   `json:"session_id"`
+	Task      TaskInfo `json:"task"`
+}
+
+// ---------------------------------------------------------------------------
 // models.list
 // ---------------------------------------------------------------------------
 
@@ -938,12 +1297,39 @@ type EventParams struct {
 	// pointer so that an empty list reaches the client as [] — clearing the
 	// panel — while every other event omits the field entirely.
 	Items *[]TodoItem `json:"items,omitempty"`
+	// Compact is set on a `compact` event (0.43+): the runtime folded older
+	// turns into a summary before the next request. It is nil on every other
+	// event, and a manual compaction arrives as a `compact` notification with
+	// the same inner shape.
+	Compact *CompactInfo `json:"compact,omitempty"`
+	// AgentID names the agent that emitted this event: the session's own agent
+	// for parent events, the child's id for a subagent's. ParentToolCallID is
+	// set only on a child event and names the spawn_agent call it belongs under,
+	// which is the key the webview groups its steps by. Depth is 0 and omitted
+	// for the session's own agent (0.42+).
+	AgentID          string `json:"agent_id,omitempty"`
+	ParentToolCallID string `json:"parent_tool_call_id,omitempty"`
+	Depth            int    `json:"depth,omitempty"`
 }
 
 // TodoItem is one row of the model's plan.
 type TodoItem struct {
 	Text   string `json:"text"`
 	Status string `json:"status"`
+}
+
+// CompactInfo is one compaction, live. It is what a client draws as the
+// transcript divider; the replay reads the summary record instead.
+type CompactInfo struct {
+	// Reason is "auto" for the runtime's budget check and "manual" for a person
+	// asking through session.compact.
+	Reason     string `json:"reason"`
+	Before     int    `json:"before"`
+	After      int    `json:"after"`
+	Summarized int    `json:"summarized"`
+	// Window is the declared window in tokens; 0 for a manual compaction on a
+	// session that never declared one.
+	Window int `json:"window,omitempty"`
 }
 
 // DoneParams is the terminal envelope of a run, projected from anvil.RunResult.
@@ -957,13 +1343,27 @@ type DoneParams struct {
 	Usage     *Usage `json:"usage,omitempty"`
 	Err       string `json:"err,omitempty"`
 	Code      string `json:"code,omitempty"`
+	// Context is where the conversation stands after the run, including any
+	// compaction the run itself performed. A meter that redraws from this never
+	// has to follow up with session.context.
+	Context *ContextInfo `json:"context,omitempty"`
+	// LastRequestAt is the wall-clock time of the run's last model request, RFC
+	// 3339 in UTC. Empty when the run never reached the provider; a client shows
+	// no cache countdown for that run rather than a wrong one.
+	LastRequestAt string `json:"last_request_at,omitempty"`
 }
 
 // Usage carries provider token counts when the provider reports them.
+//
+// CachedTokens is a subset of the input on OpenAI-compatible providers and a
+// separate count on Anthropic, whose input_tokens excludes it. Both stay zero
+// when the provider reported nothing: zero is "unknown", not "no cache".
 type Usage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
-	TotalTokens  int `json:"total_tokens"`
+	InputTokens      int `json:"input_tokens"`
+	OutputTokens     int `json:"output_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+	CachedTokens     int `json:"cached_tokens,omitempty"`
+	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`
 }
 
 // LogParams is a host diagnostic. Clients may surface these in an output

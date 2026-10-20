@@ -206,6 +206,88 @@ func TestAddPermissionRuleInventsNoDeclaration(t *testing.T) {
 	}
 }
 
+// A save is a replacement: the caller has the list it showed a person, and the
+// file becomes that list. The declaration travels with it, because it is a field
+// of the same file and dropping it would silently change how sessions open.
+func TestSavePermissionRuleFileReplacesTheList(t *testing.T) {
+	dir := t.TempDir()
+	writeWorkspaceFile(t, dir, ".anvil/permissions.json", `{"version":1,"defaultMode":"ask","rules":[
+		{"effect":"allow","tool":"shell","pattern":"readonly"},
+		{"effect":"deny","tool":"shell","pattern":"rm -rf:*"}
+	]}`)
+	err := SavePermissionRuleFile(dir, []PermissionRule{
+		{Effect: "allow", Tool: "shell", Pattern: "git status:*", Reason: "status is safe"},
+	}, "auto")
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := LoadPermissionRuleFile(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if file.DefaultMode != "auto" {
+		t.Fatalf("DefaultMode = %q, want auto", file.DefaultMode)
+	}
+	if len(file.Rules) != 1 || file.Rules[0].Pattern != "git status:*" || file.Rules[0].Reason != "status is safe" {
+		t.Fatalf("rules after a save = %+v", file.Rules)
+	}
+}
+
+// An empty list is a policy, not a missing one: the file is written with an
+// empty array, and no declaration is invented.
+func TestSavePermissionRuleFileWritesAnEmptyList(t *testing.T) {
+	dir := t.TempDir()
+	if err := SavePermissionRuleFile(dir, nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(PermissionRulesPath(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "defaultMode") {
+		t.Fatalf("a save with no declaration must not write one:\n%s", data)
+	}
+	if !strings.Contains(string(data), `"rules": []`) {
+		t.Fatalf("an empty policy should read as an empty list, not null:\n%s", data)
+	}
+	file, err := LoadPermissionRuleFile(dir)
+	if err != nil || file == nil || len(file.Rules) != 0 {
+		t.Fatalf("the empty file should read as no rules: %+v %v", file, err)
+	}
+}
+
+// The reader is the validator, so a rule it would refuse never reaches the disk.
+func TestSavePermissionRuleFileRefusesARuleTheLoaderWould(t *testing.T) {
+	dir := t.TempDir()
+	before := `{"version":1,"rules":[{"effect":"allow","tool":"shell","pattern":"readonly"}]}`
+	writeWorkspaceFile(t, dir, ".anvil/permissions.json", before)
+	err := SavePermissionRuleFile(dir, []PermissionRule{{Effect: "maybe", Tool: "shell"}}, "")
+	if err == nil || !strings.Contains(err.Error(), "maybe") {
+		t.Fatalf("an unknown effect must be refused by name: %v", err)
+	}
+	onDisk, _ := os.ReadFile(PermissionRulesPath(dir))
+	if string(onDisk) != before {
+		t.Fatalf("a refused save must not touch the file:\n%s", onDisk)
+	}
+}
+
+// A declaration that is not a mode word is a file problem with a place, the
+// same as it is when a person types it by hand.
+func TestSavePermissionRuleFileReportsAPosition(t *testing.T) {
+	dir := t.TempDir()
+	err := SavePermissionRuleFile(dir, []PermissionRule{{Effect: "allow", Tool: "shell"}}, "accept edits")
+	var perr *PermissionRuleError
+	if !errors.As(err, &perr) {
+		t.Fatalf("want a PermissionRuleError, got %T %v", err, err)
+	}
+	if perr.Path != PermissionRulesPath(dir) || perr.Line == 0 {
+		t.Fatalf("the error must name the file and the place: %+v", perr)
+	}
+	if _, statErr := os.Stat(PermissionRulesPath(dir)); !os.IsNotExist(statErr) {
+		t.Fatal("a refused save must not create the file")
+	}
+}
+
 // The one thing an append must never do: replace policy it could not read.
 func TestAddPermissionRuleNeverClobbersAMalformedFile(t *testing.T) {
 	dir := t.TempDir()
@@ -457,7 +539,6 @@ func TestAMalformedEditKeepsTheLastGoodPolicy(t *testing.T) {
 		t.Fatalf("with the file gone the gate asks again: %v", rec.names())
 	}
 }
-
 
 // A call that ran without asking has to be able to say why, or "it just ran" is
 // indistinguishable from "nobody was watching".

@@ -34,6 +34,7 @@ func StartRemote(ctx context.Context, cfg ServerConfig) (*Session, error) {
 		http:      &http.Client{},
 		msgURL:    strings.TrimRight(cfg.URL, "/"),
 		headers:   cfg.Headers,
+		authToken: cfg.AuthToken,
 	}
 	switch transport {
 	case "http":
@@ -59,13 +60,27 @@ func StartRemote(ctx context.Context, cfg ServerConfig) (*Session, error) {
 	return s, nil
 }
 
-func (s *Session) applyHeaders(req *http.Request) {
+// applyHeaders sets the configured headers and, when a token source exists, the
+// bearer token it returns. A static Authorization header yields to a live
+// token: the token is the thing that expires and is refreshed.
+func (s *Session) applyHeaders(req *http.Request) error {
 	for k, v := range s.headers {
 		if k == "" {
 			continue
 		}
 		req.Header.Set(k, v)
 	}
+	if s.authToken == nil {
+		return nil
+	}
+	token, err := s.authToken(req.Context())
+	if err != nil {
+		return err
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	return nil
 }
 
 func (s *Session) openSSE(ctx context.Context) error {
@@ -74,7 +89,9 @@ func (s *Session) openSSE(ctx context.Context) error {
 		return err
 	}
 	req.Header.Set("Accept", "text/event-stream")
-	s.applyHeaders(req)
+	if err := s.applyHeaders(req); err != nil {
+		return err
+	}
 	resp, err := s.http.Do(req)
 	if err != nil {
 		return err
@@ -186,7 +203,9 @@ func (s *Session) requestHTTP(ctx context.Context, method string, params any) (j
 			return nil, err
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
-		s.applyHeaders(httpReq)
+		if err := s.applyHeaders(httpReq); err != nil {
+			return nil, err
+		}
 		resp, err := s.http.Do(httpReq)
 		if err != nil {
 			return nil, err
@@ -227,52 +246,13 @@ func (s *Session) requestHTTP(ctx context.Context, method string, params any) (j
 		}
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, s.msgURL, bytes.NewReader(raw))
-	if err != nil {
-		return nil, err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Accept", "application/json")
-	s.applyHeaders(httpReq)
-	resp, err := s.http.Do(httpReq)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("mcp http: status %d: %s", resp.StatusCode, body)
-	}
-	var respObj rpcResponse
-	if err := json.Unmarshal(body, &respObj); err != nil {
-		return nil, err
-	}
-	if respObj.Error != nil {
-		return nil, fmt.Errorf("mcp %s: %s", method, respObj.Error.Message)
-	}
-	return respObj.Result, nil
+	return s.requestStreamable(ctx, method, raw, id)
 }
 
 func (s *Session) notifyHTTP(ctx context.Context, method string, params any) error {
-	reqBody := rpcRequest{JSONRPC: "2.0", Method: method, Params: params}
-	raw, err := json.Marshal(reqBody)
+	raw, err := json.Marshal(rpcRequest{JSONRPC: "2.0", Method: method, Params: params})
 	if err != nil {
 		return err
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, s.msgURL, bytes.NewReader(raw))
-	if err != nil {
-		return err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	s.applyHeaders(httpReq)
-	resp, err := s.http.Do(httpReq)
-	if err != nil {
-		return err
-	}
-	io.Copy(io.Discard, resp.Body)
-	_ = resp.Body.Close()
-	return nil
+	return s.notifyStreamable(ctx, raw)
 }

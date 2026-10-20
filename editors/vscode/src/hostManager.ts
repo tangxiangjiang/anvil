@@ -19,16 +19,29 @@ import {
   CheckpointListResult,
   CheckpointRestoreParams,
   CheckpointRestoreResult,
+  CompactInfo,
   DoneParams,
   HostEvent,
+  McpAddParams,
+  McpAuthenticateParams,
+  McpAuthenticateResult,
+  McpListParams,
   McpListResult,
+  McpReconnectParams,
+  McpRemoveParams,
+  McpSetEnabledParams,
+  McpSignOutParams,
+  McpStatusParams,
+  McpUpdateParams,
   Method,
   ModelEntry,
+  Notify,
   PermissionMode,
   PermissionModeSource,
   PermissionsAddParams,
   PermissionsAddResult,
   PermissionsResult,
+  PermissionsSetParams,
   RuleFileInfo,
   RuleSpec,
   SessionDeleteResult,
@@ -39,6 +52,13 @@ import {
   SessionTranscriptParams,
   SessionTranscriptResult,
   SkillEntry,
+  TaskInfo,
+  TasksCancelParams,
+  TasksCancelResult,
+  TasksListParams,
+  TasksListResult,
+  TasksOutputParams,
+  TasksOutputResult,
 } from './protocol';
 import { RunFailure } from './errors';
 
@@ -51,6 +71,10 @@ export interface HostListener {
   onState?: (state: SessionState, runId?: string) => void;
   /** A session opened, with the mode the host resolved for it. */
   onSession?: (result: SessionResult) => void;
+  /** A background task in this session tree started or ended. */
+  onTask?: (task: TaskInfo, sessionId: string) => void;
+  /** The conversation was compacted on request (0.43); no run owns it. */
+  onCompact?: (info: CompactInfo, sessionId: string) => void;
   onNotice?: (level: 'info' | 'warn' | 'error', message: string) => void;
 }
 
@@ -89,6 +113,15 @@ export class HostManager {
    */
   private readonly resetEmitter = new vscode.EventEmitter<void>();
   readonly onReset = this.resetEmitter.event;
+  /**
+   * Who hears about an MCP server changing state.
+   *
+   * These are window-wide, not per session: the runtime belongs to the host and
+   * a transition can happen while no tab is open. They are kept out of the
+   * router for exactly the same reason — the notification names a server, not a
+   * conversation, and the router would drop it as unkeyed.
+   */
+  private readonly mcpStatusListeners = new Set<(params: McpStatusParams) => void>();
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -117,6 +150,8 @@ export class HostManager {
         this.router.register(result.session_id, session);
         listener.onSession?.(result);
       },
+      onTask: listener.onTask,
+      onCompact: listener.onCompact,
       onLog: this.log,
     });
     return session;
@@ -124,7 +159,38 @@ export class HostManager {
 
   /** Sends one notification to the session it names. */
   private route(method: string, params: unknown): void {
+    if (method === Notify.McpStatus) {
+      this.fireMcpStatus(params as McpStatusParams);
+      return;
+    }
     this.router.route(method, params, this.log);
+  }
+
+  private fireMcpStatus(params: McpStatusParams): void {
+    if (!params?.server?.name) {
+      this.log('dropped an mcp.status notification with no server');
+      return;
+    }
+    for (const listener of this.mcpStatusListeners) {
+      try {
+        listener(params);
+      } catch (err) {
+        // A listener is a view. One that throws must not cost the others the
+        // notification, nor take the host's reader down with it.
+        this.log(`an MCP status listener failed: ${(err as Error).message}`);
+      }
+    }
+  }
+
+  /**
+   * Hears about every MCP server transition in this window.
+   *
+   * The caller disposes the returned handle; a listener that is never removed
+   * is a leak the panel keeps for the window's life.
+   */
+  onMcpStatus(listener: (params: McpStatusParams) => void): vscode.Disposable {
+    this.mcpStatusListeners.add(listener);
+    return new vscode.Disposable(() => this.mcpStatusListeners.delete(listener));
   }
 
   /**
@@ -294,16 +360,79 @@ export class HostManager {
   }
 
   /**
-   * The MCP servers the enabled file layers declare.
+   * The MCP servers the enabled file layers declare, and what the host observed.
    *
-   * Configuration, not connection: the host reports which files were read and
-   * what they name, and carries no state for a server that failed to start.
    * The sources are the caller's — the panel passes the same list it put on the
    * session, so the card cannot describe a layer the conversation does not load.
+   * A host from before 0.44 answers with configuration only and no `runtime`
+   * flag; the card then stays the read-only listing it was.
+   *
+   * The listing is deliberately uncached: it is how a caller notices an edit
+   * made outside the editor, and the host's read is a file read.
    */
-  async mcpServers(settingSources: string[]): Promise<McpListResult> {
+  async mcpServers(settingSources: string[], includeTools?: boolean): Promise<McpListResult> {
     const client = await this.startClient();
-    return client.request<McpListResult>(Method.McpList, { setting_sources: settingSources });
+    const params: McpListParams = { setting_sources: settingSources };
+    if (includeTools) params.include_tools = true;
+    return client.request<McpListResult>(Method.McpList, params);
+  }
+
+  /**
+   * Writes one server into the selected file and answers with the fresh listing.
+   *
+   * Every management call goes through `startClient`, so the trust gate holds
+   * for a write exactly as it does for a prompt. The listing in the reply is the
+   * post-write view: the host reloads the runtime and refreshes idle sessions
+   * before it answers, so a caller does not have to ask twice.
+   */
+  async addMcpServer(params: McpAddParams): Promise<McpListResult> {
+    const client = await this.startClient();
+    return client.request<McpListResult>(Method.McpAdd, params);
+  }
+
+  /** Replaces one entry in the selected file; nil maps keep the stored values. */
+  async updateMcpServer(params: McpUpdateParams): Promise<McpListResult> {
+    const client = await this.startClient();
+    return client.request<McpListResult>(Method.McpUpdate, params);
+  }
+
+  /** Removes one entry from the selected file, leaving its siblings alone. */
+  async removeMcpServer(params: McpRemoveParams): Promise<McpListResult> {
+    const client = await this.startClient();
+    return client.request<McpListResult>(Method.McpRemove, params);
+  }
+
+  /**
+   * Turns one entry on or off.
+   *
+   * It is a write like any other: disabling records `enabled: false`, re-enabling
+   * deletes the key, so an entry nobody ever toggled does not gain one.
+   */
+  async setMcpServerEnabled(params: McpSetEnabledParams): Promise<McpListResult> {
+    const client = await this.startClient();
+    return client.request<McpListResult>(Method.McpSetEnabled, params);
+  }
+
+  /** Requires signing in; the authorization URL is what the browser opens. */
+  async authenticateMcpServer(params: McpAuthenticateParams): Promise<McpAuthenticateResult> {
+    const client = await this.startClient();
+    return client.request<McpAuthenticateResult>(Method.McpAuthenticate, params);
+  }
+
+  /**
+   * Starts the server again without restarting the host or the session.
+   *
+   * A failed reconnect is not a rejection: the host reports it as the server's
+   * state and in the listing, so the caller shows a row rather than a dialog.
+   */
+  async reconnectMcpServer(params: McpReconnectParams): Promise<McpListResult> {
+    const client = await this.startClient();
+    return client.request<McpListResult>(Method.McpReconnect, params);
+  }
+
+  async signOutMcpServer(params: McpSignOutParams): Promise<McpListResult> {
+    const client = await this.startClient();
+    return client.request<McpListResult>(Method.McpSignOut, params);
   }
 
   /** Past agents stored under the workspace root. */
@@ -424,6 +553,20 @@ export class HostManager {
   }
 
   /**
+   * Replaces the workspace rule file with the list a manager showed a person.
+   *
+   * The answer is `permissions.get`'s result, not an echo: the panel renders what
+   * a session will read, including a declaration the host re-read differently. A
+   * file this build cannot parse is refused and left untouched, and the message
+   * names the line — the manager shows it rather than writing over the one thing
+   * the user was told to go and fix.
+   */
+  async savePermissionRules(params: PermissionsSetParams): Promise<PermissionsResult> {
+    const client = await this.startClient();
+    return client.request<PermissionsResult>(Method.PermissionsSet, params);
+  }
+
+  /**
    * The provider's model catalogue, for the /model picker.
    *
    * The provider can be overridden per tab, so the caller passes the tab's
@@ -438,6 +581,53 @@ export class HostManager {
       base_url: options.base_url ?? settings.session.base_url,
     });
     return result.models ?? [];
+  }
+
+  /**
+   * The background work of one session tree, in start order.
+   *
+   * The table belongs to the root agent, so a child's background job and a
+   * subagent started in the background are rows here too; `agent_id` says
+   * which agent's call started each one. A session id the host does not know
+   * is `CodeNoSession` — a closed tab's table is gone with its agent.
+   */
+  async listTasks(sessionId: string): Promise<TaskInfo[]> {
+    const client = await this.startClient();
+    const params: TasksListParams = { session_id: sessionId };
+    const result = await client.request<TasksListResult>(Method.TasksList, params);
+    return result.tasks ?? [];
+  }
+
+  /**
+   * One page of a task's output, from a byte offset.
+   *
+   * An offset the ring has already dropped comes back with `truncated` rather
+   * than as a gap, and an offset at the end is an empty page rather than an
+   * error — which is what a Refresh on a finished task reads.
+   */
+  async taskOutput(
+    sessionId: string,
+    taskId: string,
+    offset = 0,
+    limit = 0,
+  ): Promise<TasksOutputResult> {
+    const client = await this.startClient();
+    const params: TasksOutputParams = { session_id: sessionId, task_id: taskId, offset };
+    if (limit > 0) params.limit = limit;
+    return client.request<TasksOutputResult>(Method.TasksOutput, params);
+  }
+
+  /**
+   * Stops a running task and answers with its final snapshot.
+   *
+   * Cancelling a task that already ended is not an error, so a button pressed
+   * a moment late still settles on the truth rather than on a failure.
+   */
+  async cancelTask(sessionId: string, taskId: string): Promise<TaskInfo> {
+    const client = await this.startClient();
+    const params: TasksCancelParams = { session_id: sessionId, task_id: taskId };
+    const result = await client.request<TasksCancelResult>(Method.TasksCancel, params);
+    return result.task;
   }
 
   async dispose(): Promise<void> {

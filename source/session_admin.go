@@ -67,6 +67,11 @@ func RenameAgent(ctx context.Context, agentID, title string, opts ListOptions) e
 // The agent's checkpoints go too. They are the undo history of the conversation
 // being forgotten, and keeping them would leave behind the very thing the
 // delete was about.
+//
+// A subagent's conversation is part of its parent's story, not a session of its
+// own: deleting a session deletes every agent it created, transitively. The
+// files are read for the parent link before anything is removed, because they
+// are the only record of it.
 func DeleteAgent(ctx context.Context, agentID string, opts ListOptions) error {
 	_ = ctx
 	if agentID == "" {
@@ -81,11 +86,17 @@ func DeleteAgent(ctx context.Context, agentID string, opts ListOptions) error {
 		return newError("open store", false, err)
 	}
 	defer st.Close()
+	descendants := subagentDescendants(st, agentID)
 	if err := st.Delete(agentID); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return newError("agent not found: "+agentID, false, nil)
 		}
 		return newError("delete agent", false, err)
+	}
+	for _, id := range descendants {
+		if err := st.Delete(id); err != nil && !errors.Is(err, store.ErrNotFound) {
+			return newError("delete subagent "+id, false, err)
+		}
 	}
 	// The undo history goes with the conversation it belongs to; a checkpoint
 	// for a session nobody can open again is only disk. A failure here is
@@ -95,8 +106,48 @@ func DeleteAgent(ctx context.Context, agentID string, opts ListOptions) error {
 	if opts.Checkpoints != nil {
 		root = checkpointRoot(cwd, *opts.Checkpoints)
 	}
-	if err := checkpoint.Remove(root, agentID); err != nil {
-		return newError("delete agent checkpoints", false, err)
+	for _, id := range append([]string{agentID}, descendants...) {
+		if err := checkpoint.Remove(root, id); err != nil {
+			return newError("delete agent checkpoints", false, err)
+		}
 	}
 	return nil
+}
+
+// subagentDescendants walks the stored parent links and returns every agent
+// under agentID, in no particular order. A file that cannot be read is skipped:
+// a conversation that is already unreadable cannot be a reason to keep the rest.
+func subagentDescendants(st store.Backend, agentID string) []string {
+	ids, err := st.ListIDs()
+	if err != nil {
+		return nil
+	}
+	children := map[string][]string{}
+	for _, id := range ids {
+		if id == agentID {
+			continue
+		}
+		recs, err := st.Load(id)
+		if err != nil {
+			continue
+		}
+		sum := store.Summarize(recs)
+		if sum.ParentAgentID != "" {
+			children[sum.ParentAgentID] = append(children[sum.ParentAgentID], id)
+		}
+	}
+	var out []string
+	queue := append([]string(nil), children[agentID]...)
+	seen := map[string]bool{agentID: true}
+	for len(queue) > 0 {
+		id := queue[0]
+		queue = queue[1:]
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+		queue = append(queue, children[id]...)
+	}
+	return out
 }

@@ -58,7 +58,7 @@ Messages marked ← are server→client **notifications** (no `id`); → are cli
 | → | `initialize` | `protocol`, `cwd`, `client{name, version}` — the workspace root, fixed for the process. Everything else a session needs goes on `session.new`. |
 | ← | `initialized` | `host_version`, `capabilities[]` |
 | → | `session.new` \| `session.resume` \| `session.list` \| `session.close` | session == one agent id. `session.resume` takes every `session.new` param plus `agent_id`, so the same conversation re-opens under new options. `session.list` answers `SessionInfo[]` with `title`, `runs`, `last_status` and the cumulative `usage` of the stored runs. |
-| → | **`session.transcript`** | `agent_id`, `limit?` → `entries[]{kind: message\|run_end, run_id, role, content, tool_call_id, name, tool_calls[]{id, name, args}, status, steps, usage}`, `dropped?` — the stored conversation, oldest first, **keyed by agent id rather than by an open session**, so it answers on a window that has just reloaded and has none (p_0.38.3, [38](38-session-identity-and-replay.md)) |
+| → | **`session.transcript`** | `agent_id`, `limit?` → `entries[]{kind: message\|run_end\|summary, run_id, role, content, tool_call_id, name, tool_calls[]{id, name, args}, status, steps, usage}`, `dropped?` — the stored conversation, oldest first, **keyed by agent id rather than by an open session**, so it answers on a window that has just reloaded and has none (p_0.38.3, [38](38-session-identity-and-replay.md)). A `summary` entry is a compaction boundary (0.43): the turns before it stay in the replay below it. |
 | → | `prompt` | `session_id`, `message`, `attachments[]{path\|data, mime}`, `context{mentions[]{path}, selection{path, range, text}, diagnostics[]{path, line, severity, message}}` |
 | ← | `event` | `run_id` + **`JobEventBody`** (below) |
 | ← | **`approval.request`** | `request_id`, `session_id`, `run_id`, `tool`, `args`, `preview{kind, path, diff, before?, after?, command[], summary, truncated?}`, `decisions[]`, `rule?`, `remember[]`, `timeout_ms` |
@@ -69,10 +69,14 @@ Messages marked ← are server→client **notifications** (no `id`); → are cli
 | → | **`rules.list`** | `load_project?`, `load_cursor_rules?` → `files[]{path, bytes, included, truncated}` |
 | → | **`permissions.get`** | → `path`, `exists`, `rules[]{index, effect, tool, pattern, reason, describe}`, `default_mode?`, `default_mode_refused?`, `problem?{message, line?, column?}` — the workspace rule file, or why it will not compile |
 | → | **`permissions.add`** | `rule{effect?, tool, pattern?, reason?}`, `request_id?` → `path`, `index`, `rules[]`, `decided_by?`, `approved?` — append one rule, and settle the pending call when the file now decides it |
+| → | **`session.compact`** | `session_id` → `session_id`, `compacted`, `before?`, `after?`, `summarized?`, `context{...}` — summarize an idle session's older turns. A busy session answers `-32003`; an unknown one `-32001`; when it compacts, the client also receives a `compact` notification |
+| → | **`session.context`** | `session_id` → `context{estimated_tokens, window_tokens, compact_at_tokens, messages}` — a live session's estimate against its declared budget, so an idle tab can still draw its meter |
+
+`session.new` and `session.resume` also take `context{window_tokens, auto_compact_at, keep_recent}` — the session's declared budget (0.43). Omitting it keeps automatic compaction off, exactly as before the field existed: a client that declares no window cannot have its conversation summarized behind its back.
 
 ### Event payload comes from the public SDK types
 
-The `event` notification carries the fields of the public **`anvil.Event`** (`source/types.go`) — `type, text, tool_call_id, name, args, content, is_error, step, max_steps, code` — plus the `session_id` / `run_id` the host adds for correlation. The terminal `done` carries the public **`anvil.RunResult`**: `status, result, steps, usage, err, code`.
+The `event` notification carries the fields of the public **`anvil.Event`** (`source/types.go`) — `type, text, tool_call_id, name, args, content, is_error, step, max_steps, code` — plus the `session_id` / `run_id` the host adds for correlation. A `compact` event carries `compact{reason, before, after, summarized, window}` (0.43). The terminal `done` carries the public **`anvil.RunResult`**: `status, result, steps, usage, err, code`, plus `context{...}` and `last_request_at` from the host (0.43). A manual compaction has no run to key an event by, so it arrives as its own `compact` notification with the same inner shape; the client draws one divider for both and replays it from the `summary` entry.
 
 Deliberately **not** the daemon's `JobEventBody` / `JobDoneBody`: those belong to the tool-chain protocol, and depending on them is exactly the coupling this chapter forbids. The shapes look alike because both derive from the same runtime events — that resemblance is a consequence, not a contract.
 
@@ -82,7 +86,7 @@ Consequences the extension must respect:
 
 - Assistant text arrives as **concatenatable chunks, not guaranteed per-token** — a provider that does not stream yields the whole content in one `assistant` event.
 - `reasoning` chunks are **coalesced by the runtime**, not per-token, and are always flushed *before* the text of the same round. The runtime's event buffer drops silently when it fills, and a lost `assistant` chunk is permanent — the transcript is append-only — so the volume of a verbose reasoner is bounded at the source rather than by slowing the drain.
-- `usage` is **terminal only** (on `anvil.RunResult`). A live token meter would need an SDK addition and is out of scope; `session.list` is the only other place it appears, as the stored runs' cumulative totals.
+- `usage` is **terminal only** (on `anvil.RunResult` and the terminal event). It now carries `cached_tokens` and `cache_write_tokens` (0.43), where the provider reports them; zero means "the provider said nothing", not "no cache". A live meter reads `done.context` after each turn rather than reconstructing counts from the stream.
 - `Run.Stream(ctx)` ignores its `ctx`; cancellation is `Run.Cancel`, driven by the `cancel` method.
 - `Run.emit` drops events when its buffer fills. The host must drain the channel and forward without blocking on stdio writes (use an internal queue), or the UI silently loses output.
 
@@ -321,7 +325,7 @@ composer does with a mode it did not choose.
 - **"No opinion" is a choice the select has to be able to show.** The mode select gained a
   leading *Workspace default* entry, and it is the only way back to letting the file decide —
   the client's stored choice is a per-workspace habit, and clearing it is not expressible as
-  any of the five modes. In that state the client sends **no** `permission_mode` key at all:
+  any of the ladder's modes. In that state the client sends **no** `permission_mode` key at all:
   sending `""` would be a mode the host has to reject, and the whole point is that this client
   has nothing to say. The stored choice lives in `workspaceState` under `anvil.permissionMode`,
   and choosing the empty entry deletes the key rather than storing the empty string.

@@ -16,7 +16,7 @@ import (
 type anthropicStreamRequest struct {
 	Model     string             `json:"model"`
 	MaxTokens int                `json:"max_tokens"`
-	System    string             `json:"system,omitempty"`
+	System    any                `json:"system,omitempty"`
 	Messages  []anthropicMessage `json:"messages"`
 	Tools     []anthropicTool    `json:"tools,omitempty"`
 	Stream    bool               `json:"stream"`
@@ -30,7 +30,7 @@ func (c *Anthropic) CompleteStream(ctx context.Context, req Request, onDelta fun
 	if onDelta == nil {
 		onDelta = func(Delta) {}
 	}
-	system, messages := toAnthropicMessages(req.Messages)
+	system, messages := toAnthropicMessages(req.Messages, req.PromptCache)
 	body := anthropicStreamRequest{
 		Model:     firstNonEmpty(req.Model, c.cfg.Model),
 		MaxTokens: 8192,
@@ -95,15 +95,9 @@ func (c *Anthropic) CompleteStream(ctx context.Context, req Request, onDelta fun
 				Input json.RawMessage `json:"input"`
 			} `json:"content_block"`
 			Message struct {
-				Usage *struct {
-					InputTokens  int `json:"input_tokens"`
-					OutputTokens int `json:"output_tokens"`
-				} `json:"usage"`
+				Usage *anthropicUsageWire `json:"usage"`
 			} `json:"message"`
-			Usage *struct {
-				InputTokens  int `json:"input_tokens"`
-				OutputTokens int `json:"output_tokens"`
-			} `json:"usage"`
+			Usage *anthropicUsageWire `json:"usage"`
 			Error *struct {
 				Message string `json:"message"`
 			} `json:"error"`
@@ -141,11 +135,7 @@ func (c *Anthropic) CompleteStream(ctx context.Context, req Request, onDelta fun
 			}
 		case "message_start":
 			if envelope.Message.Usage != nil {
-				usage = &Usage{
-					InputTokens:  envelope.Message.Usage.InputTokens,
-					OutputTokens: envelope.Message.Usage.OutputTokens,
-					TotalTokens:  envelope.Message.Usage.InputTokens + envelope.Message.Usage.OutputTokens,
-				}
+				usage = envelope.Message.Usage.usage()
 			}
 		case "message_delta":
 			if envelope.Usage != nil {
@@ -158,7 +148,13 @@ func (c *Anthropic) CompleteStream(ctx context.Context, req Request, onDelta fun
 				if envelope.Usage.InputTokens > 0 {
 					usage.InputTokens = envelope.Usage.InputTokens
 				}
-				usage.TotalTokens = usage.InputTokens + usage.OutputTokens
+				if envelope.Usage.CacheReadInputTokens > 0 {
+					usage.CachedTokens = envelope.Usage.CacheReadInputTokens
+				}
+				if envelope.Usage.CacheCreationInputTokens > 0 {
+					usage.CacheWriteTokens = envelope.Usage.CacheCreationInputTokens
+				}
+				usage.TotalTokens = usage.InputTokens + usage.CachedTokens + usage.CacheWriteTokens + usage.OutputTokens
 			}
 		}
 	}

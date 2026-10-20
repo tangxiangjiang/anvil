@@ -27,6 +27,12 @@ type Result struct {
 	Summary     string
 	// Recent are non-system messages kept verbatim after the summary (for re-persist on Resume).
 	Recent []llm.Message
+	// Before and After are token estimates on either side of the summary, and
+	// Summarized is how many messages were folded into it (0 on no compression).
+	// They are reported by the budget path and stay zero on the character path,
+	// which has no reason to estimate. Callers that show a client what happened
+	// read these rather than recomputing.
+	Before, After, Summarized int
 }
 
 // Apply compresses older messages when over budget. System messages are kept.
