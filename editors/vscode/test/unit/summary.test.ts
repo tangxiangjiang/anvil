@@ -85,7 +85,11 @@ test('only a finished run whose last block is prose becomes a summary', () => {
 test('the two endings call it by their own status rules', () => {
   const live = bodyOf(CHAT_JS, 'finishRun');
   assert.match(live, /const round = currentRound\(\)/);
-  assert.match(live, /if \(!failure\) markSummary\(round\)/);
+  // A clean finish arrives as `{kind: 'none'}`, never as no failure at all, so
+  // the live path tests the kind. Testing the object is what made a live run
+  // draw no summary while its replay did.
+  assert.match(live, /if \(!failure \|\| failure\.kind === 'none'\) markSummary\(round\)/);
+  assert.doesNotMatch(live, /if \(!failure\) markSummary/);
 
   // A replay knows the stored status: failed and stopped runs are not
   // conclusions, and the summary is marked before the run-end line is appended

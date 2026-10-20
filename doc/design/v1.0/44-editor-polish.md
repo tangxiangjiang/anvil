@@ -298,8 +298,9 @@ which is how the extension already degrades (`runtime`, `permission_mode_source`
 | [p_0.47.14](../../roadmaps/v1.0/m_0.47/p_0.47.14.md) | One rail per reply, a folded Thought, tool output in a read-only tab |
 | [p_0.47.15](../../roadmaps/v1.0/m_0.47/p_0.47.15.md) | A replay window that starts at a turn, and a result that draws its own row |
 | [p_0.47.16](../../roadmaps/v1.0/m_0.47/p_0.47.16.md) | Moderate density, coloured state words, larger dots, a framed pane, a summary ending |
+| [p_0.47.17](../../roadmaps/v1.0/m_0.47/p_0.47.17.md) | The summary endings marked by the live path as well as the replay |
 
-0.47.9–0.47.16 were written after the milestone was accepted. Their findings came from the
+0.47.9–0.47.17 were written after the milestone was accepted. Their findings came from the
 first real use of the panel, not from a test: a capability that existed and was never turned
 on, an error that only reached the log, a block with no way out — and then a transcript that
 was tiring to read, followed by four manager panels that each declared their own copy of the
@@ -309,9 +310,10 @@ recognised from another editor, and then the reply-wide rail, the folded Thought
 output tab that the same reader asked of the first rail, and then a stored conversation that
 opened on a result whose call the window had cut, and finally a long conversation that read as
 too sparse, whose state words said nothing, whose dots sat under the line, whose opened call
-had no edge, and whose final answer had no ending. The lesson is recorded here rather than in
-a commit message — the manual passes the earlier phases wrote down as "still worth doing" are
-the ones that would have found all of these.
+had no edge, and whose final answer had no ending — and then that ending missing from the live
+turn because the live path asked for a failure that is never absent. The lesson is recorded
+here rather than in a commit message — the manual passes the earlier phases wrote down as
+"still worth doing" are the ones that would have found all of these.
 
 ## 15. The visual grammar after use
 
@@ -482,3 +484,27 @@ The summary is built from what the model wrote rather than from the prompt or th
 title taken from anywhere else would be a second opinion about the answer. That is also why
 the phase adds no protocol field, no host code and no wrapper element — the ending is a
 reading of the answer, not a record attached to it.
+
+## 20. A summary for the run that finished
+
+p_0.47.17 is one predicate. The ending p_0.47.16 designed appeared when a stored conversation
+was reopened and not when the same turn finished live, because the two renderers ask "did the
+run end normally?" in different vocabularies and one of them asked it of the wrong thing.
+
+- **The live path tested the object, not the kind.** `finishRun` marked the summary only
+  `if (!failure)`, on the assumption that a clean finish arrives without a failure. It does
+  not: `classifyDone` always returns a `RunFailure`, and a clean finish is
+  `{kind: 'none', message: '', isError: false}`. The test was never true, so a live turn never
+  gained an ending — while the replay, which reads the stored status, gained one as designed.
+- **Each path speaks its own grammar.** The live path has a failure kind whose clean value is
+  `none`; the replay has a status whose clean word is `finished`. The fix is
+  `!failure || failure.kind === 'none'` in `finishRun`; neither path learns the other's
+  vocabulary, and the rendering, the colours and the rail stay exactly as p_0.47.16 wrote them.
+- **The guard for a missing failure stays.** `finishRun` is fed a message field; a malformed or
+  older message that omits it still means the run ended, and a summary is a better answer than
+  a `TypeError` thrown in the middle of a turn's ending.
+
+A source-level test now pins the kind test and refuses the object test. The defect was not a
+rendering bug and could not have been caught by a stylesheet assertion; it lived exactly where
+the two endings agreed on their words — which is also why reading them side by side found it
+in a minute and a reader found it in a window.

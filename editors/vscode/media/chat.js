@@ -3328,8 +3328,10 @@
     stopRunningCards();
     // The answer that ended the turn is its summary. A run that ended on a tool
     // call has no concluding text, and a failed or stopped run's last words are
-    // not a conclusion, so both keep the ending they had.
-    if (!failure) markSummary(round);
+    // not a conclusion, so both keep the ending they had. `failure` is always
+    // present — a clean finish is `{kind: 'none'}` — so the kind is what says
+    // the run finished, not the object's absence.
+    if (!failure || failure.kind === 'none') markSummary(round);
     const parts = runSummary(done);
     recordUsage(done);
     statusLine.textContent = parts.join(' · ');
