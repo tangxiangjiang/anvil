@@ -78,12 +78,14 @@ test('images are attached from a drop, everything else is resolved as a mention'
   assert.ok(drop);
   assert.match(drop[0], /file\.type\.indexOf\('image\/'\) === 0[\s\S]*?readImage\(file\)/);
   assert.match(drop[0], /vscode\.postMessage\(\{ type: 'dropFiles', paths, uris \}\)/);
-  // The host resolves the paths: only it knows the workspace root.
-  assert.match(CHAT_PANEL, /case 'dropFiles':\s*this\.dropFiles\(msg\.paths, msg\.uris\);/);
+  // The host resolves the paths: only it knows the workspace root. A multi-root
+  // window without a root yet asks for one rather than taking a folder (0.47).
+  assert.match(CHAT_PANEL, /case 'dropFiles':\s*await this\.dropFiles\(msg\.paths, msg\.uris\);/);
+  assert.match(CHAT_PANEL, /folder = await resolveWorkspaceRoot\(this\.context\)/);
   assert.match(CHAT_PANEL, /relativeMention\(folder\.uri\.fsPath, candidate\)/);
   assert.match(CHAT_PANEL, /this\.post\(\{ type: 'mentions', paths: unique \}\)/);
-  // A file outside the workspace is refused with a sentence, not silently.
-  assert.match(CHAT_PANEL, /outside this workspace, so it was not added/);
+  // A file outside the root is refused with a sentence, not silently.
+  assert.match(CHAT_PANEL, /outside this window's root folder, so it was not added/);
 });
 
 test('Copy is offered on a finished answer and writes through the host', () => {

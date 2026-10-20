@@ -57,6 +57,7 @@ import {
 import { PreviewDocuments } from './review';
 import { describeProblem, emptyRulesFile, emptyUserRulesFile, problemPosition } from './rulesFile';
 import { readSettings } from './settings';
+import { rootUri } from './workspaceRoot';
 
 export class Hub {
   /** The one child this window talks to, shared by every tab. */
@@ -599,7 +600,7 @@ export class Hub {
   async openMcpFile(scope: McpScope = 'project'): Promise<void> {
     const path = mcpFilePath(scope);
     if (path === undefined) {
-      this.notice('error', 'Could not find a workspace folder to resolve mcp.json against.');
+      this.notice('error', 'No root folder is chosen yet, so mcp.json has nothing to sit in.');
       return;
     }
     const uri = vscode.Uri.file(path);
@@ -808,7 +809,7 @@ export class Hub {
  */
 function mcpFilePath(scope: McpScope): string | undefined {
   if (scope === 'user') return join(homedir(), '.cursor', 'mcp.json');
-  const folder = vscode.workspace.workspaceFolders?.[0];
-  if (!folder || folder.uri.scheme !== 'file') return undefined;
-  return join(folder.uri.fsPath, '.cursor', 'mcp.json');
+  const folder = rootUri();
+  if (!folder || folder.scheme !== 'file') return undefined;
+  return join(folder.fsPath, '.cursor', 'mcp.json');
 }

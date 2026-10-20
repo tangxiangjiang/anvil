@@ -30,6 +30,7 @@
   const modeSelect = document.getElementById('mode');
   const bypassStrip = document.getElementById('bypass');
   const dontAskStrip = document.getElementById('dontAsk');
+  const rootLine = document.getElementById('root');
   const rulesButton = document.getElementById('rules');
   const permissionsButton = document.getElementById('permissions');
   const focusButton = document.getElementById('focus');
@@ -2961,6 +2962,37 @@
     else announce(message);
   }
 
+  /**
+   * The window's root, from the extension.
+   *
+   * A line rather than a control (see `workspaceRoot.ts`): a conversation
+   * belongs to one folder for its whole life, so there is nothing to switch to.
+   * The name is what the eye reads and the path is the tooltip, which is the
+   * split the Explorer makes between where a folder is and what it is called.
+   */
+  function renderRoot(msg) {
+    if (!rootLine) return;
+    rootLine.textContent = '';
+    const name = typeof msg.name === 'string' ? msg.name : '';
+    if (name === '') {
+      rootLine.hidden = true;
+      return;
+    }
+    const path = typeof msg.path === 'string' ? msg.path : '';
+    rootLine.appendChild(el('span', 'root-label', 'Root'));
+    const folder = el('code', 'root-name', name);
+    folder.title = path;
+    rootLine.appendChild(folder);
+    if (msg.multi === true) {
+      rootLine.appendChild(el('span', 'root-note', 'one folder per window'));
+    }
+    rootLine.title =
+      msg.multi === true
+        ? `This conversation, its checkpoints and its host all belong to ${path}. The window's other folders are not part of it; open another window to work in them.`
+        : `This conversation reads and writes in ${path}.`;
+    rootLine.hidden = false;
+  }
+
   // --- composer height ------------------------------------------------------
 
   /**
@@ -3339,6 +3371,9 @@
       case 'state':
         sendButton.disabled = false;
         setRunning(msg.state === 'running');
+        return;
+      case 'root':
+        renderRoot(msg);
         return;
       case 'event': {
         const e = msg.event;

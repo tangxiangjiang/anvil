@@ -187,6 +187,16 @@ spawned with.
   JSON; **Anvil: Open Permission Rules File** opens the file itself.
 - **Kills its child.** One host per window, stopped on deactivate, on a folder
   change, and on a settings change (the host reads its configuration at spawn).
+- **Works in one folder per window.** A conversation, its host process, its
+  checkpoints and every path it reports belong to one root. A single-folder
+  window uses that folder without asking. In a multi-root window the first
+  conversation asks which folder is the root and remembers the answer for the
+  workspace; the header names it (*Root  my-project*, with the full path in the
+  tooltip) and offers no switch, because moving the root would leave the
+  conversation's checkpoints and tool paths describing a directory its history
+  no longer points at. To work in a second folder, open another window —
+  **File > New Window** and open the folder there, or drag it onto the taskbar
+  icon — and the two windows get separate hosts and separate conversations.
 - **Tells you what it read.** The tab reports which rule files this workspace
   loaded — `AGENTS.md`, `.anvil/rules/*.md`, and optionally `.cursor/rules/*` —
   and says so plainly when one was skipped or cut short by the size budget.
@@ -374,7 +384,9 @@ The Anvil view in the activity bar is this workspace's session list: one row per
 past session, grouped by when it was last used, newest first, with the model and
 run count beside it. A click opens the chat tab onto that session. The run icon
 in the view's title bar starts a new conversation and the refresh icon re-reads
-the list; **Anvil: Refresh Sessions** does the same from the palette.
+the list; **Anvil: Refresh Sessions** does the same from the palette. In a
+multi-root window the list is the chosen root's, not the whole workspace's, and
+every conversation's header names that root.
 
 The rows are what `session.list` returns and nothing more. A row is labelled with
 the session's title — the first thing you typed in it, one line and truncated —

@@ -854,6 +854,38 @@ body.vscode-high-contrast-light .body.md .md-link:focus-visible {
   outline-offset: 1px;
 }
 
+/* --- the window's root ---------------------------------------------------- */
+
+/*
+ * One line above the status line, in the same muted weight as the meter: it is
+ * a fact about the conversation, not a warning, and a multi-root window is the
+ * only place it is not obvious. It carries no affordance on purpose — a
+ * conversation cannot change folders (see the design chapter).
+ */
+.root {
+  padding: 0 calc(var(--anvil-gap) + 1px) 6px;
+  font-size: 0.88em;
+  color: var(--vscode-descriptionForeground);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.root .root-label {
+  margin-right: 6px;
+  opacity: 0.8;
+}
+
+.root .root-name {
+  font-family: var(--vscode-editor-font-family, monospace);
+  color: var(--vscode-foreground);
+}
+
+.root .root-note {
+  margin-left: 8px;
+  opacity: 0.8;
+}
+
 /* --- status --------------------------------------------------------------- */
 
 .status {

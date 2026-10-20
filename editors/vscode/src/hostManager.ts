@@ -13,6 +13,7 @@ import { ChatSession, SessionConfig, SessionState } from './session';
 import { SessionRouter } from './router';
 import { childEnv, readApiKey, readSettings, readWebSearchKey } from './settings';
 import { describeHost, hostFixHint, resolveHost, verifyHost, versionDrift } from './hostBundle';
+import { resolveWorkspaceRoot } from './workspaceRoot';
 import {
   ApprovalRequest,
   CheckpointListParams,
@@ -240,7 +241,7 @@ export class HostManager {
       readApiKey(this.context),
       readWebSearchKey(this.context),
     ]);
-    const folder = vscode.workspace.workspaceFolders?.[0];
+    const folder = await resolveWorkspaceRoot(this.context);
     if (!folder) throw new Error('open a folder to use Anvil');
     const cwd = folder.uri.fsPath;
     this.cwd = cwd;

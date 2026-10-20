@@ -45,6 +45,9 @@ import { exportMarkdown } from './export';
 import { RewindAction, rewindPlan } from './rewind';
 import { CommandAction, SlashCommand, parseSlash, route } from './commands';
 import {
+  RootChoiceCancelled, resolveWorkspaceRoot, rootFolder, rootInfo, rootUri,
+} from './workspaceRoot';
+import {
   ApprovalRequest,
   CodeMethodNotFound,
   CompactInfo,
@@ -154,6 +157,13 @@ type Inbound =
 /** A message to the webview. */
 type Outbound =
   | { type: 'trust'; trusted: boolean }
+  /**
+   * This window's root, once one has been chosen. A conversation belongs to one
+   * folder for its whole life, so the header names it and offers no switch: a
+   * control that moved the root would leave checkpoints and tool paths
+   * describing a directory the conversation's history no longer points at.
+   */
+  | { type: 'root'; name: string; path: string; multi: boolean }
   | {
       type: 'state';
       state: SessionState;
@@ -742,6 +752,7 @@ export class ChatPanel implements HostListener {
       this.post({ type: 'vision', enabled: readSettings().session.vision === true });
       this.reportContext();
       this.postAgentId();
+      this.postRoot();
       this.postMode();
       if (this.rules.length > 0) this.post({ type: 'rules', files: this.rules });
       this.postState();
@@ -846,7 +857,7 @@ export class ChatPanel implements HostListener {
         await this.pickImages();
         return;
       case 'dropFiles':
-        this.dropFiles(msg.paths, msg.uris);
+        await this.dropFiles(msg.paths, msg.uris);
         return;
       default:
         return;
@@ -935,13 +946,22 @@ export class ChatPanel implements HostListener {
    * workspace? A path outside it is not a mention, and saying so now is better
    * than letting the host refuse the prompt later.
    */
-  private dropFiles(paths: unknown, uris: unknown): void {
-    const folder = vscode.workspace.workspaceFolders?.[0];
+  private async dropFiles(paths: unknown, uris: unknown): Promise<void> {
+    // Asked rather than read: a multi-root window without a root yet has to
+    // choose one before anything can be said to be inside it. Dismissing the
+    // picker leaves the workspace as it was, and the drop is refused below.
+    let folder: Awaited<ReturnType<typeof resolveWorkspaceRoot>> = rootFolder();
+    if (!folder) {
+      folder = await resolveWorkspaceRoot(this.context).catch((err: unknown) => {
+        if (err instanceof RootChoiceCancelled) return undefined;
+        throw err;
+      });
+    }
     if (!folder) {
       this.post({
         type: 'notice',
         level: 'warn',
-        message: 'No workspace folder is open, so a dropped file has nothing to be relative to.',
+        message: 'This window has no root folder, so a dropped file has nothing to be relative to.',
       });
       return;
     }
@@ -977,8 +997,8 @@ export class ChatPanel implements HostListener {
         level: 'warn',
         message:
           outside === 1
-            ? 'A dropped file is outside this workspace, so it was not added.'
-            : `${outside} dropped files are outside this workspace, so they were not added.`,
+            ? "A dropped file is outside this window's root folder, so it was not added."
+            : `${outside} dropped files are outside this window's root folder, so they were not added.`,
       });
     }
   }
@@ -1276,9 +1296,9 @@ export class ChatPanel implements HostListener {
     }
 
     const date = new Date().toISOString().slice(0, 10);
-    const folder = vscode.workspace.workspaceFolders?.[0]?.uri;
-    const defaultUri = folder
-      ? vscode.Uri.joinPath(folder, `anvil-conversation-${date}.md`)
+    const root = rootUri();
+    const defaultUri = root
+      ? vscode.Uri.joinPath(root, `anvil-conversation-${date}.md`)
       : undefined;
     const target = await vscode.window.showSaveDialog({
       title: 'Export conversation',
@@ -1496,6 +1516,20 @@ export class ChatPanel implements HostListener {
    */
   private postAgentId(): void {
     this.post({ type: 'agent', agentId: this.agentId ?? '' });
+  }
+
+  /**
+   * Names the window's root in the header.
+   *
+   * Sent with everything else a fresh document cannot infer, and again when a
+   * session opens: in a multi-root window the root does not exist until the
+   * picker has been answered, which happens while the first session is being
+   * created.
+   */
+  private postRoot(): void {
+    const info = rootInfo();
+    if (!info) return;
+    this.post({ type: 'root', name: info.name, path: info.path, multi: info.multi });
   }
 
   /** Names the tab after the conversation in it, so a tab strip is readable. */
@@ -2043,16 +2077,16 @@ export class ChatPanel implements HostListener {
   }
 
   /**
-   * A workspace file as a URI, refusing anything that would climb out of the
-   * folder. The path came from the model's tool arguments, so the SDK's sandbox
-   * governs the write and this governs which file a diff describes.
+   * A root-relative file as a URI, refusing anything that would climb out of
+   * the folder. The path came from the model's tool arguments, so the SDK's
+   * sandbox governs the write and this governs which file a diff describes.
    */
   private fileUri(path: string): vscode.Uri | undefined {
-    const folder = vscode.workspace.workspaceFolders?.[0];
-    if (!folder) return undefined;
+    const root = rootUri();
+    if (!root) return undefined;
     const segments = path.split('/').filter((segment) => segment !== '' && segment !== '..' && segment !== '.');
     if (segments.length === 0) return undefined;
-    return vscode.Uri.joinPath(folder.uri, ...segments);
+    return vscode.Uri.joinPath(root, ...segments);
   }
 
   /** Forgets the last turn's changes, when there is no last turn any more. */
@@ -2171,6 +2205,9 @@ export class ChatPanel implements HostListener {
     this.rememberAgent(result.agent_id);
     this.noteResolvedMode(result);
     this.postMode();
+    // The root is a fact about the session only after the host exists, which is
+    // why the header learns it here in a multi-root window rather than at ready.
+    this.postRoot();
     this.announceSessionMode(result);
   };
 
@@ -2733,6 +2770,14 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri, focus = f
     --anvil-composer-h, which is what the transcript reserves at its bottom.
   -->
   <div id="composerDock" class="dock">
+    <!--
+      The folder this conversation belongs to (0.47). It is a line rather than a
+      control: one root per window means a conversation cannot switch folders,
+      and a select here would promise something the checkpoints and paths behind
+      it cannot keep. Hidden until a root exists — which, in a multi-root
+      window, is after the first conversation chose one.
+    -->
+    <div id="root" class="root" hidden></div>
     <div id="status" class="status" hidden></div>
     <div id="meter" class="meter" hidden></div>
     <div id="bypass" class="bypass" hidden>Bypass is on. Tool calls run without asking.</div>

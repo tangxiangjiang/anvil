@@ -22,6 +22,7 @@
 
 import * as vscode from 'vscode';
 import { toolCallPaths } from './mentions';
+import { rootUri } from './workspaceRoot';
 
 export interface ChangedFile {
   /** Workspace-relative, forward-slashed. */
@@ -122,14 +123,14 @@ export class ChangesTracker {
   }
 
   private uriFor(relPath: string): vscode.Uri | undefined {
-    const folder = vscode.workspace.workspaceFolders?.[0];
-    if (!folder) return undefined;
+    const root = rootUri();
+    if (!root) return undefined;
     // The path came from the model's tool arguments, so it is not trusted to
     // stay inside the folder: the SDK's sandbox governs the write, and this
     // governs which file the diff describes.
     const segments = relPath.split('/').filter((segment) => segment !== '' && segment !== '..' && segment !== '.');
     if (segments.length === 0) return undefined;
-    return vscode.Uri.joinPath(folder.uri, ...segments);
+    return vscode.Uri.joinPath(root, ...segments);
   }
 }
 

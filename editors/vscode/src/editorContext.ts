@@ -10,6 +10,7 @@
 import * as vscode from 'vscode';
 import { Diagnostic, PromptContext, Range, Selection } from './protocol';
 import { relativeMention } from './mentions';
+import { rootFolder } from './workspaceRoot';
 
 /** How many diagnostics the extension will put on the wire for one prompt. */
 export const MAX_DIAGNOSTICS = 100;
@@ -64,7 +65,7 @@ function toRange(selection: vscode.Selection): Range {
  */
 export function currentDiagnostics(limit = MAX_DIAGNOSTICS): Diagnostic[] {
   const out: Diagnostic[] = [];
-  const folder = vscode.workspace.workspaceFolders?.[0];
+  const folder = rootFolder();
   for (const [uri, diagnostics] of vscode.languages.getDiagnostics()) {
     if (uri.scheme !== 'file') continue;
     if (folder && !isInside(folder.uri.fsPath, uri.fsPath)) continue;
@@ -128,7 +129,7 @@ function isInside(root: string, path: string): boolean {
  * the pipe.
  */
 export async function pickMentions(): Promise<string[]> {
-  const folder = vscode.workspace.workspaceFolders?.[0];
+  const folder = rootFolder();
   if (!folder) return [];
   const found = await vscode.workspace.findFiles(MENTION_GLOB, MENTION_EXCLUDE, MENTION_LIMIT);
   const items: Array<vscode.QuickPickItem & { relative: string }> = [];

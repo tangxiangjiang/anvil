@@ -211,12 +211,18 @@ Seven places in the extension resolve the workspace as `workspaceFolders?.[0]`
 multi-root window that silently binds a conversation, its checkpoints, and its MCP file to
 the first folder, with no indication that the other folders are not part of it.
 
-0.47 replaces them with one resolver and makes the root explicit:
+0.47 replaces them with one resolver (`src/workspaceRoot.ts`) and makes the root explicit:
 
 - one root per window (a conversation, its host process and its files share one `cwd`);
-- on a new conversation in a multi-root window, a picker chooses the root; the choice is
-  remembered per window;
+- on the first conversation in a multi-root window, a picker chooses the root; dismissing it
+  creates nothing — no host process, no session. The choice is stored in `workspaceState`, so
+  it is remembered for the workspace: a reloaded window reuses it rather than asking the same
+  question again, and the header says which folder it is;
 - the conversation header shows the root, and a started conversation cannot switch it.
+
+No other module reads the folder list. A call site that needs the root asks the resolver for
+the folder or its URI, which is what makes "one root per window" a property of the code rather
+than a convention.
 
 Multiple hosts per window is a different design (process per root, per-root panels) and is
 out of scope; the honest limitation is stated in the README.
