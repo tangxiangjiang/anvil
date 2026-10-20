@@ -180,6 +180,19 @@
         "command": "anvil.rejectPlan",
         "title": "Anvil: Keep Planning",
         "category": "Anvil"
+      },
+      {
+        "command": "anvil.toggleFocusView",
+        "title": "Anvil: Toggle Focus View",
+        "category": "Anvil"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "anvil.toggleFocusView",
+        "key": "ctrl+alt+f",
+        "mac": "cmd+alt+f",
+        "when": "activeWebviewPanelId == anvil.chat"
       }
     ],
     "menus": {
@@ -425,6 +438,7 @@
     "compile": "tsc -p .",
     "watch": "tsc -p . --watch",
     "build:host": "node scripts/build-host.mjs",
+    "vendor:katex": "node scripts/vendor-katex.mjs",
     "package:vsix": "node scripts/package-vsix.mjs",
     "package:all": "node scripts/package-vsix.mjs --all",
     "smoke:vsix": "node scripts/smoke-packaged.mjs",
@@ -439,6 +453,7 @@
     "@vscode/vsce": "^3.9.2",
     "eslint": "^9.39.5",
     "globals": "^14.0.0",
+    "katex": "0.19.0",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.71.2"
   }

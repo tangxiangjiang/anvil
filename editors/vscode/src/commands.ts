@@ -50,6 +50,11 @@ export const BUILTIN_COMMANDS: readonly SlashCommand[] = [
     source: 'builtin',
   },
   {
+    name: 'export',
+    description: 'Save this conversation as Markdown',
+    source: 'builtin',
+  },
+  {
     name: 'clear',
     description: 'Start a new conversation',
     source: 'builtin',
@@ -170,6 +175,7 @@ export type CommandAction =
   | { kind: 'model'; model: string }
   | { kind: 'resume'; agentId: string }
   | { kind: 'rewind' }
+  | { kind: 'export' }
   | { kind: 'clear' }
   | { kind: 'compact' }
   | { kind: 'tasks' }
@@ -192,6 +198,8 @@ export function route(text: string, commands: SlashCommand[]): CommandAction {
       return { kind: 'resume', agentId: parsed.args };
     case 'rewind':
       return { kind: 'rewind' };
+    case 'export':
+      return { kind: 'export' };
     case 'clear':
       return { kind: 'clear' };
     case 'compact':

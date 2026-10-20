@@ -276,3 +276,76 @@ test('the commit rule holds as a document grows character by character', () => {
     }
   }
 });
+
+test('a formula is one span, and display math is one block', () => {
+  assert.deepEqual(inline('a $x^2$ b'), [
+    { type: 'text', value: 'a ' },
+    { type: 'math', value: 'x^2', display: false },
+    { type: 'text', value: ' b' },
+  ]);
+  // `$$` mid-sentence is the same formula; the renderer decides how to draw it.
+  assert.deepEqual(inline('so $$E=mc^2$$ here'), [
+    { type: 'text', value: 'so ' },
+    { type: 'math', value: 'E=mc^2', display: true },
+    { type: 'text', value: ' here' },
+  ]);
+
+  const [block] = parse('$$\n\\frac{a}{b}\n$$').blocks;
+  assert.equal(block.type, 'math');
+  assert.equal(block.text, '\\frac{a}{b}');
+
+  const [oneLine] = parse('$$x^2$$').blocks;
+  assert.equal(oneLine.type, 'math');
+  assert.equal(oneLine.text, 'x^2');
+});
+
+test('money keeps its dollars', () => {
+  // The closing rule — no space before it, no digit after it — is what tells
+  // prose about prices apart from mathematics, which is the only reason a
+  // parser has to guess at all.
+  for (const text of ['$5 and $6', 'price is $5.00', 'costs $5 to $6', '$ x $', 'a $ b', '$x$5']) {
+    assert.deepEqual(inline(text), [{ type: 'text', value: text }], text);
+  }
+});
+
+test('an unclosed formula stays literal', () => {
+  assert.deepEqual(parse('an open $x^2').blocks[0].spans, [{ type: 'text', value: 'an open $x^2' }]);
+  // A display opener with no closer is a paragraph, not a code block or an
+  // error: this is the ordinary state of a formula that is still streaming.
+  assert.deepEqual(types('$$\nx^2'), ['paragraph']);
+  assert.deepEqual(types('$$\nx^2\n'), ['paragraph']);
+  // A closer that is not alone on its line is not a closer: taking it would
+  // drop the text after it. The line still *opens* a formula, so it starts a
+  // paragraph of its own — a paragraph may not run across a line that could
+  // become a block once the rest of it arrives.
+  assert.deepEqual(types('$$\nx^2\n$$ after'), ['paragraph', 'paragraph']);
+  // `$$$$` is four characters, not an empty formula.
+  assert.deepEqual(inline('$$$$'), [{ type: 'text', value: '$$$$' }]);
+});
+
+test('a formula inside code or emphasis keeps the container it was in', () => {
+  assert.deepEqual(inline('`$x$`'), [{ type: 'code', value: '$x$' }]);
+  assert.deepEqual(inline('**$x$**'), [
+    { type: 'strong', spans: [{ type: 'math', value: 'x', display: false }] },
+  ]);
+  const list = parse('- item $z$').blocks[0];
+  assert.deepEqual(list.items?.[0].spans?.map((span) => span.type), ['text', 'math']);
+});
+
+test('a formula keeps its place as the document grows', () => {
+  // The commit rule matters for math more than for prose: an open `$$` is a
+  // paragraph and a closed one is a block, and a frozen paragraph must never be
+  // rewritten into something else.
+  const document = 'before\n\n$$\nx^2 + y^2\n$$\n\nafter $z$ and';
+  let frozen: Block[] = [];
+  for (let end = 1; end <= document.length; end++) {
+    const text = document.slice(0, end);
+    const blocks = parse(text).blocks;
+    assert.deepEqual(
+      blocks.slice(0, frozen.length).map((block) => ({ ...block, start: 0 })),
+      frozen.map((block) => ({ ...block, start: 0 })),
+      `a frozen block changed at ${JSON.stringify(text)}`,
+    );
+    frozen = blocks.slice(0, -1);
+  }
+});

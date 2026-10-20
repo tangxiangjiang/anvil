@@ -36,6 +36,12 @@ npm run compile
 npm run build:host   # builds source/cmd/anvil-host into bin/
 ```
 
+`media/vendor/katex/` is committed rather than installed. The formula renderer
+ships inside the VSIX and the webview fetches nothing, so `package:vsix` needs no
+`node_modules` for it; `npm run vendor:katex` re-copies `katex.min.js` and its
+licence from the `katex` devDependency when the version changes, and refuses a
+bundle that is not the pinned version or that assigns `innerHTML`.
+
 Then press <kbd>F5</kbd> (or the `Run Extension` launch config) to open a second
 VS Code window with the extension loaded, and run **Anvil: Open Chat**. `Run
 Extension (trusted workspace, no reload)` opens that window straight onto this
@@ -271,7 +277,20 @@ spawned with.
   before asking the operating system to open it; anything else stays the literal
   text it was written as. The Thinking row is provider-dependent: Anthropic's
   extended thinking must be echoed back with a signature the SDK does not carry
-  yet, so it does not appear there.
+  yet, so it does not appear there. Formulas are typeset too: `$…$` and `$$…$$`
+  are drawn by a KaTeX bundle that ships with the extension, in MathML mode, so
+  the page still loads nothing from the network and needs no stylesheet. `$5 and
+  $6` stays money rather than becoming a formula, an unclosed `$` stays the
+  character it is while the model is still typing, and a formula the renderer
+  refuses appears as its source in monospace.
+- **Reads a conversation without the machinery.** **Focus** on the composer —
+  <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>F</kbd>, or **Anvil: Toggle Focus View** —
+  hides the tool cards and the Thinking rows and leaves the questions and the
+  answers. An approval card stays: it is a question to you, and hiding it would
+  leave a turn waiting where you cannot see it. The view belongs to the tab, not
+  to your settings: it survives a reload and comes back with the restored tab,
+  and reopening the conversation later starts in the ordinary view. Toggling it
+  keeps your draft and the place you were reading.
 - **Reopens the change a call made.** Every finished card for a call that wrote
   or edited a file offers **Review changes**, which opens VS Code's own diff
   editor. It is deliberately not the same thing as the prompt's preview: a call
@@ -375,6 +394,7 @@ Type `/` in the composer for the catalogue. Built-ins:
 | `/model [id]` | Choose the model this conversation uses |
 | `/resume [agent id]` | Continue a past session in this workspace |
 | `/rewind` | Rewind the last turn: fork before it, put its files back, or both |
+| `/export` | Save this conversation as Markdown; nothing after the command is read |
 | `/clear` | Start a new conversation |
 | `/compact` | Summarize the conversation so far; handled by the host, nothing is sent to the model. Refused while a turn is running |
 | `/tasks` | Open the background tasks panel; sends nothing to the model |
@@ -388,6 +408,15 @@ continues from the run before it, files untouched), restore this turn's files (t
 conversation is untouched), or both. The file action appears only when the host has a
 checkpoint for the run; the first message has no run before it, so its fork action starts a
 new conversation.
+
+**`/export` writes a file, not a screenshot.** It reads the stored transcript rather than
+what the tab has drawn, so a tab that attached in the middle still exports what the store
+keeps — and a transcript the store truncated says how many records came before it. The
+Markdown is the conversation — your message, the answer — plus one line per tool call naming
+the tool and, for `write_file`, `edit_file` and `apply_patch`, the paths it touched. Tool
+arguments, tool output, call and run ids and anything from the host's environment are not in
+it. The save dialog defaults to `anvil-conversation-<date>.md` in the workspace folder, and
+cancelling it writes nothing.
 
 **A plan is a document.** A plan-mode answer ends with a card offering **Open plan**,
 **Approve and run**, and **Keep planning**. *Open plan* (or **Anvil: Open Plan**) opens the
@@ -488,11 +517,13 @@ and `src/extension.ts` import `vscode` and are therefore not covered by these
 tests — they need an extension host. Keep them thin; the behaviour worth testing
 belongs on this side of the `vscode` boundary. `src/commands.ts`,
 `src/hostBundle.ts`, `src/sessionList.ts`, `src/rulesFile.ts`, `src/editDiff.ts`,
-`src/transcript.ts` and `src/reattach.ts` are split that way on purpose: they
-decide what a typed line means, which binary to run, what the session sidebar
-shows, what the rules file's skeleton and error positions are, what change a
-finished tool call carried and how it should be opened, what a stored
-conversation folds into, and whether a reloaded window comes back to its session
+`src/transcript.ts`, `src/export.ts` and `src/reattach.ts` are split that way on
+purpose: they decide what a typed line means, which binary to run, what the
+session sidebar shows, what the rules file's skeleton and error positions are,
+what change a finished tool call carried and how it should be opened, what a
+stored conversation folds into, what a conversation exports as, and whether a
+reloaded window comes back to its session or starts fresh — and the
+`vscode`-bound modules above only carry those
 or starts fresh — and the `vscode`-bound modules above only carry those
 decisions out. `test/unit/chatLayout.test.ts` is the third kind of check: it reads
 `media/chat.css` and `media/chat.js` as text and asserts the layout invariants
@@ -525,7 +556,16 @@ before the marker and the replay after both, that a host too old to answer costs
 the tab a replay and nothing else, and that the two lines a replay adds are built
 rather than written. The Go side of the same feature has its own reader tests,
 including the one that asserts no entry and no line of the store file contains
-image bytes or the API key.
+image bytes or the API key. `test/unit/export.test.ts` pins the export's
+audience: a fixture carries a file body, a tool result and the ids, and the
+output must contain none of them, only the name and the paths.
+`test/unit/reading.test.ts` is over the reading view and the formulas, where a
+browser would be needed to see them: it reads `chat.js`, `chat.css`,
+`chatPanel.ts`, the serializer, the package manifest and the vendored bundle,
+and asserts the CSP kept its one source per directive, the renderer was asked
+for MathML with `trust: false`, no HTML is assigned anywhere, the focus view
+hides the tool cards and thinking but not an approval, and the export writes
+through `vscode.workspace.fs` only after the dialog returned a target.
 
 The packaging step has its own check, since it is the part no unit test can
 reach: `npm run smoke:vsix` extracts a built VSIX to a temporary directory,

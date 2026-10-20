@@ -26,6 +26,7 @@
    *
    * A span is `{ type }` plus, for the leaf types, `value`:
    *   `{ type: 'text', value }` `{ type: 'code', value }`
+   *   `{ type: 'math', value, display }`
    * and for the containers, `spans` (and `href` for a link):
    *   `{ type: 'em' | 'strong' | 'del' | 'link', spans, href? }`
    *
@@ -71,6 +72,20 @@
         }
       }
 
+      // A formula, before emphasis: `$` does not nest and has no marker pair
+      // to balance against the emphasis ones, so there is no ordering to get
+      // wrong — but it does have to come after the code span, because a `$`
+      // between backticks is a character.
+      if (text[i] === '$') {
+        const math = matchMath(rest);
+        if (math) {
+          flush();
+          spans.push({ type: 'math', value: math.value, display: math.display });
+          i += math.length;
+          continue;
+        }
+      }
+
       const wrapped = matchWrapped(rest, i, text);
       if (wrapped) {
         flush();
@@ -85,6 +100,43 @@
 
     flush();
     return spans;
+  }
+
+  /**
+   * `$…$` or `$$…$$` at the start of `text`, or null.
+   *
+   * The rules are the familiar ones, and each exists because of prose rather
+   * than mathematics: the opening marker may not be followed by a space, the
+   * content may not end in one, and the closing marker may not be followed by
+   * a digit. That last rule is what keeps `$5 and $6` money rather than a
+   * formula from `5 and ` to nowhere.
+   *
+   * The first `$` after the opener decides, even when it is not a good closer:
+   * looking past it would let `$a $b$` become a formula over text the author
+   * ended a dollar sign earlier. A formula with a stray `$` in it is not one
+   * this parser will render.
+   *
+   * Nothing unclosed is a formula: the dollar stays the character it is.
+   * Nothing here decides whether the body *parses* — that is the renderer's
+   * answer, and a formula it refuses is drawn as its source.
+   *
+   * Display math on one line (`$$x$$`) is a span too, with `display` set: the
+   * block parser turns a line that *starts* with `$$` into a block, and a
+   * `$$…$$` in the middle of a sentence is the same formula, drawn as a block
+   * inside the line it was written in.
+   */
+  function matchMath(text) {
+    const display = text.startsWith('$$');
+    const marker = display ? '$$' : '$';
+    const body = text.slice(marker.length);
+    if (body === '' || /^\s/.test(body)) return null;
+    const close = text.indexOf(marker, marker.length);
+    if (close < 0) return null;
+    const value = text.slice(marker.length, close);
+    const next = text[close + marker.length];
+    if (value === '' || /\s$/.test(value)) return null;
+    if (next !== undefined && /\d/.test(next)) return null;
+    return { value, display, length: close + marker.length };
   }
 
   /**
@@ -160,6 +212,10 @@
   const ORDERED = /^(\s*)(\d{1,9}[.)])(?:\s+(.*))?$/;
   const RULE = /^ {0,3}([-*_])(?:\s*\1){2,}\s*$/;
   const QUOTE = /^ {0,3}>\s?(.*)$/;
+  /** A line that opens display math. It closes on the same line or on `$$`. */
+  const MATH_OPEN = /^ {0,3}\$\$/;
+  /** A line that is only the closing `$$` of a display formula. */
+  const MATH_CLOSE = /^\s*\$\$\s*$/;
 
   /** The list marker a line starts with, and whether it is an ordered one. */
   function markerOf(text) {
@@ -211,6 +267,18 @@
         blocks.push({ type: 'heading', level: heading[1].length, spans: inline(heading[2]), start });
         i++;
         continue;
+      }
+
+      if (MATH_OPEN.test(line.text)) {
+        const math = matchMathBlock(lines, i);
+        if (math) {
+          blocks.push({ type: 'math', text: math.value, start });
+          i = math.next;
+          continue;
+        }
+        // Unclosed, so it is not a block: the line falls through to the
+        // paragraph below, which is what makes `$$` on its own stay the two
+        // characters it is while the model is still typing.
       }
 
       if (RULE.test(line.text)) {
@@ -270,8 +338,13 @@
       // A paragraph runs to the next blank line or block start, and stays one
       // paragraph however many lines it spans: the newlines inside it are soft
       // wraps, not breaks.
-      const body = [];
-      let j = i;
+      //
+      // The first line is taken unconditionally. Every other block start was
+      // tried above, but `isBoundary` also stops at an *unclosed* `$$`, and a
+      // loop that started by testing it would read nothing and leave the index
+      // where it was.
+      const body = [lines[i].text.trim()];
+      let j = i + 1;
       while (j < lines.length && !isBoundary(lines[j].text)) {
         body.push(lines[j].text.trim());
         j++;
@@ -302,10 +375,44 @@
       HEADING.test(text) ||
       RULE.test(text) ||
       QUOTE.test(text) ||
+      MATH_OPEN.test(text) ||
       BULLET.test(text) ||
       ORDERED.test(text) ||
       /^ {4}/.test(text)
     );
+  }
+
+  /**
+   * A display formula starting at `lines[index]`, or null when it does not
+   * close.
+   *
+   * Two shapes, because that is how people write them: `$$…$$` on one line, and
+   * `$$` alone with the body on the lines between it and another `$$`. A closer
+   * that is not alone on its line is not a closer — taking it would drop
+   * whatever followed, and the formula would come back on the next reply with
+   * its text missing. The body keeps its inner newlines: an aligned derivation
+   * is written one line per row.
+   */
+  function matchMathBlock(lines, index) {
+    const afterOpen = lines[index].text.replace(MATH_OPEN, '');
+    if (afterOpen.trim() === '') {
+      const body = [];
+      for (let j = index + 1; j < lines.length; j++) {
+        /** @type {string} */
+        const text = lines[j].text;
+        if (MATH_CLOSE.test(text)) {
+          const value = body.join('\n').trim();
+          return value === '' ? null : { value, next: j + 1 };
+        }
+        body.push(text);
+      }
+      return null;
+    }
+    const close = afterOpen.indexOf('$$');
+    if (close < 0) return null;
+    if (afterOpen.slice(close + 2).trim() !== '') return null;
+    const value = afterOpen.slice(0, close).trim();
+    return value === '' ? null : { value, next: index + 1 };
   }
 
   /**

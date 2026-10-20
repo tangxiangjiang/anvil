@@ -32,6 +32,7 @@
   const dontAskStrip = document.getElementById('dontAsk');
   const rulesButton = document.getElementById('rules');
   const permissionsButton = document.getElementById('permissions');
+  const focusButton = document.getElementById('focus');
   const palette = document.getElementById('palette');
   const dock = document.getElementById('composerDock');
   const meter = document.getElementById('meter');
@@ -218,6 +219,76 @@
 
   function scrollIfPinned(wasPinned) {
     if (wasPinned) transcript.scrollTop = transcript.scrollHeight;
+  }
+
+  /**
+   * The document's saved state — which conversation it is showing, and whether
+   * it is in the focus view.
+   *
+   * Merged rather than replaced. The two are written at different moments (the
+   * agent when the session is announced, the view when it is toggled), and a
+   * whole-object write from one would silently erase what the other said. That
+   * is also how the extension learns the view: VS Code hands this object back
+   * when it restores the tab.
+   */
+  function remember(patch) {
+    const state = vscode.getState();
+    vscode.setState(Object.assign({}, state && typeof state === 'object' ? state : {}, patch));
+  }
+
+  /**
+   * Whether tool cards and thinking are hidden.
+   *
+   * The document owns this rather than the extension: it is a reading
+   * preference with nowhere else to live, it must survive a reload, and the
+   * extension has no API to set a webview's state — only to ask the document
+   * to flip it. The body class is the initial value because the host rendered
+   * the page with it; a reload therefore comes back in the same view.
+   */
+  let focusView = document.body.classList.contains('focus-view');
+
+  /** The first block at or below the top of the visible transcript. */
+  function firstVisibleBlock(skipHidden) {
+    const top = transcript.getBoundingClientRect().top;
+    const children = Array.from(transcript.children);
+    let index = children.findIndex((child) => child.getBoundingClientRect().bottom > top);
+    if (index < 0) return null;
+    // The anchor has to be a block that survives the toggle, or its measured
+    // position afterwards is zero — a hidden element has no box. Turning focus
+    // on therefore walks back to the nearest prose block above the tool card it
+    // was looking at.
+    if (skipHidden) {
+      while (index > 0 && hiddenInFocus(children[index])) index--;
+      if (hiddenInFocus(children[index])) return null;
+    }
+    return children[index];
+  }
+
+  /** Whether the focus view hides this block. Kept beside the stylesheet's rule. */
+  function hiddenInFocus(node) {
+    return node.classList.contains('tool') || node.classList.contains('think');
+  }
+
+  /**
+   * Shows or hides the agent's side of the work, keeping the reader's place.
+   *
+   * Hiding a few hundred tool cards shrinks the scroll height in one step, and
+   * the browser keeps `scrollTop` as a number — which would land the reader
+   * somewhere else in the conversation. So the block at the top of the visible
+   * area is measured before and realigned after; a reader pinned to the bottom
+   * stays at the bottom, which is where new text arrives.
+   */
+  function setFocus(on) {
+    if (focusView === on) return;
+    const pinned = atBottom();
+    const anchor = pinned ? null : firstVisibleBlock(on);
+    const top = anchor ? anchor.getBoundingClientRect().top : 0;
+    focusView = on;
+    document.body.classList.toggle('focus-view', on);
+    if (focusButton) focusButton.setAttribute('aria-pressed', on ? 'true' : 'false');
+    if (pinned) transcript.scrollTop = transcript.scrollHeight;
+    else if (anchor) transcript.scrollTop += anchor.getBoundingClientRect().top - top;
+    remember({ focus: on });
   }
 
   function append(node) {
@@ -443,6 +514,9 @@
     if (a.type === 'heading') return a.level === b.level;
     if (a.type === 'list') return a.ordered === b.ordered;
     if (a.type === 'code') return (a.lang || '') === (b.lang || '');
+    // A formula is redrawn when its source changes rather than reconciled: its
+    // inner nodes belong to the renderer, not to this file.
+    if (a.type === 'math') return a.text === b.text;
     return true;
   }
 
@@ -495,6 +569,11 @@
       }
       case 'hr':
         return el('hr', 'md-rule');
+      case 'math': {
+        const node = mathNode(block.text || '', true);
+        node.classList.add('md-math-block');
+        return node;
+      }
       case 'list': {
         const node = el(block.ordered ? 'ol' : 'ul', 'md-list');
         if (block.ordered && block.from && block.from !== 1) node.start = block.from;
@@ -600,6 +679,7 @@
     const shape = node.anvilSpan;
     if (!shape || shape.type !== span.type) return false;
     if (span.type === 'link') return shape.href === span.href;
+    if (span.type === 'math') return shape.value === span.value && shape.display === span.display;
     if (span.type === 'text' || span.type === 'code') return shape.value === span.value;
     return false;
   }
@@ -624,6 +704,9 @@
         break;
       case 'link':
         node = linkNode(span);
+        break;
+      case 'math':
+        node = mathNode(span.value, span.display === true);
         break;
       default:
         node = document.createTextNode(span.value);
@@ -677,6 +760,55 @@
 
   function spansText(spans) {
     return (spans || []).map((span) => (span.value !== undefined ? span.value : spansText(span.spans))).join('');
+  }
+
+  /**
+   * A formula, drawn as MathML by the vendored renderer.
+   *
+   * `render` builds nodes instead of returning markup, which is the property
+   * the transcript depends on: a formula is model output, and nothing here
+   * assigns HTML from it. `trust: false` removes the commands that could write
+   * a link or a class (`\href`, `\htmlClass`), and `throwOnError` hands a
+   * malformed formula back to this file so it can be shown as the characters
+   * it is rather than as the renderer's own red error box.
+   *
+   * MathML is what makes the page's CSP stay as it is. KaTeX's HTML output
+   * writes inline style attributes on nearly every span, and a CSP without
+   * `'unsafe-inline'` blocks those; MathML writes none, needs no stylesheet,
+   * and needs no font files — the browser already draws mathematics. The price
+   * is a look that follows the platform's math font rather than KaTeX's.
+   *
+   * The renderer is a page script, not an import: `media/` is plain scripts.
+   * If it is missing, the formula still appears — as its source.
+   */
+  function mathNode(value, display) {
+    // A span either way: a display formula can sit inside a list item or a
+    // sentence, where a `div` would end the line's element early. The class
+    // that makes it a block does the layout.
+    const node = el('span', display ? 'md-math md-math-display' : 'md-math');
+    const renderer = self.katex;
+    if (renderer && typeof renderer.render === 'function') {
+      // Built in a detached element: `render` appends as it goes, and a formula
+      // it refuses halfway would leave a partial drawing behind.
+      const drawing = el('span', 'md-math-drawing');
+      try {
+        renderer.render(value, drawing, {
+          displayMode: display,
+          output: 'mathml',
+          throwOnError: true,
+          trust: false,
+          strict: false,
+        });
+        node.appendChild(drawing);
+        return node;
+      } catch {
+        // Falls through to the source below, which is what the model wrote and
+        // what a reader can still use.
+      }
+    }
+    node.classList.add('md-math-source');
+    node.textContent = display ? '$$' + value + '$$' : '$' + value + '$';
+    return node;
   }
 
   /**
@@ -2882,6 +3014,13 @@
     permissionsButton.addEventListener('click', () => vscode.postMessage({ type: 'openPermissions' }));
   }
 
+  if (focusButton) {
+    // Local, and then remembered: the button is the document asking itself, so
+    // there is no round trip to wait for. The palette command and the key
+    // binding take the other path — the extension asks the document to flip.
+    focusButton.addEventListener('click', () => setFocus(!focusView));
+  }
+
   // A paste is only ours when it carries an image; text pastes stay the
   // textarea's, which is why the default is left alone unless one is found.
   input.addEventListener('paste', (event) => {
@@ -3148,7 +3287,12 @@
         // The one thing this document must remember for a reload: the
         // serializer hands it back and the tab comes up on the same
         // conversation. It is not drawn — a new session is not news.
-        vscode.setState({ agentId: msg.agentId || undefined });
+        remember({ agentId: msg.agentId || undefined });
+        return;
+      case 'toggleFocus':
+        // The palette command and its keybinding arrive here. The document
+        // flips and stores; the button shows the result.
+        setFocus(!focusView);
         return;
       case 'context':
         // 0 is "unknown", the same value the setting's absence means, so a

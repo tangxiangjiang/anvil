@@ -65,6 +65,7 @@ test('the catalogue lists built-ins first and a skill never shadows one', () => 
     'model',
     'resume',
     'rewind',
+    'export',
     'clear',
     'compact',
     'tasks',
@@ -131,6 +132,10 @@ test('every built-in routes to the capability it names', () => {
   assert.deepEqual(route('/resume a7', catalogue), { kind: 'resume', agentId: 'a7' });
   assert.deepEqual(route('/rewind', catalogue), { kind: 'rewind' });
   assert.deepEqual(route('/Rewind', catalogue), { kind: 'rewind' });
+  // The extension writes the file and picks the name; nothing after the command
+  // is a path, so an argument cannot steer where the export lands.
+  assert.deepEqual(route('/export', catalogue), { kind: 'export' });
+  assert.deepEqual(route('/export /etc/passwd', catalogue), { kind: 'export' });
   assert.deepEqual(route('/clear', catalogue), { kind: 'clear' });
   assert.deepEqual(route('/tasks', catalogue), { kind: 'tasks' });
   // The manager covers both layers, so nothing after `/mcp` is carried: there is

@@ -141,10 +141,12 @@ export class Hub {
   /**
    * Builds a tab without opening it. The caller adopts a webview panel onto it
    * — either one this side just created, or one VS Code restored — which is why
-   * construction and `open()` are separate.
+   * construction and `open()` are separate. `focus` is the reading view the
+   * previous document saved, which only a restored tab can have: a tab opened
+   * now starts in the full view.
    */
-  createPanel(agentId?: string): ChatPanel {
-    const panel = new ChatPanel(this.context, this.log, this.previews, this.plans, this, agentId);
+  createPanel(agentId?: string, focus = false): ChatPanel {
+    const panel = new ChatPanel(this.context, this.log, this.previews, this.plans, this, agentId, focus);
     this.panels.add(panel);
     this.tabsChanged.fire();
     return panel;

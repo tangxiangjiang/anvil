@@ -131,16 +131,32 @@ prose.
 Three client-only changes, all of which leave the protocol alone:
 
 - **Focus view** filters the transcript to narrative: tool cards and thinking blocks
-  collapse, the answer stays. The state lives in the webview (`vscode.getState()`), so it
-  survives a reload and never enters settings or the store.
-- **Formulas** render `$…$` and `$$…$$` with a locally bundled renderer (KaTeX or an
-  equivalent). The page's CSP stays `default-src 'none'`; nothing is fetched. Unclosed `$`
-  stays literal, and the renderer builds DOM rather than assigning `innerHTML` to host text.
-  If the bundle size becomes unacceptable, the fallback is to show the source in a monospace
-  block, not to load a script from a CDN.
-- **`/export`** writes the current transcript as Markdown through `showSaveDialog`. The
-  export carries the conversation and a summary of tool calls, not raw tool output, internal
-  ids, or anything from the host's environment.
+  collapse, the answer stays. It is also the view an approval card must survive: the card is
+  a question to the reader, and hiding it would leave a turn waiting behind a wall the reader
+  cannot see through. The state lives in the webview (`vscode.getState()`) and never enters
+  settings or the store. The document owns the flag — the toolbar button, `Ctrl+Alt+F` and
+  the palette command all ask the document to flip it, and nothing else writes it — while
+  the host only re-seeds the page from the `focus` the serializer saved when VS Code restores
+  the tab. The saved object is merged rather than replaced, because the agent id and the view
+  are written at different moments.
+- **Formulas** render `$…$` and `$$…$$` with KaTeX 0.19.0, vendored into
+  `media/vendor/katex/` by `npm run vendor:katex`: one `katex.min.js` of about 273 KB, no
+  stylesheet, no font file, no network request. It is used in `output: 'mathml'` mode. The
+  HTML output writes inline `style` attributes for its layout, which the page's CSP blocks;
+  the ways past that are `'unsafe-inline'` or serving a stylesheet, and both are worse than
+  MathML, which writes no styles and needs no CSS. The renderer builds elements through
+  `textContent`, `trust: false` keeps `\href` and `\htmlClass` from naming a link or a class
+  the model chose, and a formula it refuses is drawn as its source in monospace. `$5 and $6`
+  stays money — no space before the closer, no digit after it — and an unclosed delimiter
+  stays the characters it is while the model is still typing.
+  If the bundle size becomes unacceptable, the fallback is still to show the source in a
+  monospace block, not to load a script from a CDN.
+- **`/export`** writes the current transcript as Markdown through `showSaveDialog`, defaulting
+  to `anvil-conversation-<date>.md` in the workspace folder. The export carries the
+  conversation and a summary of tool calls — the name, and for `write_file`, `edit_file` and
+  `apply_patch`, the paths the call named — not raw tool output, not arguments, not internal
+  ids, not anything from the host's environment. The store is the source rather than the
+  screen, and a transcript the store truncated says how many records came before it.
 
 ## 7. Accessibility is a contract, not a pass
 

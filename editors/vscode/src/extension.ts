@@ -55,13 +55,16 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.window.registerWebviewPanelSerializer(ChatPanel.viewType, {
       async deserializeWebviewPanel(
         webviewPanel: vscode.WebviewPanel,
-        state: { agentId?: unknown } | undefined,
+        state: { agentId?: unknown; focus?: unknown } | undefined,
       ): Promise<void> {
         // No `reveal`: restoring a tab is not a request to be taken to it. The
         // document remembered its agent; handing it back is what makes the tab
         // come back on the same conversation rather than on a blank one.
         const agentId = typeof state?.agentId === 'string' && state.agentId !== '' ? state.agentId : undefined;
-        const panel = hub.createPanel(agentId);
+        // The reading view is the document's own state, saved with the same
+        // call. A restored tab that comes back in the other view would be a
+        // reload the reader has to notice and undo.
+        const panel = hub.createPanel(agentId, state?.focus === true);
         panel.adopt(webviewPanel);
       },
     }),
@@ -138,6 +141,13 @@ export function activate(context: vscode.ExtensionContext): void {
       // refusal to mean anything. The plan document was the active editor.
       target.panel.reveal();
       target.panel.rejectPlan(target.runId);
+    }),
+
+    // The reading view, from the palette and from Ctrl+Alt+F. It is the front
+    // tab that answers, which is the one the keybinding was aimed at; the
+    // document owns the flag and flips it.
+    vscode.commands.registerCommand('anvil.toggleFocusView', () => {
+      hub.activePanel()?.toggleFocusView();
     }),
 
     // Built here rather than in `activate`'s body so its lifetime is the

@@ -41,6 +41,7 @@ import { dedupeMentions, relativeMention } from './mentions';
 import { McpCardServer, cardServer, hasRuntime, mcpEnabled, missingMcpSources, settingSourcesFor } from './mcp';
 import { shouldReattach } from './reattach';
 import { replayOf } from './transcript';
+import { exportMarkdown } from './export';
 import { RewindAction, rewindPlan } from './rewind';
 import { CommandAction, SlashCommand, parseSlash, route } from './commands';
 import {
@@ -334,6 +335,13 @@ type Outbound =
   | { type: 'runEnd'; done: DoneParams }
   /** The tab became the active editor: the composer takes the keyboard. */
   | { type: 'focus' }
+  /**
+   * Flip the reading view, from the palette command and its keybinding. The
+   * document owns the flag: it is the only side that can store it where a
+   * reload will find it, so this is a request to the document, not a state
+   * message about it.
+   */
+  | { type: 'toggleFocus' }
   | { type: 'notice'; level: 'info' | 'warn' | 'error'; message: string };
 
 /** Where the chosen permission mode is remembered between windows. */
@@ -503,6 +511,12 @@ export class ChatPanel implements HostListener {
     private readonly plans: PlanDocuments,
     private readonly hub: Hub,
     agentId?: string,
+    /**
+     * Whether this document starts in the focus view. It comes from the state
+     * the previous document saved, and it is read once: from then on the
+     * document is the owner, and the palette command asks it to flip.
+     */
+    private readonly focusView = false,
   ) {
     this.mode = readMode(context);
     this.agentId = agentId === '' ? undefined : agentId;
@@ -556,7 +570,7 @@ export class ChatPanel implements HostListener {
       enableScripts: true,
       localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, 'media')],
     };
-    panel.webview.html = renderHtml(panel.webview, this.context.extensionUri);
+    panel.webview.html = renderHtml(panel.webview, this.context.extensionUri, this.focusView);
     panel.webview.onDidReceiveMessage((msg: Inbound) => void this.onMessage(msg));
     this.active = panel.active;
     panel.onDidChangeViewState((event) => {
@@ -1161,6 +1175,12 @@ export class ChatPanel implements HostListener {
         this.post({ type: 'rewindOpen' });
         this.postState();
         return;
+      case 'export':
+        await this.exportConversation();
+        // Nothing about the conversation changed, but the composer locked when
+        // the command was submitted and only a state message unlocks it.
+        this.postState();
+        return;
       case 'clear':
         await this.clearConversation();
         return;
@@ -1210,6 +1230,76 @@ export class ChatPanel implements HostListener {
         await this.sendQuestion(text, mentions, images);
         return;
     }
+  }
+
+  /**
+   * Writes the conversation to a Markdown file the user names.
+   *
+   * The transcript comes from the store rather than from the document: the
+   * screen may hold only the newest turns of a replayed conversation, and what
+   * is exported has to be what the host can vouch for. The file is written
+   * through `vscode.workspace.fs`, so a remote window saves it where the
+   * workspace is, not where the UI runs.
+   *
+   * The default name carries the date and nothing from the conversation: a
+   * first line of prose can hold a path, a hostname, or a name, and a filename
+   * is shown in places the conversation is not.
+   */
+  private async exportConversation(): Promise<void> {
+    const agentId = this.currentAgentId();
+    if (!agentId) {
+      this.post({ type: 'notice', level: 'warn', message: 'There is nothing to export yet.' });
+      return;
+    }
+    let result: SessionTranscriptResult;
+    try {
+      result = await this.hub.transcript(agentId);
+    } catch (err) {
+      this.post({
+        type: 'notice',
+        level: 'error',
+        message: `Could not read the conversation: ${(err as Error).message}`,
+      });
+      return;
+    }
+    const entries = result.entries ?? [];
+    if (entries.length === 0) {
+      this.post({ type: 'notice', level: 'warn', message: 'There is nothing to export yet.' });
+      return;
+    }
+
+    const date = new Date().toISOString().slice(0, 10);
+    const folder = vscode.workspace.workspaceFolders?.[0]?.uri;
+    const defaultUri = folder
+      ? vscode.Uri.joinPath(folder, `anvil-conversation-${date}.md`)
+      : undefined;
+    const target = await vscode.window.showSaveDialog({
+      title: 'Export conversation',
+      saveLabel: 'Export',
+      defaultUri,
+      filters: { Markdown: ['md'] },
+    });
+    // A cancelled dialog is not a failure, and the composer still has to be
+    // told the command is over.
+    if (!target) return;
+
+    const text = exportMarkdown(entries, { dropped: result.dropped, date });
+    try {
+      await vscode.workspace.fs.writeFile(target, Buffer.from(text, 'utf8'));
+    } catch (err) {
+      this.post({
+        type: 'notice',
+        level: 'error',
+        message: `Could not write ${target.fsPath}: ${(err as Error).message}`,
+      });
+      return;
+    }
+    // Not awaited: the notice stays up until it is dismissed, and the command
+    // is over the moment the bytes are on disk.
+    void vscode.window
+      .showInformationMessage(`Conversation exported to ${target.fsPath}`, 'Open')
+      .then((pick) => (pick === 'Open' ? vscode.window.showTextDocument(target) : undefined))
+      .then(undefined, () => undefined);
   }
 
   /** Adopts a named agent, for `/resume <id>` typed rather than picked. */
@@ -2425,6 +2515,18 @@ export class ChatPanel implements HostListener {
   }
 
   /**
+   * Asks this tab's document to flip the focus view.
+   *
+   * The request goes to the document rather than the panel holding a copy: the
+   * flag is the document's, stored where a reload finds it, and a second copy
+   * here would be a copy that could disagree with the one on screen. With no
+   * document there is nothing to flip, which is why this returns quietly.
+   */
+  toggleFocusView(): void {
+    this.post({ type: 'toggleFocus' });
+  }
+
+  /**
    * Sends to the tab, if there is one. Closing the tab is now routine — it is
    * how the user puts the conversation away — so a message that arrives with no
    * document behind it is expected rather than exceptional, and the rejection
@@ -2572,7 +2674,7 @@ export class ChatPanel implements HostListener {
 }
 
 /** Builds the webview document. Nothing here is fetched at runtime. */
-function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
+function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri, focus = false): string {
   const nonce = makeNonce();
   const asset = (name: string): vscode.Uri =>
     webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', name));
@@ -2585,7 +2687,7 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
 <link rel="stylesheet" href="${asset('chat.css')}">
 <title>Anvil</title>
 </head>
-<body>
+<body${focus ? ' class="focus-view"' : ''}>
   <div id="banner" class="banner" hidden></div>
   <div id="transcript" class="transcript" role="log" aria-live="polite">
     <div id="empty" class="empty">
@@ -2627,6 +2729,12 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
         </select>
         <button id="rules" type="button" class="ghost" title="Which rule files this workspace loaded" hidden>Rules</button>
         <button id="permissions" type="button" class="ghost" title="Manage permission rules: what runs without asking, what asks, and what is refused">Permissions</button>
+        <!--
+          The reading view. It is a state, not an action, so it is drawn as a
+          pressed toggle; the label says what it shows rather than what it
+          hides.
+        -->
+        <button id="focus" type="button" class="ghost" aria-pressed="${focus ? 'true' : 'false'}" title="Show only the conversation: hide tool cards and thinking (Ctrl+Alt+F)">Focus</button>
         <span class="spacer"></span>
         <button id="attach" type="button" class="secondary" title="Reference a file or folder">@</button>
         <!--
@@ -2666,6 +2774,14 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     lazily on its first render, so the order is convention rather than a
     requirement; it is written this way so a reader can see the dependency.
   -->
+  <!--
+    The formula renderer, vendored under media/vendor. It is a plain script
+    that assigns a global, loaded from the extension rather than a CDN: the
+    page's CSP allows no network, so a formula has to render with the network
+    unplugged. It renders MathML, which is why neither KaTeX's stylesheet nor
+    its fonts ship: the browser already knows how to draw mathematics.
+  -->
+  <script nonce="${nonce}" src="${asset('vendor/katex/katex.min.js')}"></script>
   <script nonce="${nonce}" src="${asset('markdown.js')}"></script>
   <script nonce="${nonce}" src="${asset('meter.js')}"></script>
   <script nonce="${nonce}" src="${asset('history.js')}"></script>

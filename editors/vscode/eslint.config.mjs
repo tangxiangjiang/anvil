@@ -5,7 +5,11 @@ import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
   {
-    ignores: ['out/**', 'node_modules/**'],
+    // Vendored third-party code is shipped, not maintained: linting it would
+    // mean either fixing a bundle nobody here wrote or silencing the same
+    // findings on every upgrade. It is checked by its version and by the one
+    // property this repository cares about, in `scripts/vendor-katex.mjs`.
+    ignores: ['out/**', 'node_modules/**', 'media/vendor/**'],
   },
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
