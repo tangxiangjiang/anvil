@@ -47,12 +47,9 @@ window.Features.clusters = {
     this.render();
   },
 
+  // Shared with Delivery and Nodes: one definition, in js/shared/esc.js.
   esc(s) {
-    return String(s ?? "")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
+    return window.AnvilUI.esc(s);
   },
 
   async refreshQuiet() {
@@ -273,7 +270,7 @@ window.Features.clusters = {
         });
         this.closeUiModal();
         await this.render();
-        alert("Workspace token (put in agentd cluster.workspace_token):\n\n" + ws.token);
+        this.showNotice("Workspace token (put in agentd cluster.workspace_token):\n\n" + ws.token, "Workspace token");
       } catch (e) {
         err.textContent = e.message || String(e);
       }
@@ -899,7 +896,7 @@ window.Features.clusters = {
         });
         location.hash = "#/delivery/requirements/" + encodeURIComponent(eng.id);
       } catch (e) {
-        alert(e.message || e);
+        this.showNotice(e.message || e, "Error");
       }
     });
     root.querySelector("#c-proj-edit-deps")?.addEventListener("click", () =>
@@ -923,7 +920,7 @@ window.Features.clusters = {
           await api.v1.startClusterWorker(fleetId, btn.getAttribute("data-node"), btn.getAttribute("data-w-start"));
           await this.render();
         } catch (e) {
-          alert(e.message || e);
+          this.showNotice(e.message || e, "Error");
         }
       });
     });
@@ -938,7 +935,7 @@ window.Features.clusters = {
           );
           await this.render();
         } catch (e) {
-          alert(e.message || e);
+          this.showNotice(e.message || e, "Error");
         }
       });
     });
@@ -986,7 +983,7 @@ window.Features.clusters = {
         this.closeUiModal();
         await this.render();
       } catch (e) {
-        alert(e.message || e);
+        this.showNotice(e.message || e, "Error");
       }
     };
   },
@@ -1218,7 +1215,7 @@ Created by Anvil.
   async fsMkdir(modal) {
     const err = modal.querySelector("#c-modal-err");
     err.textContent = "";
-    const name = prompt("New folder name");
+    const name = await this.askText("New folder name");
     if (!name) return;
     const base = (this._addCtx.fsPath || "").replace(/\/+$/, "");
     const path = base ? base + "/" + name.trim() : name.trim();
@@ -1299,22 +1296,55 @@ Created by Anvil.
     return this.el?.querySelector("#c-ui-modal");
   },
   closeUiModal() {
-    const m = this.uiModal();
-    if (m) {
-      m.hidden = true;
-      m.innerHTML = "";
-    }
+    window.AnvilUI.modal.close(this.uiModal());
     this._addCtx = null;
   },
-  showUiModal(html) {
+  showUiModal(html, opts) {
     const m = this.uiModal();
-    m.innerHTML = html;
-    m.hidden = false;
-    m.querySelectorAll("[data-close-ui]").forEach((b) => {
-      b.onclick = () => this.closeUiModal();
+    if (!m) return;
+    window.AnvilUI.modal.open(m, html, opts || {});
+  },
+
+  showNotice(message, title = "Notice") {
+    window.AnvilUI.notice(this.uiModal(), message, title);
+  },
+
+  /** askText is prompt() without the browser dialog. */
+  askText(title, label = "Name") {
+    return new Promise((resolve) => {
+      let settled = false;
+      const done = (v) => {
+        if (settled) return;
+        settled = true;
+        resolve(v);
+      };
+      window.AnvilUI.modal.open(
+        this.uiModal(),
+        `
+        <div class="modal-card">
+          <h3 style="margin-top:0">${window.AnvilUI.esc(title)}</h3>
+          <label for="c-ask">${window.AnvilUI.esc(label)}</label>
+          <input id="c-ask" autocomplete="off" spellcheck="false" />
+          <div class="toolbar" style="margin-top:0.75rem;justify-content:flex-end">
+            <button type="button" class="ghost" data-close-ui>Cancel</button>
+            <button type="button" id="c-ask-ok">OK</button>
+          </div>
+        </div>`,
+        { title, onClose: () => done("") },
+      );
+      const m = this.uiModal();
+      const input = m.querySelector("#c-ask");
+      const submit = () => {
+        const v = (input.value || "").trim();
+        done(v);
+      };
+      m.querySelector("#c-ask-ok").addEventListener("click", submit);
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          submit();
+        }
+      });
     });
-    m.onclick = (ev) => {
-      if (ev.target === m) this.closeUiModal();
-    };
   },
 };

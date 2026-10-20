@@ -324,12 +324,12 @@ window.AiChat = {
           });
         };
         root.querySelector("[data-ai-send]")?.addEventListener("click", () => {
-          send().catch((err) => alert(err.message || err));
+          send().catch((err) => console.error("ai_chat:", err));
         });
         root.querySelector("[data-ai-input]")?.addEventListener("keydown", (e) => {
           if (e.key === "Enter" && !e.shiftKey) {
             e.preventDefault();
-            send().catch((err) => alert(err.message || err));
+            send().catch((err) => console.error("ai_chat:", err));
           }
         });
 

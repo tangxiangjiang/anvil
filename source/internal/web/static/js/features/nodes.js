@@ -80,7 +80,7 @@ function btn(label, onClick, cls) {
   b.type = "button";
   b.textContent = label;
   if (cls) b.className = cls;
-  b.onclick = () => onClick().catch((e) => alert(e.message || e));
+  b.onclick = () => onClick().catch((e) => console.error(e));
   return b;
 }
 function esc(s) {
