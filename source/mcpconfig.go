@@ -292,6 +292,14 @@ func (d *mcpDocument) errorf(format string, args ...any) error {
 }
 
 func mcpParseError(path string, data []byte, err error) error {
+	return newError("mcp.json does not parse", false, mcpConfigError(path, data, err))
+}
+
+// mcpConfigError names the file a parse or validation failure came from, and the
+// position the parser pointed at when it reported one. It is used by the reader
+// as well as the writer: a listing that cannot parse a file still has to say
+// which file and where, because that is what a client opens.
+func mcpConfigError(path string, data []byte, err error) *MCPConfigError {
 	ce := &MCPConfigError{Path: path, Message: err.Error()}
 	var offset int
 	var syntax *json.SyntaxError
@@ -308,7 +316,7 @@ func mcpParseError(path string, data []byte, err error) error {
 	if offset > 0 {
 		ce.Line, ce.Column = lineColumn(data, offset)
 	}
-	return newError("mcp.json does not parse", false, ce)
+	return ce
 }
 
 func lineColumn(data []byte, offset int) (int, int) {

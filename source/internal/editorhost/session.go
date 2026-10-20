@@ -41,6 +41,12 @@ type session struct {
 	// so the host refuses to write it rather than promising what it cannot keep;
 	// and the file's declaration of a starting mode is not read either.
 	loadPermissions bool
+	// settingSources is the file layers the session reads, and mcpKey identifies
+	// the host's shared MCP runtime for that set (0.44+). A configuration write
+	// refreshes the idle sessions whose key it names; a session with no sources
+	// has no runtime and no key.
+	settingSources []anvil.SettingSource
+	mcpKey         string
 
 	mu      sync.Mutex
 	agent   *anvil.Agent

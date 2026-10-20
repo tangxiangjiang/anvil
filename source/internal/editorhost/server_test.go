@@ -18,10 +18,15 @@ import (
 func initHost(t *testing.T, baseURL string) (*harness, string) {
 	t.Helper()
 	dir := newWorkspace(t)
+	// The user layer and the MCP token store are host-level state: both are
+	// pointed into the test's temp tree so no test reads or writes the real
+	// user's files.
+	home := isolateHome(t)
 	h := startHarness(t, Config{
-		Provider: string(anvil.ProviderOpenAI),
-		BaseURL:  baseURL,
-		Model:    "stub-model",
+		Provider:    string(anvil.ProviderOpenAI),
+		BaseURL:     baseURL,
+		Model:       "stub-model",
+		MCPTokenDir: filepath.Join(home, "mcp-oauth"),
 	})
 	res := resultOf(t, h.callOK(MethodInitialize, InitializeParams{
 		Protocol: ProtocolVersion,

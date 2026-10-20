@@ -5,6 +5,7 @@ package editorhost
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,18 @@ import (
 
 	"github.com/anvil-dev/anvil"
 )
+
+// isolateHome points the user layer and the OAuth token directory at the test's
+// temp tree. Without it, a test that selects the user source would read the
+// machine's real ~/.cursor/mcp.json and start whatever it names. Both variables
+// are set because the home directory is resolved per platform.
+func isolateHome(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	return home
+}
 
 func writeMCPFile(t *testing.T, path, body string) {
 	t.Helper()
@@ -29,13 +42,21 @@ func writeMCPFile(t *testing.T, path, body string) {
 func TestMCPListReportsTheProjectFile(t *testing.T) {
 	h, dir := initHost(t, "")
 	path := filepath.Join(dir, ".cursor", "mcp.json")
+	// Both servers are unreachable on purpose: the listing must describe them
+	// from the file without a dial deciding the answer, and the ports are closed
+	// so the host's background reload fails at once instead of waiting.
 	writeMCPFile(t, path, `{"mcpServers": {
-		"files": {"command": "npx", "args": ["server-files"]},
-		"docs": {"url": "https://example.test/mcp"}
+		"files": {"command": "anvil-test-no-such-command"},
+		"docs": {"url": "http://127.0.0.1:1/mcp"}
 	}}`)
 
 	res := resultOf(t, h.callOK(MethodMCPList, MCPListParams{SettingSources: []string{"project"}}))
 
+	// The runtime is what this host asks the SDK for; an older host has no such
+	// field, and the extension degrades on its absence.
+	if res["runtime"] != true {
+		t.Fatalf("runtime=%v want true", res["runtime"])
+	}
 	servers, _ := res["servers"].([]any)
 	if len(servers) != 2 {
 		t.Fatalf("servers=%v want two", servers)
@@ -48,10 +69,18 @@ func TestMCPListReportsTheProjectFile(t *testing.T) {
 	if second["name"] != "files" || second["transport"] != "stdio" {
 		t.Fatalf("files=%v want stdio", second)
 	}
-	// There is no connected state on the wire. A field that said "running"
-	// would only mean the file mentioned it.
-	if _, ok := first["connected"]; ok {
-		t.Fatalf("the listing invented a connection state: %v", first)
+	// State describes the runtime, never the file. A server that was never
+	// reached is not connected, whatever the file says about it.
+	for _, server := range servers {
+		info, _ := server.(map[string]any)
+		switch info["state"] {
+		case nil, "", "connecting", "failed", "disabled":
+		default:
+			t.Fatalf("%v claims state %q without a connection", info["name"], info["state"])
+		}
+		if count, _ := info["tool_count"].(float64); count != 0 {
+			t.Fatalf("%v tool_count=%v want 0", info["name"], count)
+		}
 	}
 
 	sources, _ := res["sources"].([]any)
@@ -93,22 +122,33 @@ func TestMCPListReportsAnAbsentProjectFile(t *testing.T) {
 	}
 }
 
-// A malformed file is the interesting failure: an empty listing would hide the
-// one thing the user can fix.
-func TestMCPListFailsOnAMalformedFile(t *testing.T) {
+// A malformed file is a problem beside the listing, not a failed call: the panel
+// has to show the file's line beside the last good statuses, and it cannot do
+// that with an error string alone.
+func TestMCPListReportsAMalformedFileAsAProblem(t *testing.T) {
 	h, dir := initHost(t, "")
-	writeMCPFile(t, filepath.Join(dir, ".cursor", "mcp.json"), `{"mcpServers": {`)
+	path := filepath.Join(dir, ".cursor", "mcp.json")
+	writeMCPFile(t, path, `{"mcpServers": {`)
 
-	m := h.call(MethodMCPList, MCPListParams{SettingSources: []string{"project"}})
-	rpcErr, ok := rpcErrorOf(m)
+	res := resultOf(t, h.callOK(MethodMCPList, MCPListParams{SettingSources: []string{"project"}}))
+
+	problem, ok := res["problem"].(map[string]any)
 	if !ok {
-		t.Fatalf("a malformed file produced a result: %v", m)
+		t.Fatalf("result=%v want a problem", res)
 	}
-	if rpcErr.Code != CodeHostError {
-		t.Fatalf("code=%d want %d", rpcErr.Code, CodeHostError)
+	if problem["path"] != path {
+		t.Fatalf("problem=%v want the path %s", problem, path)
 	}
-	if !strings.Contains(rpcErr.Message, "parse") || !strings.Contains(rpcErr.Message, "mcp.json") {
-		t.Fatalf("message=%q want it to name the parse failure and the file", rpcErr.Message)
+	if msg, _ := problem["message"].(string); msg == "" {
+		t.Fatalf("problem=%v want a message", problem)
+	}
+	if line, _ := problem["line"].(float64); line < 1 {
+		t.Fatalf("problem=%v want the line the file breaks on", problem)
+	}
+	// Nothing parsed, so nothing is listed — an invented empty server set would
+	// read as "you have no servers".
+	if servers, _ := res["servers"].([]any); len(servers) != 0 {
+		t.Fatalf("servers=%v want none", servers)
 	}
 }
 
@@ -128,10 +168,14 @@ func TestMCPListRejectsAnUnknownSource(t *testing.T) {
 // a run, because the source never reaches the wire again after this point.
 func TestBuildOptionsCarriesTheSelectedSettingSources(t *testing.T) {
 	dir := newWorkspace(t)
+	// The user layer is read from the home directory; pointing it at the
+	// workspace keeps the test off the machine's real mcp.json, which may name
+	// servers this test would then try to start.
+	isolateHome(t)
 	srv := New(Config{CWD: dir, Model: "stub-model"}, strings.NewReader(""), &bytes.Buffer{})
 	sess := newSession("sess-test", srv.cwdPath(), ModeAsk, false)
 
-	opts, rpcErr := srv.buildOptions(SessionParams{SettingSources: []string{"project", " user "}}, sess)
+	opts, rpcErr := srv.buildOptions(context.Background(), SessionParams{SettingSources: []string{"project", " user "}}, sess)
 	if rpcErr != nil {
 		t.Fatalf("buildOptions: %s", rpcErr.Message)
 	}
@@ -145,7 +189,7 @@ func TestBuildOptionsCarriesTheSelectedSettingSources(t *testing.T) {
 	}
 
 	// Off is the empty list, which is the SDK's inline-only behaviour.
-	opts, rpcErr = srv.buildOptions(SessionParams{}, sess)
+	opts, rpcErr = srv.buildOptions(context.Background(), SessionParams{}, sess)
 	if rpcErr != nil {
 		t.Fatalf("buildOptions: %s", rpcErr.Message)
 	}

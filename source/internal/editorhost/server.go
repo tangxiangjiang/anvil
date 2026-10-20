@@ -36,6 +36,10 @@ type Config struct {
 	Model    string
 	// CWD pre-seeds the workspace root. initialize may still override it.
 	CWD string
+	// MCPTokenDir is where the host keeps MCP OAuth tokens. Empty means the
+	// SDK's default (~/.anvil/mcp/oauth). Tests point it at a temp directory so
+	// a sign-in never touches the user's real tokens.
+	MCPTokenDir string
 	// Logf receives host diagnostics. Defaults to stderr.
 	Logf func(format string, args ...any)
 }
@@ -54,6 +58,12 @@ type Server struct {
 	inited    bool
 	sessions  map[string]*session
 	sessionID []string
+
+	// mcpMu guards the runtime registry, which lives apart from sessions: one
+	// runtime serves every session that reads the same file layers, and it can
+	// exist before any of them (a panel opened first).
+	mcpMu sync.Mutex
+	mcp   map[string]*hostMCPRuntime
 }
 
 // New builds a server bound to the given streams.
@@ -70,6 +80,7 @@ func New(cfg Config, in io.Reader, out io.Writer) *Server {
 		cfg:       cfg,
 		cwd:       cfg.CWD,
 		sessions:  map[string]*session{},
+		mcp:       map[string]*hostMCPRuntime{},
 	}
 }
 
@@ -191,6 +202,20 @@ func (s *Server) dispatch(ctx context.Context, req *Request) (any, *RPCError) {
 		return s.handleRulesList(ctx, req.Params)
 	case MethodMCPList:
 		return s.handleMCPList(ctx, req.Params)
+	case MethodMCPAdd:
+		return s.handleMCPAdd(ctx, req.Params)
+	case MethodMCPUpdate:
+		return s.handleMCPUpdate(ctx, req.Params)
+	case MethodMCPRemove:
+		return s.handleMCPRemove(ctx, req.Params)
+	case MethodMCPSetEnabled:
+		return s.handleMCPSetEnabled(ctx, req.Params)
+	case MethodMCPReconnect:
+		return s.handleMCPReconnect(ctx, req.Params)
+	case MethodMCPAuthenticate:
+		return s.handleMCPAuthenticate(ctx, req.Params)
+	case MethodMCPSignOut:
+		return s.handleMCPSignOut(ctx, req.Params)
 	case MethodPermissionsGet:
 		return s.handlePermissionsGet(ctx, req.Params)
 	case MethodPermissionsAdd:
@@ -258,7 +283,7 @@ func (s *Server) handleInitialize(params json.RawMessage) (any, *RPCError) {
 }
 
 func capabilities() []string {
-	return []string{"streaming", "sessions", "resume", "cancel", "models", "approval", "context", "vision", "plan", "skills", "rules", "permissions", "mcp", "subagents", "tasks"}
+	return []string{"streaming", "sessions", "resume", "cancel", "models", "approval", "context", "vision", "plan", "skills", "rules", "permissions", "mcp", "mcp.runtime", "subagents", "tasks"}
 }
 
 // ---------------------------------------------------------------------------
@@ -286,7 +311,7 @@ func (s *Server) handleSessionNew(ctx context.Context, params json.RawMessage) (
 	sess.loadPermissions = loadPermissions
 	sess.modeSource = source
 	sess.modeRefused = refused
-	opts, rpcErr := s.buildOptions(p, sess)
+	opts, rpcErr := s.buildOptions(ctx, p, sess)
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
@@ -321,7 +346,7 @@ func (s *Server) handleSessionResume(ctx context.Context, params json.RawMessage
 	sess.loadPermissions = loadPermissions
 	sess.modeSource = source
 	sess.modeRefused = refused
-	opts, rpcErr := s.buildOptions(p, sess)
+	opts, rpcErr := s.buildOptions(ctx, p, sess)
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
@@ -1036,50 +1061,6 @@ func (s *Server) handleRulesList(ctx context.Context, params json.RawMessage) (a
 	return out, nil
 }
 
-// handleMCPList reports what the selected file layers declare.
-//
-// It is configuration, not connection: nothing here says a server started. The
-// listing exists so a person can see which file would launch what before a turn
-// runs, and so a file that will not parse fails loudly here rather than as MCP
-// tools that silently do not exist.
-//
-// The response carries no status field on purpose. The SDK has no introspection
-// for a connected server, and a state inferred from "the file listed it" would
-// claim the one thing a green dot is supposed to mean.
-func (s *Server) handleMCPList(_ context.Context, params json.RawMessage) (any, *RPCError) {
-	p, err := decode[MCPListParams](params)
-	if err != nil {
-		return nil, errInvalidParams("mcp.list: " + err.Error())
-	}
-	sources, rpcErr := settingSourcesFrom(p.SettingSources)
-	if rpcErr != nil {
-		return nil, errInvalidParams("mcp.list: " + rpcErr.Message)
-	}
-	listed, err := anvil.ListMCPServers(s.cwdPath(), sources)
-	if err != nil {
-		return nil, errHost(err)
-	}
-	out := MCPListResult{
-		Servers: make([]MCPServerInfo, 0, len(listed.Servers)),
-		Sources: make([]MCPSourceInfo, 0, len(listed.Sources)),
-	}
-	for _, server := range listed.Servers {
-		out.Servers = append(out.Servers, MCPServerInfo{
-			Name:      server.Name,
-			Transport: server.Transport,
-			Source:    server.Source,
-		})
-	}
-	for _, source := range listed.Sources {
-		out.Sources = append(out.Sources, MCPSourceInfo{
-			Source: string(source.Source),
-			Path:   source.Path,
-			Exists: source.Exists,
-		})
-	}
-	return out, nil
-}
-
 // ---------------------------------------------------------------------------
 // permissions
 // ---------------------------------------------------------------------------
@@ -1297,7 +1278,7 @@ func ruleProblem(err error) *RuleProblem {
 // APIKey is intentionally never set here: the SDK reads ANVIL_API_KEY from the
 // process environment, which the client populates from SecretStorage. The key
 // does not cross the protocol.
-func (s *Server) buildOptions(p SessionParams, sess *session) (anvil.Options, *RPCError) {
+func (s *Server) buildOptions(ctx context.Context, p SessionParams, sess *session) (anvil.Options, *RPCError) {
 	groups := groupsForMode(sess.mode, p.PermissionGroups)
 	// loadPermissions was resolved by the caller, before the mode, because the
 	// mode resolution reads the same file. It is read here, not recomputed: two
@@ -1362,7 +1343,19 @@ func (s *Server) buildOptions(p SessionParams, sess *session) (anvil.Options, *R
 	if rpcErr != nil {
 		return opts, rpcErr
 	}
+	sources = canonicalSources(sources)
 	opts.Local.SettingSources = sources
+	// A session that reads a file layer gets the host's shared runtime for that
+	// pair, connected before the agent is built so its first turn already has the
+	// tools. A failure in Reload is deliberately ignored: an unreachable server is
+	// a status the panel reports, not a reason to refuse the session.
+	if len(sources) > 0 {
+		h := s.mcpRuntimeFor(s.cwdPath(), sources)
+		_ = h.reload(ctx)
+		opts.MCPRuntime = h.rt
+		sess.settingSources = sources
+		sess.mcpKey = h.key
+	}
 	web, rpcErr := webSearchFrom(p.WebSearch)
 	if rpcErr != nil {
 		return opts, rpcErr
@@ -1903,6 +1896,10 @@ func (s *Server) closeAll() {
 			}
 		}
 	}
+	// The runtimes outlive individual sessions but not the host: they own the
+	// processes every agent borrowed. Closed last, after the agents that call
+	// into them are gone.
+	s.closeMCPRuntimes()
 }
 
 func (s *Server) ready() bool {

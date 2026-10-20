@@ -116,7 +116,10 @@ func ListMCPServers(cwd string, sources []SettingSource) (MCPListing, error) {
 		// file differently from the way a session reads it.
 		servers, err := settings.LoadMCPJSON(l.path)
 		if err != nil {
-			return MCPListing{}, newError("load "+string(l.source)+" mcp.json", false, err)
+			// The file is named even when the parser is: the listing's caller
+			// opens the file at the position it is handed.
+			data, _ := os.ReadFile(l.path)
+			return MCPListing{}, newError("load "+string(l.source)+" mcp.json", false, mcpConfigError(l.path, data, err))
 		}
 		for name, s := range servers {
 			cfg := mcpFromSettings(s)

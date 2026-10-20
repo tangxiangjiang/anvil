@@ -70,10 +70,30 @@ const (
 	MethodSkillsList        = "skills.list"
 	MethodRulesList         = "rules.list"
 	// MethodMCPList reports the MCP servers the selected file layers declare,
-	// and which of those files exist. It is configuration, not connection: the
-	// SDK exposes no state for a server that failed to start. Additive: a host
+	// and which of those files exist. Since 0.44 it also reports the state the
+	// host observed, marked by `runtime: true`; an older host omits that field
+	// and the client falls back to the configuration-only card. Additive: a host
 	// without it answers -32601, which a client reads as "no listing here".
 	MethodMCPList = "mcp.list"
+	// MethodMCPAdd and MethodMCPUpdate write one entry to the selected scope and
+	// answer a fresh listing. The host delegates the write to the public SDK
+	// writers, so validation and unknown-field preservation are the same rules a
+	// caller of the SDK gets.
+	MethodMCPAdd    = "mcp.add"
+	MethodMCPUpdate = "mcp.update"
+	// MethodMCPRemove deletes one entry from the selected scope.
+	MethodMCPRemove = "mcp.remove"
+	// MethodMCPSetEnabled turns one entry off or on without deleting it.
+	MethodMCPSetEnabled = "mcp.set_enabled"
+	// MethodMCPReconnect restarts one server's connection.
+	MethodMCPReconnect = "mcp.reconnect"
+	// MethodMCPAuthenticate starts a sign-in for a remote server and answers the
+	// URL a browser should open. The flow completes in the background; the
+	// result is announced by mcp.status, not by this reply.
+	MethodMCPAuthenticate = "mcp.authenticate"
+	// MethodMCPSignOut deletes a server's stored tokens and puts it back in
+	// auth_required.
+	MethodMCPSignOut = "mcp.sign_out"
 	// MethodPermissionsGet reads the workspace rule file — the effective policy
 	// for this workspace, and the place to put a squiggle when it will not
 	// compile.
@@ -116,6 +136,10 @@ const (
 	// belong to; this one has no run, and a client that replays the transcript
 	// finds the divider in the store instead.
 	NotifyCompact = "compact"
+	// NotifyMCPStatus reports one MCP server's state changing: connecting,
+	// connected, failed, auth_required or disabled. It is the push half of
+	// mcp.list; a client that keeps a panel open does not poll.
+	NotifyMCPStatus = "mcp.status"
 )
 
 // JSON-RPC 2.0 standard error codes.
@@ -888,16 +912,51 @@ type RulesResult struct {
 // read that the session would not read.
 type MCPListParams struct {
 	SettingSources []string `json:"setting_sources,omitempty"`
+	// IncludeTools asks for each connected server's tool catalogue. The chat
+	// card does not need it; the manager draws it.
+	IncludeTools bool `json:"include_tools,omitempty"`
 }
 
-// MCPServerInfo is one declared MCP server. There is deliberately no connected
-// or status field: the SDK does not expose connection state, and a field filled
-// from "the file mentioned it" would be a false green light.
+// MCPServerInfo is one declared MCP server and — from a host that answers with
+// Runtime true — the state the host observed for it.
+//
+// The launch fields are what a manager needs to show and edit the entry; EnvNames
+// and HeaderNames are keys only, because those maps commonly hold bearer tokens
+// and API keys.
 type MCPServerInfo struct {
 	Name      string `json:"name"`
 	Transport string `json:"transport,omitempty"`
 	// Source is the config file that declared this server.
-	Source string `json:"source"`
+	Source  string `json:"source"`
+	Enabled bool   `json:"enabled"`
+	// State is disabled | connecting | connected | failed | auth_required. Empty
+	// on a host that predates the runtime.
+	State string `json:"state,omitempty"`
+	// ToolCount is the number of tools the connected server listed. It is
+	// meaningful only when State is connected.
+	ToolCount int `json:"tool_count"`
+	// Tools is present only when the request asked for include_tools and the
+	// server is connected.
+	Tools []MCPToolInfo `json:"tools,omitempty"`
+	// Error is the start or transport failure, in words. It never contains a
+	// token or a secret header value.
+	Error string `json:"error,omitempty"`
+	// ConnectedAt is when the current session was established, RFC 3339 in UTC.
+	ConnectedAt string `json:"connected_at,omitempty"`
+
+	Command string   `json:"command,omitempty"`
+	Args    []string `json:"args,omitempty"`
+	URL     string   `json:"url,omitempty"`
+	// EnvNames and HeaderNames are the keys, sorted. Values never leave the file
+	// through a listing.
+	EnvNames    []string `json:"env_names,omitempty"`
+	HeaderNames []string `json:"header_names,omitempty"`
+}
+
+// MCPToolInfo is one tool a connected server offers.
+type MCPToolInfo struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
 }
 
 // MCPSourceInfo is one config file the listing looked at.
@@ -908,10 +967,107 @@ type MCPSourceInfo struct {
 	Exists bool `json:"exists"`
 }
 
-// MCPListResult is what the selected layers declare.
+// MCPProblem is a malformed enabled config file. It is a result, not an RPC
+// error: the panel has to keep showing the last good statuses beside the parser
+// error, and make the document read-only until a person fixes the file.
+type MCPProblem struct {
+	Path    string `json:"path"`
+	Message string `json:"message"`
+	Line    int    `json:"line,omitempty"`
+	Column  int    `json:"column,omitempty"`
+}
+
+// MCPListResult is what the selected layers declare and what the host observed.
 type MCPListResult struct {
+	// Runtime marks a host that can observe connection state. An older host
+	// omits it and a client falls back to configuration only.
+	Runtime bool            `json:"runtime"`
 	Servers []MCPServerInfo `json:"servers"`
 	Sources []MCPSourceInfo `json:"sources"`
+	Problem *MCPProblem     `json:"problem,omitempty"`
+}
+
+// MCPStatusParams is one server's state transition. The server object is the
+// same shape the listing uses, and the source set says which runtime it belongs
+// to — a client shows two runtimes' servers apart.
+type MCPStatusParams struct {
+	Server         MCPServerInfo `json:"server"`
+	SettingSources []string      `json:"setting_sources,omitempty"`
+}
+
+// MCPServerDraftWire is one entry as a client wants it written. Env and Headers
+// follow "nil means keep" on update: an omitted map leaves the file's values
+// alone, and an explicit empty map clears them.
+type MCPServerDraftWire struct {
+	Name      string            `json:"name"`
+	Transport string            `json:"transport,omitempty"`
+	Command   string            `json:"command,omitempty"`
+	Args      []string          `json:"args,omitempty"`
+	Env       map[string]string `json:"env,omitempty"`
+	Headers   map[string]string `json:"headers,omitempty"`
+	URL       string            `json:"url,omitempty"`
+	Enabled   *bool             `json:"enabled,omitempty"`
+}
+
+// MCPAddParams writes one new entry.
+type MCPAddParams struct {
+	Scope          string             `json:"scope"` // project | user
+	Server         MCPServerDraftWire `json:"server"`
+	SettingSources []string           `json:"setting_sources,omitempty"`
+	IncludeTools   bool               `json:"include_tools,omitempty"`
+}
+
+// MCPUpdateParams replaces the fields a draft names on an existing entry.
+type MCPUpdateParams struct {
+	Scope          string             `json:"scope"`
+	Server         MCPServerDraftWire `json:"server"`
+	SettingSources []string           `json:"setting_sources,omitempty"`
+	IncludeTools   bool               `json:"include_tools,omitempty"`
+}
+
+// MCPRemoveParams deletes one entry from one scope.
+type MCPRemoveParams struct {
+	Scope          string   `json:"scope"`
+	Name           string   `json:"name"`
+	SettingSources []string `json:"setting_sources,omitempty"`
+	IncludeTools   bool     `json:"include_tools,omitempty"`
+}
+
+// MCPSetEnabledParams turns one entry off or on.
+type MCPSetEnabledParams struct {
+	Scope          string   `json:"scope"`
+	Name           string   `json:"name"`
+	Enabled        bool     `json:"enabled"`
+	SettingSources []string `json:"setting_sources,omitempty"`
+	IncludeTools   bool     `json:"include_tools,omitempty"`
+}
+
+// MCPReconnectParams restarts one server.
+type MCPReconnectParams struct {
+	Name           string   `json:"name"`
+	SettingSources []string `json:"setting_sources,omitempty"`
+	IncludeTools   bool     `json:"include_tools,omitempty"`
+}
+
+// MCPAuthenticateParams starts a sign-in for one server.
+type MCPAuthenticateParams struct {
+	Name           string   `json:"name"`
+	SettingSources []string `json:"setting_sources,omitempty"`
+}
+
+// MCPAuthenticateResult is the URL a browser should open. The reply does not
+// wait for the sign-in: completion arrives as mcp.status.
+type MCPAuthenticateResult struct {
+	Server    string `json:"server"`
+	AuthURL   string `json:"auth_url"`
+	ExpiresAt string `json:"expires_at,omitempty"`
+}
+
+// MCPSignOutParams deletes one server's stored tokens.
+type MCPSignOutParams struct {
+	Name           string   `json:"name"`
+	SettingSources []string `json:"setting_sources,omitempty"`
+	IncludeTools   bool     `json:"include_tools,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
