@@ -872,7 +872,11 @@ Object.assign(window.Features.delivery, {
         <span class="muted" style="flex:1">${rows.length} milestone${rows.length === 1 ? "" : "s"} in ${this.esc(majLabel)}</span>
         <span class="muted" style="font-size:0.85rem">Graph · drag · controls on cards</span>
       </div>
-      <div class="del-roadmap-graph card del-canvas" data-major="${routeMajor}">${graphBody}</div>
+      <div class="desktop-only">
+        The graph is arranged by dragging, which needs a wider screen. The milestone cards
+        below carry every action, so nothing is lost.
+      </div>
+      <div class="needs-wide del-roadmap-graph card del-canvas" data-major="${routeMajor}">${graphBody}</div>
       ${
         cards
           ? `<div class="del-req-section-head" style="margin-top:1rem">

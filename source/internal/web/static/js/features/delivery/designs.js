@@ -922,6 +922,10 @@ Object.assign(window.Features.delivery, {
         <span>${this.esc(d.title)}</span>
       </p>
       ${this.auditHtml("design", d.id)}
+      <div class="desktop-only">
+        The ADR editor is two panes with drag-to-cite; it needs a wider screen. The design's
+        Markdown is still readable through <em>View</em>.
+      </div>
       <div class="del-split${approved ? "" : " del-split-chatwide"}">
         <div class="del-main">
           <div class="card${approved ? " del-des-locked" : ""}">
