@@ -360,7 +360,8 @@ test('a reply is one rail, prose included', () => {
   assert.match(JS, /block\.classList\.add\('rail'\)/);
   assert.match(JS, /block\.classList\.toggle\('rail-up', i > 0\)/);
   assert.match(JS, /block\.classList\.toggle\('rail-down', i < run\.length - 1\)/);
-  assert.match(JS, /syncRail\(active\.container\)/);
+  assert.match(JS, /const target = targetFor\(node\)/);
+  assert.match(JS, /syncRail\(target\)/);
   // Prose no longer ends the run, so the old think-only step walk is gone.
   assert.doesNotMatch(JS, /:scope > \.think/);
 });

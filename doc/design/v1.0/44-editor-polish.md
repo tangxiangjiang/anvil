@@ -299,8 +299,9 @@ which is how the extension already degrades (`runtime`, `permission_mode_source`
 | [p_0.47.15](../../roadmaps/v1.0/m_0.47/p_0.47.15.md) | A replay window that starts at a turn, and a result that draws its own row |
 | [p_0.47.16](../../roadmaps/v1.0/m_0.47/p_0.47.16.md) | Moderate density, coloured state words, larger dots, a framed pane, a summary ending |
 | [p_0.47.17](../../roadmaps/v1.0/m_0.47/p_0.47.17.md) | The summary endings marked by the live path as well as the replay |
+| [p_0.47.18](../../roadmaps/v1.0/m_0.47/p_0.47.18.md) | A reply's start marker, one fold per turn, history closed and the newest open |
 
-0.47.9–0.47.17 were written after the milestone was accepted. Their findings came from the
+0.47.9–0.47.18 were written after the milestone was accepted. Their findings came from the
 first real use of the panel, not from a test: a capability that existed and was never turned
 on, an error that only reached the log, a block with no way out — and then a transcript that
 was tiring to read, followed by four manager panels that each declared their own copy of the
@@ -311,9 +312,10 @@ output tab that the same reader asked of the first rail, and then a stored conve
 opened on a result whose call the window had cut, and finally a long conversation that read as
 too sparse, whose state words said nothing, whose dots sat under the line, whose opened call
 had no edge, and whose final answer had no ending — and then that ending missing from the live
-turn because the live path asked for a failure that is never absent. The lesson is recorded
-here rather than in a commit message — the manual passes the earlier phases wrote down as
-"still worth doing" are the ones that would have found all of these.
+turn because the live path asked for a failure that is never absent, and finally a turn with
+no beginning and no way to close the ones already read. The lesson is recorded here rather
+than in a commit message — the manual passes the earlier phases wrote down as "still worth
+doing" are the ones that would have found all of these.
 
 ## 15. The visual grammar after use
 
@@ -508,3 +510,48 @@ A source-level test now pins the kind test and refuses the object test. The defe
 rendering bug and could not have been caught by a stylesheet assertion; it lived exactly where
 the two endings agreed on their words — which is also why reading them side by side found it
 in a minute and a reader found it in a window.
+
+## 21. A reply has a beginning, and it folds
+
+p_0.47.18 closes the bookend p_0.47.16 opened: a turn now starts with a marker and can be
+folded as a unit. It also reverses one of p_0.47.16's non-goals — "a wrapper element per
+reply" — for a reason that did not exist then.
+
+- **Folding needs the element.** The rail was built flat on purpose: each block drew its own
+  segment, so no wrapper was needed and the replay, the spawn scopes and the focus view
+  learned nothing. Folding cannot be done that way: hiding arbitrary siblings is not a CSS
+  operation, and a script toggling `display` would be a second, weaker `<details>`. The
+  wrapper is the browser's element, so the chevron, the keyboard and the accessibility tree
+  are correct by construction. The flat rail is kept inside it — `syncRail` now runs over the
+  reply body, whose column repeats the transcript's 12px gap.
+- **The route is the turn, not the block type.** A reply that is open takes everything the
+  agent adds until a user message closes it. The host sends the checkpoint, changes and fork
+  cards after the run ends; routing by block type alone would place those after the
+  `<details>` while the turn's next block went inside, and the transcript would read out of
+  order. Only the *first* block of a turn decides whether a reply is created, and only the
+  blocks that are the agent's own — a round, a tool row, an approval, a result note — can
+  begin one. Notices, command cards and session lines stay in the transcript.
+- **A user message is the boundary.** Closing the reply before the message is appended is
+  what keeps the message outside every turn. A numbered turn could be tracked instead, but
+  the message is already the boundary the rail and the rewind use; the fold reads it the same
+  way.
+- **A reply opens by default, and the next turn closes it.** That single rule produces
+  "newest open, history closed" without a replay path of its own: the replay closes each turn
+  as its next user event arrives, and the last one stays open. A click pins a reply, so the
+  reader who opens an old turn to read it does not lose it to the next message; the pattern
+  is Thinking's `thinkPinned`.
+- **The start dot is hollow, in the ending's colour.** A filled dot would be a second ending;
+  a hollow ring is the shape an open row already uses, and the same purple at the same 9px
+  makes the pair read as brackets around the turn. A generated segment from the dot to the
+  body makes the rail begin at the marker rather than below it.
+- **The folded face is the conclusion.** A folded reply that said only `anvil` would turn a
+  saved conversation into a column of identical rows. The header carries the answer's first
+  line — the line the end Summary already chose — and a turn whose run did not conclude
+  normally keeps an empty hint rather than a borrowed one.
+- **The speaker is said once.** The header names the turn; a round inside the reply no
+  longer repeats `anvil` above its prose. The Summary's `.who` is the exception: it is the
+  ending's own header, not a speaker label.
+
+Two costs are accepted and written down: a closed `<details>` is not searched by find-in-page,
+and a spawn card's pane keeps the flat grammar because it already folds and because its rounds
+need a name to tell parent from child.

@@ -315,9 +315,90 @@
   function append(node) {
     const pinned = atBottom();
     clearEmpty();
-    active.container.appendChild(node);
-    syncRail(active.container);
+    const target = targetFor(node);
+    target.appendChild(node);
+    syncRail(target);
     scrollIfPinned(pinned);
+  }
+
+  /**
+   * The turn being built, or null between turns.
+   *
+   * A reply is one turn of the agent — the prose, the Thinking, the tool rows,
+   * the approvals and the ending — folded under one header. It is a `<details>`
+   * rather than a div and a handler so the chevron, the keyboard and the
+   * screen reader are the browser's, and so a closed turn costs no layout.
+   */
+  let reply = null;
+
+  /**
+   * Whether this block begins an agent turn.
+   *
+   * The host's own cards — help, rules, MCP, session lines, notices — are
+   * conversation furniture: a `/help` is not a reply, and an error that arrives
+   * between turns belongs where it can be read without opening something.
+   */
+  function inReply(node) {
+    if (node.classList.contains('tool') || node.classList.contains('approval')) return true;
+    return (
+      node.classList.contains('msg') &&
+      (node.classList.contains('assistant') || node.classList.contains('result-note'))
+    );
+  }
+
+  /**
+   * Where a block goes: into the open reply, into a new one, or to the
+   * transcript.
+   *
+   * Once a reply is open everything goes inside it until a user message closes
+   * it — including the cards the host sends after a run ends. Routing by block
+   * type alone would put such a card after the `<details>` while the turn's
+   * next block went inside, and the transcript would read out of order.
+   */
+  function targetFor(node) {
+    if (active !== mainScope) return active.container;
+    if (reply) return reply.body;
+    if (!inReply(node)) return active.container;
+    return ensureReply().body;
+  }
+
+  /**
+   * Opens a reply with its start marker.
+   *
+   * The dot is the rail's beginning — hollow in the colour the ending fills —
+   * and the header carries the speaker's name for the whole turn, which is why
+   * the rounds inside it no longer repeat it.
+   */
+  function ensureReply() {
+    const node = el('details', 'reply');
+    node.open = true;
+    const head = el('summary', 'reply-head');
+    head.appendChild(el('span', 'start-dot'));
+    head.appendChild(el('span', 'reply-name', 'anvil'));
+    head.appendChild(el('span', 'reply-hint'));
+    node.appendChild(head);
+    const body = el('div', 'reply-body');
+    node.appendChild(body);
+    // A reply the reader opened is theirs. The next turn folds the one before
+    // it, and that must not undo a decision the reader just made — the same
+    // rule Thinking follows.
+    head.addEventListener('click', () => {
+      node.dataset.pinned = '1';
+    });
+    transcript.appendChild(node);
+    reply = { node: node, body: body, head: head };
+    return reply;
+  }
+
+  /**
+   * Ends the turn on screen: the next user message closes it.
+   *
+   * A reader-pinned reply stays open; only a reply nobody touched is folded.
+   */
+  function closeReply() {
+    if (!reply) return;
+    if (reply.node.dataset.pinned !== '1') reply.node.open = false;
+    reply = null;
   }
 
   /**
@@ -388,6 +469,8 @@
     planCards.clear();
     rewindTurns.length = 0;
     rewindStates.clear();
+    // The turn being built belonged to the conversation that just left.
+    reply = null;
     mentions = [];
     images = [];
     renderChips();
@@ -412,6 +495,9 @@
   // --- messages -------------------------------------------------------------
 
   function addUser(text, sentMentions, sentImages) {
+    // This message opens a new turn: the reply above it folds, and the message
+    // itself is never part of a reply.
+    if (active === mainScope) closeReply();
     const wrap = el('div', 'msg user');
     wrap.appendChild(el('div', 'who', 'you'));
     wrap.appendChild(el('div', 'body', text));
@@ -1985,10 +2071,14 @@
     }
 
     approvals.set(request.request_id, card);
-    transcript.appendChild(card);
+    // An approval is part of the turn: it belongs inside the reply like the
+    // calls above it, and inside one is where a reader who expanded the turn
+    // will look for it.
+    const target = active === mainScope && reply ? reply.body : transcript;
+    target.appendChild(card);
     // An approval is not a step, so a run ends at it; the rows above may still
     // carry a `rail-down` from before the card existed.
-    syncRail(transcript);
+    syncRail(target);
     transcript.scrollTop = transcript.scrollHeight;
     // A card that only appears is a turn waiting behind a reader's back. The
     // turn is running, so the composer is disabled and nothing else owns the
@@ -3447,6 +3537,13 @@
     round.md = { node: round.body, settled: [], offset: 0, rendered: 0 };
     round.body.textContent = '';
     paintMarkdown(round.md, round.text);
+    // The folded face of the turn is the line that now titles its ending, so a
+    // column of closed replies reads as the conclusions that closed them. A
+    // turn whose run did not conclude keeps an empty hint — no title is
+    // invented for it.
+    const turn = round.wrap.closest('.reply');
+    const hint = turn ? turn.querySelector('.reply-hint') : null;
+    if (hint) hint.textContent = parts.title;
     syncRail(round.wrap.parentElement);
     return true;
   }
