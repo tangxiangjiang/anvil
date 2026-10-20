@@ -8,7 +8,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -97,6 +100,17 @@ type MCPRuntime struct {
 	entries map[string]*mcpEntry
 	version atomic.Int64
 	closed  bool
+	// lifetime bounds a pending sign-in: Close cancels it, so a listener and a
+	// Wait goroutine never outlive the runtime.
+	lifetime context.Context
+	cancel   context.CancelFunc
+}
+
+// MCPAuthentication is what an editor shows as "open this URL to sign in".
+type MCPAuthentication struct {
+	Server    string
+	URL       string
+	ExpiresAt time.Time
 }
 
 // mcpEntry is one server. ioMu is held for reading by a call and for writing
@@ -106,9 +120,14 @@ type mcpEntry struct {
 	ioMu      sync.RWMutex
 	mu        sync.RWMutex
 	connectMu sync.Mutex
+	// authMu serialises Authenticate and SignOut for one server; it is not held
+	// across a dial or a call.
+	authMu    sync.Mutex
 	cfg       runtimeMCPConfig
 	status    MCPServerStatus
 	session   *mcp.Session
+	oauth     *mcp.OAuth
+	challenge string
 }
 
 // runtimeMCPConfig is one entry as the runtime holds it, with a hash that
@@ -123,7 +142,11 @@ type runtimeMCPConfig struct {
 	url       string
 	headers   map[string]string
 	enabled   bool
-	hash      string
+	// The manual client registration, when the file supplies one (0.44+).
+	clientID     string
+	clientSecret string
+	scope        string
+	hash         string
 }
 
 // NewMCPRuntime records what to read and how to connect. It does not connect:
@@ -136,7 +159,8 @@ func NewMCPRuntime(opts MCPRuntimeOptions) *MCPRuntime {
 		// path at all; keeping the raw value makes Reload report it in context.
 		cwd = opts.CWD
 	}
-	return &MCPRuntime{opts: opts, cwd: cwd, entries: map[string]*mcpEntry{}}
+	lifetime, cancel := context.WithCancel(context.Background())
+	return &MCPRuntime{opts: opts, cwd: cwd, entries: map[string]*mcpEntry{}, lifetime: lifetime, cancel: cancel}
 }
 
 // Version is a counter that moves whenever the tool snapshot or any status
@@ -257,6 +281,128 @@ func (r *MCPRuntime) Reconnect(ctx context.Context, name string) error {
 	return err
 }
 
+// Authenticate starts (or repeats) a sign-in for one remote server and returns
+// the URL a browser should open. The flow completes in the background; on
+// success the server is reconnected and its new state announced.
+func (r *MCPRuntime) Authenticate(ctx context.Context, name string) (MCPAuthentication, error) {
+	if r == nil {
+		return MCPAuthentication{}, newError("nil MCP runtime", false, nil)
+	}
+	r.mu.RLock()
+	entry := r.entries[name]
+	r.mu.RUnlock()
+	if entry == nil {
+		return MCPAuthentication{}, newError("mcp server "+name+" is not configured", false, nil)
+	}
+	// One sign-in at a time per server: a second call during a pending flow
+	// returns the same URL from Begin rather than opening a second listener.
+	entry.authMu.Lock()
+	defer entry.authMu.Unlock()
+
+	entry.mu.RLock()
+	cfg := entry.cfg
+	auth := entry.oauth
+	challenge := entry.challenge
+	entry.mu.RUnlock()
+	if !cfg.enabled {
+		return MCPAuthentication{}, newError("mcp server "+name+" is disabled", false, nil)
+	}
+	if auth == nil {
+		auth = r.oauthFor(cfg)
+		if auth == nil {
+			return MCPAuthentication{}, newError("mcp server "+name+" is not a remote server", false, nil)
+		}
+		entry.mu.Lock()
+		entry.oauth = auth
+		entry.mu.Unlock()
+	}
+	authorization, err := auth.Begin(ctx, challenge)
+	if err != nil {
+		r.setState(entry, MCPServerStatus{State: MCPStateFailed, Error: err.Error()})
+		return MCPAuthentication{}, newError(err.Error(), false, nil)
+	}
+	go r.completeSignIn(entry, auth)
+	return MCPAuthentication{Server: name, URL: authorization.URL, ExpiresAt: authorization.ExpiresAt}, nil
+}
+
+// completeSignIn is the background half: wait for the callback, then reconnect
+// so the new token is what the next handshake uses.
+func (r *MCPRuntime) completeSignIn(entry *mcpEntry, auth *mcp.OAuth) {
+	if err := auth.Wait(r.lifetime); err != nil {
+		if r.lifetime.Err() != nil {
+			return // the runtime is closing; nobody waits for this status
+		}
+		r.setState(entry, MCPServerStatus{State: MCPStateFailed, Error: err.Error()})
+		return
+	}
+	if r.lifetime.Err() != nil {
+		return
+	}
+	_ = r.connect(r.lifetime, entry)
+}
+
+// SignOut deletes the stored tokens and puts the server back in auth_required.
+func (r *MCPRuntime) SignOut(name string) error {
+	if r == nil {
+		return newError("nil MCP runtime", false, nil)
+	}
+	r.mu.RLock()
+	entry := r.entries[name]
+	r.mu.RUnlock()
+	if entry == nil {
+		return newError("mcp server "+name+" is not configured", false, nil)
+	}
+	entry.authMu.Lock()
+	defer entry.authMu.Unlock()
+
+	entry.mu.RLock()
+	cfg := entry.cfg
+	auth := entry.oauth
+	entry.mu.RUnlock()
+	if auth == nil {
+		auth = r.oauthFor(cfg)
+		if auth == nil {
+			return newError("mcp server "+name+" is not a remote server", false, nil)
+		}
+		entry.mu.Lock()
+		entry.oauth = auth
+		entry.mu.Unlock()
+	}
+	if err := auth.SignOut(); err != nil {
+		return newError(err.Error(), false, nil)
+	}
+	r.retire(entry, &MCPServerStatus{State: MCPStateAuthRequired, Error: "sign-in required"})
+	return nil
+}
+
+// oauthFor builds the sign-in helper for a remote entry. stdio and the legacy
+// SSE transport have no flow: they authenticate with env or headers.
+func (r *MCPRuntime) oauthFor(cfg runtimeMCPConfig) *mcp.OAuth {
+	if cfg.transport != "http" || cfg.url == "" {
+		return nil
+	}
+	return mcp.NewOAuth(mcp.OAuthConfig{
+		Server:       cfg.name,
+		ServerURL:    cfg.url,
+		TokenDir:     r.tokenDir(),
+		ClientID:     cfg.clientID,
+		ClientSecret: cfg.clientSecret,
+		Scope:        cfg.scope,
+	})
+}
+
+// tokenDir is ~/.anvil/mcp/oauth unless the caller names another directory.
+func (r *MCPRuntime) tokenDir() string {
+	if r.opts.TokenDir != "" {
+		return r.opts.TokenDir
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".anvil", "mcp", "oauth")
+}
+
 // Statuses returns every known server, sorted by name.
 func (r *MCPRuntime) Statuses() []MCPServerStatus {
 	if r == nil {
@@ -342,7 +488,17 @@ func (r *MCPRuntime) Call(ctx context.Context, server, tool string, args json.Ra
 	if session == nil {
 		return "", newError(fmt.Sprintf("mcp server %s is %s", server, state), false, nil)
 	}
-	return session.Call(ctx, tool, args)
+	out, err := session.Call(ctx, tool, args)
+	if err != nil {
+		var authErr *mcp.AuthRequiredError
+		if errors.As(err, &authErr) {
+			entry.mu.Lock()
+			entry.challenge = authErr.Challenge
+			entry.mu.Unlock()
+			r.setState(entry, MCPServerStatus{State: MCPStateAuthRequired, Error: "sign-in required"})
+		}
+	}
+	return out, err
 }
 
 // Close retires every session and makes the runtime unusable. It is safe to
@@ -363,6 +519,7 @@ func (r *MCPRuntime) Close() error {
 	}
 	r.entries = map[string]*mcpEntry{}
 	r.mu.Unlock()
+	r.cancel()
 
 	for _, entry := range entries {
 		r.retire(entry, nil)
@@ -443,6 +600,11 @@ func configFromServer(name string, cfg MCPServerConfig, source string) runtimeMC
 		headers:   cfg.Headers,
 		enabled:   enabled,
 	}
+	if cfg.OAuth != nil {
+		out.clientID = cfg.OAuth.ClientID
+		out.clientSecret = cfg.OAuth.ClientSecret
+		out.scope = cfg.OAuth.Scope
+	}
 	out.hash = out.fingerprint()
 	return out
 }
@@ -468,6 +630,10 @@ func (c runtimeMCPConfig) fingerprint() string {
 	for _, k := range keys {
 		fmt.Fprintf(h, "header=%s=%s\n", k, c.headers[k])
 	}
+	// Only the digest leaves this function; a secret in it is not readable.
+	fmt.Fprintf(h, "client=%s\n", c.clientID)
+	fmt.Fprintf(h, "secret=%s\n", c.clientSecret)
+	fmt.Fprintf(h, "scope=%s\n", c.scope)
 	return hex.EncodeToString(h.Sum(nil))
 }
 
@@ -502,14 +668,31 @@ func (r *MCPRuntime) connect(ctx context.Context, entry *mcpEntry) error {
 	cfg := entry.cfg
 	entry.mu.RUnlock()
 
+	auth := r.oauthFor(cfg)
+	entry.mu.Lock()
+	entry.oauth = auth
+	entry.mu.Unlock()
+
 	timeout := r.opts.ConnectTimeout
 	if timeout <= 0 {
 		timeout = 15 * time.Second
 	}
 	startCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	session, err := mcp.Start(startCtx, r.serverConfig(cfg))
+	serverCfg := r.serverConfig(cfg)
+	if auth != nil {
+		serverCfg.AuthToken = auth.Token
+	}
+	session, err := mcp.Start(startCtx, serverCfg)
 	if err != nil {
+		var authErr *mcp.AuthRequiredError
+		if errors.As(err, &authErr) {
+			entry.mu.Lock()
+			entry.challenge = authErr.Challenge
+			entry.mu.Unlock()
+			r.setState(entry, MCPServerStatus{State: MCPStateAuthRequired, Error: "sign-in required"})
+			return err
+		}
 		r.setState(entry, MCPServerStatus{State: MCPStateFailed, Error: err.Error()})
 		return err
 	}
@@ -543,6 +726,7 @@ func (r *MCPRuntime) retire(entry *mcpEntry, next *MCPServerStatus) {
 	entry.mu.Lock()
 	cfg := entry.cfg
 	session := entry.session
+	auth := entry.oauth
 	entry.session = nil
 	var status MCPServerStatus
 	if next != nil {
@@ -562,6 +746,11 @@ func (r *MCPRuntime) retire(entry *mcpEntry, next *MCPServerStatus) {
 	entry.mu.Unlock()
 	entry.ioMu.Unlock()
 
+	if auth != nil {
+		// A pending sign-in belongs to the session being retired; its loopback
+		// listener should not outlive the connection it was opened for.
+		auth.Cancel()
+	}
 	if session != nil {
 		_ = session.Close()
 	}

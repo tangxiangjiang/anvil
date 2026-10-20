@@ -405,6 +405,16 @@ type MCPServerConfig struct {
 	// started; an inline config is the caller's direct intent and is always
 	// started, whatever this says.
 	Enabled *bool
+	// OAuth supplies a client registration for authorization servers that do
+	// not support dynamic registration (0.44+). Nil lets the runtime register.
+	OAuth *MCPOAuthConfig
+}
+
+// MCPOAuthConfig is a manual OAuth client registration (0.44+).
+type MCPOAuthConfig struct {
+	ClientID     string
+	ClientSecret string
+	Scope        string
 }
 
 // PermissionFunc decides whether a gated tool may run.

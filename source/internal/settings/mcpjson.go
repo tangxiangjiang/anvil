@@ -27,6 +27,17 @@ type MCPServer struct {
 	// TransportName settles which one applies.
 	Transport string `json:"transport"`
 	Type      string `json:"type"`
+	// OAuth supplies a client registration by hand for authorization servers
+	// that do not support dynamic registration (0.44+). The secret never
+	// leaves this file except to the server it belongs to.
+	OAuth *MCPServerOAuth `json:"oauth"`
+}
+
+// MCPServerOAuth is the manual half of the sign-in configuration.
+type MCPServerOAuth struct {
+	ClientID     string `json:"client_id"`
+	ClientSecret string `json:"client_secret"`
+	Scope        string `json:"scope"`
 }
 
 // TransportName is the transport the entry declares, normalized the way the

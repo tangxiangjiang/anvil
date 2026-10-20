@@ -71,5 +71,12 @@ func mcpFromSettings(s settings.MCPServer) MCPServerConfig {
 	if cfg.Transport == "" && cfg.URL != "" && cfg.Command == "" {
 		cfg.Transport = "http"
 	}
+	if s.OAuth != nil {
+		cfg.OAuth = &MCPOAuthConfig{
+			ClientID:     s.OAuth.ClientID,
+			ClientSecret: s.OAuth.ClientSecret,
+			Scope:        s.OAuth.Scope,
+		}
+	}
 	return cfg
 }

@@ -28,6 +28,10 @@ type ServerConfig struct {
 	URL       string // http / sse base URL
 	// Headers are applied to HTTP/SSE requests only (ignored for stdio).
 	Headers map[string]string
+	// AuthToken, when set, is called before every HTTP request and its result
+	// sent as a bearer token. The runtime uses it to refresh an OAuth token
+	// mid-session. The value is never logged or returned in an error.
+	AuthToken func(ctx context.Context) (string, error)
 }
 
 // ToolInfo is one MCP tool descriptor.
@@ -49,14 +53,22 @@ type Session struct {
 	nextID    atomic.Int64
 	tools     []ToolInfo
 
-	http       *http.Client
-	baseURL    string
-	msgURL     string
-	headers    map[string]string
-	sseBody    io.ReadCloser
-	sseReader  *bufio.Reader
-	sseReplies chan json.RawMessage
-	sseErr     chan error
+	http    *http.Client
+	baseURL string
+	msgURL  string
+	headers map[string]string
+	// authToken, when set, supplies a bearer token per request. It is how OAuth
+	// refresh happens without a reconnect; a nil source means the static
+	// headers are the whole story.
+	authToken func(context.Context) (string, error)
+	// sessionID and protocolVersion are Streamable HTTP state: the id the
+	// server issued at initialize, and the version it accepted.
+	sessionID       string
+	protocolVersion string
+	sseBody         io.ReadCloser
+	sseReader       *bufio.Reader
+	sseReplies      chan json.RawMessage
+	sseErr          chan error
 }
 
 type rpcRequest struct {
@@ -215,16 +227,38 @@ func (s *Session) Close() error {
 }
 
 func (s *Session) initialize(ctx context.Context) error {
-	_, err := s.request(ctx, "initialize", map[string]any{
-		"protocolVersion": "2024-11-05",
-		"capabilities":    map[string]any{},
-		"clientInfo": map[string]any{
-			"name":    "anvil",
-			"version": "0.3.0",
-		},
-	})
-	if err != nil {
-		return err
+	// Streamable HTTP opens with the current version and falls back once if the
+	// server refuses it. stdio and the legacy SSE transport keep the version
+	// their servers have always been sent.
+	version := "2024-11-05"
+	if s.transport == "http" {
+		version = "2025-06-18"
+	}
+	for {
+		raw, err := s.request(ctx, "initialize", map[string]any{
+			"protocolVersion": version,
+			"capabilities":    map[string]any{},
+			"clientInfo": map[string]any{
+				"name":    "anvil",
+				"version": "0.3.0",
+			},
+		})
+		if err != nil {
+			if version == "2025-06-18" && rejectableVersion(err) {
+				version = "2024-11-05"
+				continue
+			}
+			return err
+		}
+		var result struct {
+			ProtocolVersion string `json:"protocolVersion"`
+		}
+		_ = json.Unmarshal(raw, &result)
+		s.protocolVersion = result.ProtocolVersion
+		if s.protocolVersion == "" {
+			s.protocolVersion = version
+		}
+		break
 	}
 	return s.notify(ctx, "notifications/initialized", map[string]any{})
 }
