@@ -144,8 +144,34 @@ window.api = {
       );
     },
     usage() { return api.req("GET", "/api/v1/usage"); },
-    delivery() { return api.req("GET", "/api/v1/delivery"); },
-    deliveryReset() { return api.req("POST", "/api/v1/delivery/reset", {}); },
+    search(q) { return api.req("GET", "/api/v1/search?q=" + encodeURIComponent(q)); },
+    health() { return api.req("GET", "/api/v1/health"); },
+    classifyError(body) { return api.req("POST", "/api/v1/diagnostics/classify-error", body); },
+    jobs(suffix) { return api.req("GET", "/api/v1/jobs" + (suffix || "")); },
+    jobEvents(id) { return api.req("GET", "/api/v1/jobs/" + encodeURIComponent(id) + "/events"); },
+    jobCancel(id) { return api.req("POST", "/api/v1/jobs/" + encodeURIComponent(id) + "/cancel", {}); },
+    deliveryAssist(body) { return api.req("POST", "/api/v1/delivery/assist", body); },
+    deliveryAudit(kind, id, limit) {
+      const q = new URLSearchParams({ kind, id, limit: String(limit || 50) }).toString();
+      return api.req("GET", "/api/v1/delivery/audit?" + q);
+    },
+    deliveryPreflight(transition, target) {
+      const q = new URLSearchParams({ transition, target }).toString();
+      return api.req("GET", "/api/v1/delivery/preflight?" + q);
+    },    delivery() { return api.req("GET", "/api/v1/delivery"); },
+
+    // Workbench (0.46.7): the console's interactive session surface.
+    workbenchSessions() { return api.req("GET", "/api/v1/workbench/sessions"); },
+    workbenchStart(body) { return api.req("POST", "/api/v1/workbench/sessions", body); },
+    workbenchSession(id) {
+      return api.req("GET", "/api/v1/workbench/sessions/" + encodeURIComponent(id));
+    },
+    workbenchCancel(id) {
+      return api.req("POST", "/api/v1/workbench/sessions/" + encodeURIComponent(id) + "/cancel", {});
+    },
+    workbenchEventsURL(id) {
+      return "/api/v1/workbench/sessions/" + encodeURIComponent(id) + "/events";
+    },
     deliveryCreateEng(body) { return api.req("POST", "/api/v1/delivery/eng-reqs", body); },
     deliveryEnsureProject(body) {
       return api.req("POST", "/api/v1/delivery/eng-reqs/ensure-project", body);

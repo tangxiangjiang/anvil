@@ -1,6 +1,9 @@
 window.Nav = {
   items: [
     { hash: "#/clusters", label: "Clusters", feature: "clusters" },
+    { hash: "#/workbench", label: "Workbench", feature: "workbench" },
+    { hash: "#/jobs", label: "Job history", feature: "jobhistory" },
+    { hash: "#/ops", label: "Ops", feature: "ops" },
     {
       hash: "#/delivery",
       label: "Delivery",

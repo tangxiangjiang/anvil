@@ -1,0 +1,10 @@
+{
+  "name": "anvil-web-static",
+  "private": true,
+  "version": "0.46.0",
+  "description": "anvil-web Delivery UI. No build step: this file exists so `node --test` has a root, and `npm test` is what CI runs.",
+  "scripts": {
+    "test": "node --test test/pure.test.js test/escaping.test.js test/workbench.test.js",
+    "test:update-escaping": "node --test test/escaping.test.js"
+  }
+}

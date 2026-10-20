@@ -40,21 +40,6 @@ func (s *Server) handleDelivery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if path == "reset" && r.Method == http.MethodPost {
-		if err := s.delivery.Reset(); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		snap, err := s.delivery.Snapshot()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		snap.Workers = mergeWorkerHelpers(snap.Workers)
-		writeJSON(w, http.StatusOK, snap)
-		return
-	}
-
 	if path == "majors" && r.Method == http.MethodGet {
 		list, err := s.delivery.ListMajors()
 		if err != nil {
@@ -152,6 +137,33 @@ func (s *Server) handleDelivery(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, item)
 			return
 		}
+	}
+
+	if path == "audit" && r.Method == http.MethodGet {
+		if s.delivery == nil {
+			http.Error(w, "delivery store not configured", http.StatusServiceUnavailable)
+			return
+		}
+		q := r.URL.Query()
+		kind := strings.TrimSpace(q.Get("kind"))
+		id := strings.TrimSpace(q.Get("id"))
+		if kind == "" {
+			http.Error(w, "kind is required", http.StatusBadRequest)
+			return
+		}
+		limit := 50
+		if v := strings.TrimSpace(q.Get("limit")); v != "" {
+			if n, err := strconv.Atoi(v); err == nil {
+				limit = n
+			}
+		}
+		rows, err := s.delivery.ListAudit(kind, id, limit)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"kind": kind, "id": id, "entries": rows})
+		return
 	}
 
 	if path == "trash" && r.Method == http.MethodGet {

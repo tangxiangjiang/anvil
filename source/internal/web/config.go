@@ -32,6 +32,43 @@ type Config struct {
 	// DeliveryMergeRoot is an optional absolute parent of Worker project_rel checkouts
 	// used for Accept→merge main (0.39.15). Empty → stub merge only.
 	DeliveryMergeRoot string `json:"delivery_merge_root" yaml:"delivery_merge_root"`
+	// Assist configures the drafting assistant (0.46.6).
+	//
+	// This is deliberately its own block rather than reusing the worker's model
+	// settings: anvil-web drafting *planning text* is a different act from a Worker
+	// executing a job, and design 23 says the worker owns cognition. See
+	// doc/design/v1.0/40-web-assist.md for the boundary this draws.
+	Assist AssistConfig `json:"assist" yaml:"assist"`
+}
+
+// AssistConfig is the drafting assistant's provider settings.
+//
+// Empty means off, and off means the surfaces say so rather than producing a fake
+// reply: "AI assist is not configured" is honest, a canned answer is not.
+type AssistConfig struct {
+	// BaseURL is an OpenAI-compatible root (…/v1).
+	BaseURL string `json:"base_url" yaml:"base_url"`
+	// Model is the model id used for drafting.
+	Model string `json:"model" yaml:"model"`
+	// APIKeyEnv names the environment variable holding the key. The key never
+	// travels through the config file, the wire, or a log.
+	APIKeyEnv string `json:"api_key_env" yaml:"api_key_env"`
+	// TimeoutSec bounds one drafting request (default 60).
+	TimeoutSec int `json:"timeout_sec" yaml:"timeout_sec"`
+}
+
+// Enabled reports whether the assistant is configured well enough to try.
+func (a AssistConfig) Enabled() bool {
+	return strings.TrimSpace(a.BaseURL) != "" && strings.TrimSpace(a.Model) != ""
+}
+
+// APIKey reads the key from the environment the config names.
+func (a AssistConfig) APIKey() string {
+	env := strings.TrimSpace(a.APIKeyEnv)
+	if env == "" {
+		env = "ANVIL_ASSIST_API_KEY"
+	}
+	return os.Getenv(env)
 }
 
 // DefaultConfig returns defaults.
@@ -44,6 +81,10 @@ func DefaultConfig() Config {
 		SessionTTLHours:   24 * 7,
 		AdminUserEnv:      "ANVIL_WEB_ADMIN_USER",
 		AdminPasswordEnv:  "ANVIL_WEB_ADMIN_PASSWORD",
+		Assist: AssistConfig{
+			APIKeyEnv:  "ANVIL_ASSIST_API_KEY",
+			TimeoutSec: 60,
+		},
 	}
 }
 
@@ -81,6 +122,13 @@ func (c *Config) Normalize() error {
 	}
 	if c.AdminPasswordEnv == "" {
 		c.AdminPasswordEnv = "ANVIL_WEB_ADMIN_PASSWORD"
+	}
+	c.Assist.BaseURL = strings.TrimRight(strings.TrimSpace(c.Assist.BaseURL), "/")
+	if c.Assist.APIKeyEnv == "" {
+		c.Assist.APIKeyEnv = "ANVIL_ASSIST_API_KEY"
+	}
+	if c.Assist.TimeoutSec <= 0 {
+		c.Assist.TimeoutSec = 60
 	}
 	c.Fleets = normalizeFleets(c.Fleets, c.SchedulerURL)
 	return nil

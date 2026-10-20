@@ -24,6 +24,17 @@
   function showShell() {
     hideAll();
     document.getElementById("view-shell").hidden = false;
+    // Shell chrome: the health strip answers "is anything wrong right now" and
+    // the help button answers "which button now". Both cross surfaces, so they
+    // belong to the shell rather than to any one feature.
+    window.AnvilShell.mountHealth();
+    const help = document.getElementById("shell-help");
+    if (help && !help._wired) {
+      help._wired = true;
+      help.addEventListener("click", () => {
+        window.AnvilShell.openHelp(window.AnvilShell.surfaceForRoute(location.hash));
+      });
+    }
   }
 
   function showSetupBlocked(msg) {
@@ -93,6 +104,9 @@
       Features[current].unmount();
     }
     current = item.feature;
+    // Cheap: one probe per fleet with its own timeout, and it only repaints the
+    // strip.
+    void window.AnvilShell.refreshHealth();
     app.innerHTML = "";
     if (Features[current] && Features[current].mount) {
       await Features[current].mount(app);
@@ -148,6 +162,107 @@
     location.hash = "#/login";
     await route();
   });
+
+  // ---------------------------------------------------------------- search
+  //
+  // One box for the whole planning record, in the shell rather than per
+  // surface: the question "where did I write that" is not scoped to the
+  // section the operator happens to be in.
+  function wireGlobalSearch() {
+    const input = document.getElementById("global-search");
+    if (!input) return;
+    let box = document.getElementById("global-search-results");
+    if (!box) {
+      box = document.createElement("div");
+      box.id = "global-search-results";
+      box.className = "gs-results";
+      box.hidden = true;
+      input.parentElement.appendChild(box);
+    }
+    let timer = null;
+    let seq = 0;
+    const run = async () => {
+      const q = input.value.trim();
+      if (!q) {
+        box.hidden = true;
+        box.innerHTML = "";
+        return;
+      }
+      const mine = ++seq;
+      try {
+        const data = await api.v1.search(q);
+        if (mine !== seq) return; // a later keystroke won
+        const hits = data.hits || [];
+        box.hidden = false;
+        box.innerHTML = hits.length
+          ? hits
+              .map(
+                (h) => `<a class="gs-hit" href="${escapeAttr(h.href)}">
+                  <span class="gs-kind muted">${escapeAttr(h.kind)}</span>
+                  <span class="gs-title">${escapeAttr(h.title || h.id)}</span>
+                  <span class="gs-excerpt muted">${escapeAttr(h.excerpt || "")}</span>
+                </a>`,
+              )
+              .join("")
+          : `<p class="muted gs-none">Nothing matches “${escapeAttr(q)}”.</p>`;
+      } catch (e) {
+        if (mine !== seq) return;
+        box.hidden = false;
+        box.innerHTML = `<p class="err">${escapeAttr(e.message || String(e))}</p>`;
+      }
+    };
+    input.addEventListener("input", () => {
+      clearTimeout(timer);
+      timer = setTimeout(run, 180);
+    });
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        input.value = "";
+        box.hidden = true;
+      }
+    });
+    // Navigating away closes the panel; a result click is a navigation.
+    document.addEventListener("click", (e) => {
+      if (e.target.closest?.(".side-search") || e.target.closest?.(".gs-results")) return;
+      box.hidden = true;
+    });
+    box.addEventListener("click", (e) => {
+      if (e.target.closest("a")) box.hidden = true;
+    });
+  }
+
+  function escapeAttr(v) {
+    return String(v ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  // The sidebar is an overlay under 600px; one button opens and closes it.
+  // Escape closes it too, because a phone user who opened it by accident should
+  // not have to find the button again.
+  function wireNavToggle() {
+    const btn = document.getElementById("nav-toggle");
+    if (!btn) return;
+    const setOpen = (open) => {
+      document.body.classList.toggle("nav-open", open);
+      btn.setAttribute("aria-expanded", open ? "true" : "false");
+    };
+    btn.addEventListener("click", () => {
+      setOpen(!document.body.classList.contains("nav-open"));
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") setOpen(false);
+    });
+    // Choosing a destination closes it: the overlay covers the page it navigates to.
+    document.getElementById("nav").addEventListener("click", (e) => {
+      if (e.target.closest("a")) setOpen(false);
+    });
+  }
+
+  wireNavToggle();
+  wireGlobalSearch();
 
   window.addEventListener("hashchange", () => { route(); });
   route();

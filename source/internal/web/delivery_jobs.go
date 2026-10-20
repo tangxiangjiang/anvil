@@ -297,6 +297,7 @@ func (s *Server) startMilestonePhaseJob(msID string, forceStub bool) (delivery.P
 	hub := s.ensureJobHub()
 	hub.ensure(jobID)
 	_ = s.delivery.AppendPhaseJobEvent(ph.ID, delivery.JobRunning, "starting")
+	s.beginPhaseJob(jobID, msID, ph.ID, ms.ExecuteWorkerID)
 
 	if localStub {
 		go s.runPhaseJobLocalStub(msID, ph.ID, jobID, in.ForceStub)
@@ -306,14 +307,56 @@ func (s *Server) startMilestonePhaseJob(msID string, forceStub bool) (delivery.P
 	return ph, nil
 }
 
+// recordJobEvent persists one phase-job event (p_0.46.10).
+//
+// The in-memory hub is the fast path for a live subscriber; this table is what
+// makes a run readable after the process that ran it is gone. Before it existed,
+// a failed phase job left one string (`job_last_event`) and nothing else, so the
+// console could not answer "why did this fail" - the question asked most often.
+func (s *Server) recordJobEvent(jobID, phaseID string, ev daemon.JobEventBody) {
+	if s.delivery == nil {
+		return
+	}
+	_ = s.delivery.AppendJobEvent(delivery.JobEvent{
+		JobID:   jobID,
+		Type:    ev.Type,
+		Text:    ev.Text,
+		Name:    ev.Name,
+		Args:    string(ev.Args),
+		Content: ev.Content,
+		IsError: ev.IsError,
+		Step:    ev.Step,
+	})
+}
+
+// beginPhaseJob records the job header so its events have a row to belong to and
+// the history list knows about it before it finishes.
+func (s *Server) beginPhaseJob(jobID, msID, phaseID, workerID string) {
+	if s.delivery == nil {
+		return
+	}
+	_ = s.delivery.BeginJob(delivery.JobRecord{
+		JobID:       jobID,
+		Kind:        "phase",
+		MilestoneID: msID,
+		PhaseID:     phaseID,
+		WorkerID:    workerID,
+		Status:      "running",
+	})
+}
 func (s *Server) runPhaseJobLocalStub(msID, phaseID, jobID string, advance bool) {
 	hub := s.ensureJobHub()
+	s.beginPhaseJob(jobID, msID, phaseID, "")
 	ev := daemon.JobEventBody{JobID: jobID, Type: "progress", Text: "force_stub local"}
 	hub.publishEvent(jobID, ev)
+	s.recordJobEvent(jobID, phaseID, ev)
 	_ = s.delivery.AppendPhaseJobEvent(phaseID, delivery.JobRunning, ev.Text)
 	done := daemon.JobDoneBody{JobID: jobID, Status: "finished", Result: "force_stub ok"}
 	hub.publishDone(jobID, done, "")
 	_ = s.delivery.CompletePhaseJob(phaseID, delivery.JobFinished, "finished", done.Result)
+	if s.delivery != nil {
+		_ = s.delivery.FinishJob(jobID, "finished", "")
+	}
 	if !advance {
 		return
 	}
@@ -366,6 +409,7 @@ func (s *Server) runPhaseJob(msID, phaseID, jobID string, in schedclient.JobCrea
 	runner := s.jobRunner()
 	done, err := runner.CreateJobStream(ctx, in, func(ev daemon.JobEventBody) {
 		hub.publishEvent(jobID, ev)
+		s.recordJobEvent(jobID, phaseID, ev)
 		snippet := ev.Text
 		if snippet == "" {
 			snippet = ev.Content
@@ -378,11 +422,21 @@ func (s *Server) runPhaseJob(msID, phaseID, jobID string, in schedclient.JobCrea
 	if err != nil {
 		hub.publishDone(jobID, daemon.JobDoneBody{JobID: jobID, Status: "error", Error: err.Error()}, err.Error())
 		_ = s.delivery.CompletePhaseJob(phaseID, delivery.JobError, "error", err.Error())
+		if s.delivery != nil {
+			_ = s.delivery.FinishJob(jobID, "error", err.Error())
+		}
 		rs := delivery.RunPaused
 		_, _ = s.delivery.PatchMilestone(msID, delivery.PatchMilestoneInput{RunState: &rs})
 		return
 	}
 	hub.publishDone(jobID, done, "")
+	if s.delivery != nil {
+		finalStatus := done.Status
+		if finalStatus == "" {
+			finalStatus = "finished"
+		}
+		_ = s.delivery.FinishJob(jobID, finalStatus, done.Error)
+	}
 	st := strings.ToLower(done.Status)
 	switch st {
 	case "finished":

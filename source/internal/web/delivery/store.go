@@ -256,7 +256,17 @@ CREATE TABLE IF NOT EXISTS delivery_trash (
 	if err := s.ensureMilestoneAcceptColumns(); err != nil {
 		return err
 	}
-	return s.ensurePolishesTable()
+	if err := s.ensurePolishesTable(); err != nil {
+		return err
+	}
+	// p_0.46.10: keep the work.
+	if err := s.ensureJobEventTables(); err != nil {
+		return err
+	}
+	if err := s.ensureAuditTable(); err != nil {
+		return err
+	}
+	return s.ensureTrashProvenance()
 }
 
 func (s *Store) ensureMilestoneAcceptColumns() error {
@@ -3880,40 +3890,6 @@ INSERT INTO delivery_majors(major, title, status, summary, created_at, updated_a
 (1, '1.0', 'planning', 'First stable generation after 0.x.', ?, ?)`,
 		ts, ts, ts, ts)
 	return err
-}
-
-// Reset clears all delivery tables and reseeds.
-func (s *Store) Reset() error {
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-	for _, q := range []string{
-		`DELETE FROM delivery_gates`,
-		`DELETE FROM delivery_polishes`,
-		`DELETE FROM delivery_test_cases`,
-		`DELETE FROM delivery_buglist_items`,
-		`DELETE FROM delivery_edges`,
-		`DELETE FROM delivery_phases`,
-		`DELETE FROM delivery_milestones`,
-		`DELETE FROM delivery_design_version_deps`,
-		`DELETE FROM delivery_design_versions`,
-		`DELETE FROM delivery_design_options`,
-		`DELETE FROM delivery_designs`,
-		`DELETE FROM delivery_req_versions`,
-		`DELETE FROM delivery_eng_reqs`,
-		`DELETE FROM delivery_majors`,
-		`DELETE FROM delivery_trash`,
-	} {
-		if _, err := tx.Exec(q); err != nil {
-			return err
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-	return s.seedDemo()
 }
 
 func (s *Store) seedDemo() error {

@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/anvil-dev/anvil/internal/web/auth"
@@ -28,8 +29,17 @@ type Server struct {
 	sched     *schedclient.Client
 	jobs      JobRunner // optional; defaults to sched client
 	jobHub    *jobHub
-	static    fs.FS
-	log       *log.Logger
+
+	// workbench holds interactive sessions (p_0.46.7). In memory by design:
+	// the durable record of a session is the worker's own transcript, keyed by
+	// the agent id in the terminal event.
+	workbench   *workbenchHub
+	wbCancelMu  sync.Mutex
+	wbCancel    map[string]context.CancelFunc
+	jobCanceler func(jobID string) error // test seam
+
+	static fs.FS
+	log    *log.Logger
 }
 
 // New constructs a server. staticFS is typically embed FS rooted at static/.
@@ -44,6 +54,8 @@ func New(cfg Config, store *auth.Store, deliveryStore *delivery.Store, workspace
 		delivery:  deliveryStore,
 		workspace: workspaceStore,
 		sched:     &schedclient.Client{BaseURL: cfg.SchedulerURL, Token: cfg.SchedulerToken()},
+		workbench: newWorkbenchHub(),
+		wbCancel:  map[string]context.CancelFunc{},
 		static:    staticFS,
 		log:       logger,
 	}
@@ -65,8 +77,17 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/nodes", s.requireAuth(s.handleNodes))
 	mux.HandleFunc("/api/v1/nodes/", s.requireAuth(s.handleNodePatch))
 	mux.HandleFunc("/api/v1/usage", s.requireAuth(s.handleUsage))
-	mux.HandleFunc("/api/v1/delivery", s.requireAuth(s.handleDelivery))
-	mux.HandleFunc("/api/v1/delivery/", s.requireAuth(s.handleDelivery))
+	mux.HandleFunc("/api/v1/delivery", s.requireAuth(s.auditDelivery(s.handleDelivery)))
+	mux.HandleFunc("/api/v1/delivery/", s.requireAuth(s.auditDelivery(s.handleDelivery)))
+	mux.HandleFunc("/api/v1/jobs", s.requireAuth(s.handleJobs))
+	mux.HandleFunc("/api/v1/jobs/", s.requireAuth(s.handleJobsOrCancel))
+	mux.HandleFunc("/api/v1/search", s.requireAuth(s.handleSearch))
+	mux.HandleFunc("/api/v1/delivery/preflight", s.requireAuth(s.handlePreflight))
+	mux.HandleFunc("/api/v1/delivery/assist", s.requireAuth(s.handleAssist))
+	mux.HandleFunc("/api/v1/workbench", s.requireAuth(s.handleWorkbench))
+	mux.HandleFunc("/api/v1/workbench/", s.requireAuth(s.handleWorkbench))
+	mux.HandleFunc("/api/v1/health", s.requireAuth(s.handleHealth))
+	mux.HandleFunc("/api/v1/diagnostics/classify-error", s.requireAuth(s.handleClassifyError))
 
 	if s.static != nil {
 		fileServer := http.FileServer(http.FS(s.static))

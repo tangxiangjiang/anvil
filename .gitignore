@@ -11,6 +11,7 @@
 
 # Local joint-debug stack (scripts/dev_stack.py)
 .dev/
+.tmp/
 
 # Go
 source/vendor/

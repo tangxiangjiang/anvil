@@ -132,6 +132,14 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 	messages = append(messages, user)
 	sink(user)
 
+	// The provider rejects the whole request when an assistant turn's tool_calls
+	// are not answered, and a stored history can reach that state without this
+	// process ever having produced it: a run killed before its tool results
+	// landed, or two runs interleaved into one store file. Healing here — before
+	// the first request and before compression reads the history — is what keeps
+	// one interruption from poisoning every later turn in the session.
+	messages = HealToolPairs(messages)
+
 	if cfg.HistoryMaxChars > 0 {
 		cr, err := compress.Apply(ctx, completer, cfg.Model, messages, compress.Options{
 			MaxChars:   cfg.HistoryMaxChars,

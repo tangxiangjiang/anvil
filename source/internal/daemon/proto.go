@@ -220,6 +220,27 @@ type ClusterWorkerAddBody struct {
 	Readme       string `json:"readme,omitempty"`
 	WorktreeBase string `json:"worktree_base,omitempty"` // existing checkout; project_path = new worktree
 	Branch       string `json:"branch,omitempty"`        // new branch for worktree add -b
+
+	// LLM is this worker's own provider settings (0.47). Empty fields fall back to
+	// agentd's llm block, so a worker that says nothing behaves exactly as before.
+	//
+	// It exists because one fleet routinely points at more than one model: a cheap
+	// one for bulk phases, an expensive one for the phase that has to think. The
+	// daemon-wide block could only express one.
+	LLM *WorkerLLMBody `json:"llm,omitempty"`
+}
+
+// WorkerLLMBody is a per-worker provider override.
+//
+// APIKey is deliberately absent: a key travels through the environment
+// (APIKeyEnv) or is inherited from agentd, never through a JSON body that would
+// end up in workers.json on disk.
+type WorkerLLMBody struct {
+	Provider  string `json:"provider,omitempty"`
+	BaseURL   string `json:"base_url,omitempty"`
+	Model     string `json:"model,omitempty"`
+	APIKeyEnv string `json:"api_key_env,omitempty"`
+	MaxSteps  int    `json:"max_steps,omitempty"`
 }
 
 // ClusterWorkerRemoveBody removes a project worker (stopped or idle).

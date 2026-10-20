@@ -70,7 +70,7 @@ window.AiChat = {
       allowDrop: opts.allowDrop !== false,
       showLog: opts.showLog !== false,
       citeNav: Array.isArray(opts.citeNav) ? opts.citeNav : [],
-      sendLabel: opts.sendLabel || "Send (mock)",
+      sendLabel: opts.sendLabel || "Send",
       onSend: typeof opts.onSend === "function" ? opts.onSend : async () => {},
       onCiteNav: typeof opts.onCiteNav === "function" ? opts.onCiteNav : () => {},
       onScrollCite: typeof opts.onScrollCite === "function" ? opts.onScrollCite : () => {},
@@ -324,12 +324,12 @@ window.AiChat = {
           });
         };
         root.querySelector("[data-ai-send]")?.addEventListener("click", () => {
-          send().catch((err) => alert(err.message || err));
+          send().catch((err) => console.error("ai_chat:", err));
         });
         root.querySelector("[data-ai-input]")?.addEventListener("keydown", (e) => {
           if (e.key === "Enter" && !e.shiftKey) {
             e.preventDefault();
-            send().catch((err) => alert(err.message || err));
+            send().catch((err) => console.error("ai_chat:", err));
           }
         });
 

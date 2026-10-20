@@ -87,7 +87,7 @@ func TestAddRemoveProjectWorkerInSandbox(t *testing.T) {
 	cfg.SandboxDir = sandbox
 	_ = cfg.Normalize()
 	s := &Server{cfg: cfg, slots: NewSlots(0)}
-	ws, err := s.AddProjectWorker("", "Demo", "ops note", "proj", "", false, "", "", "")
+	ws, err := s.AddProjectWorker("", "Demo", "ops note", "proj", "", false, "", "", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +151,7 @@ func TestProjectWorkersPersistAcrossNewServer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ws, err := s1.AddProjectWorker("Demo", "Demo", "note", "proj", "", false, "", "", "")
+	ws, err := s1.AddProjectWorker("Demo", "Demo", "note", "proj", "", false, "", "", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,7 +257,7 @@ func TestAddProjectWorkerWorktree(t *testing.T) {
 	cfg.SandboxDir = sandbox
 	_ = cfg.Normalize()
 	s := &Server{cfg: cfg, slots: NewSlots(0)}
-	ws, err := s.AddProjectWorker("", "Feature", "", "feature-wt", "", false, "", "main", "feature/x")
+	ws, err := s.AddProjectWorker("", "Feature", "", "feature-wt", "", false, "", "main", "feature/x", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

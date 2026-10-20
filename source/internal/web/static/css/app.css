@@ -265,14 +265,373 @@ input { width: 100%; margin-bottom: 0.75rem; }
   .side { border-right: 0; border-bottom: 1px solid var(--border); }
 }
 
+/* Drafting assistant (p_0.46.6): proposals, never writes. */
+.assist-host:empty { display: none; }
+.assist-host { margin-top: 0.6rem; }
+.assist-list { display: flex; flex-direction: column; gap: 0.5rem; }
+.assist-card {
+  border: 1px solid var(--border); border-left: 3px solid var(--accent-dim);
+  border-radius: var(--radius); padding: 0.5rem 0.65rem; background: var(--panel);
+}
+.assist-head { display: flex; gap: 0.5rem; align-items: baseline; flex-wrap: wrap; margin-bottom: 0.35rem; }
+.assist-before summary { cursor: pointer; font-size: 0.78rem; }
+.assist-before pre, .assist-after {
+  margin: 0.3rem 0; padding: 0.45rem 0.5rem; font-family: var(--mono);
+  font-size: 0.78rem; white-space: pre-wrap; word-break: break-word;
+  max-height: 26vh; overflow: auto; border-radius: 6px; background: #0f1620;
+}
+.assist-after { border-left: 2px solid var(--ok); }
+.assist-actions { justify-content: flex-end; gap: 0.35rem; }
+.assist-actions button { padding: 0.22rem 0.6rem; font-size: 0.8rem; }
+.assist-foot { font-size: 0.75rem; }
+.assist-note {
+  padding: 0.45rem 0.6rem; border-radius: var(--radius);
+  border: 1px dashed var(--border); font-size: 0.82rem; color: var(--muted);
+}
+.assist-note.bad { border-color: var(--danger); color: #f3c7c7; }
+
+/* Connection banner (p_0.46.12): a stale stream that looks live is worse than
+   a visible disconnection. */
+.wb-conn {
+  padding: 0.35rem 0.6rem; border-radius: var(--radius);
+  font-size: 0.8rem; border: 1px solid var(--border);
+}
+.wb-conn.warn { border-color: var(--warn); color: var(--warn); }
+.wb-conn.bad { border-color: var(--danger); color: var(--danger); }
+.wb-conn[hidden] { display: none !important; }
+
+/* ---------------------------------------------------------------- reachable
+   (p_0.46.12) The console assumed a wide, stable desktop. These rules make the
+   two things an operator does away from a desk - see state, stop a runaway job -
+   work on a phone, and they name the surfaces that genuinely do not work small
+   instead of rendering them half-broken. */
+@media (max-width: 900px) {
+  :root { --sidebar: 56px; }
+  .side { padding: 0.75rem 0.5rem; }
+  .brand span, .nav-parent, .nav-child, .side-foot #whoami, .shell-health .sh-cap { display: none; }
+  .brand { font-size: 0.9rem; text-align: center; }
+  .nav a, .nav-fold { padding: 0.5rem 0.35rem; text-align: center; }
+  .del-scope { gap: 0.25rem; }
+  .del-scope-title { display: none; }
+  .jh-row { grid-template-columns: 0.6rem minmax(0,1fr) auto; }
+}
+
+@media (max-width: 600px) {
+  :root { --sidebar: 0px; }
+  .shell { grid-template-columns: 1fr; }
+  /* The sidebar becomes an overlay toggled from the header rather than a
+     column that squeezes content to nothing. */
+  .side {
+    position: fixed; inset: 0 auto 0 0; width: 240px; z-index: 50;
+    transform: translateX(-100%); transition: transform 0.18s ease;
+    box-shadow: 0 0 32px rgba(0,0,0,0.5);
+  }
+  body.nav-open .side { transform: translateX(0); }
+  .brand span, .nav-parent, .nav-child, .side-foot #whoami, .shell-health .sh-cap { display: block; }
+  .main { padding: 0.85rem 0.8rem; }
+  .del-head { flex-direction: column; align-items: stretch; gap: 0.4rem; }
+  .del-head h2 { font-size: 1.1rem; }
+  .del-split { display: block; }
+  .del-scope { overflow-x: auto; flex-wrap: nowrap; padding-bottom: 0.25rem; }
+  .del-scope-chip { flex: 0 0 auto; }
+  .del-job-bar, .del-sel-bar { position: static; }
+  .toolbar { flex-wrap: wrap; }
+  .jh-row { grid-template-columns: 0.6rem minmax(0,1fr); }
+  .jh-row .jh-meta { display: none; }
+  .wb-grid { grid-template-columns: 1fr; }
+  .wb-stream { max-height: 46vh; }
+  .modal-card { width: 94vw !important; max-height: 88vh; overflow: auto; }
+  .modal-stack { width: 96vw; }
+}
+
+/* A surface that genuinely needs a wide screen says so rather than rendering a
+   broken layout. Naming the limit is more useful than a half-working one. */
+.desktop-only { display: none; }
+@media (max-width: 900px) {
+  .desktop-only {
+    display: block; padding: 0.75rem 0.85rem; margin: 0 0 0.75rem;
+    border: 1px dashed var(--border); border-radius: var(--radius);
+    font-size: 0.85rem; color: var(--muted);
+  }
+  .needs-wide { display: none; }
+}
+
+/* Mobile nav toggle: hidden on wide screens, shown when the sidebar is an
+   overlay. */
+.nav-toggle {
+  display: none; position: fixed; left: 0.6rem; bottom: 0.8rem; z-index: 60;
+  width: 2.6rem; height: 2.6rem; border-radius: 50%; padding: 0;
+  font-size: 1rem; box-shadow: 0 4px 16px rgba(0,0,0,0.45);
+}
+@media (max-width: 600px) {
+  .nav-toggle { display: block; }
+}
+
+/* ---------------------------------------------------------------- ops view
+   One screen for a phone: state and a stop button. */
+.ops-grid { display: flex; flex-direction: column; gap: 0.75rem; }
+.ops-card { padding: 0.75rem 0.85rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); }
+.ops-card h3 { margin: 0 0 0.4rem; font-size: 0.95rem; }
+.ops-row { display: flex; align-items: center; gap: 0.5rem; padding: 0.3rem 0; border-bottom: 1px solid var(--border); }
+.ops-row:last-child { border-bottom: 0; }
+.ops-row .ops-grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ops-row button { padding: 0.25rem 0.6rem; font-size: 0.82rem; }
+/* Per-worker provider settings in the Add worker dialog (0.47). */
+.cl-llm-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 0 0.6rem;
+}
+.cl-llm-grid input, .cl-llm-grid select { margin-bottom: 0.75rem; }
+@media (max-width: 600px) {
+  .cl-llm-grid { grid-template-columns: 1fr; }
+}
+
+/* Selection and batch actions (p_0.46.8). */.del-sel-row { position: relative; border-radius: var(--radius); }
+.del-sel-row.sel-on {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.del-sel-row:focus-visible { outline: 2px solid var(--accent-dim); outline-offset: -2px; }
+.del-sel-bar {
+  display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+  margin: 0.5rem 0; padding: 0.4rem 0.65rem;
+  background: var(--panel); border: 1px solid var(--accent-dim);
+  border-left: 3px solid var(--accent); border-radius: var(--radius);
+  font-size: 0.85rem; position: sticky; top: 0; z-index: 6;
+}
+.del-sel-bar[hidden] { display: none !important; }
+.del-sel-bar button { padding: 0.2rem 0.55rem; font-size: 0.8rem; }
+
+/* Shell chrome (p_0.46.9): health strip, help, actionable errors. */
+.help-btn {
+  float: right; width: 1.4rem; height: 1.4rem; padding: 0;
+  font-size: 0.8rem; line-height: 1; border-radius: 50%;
+  opacity: 0.7;
+}
+.help-btn:hover { opacity: 1; }
+.shell-health {
+  display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;
+  font-size: 0.78rem; padding: 0.35rem 0 0.55rem;
+  border-bottom: 1px solid var(--border); margin-bottom: 0.5rem;
+}
+.sh-dot { width: 0.5rem; height: 0.5rem; border-radius: 50%; background: var(--muted); flex: 0 0 auto; }
+.sh-dot.ok { background: var(--ok); }
+.sh-dot.warn { background: var(--warn); }
+.sh-dot.bad { background: var(--danger); }
+.sh-cap { font-size: 0.72rem; }
+.help-states { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+.help-states th, .help-states td { text-align: left; padding: 0.3rem 0.4rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+.help-states th { color: var(--muted); font-weight: 500; font-size: 0.78rem; }
+.help-keys { margin: 0.2rem 0 0; padding-left: 1.1rem; font-size: 0.85rem; }
+.err-detail { margin-top: 0.6rem; }
+.err-detail summary { cursor: pointer; color: var(--muted); font-size: 0.82rem; }
+.err-detail pre {
+  margin: 0.35rem 0 0; padding: 0.5rem; font-family: var(--mono); font-size: 0.75rem;
+  white-space: pre-wrap; word-break: break-word; max-height: 30vh; overflow: auto;
+  background: #0f1620; border-radius: var(--radius);
+}
+/* Audit trail on an entity (p_0.46.10 data, rendered here). */
+.audit-list { display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.82rem; }
+.audit-row { display: grid; grid-template-columns: 1fr auto; gap: 0.5rem; padding: 0.25rem 0; border-bottom: 1px solid var(--border); }
+.audit-what { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.audit-when { color: var(--muted); white-space: nowrap; font-size: 0.75rem; }
+
+/* Pre-flight blockers (p_0.46.11): why a button is disabled, next to it. */
+.del-blockers {
+  margin: 0.45rem 0 0; padding: 0.4rem 0.55rem;
+  border-radius: var(--radius); font-size: 0.82rem;
+}
+.del-blockers.hard {
+  border: 1px solid var(--danger); background: #2a1616; color: #f3c7c7;
+}
+.del-blockers.advisory {
+  border: 1px solid var(--warn); background: #2a2317; color: #f0dcb8;
+}
+.del-blocker + .del-blocker { margin-top: 0.25rem; }
+.del-blocker a { margin-left: 0.25rem; }
+button[disabled][aria-describedby] { opacity: 0.65; cursor: not-allowed; }
+
+/* Global search (p_0.46.10): one box for the whole planning record. */
+.side-search { position: relative; }
+.side-search input { margin: 0; width: 100%; font-size: 0.85rem; padding: 0.35rem 0.55rem; }
+.gs-results {
+  position: absolute; left: 0; right: 0; top: calc(100% + 0.25rem); z-index: 30;
+  max-height: 60vh; overflow: auto;
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.35); padding: 0.25rem;
+}
+.gs-hit {
+  display: flex; flex-direction: column; gap: 0.1rem;
+  padding: 0.4rem 0.5rem; border-radius: 6px; color: var(--text);
+}
+.gs-hit:hover, .gs-hit:focus { background: #223040; }
+.gs-kind { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em; }
+.gs-title { font-size: 0.9rem; }
+.gs-excerpt { font-size: 0.78rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gs-none { padding: 0.5rem; margin: 0; font-size: 0.85rem; }
+
+/* Job history (p_0.46.10). */
+.jh-list { display: flex; flex-direction: column; gap: 0.3rem; }
+.jh-row {
+  display: grid; grid-template-columns: 0.6rem minmax(0,1fr) auto auto auto auto;
+  gap: 0.6rem; align-items: center; width: 100%; text-align: left;
+  background: var(--panel); border: 1px solid var(--border); color: var(--text);
+  padding: 0.45rem 0.65rem; border-radius: var(--radius);
+}
+.jh-row:hover { border-color: var(--accent-dim); }
+.jh-state { width: 0.5rem; height: 0.5rem; border-radius: 50%; background: var(--muted); }
+.jh-state.ok { background: var(--ok); }
+.jh-state.warn { background: var(--warn); }
+.jh-state.bad { background: var(--danger); }
+.jh-main { display: flex; flex-direction: column; min-width: 0; }
+.jh-kind { font-size: 0.9rem; }
+.jh-id { font-family: var(--mono); font-size: 0.72rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.jh-meta { font-size: 0.75rem; white-space: nowrap; }.jh-progress, .jh-other { font-size: 0.8rem; }
+/* The row is a container with two controls in it, not one big button: nesting a
+   Stop button inside a clickable row is a target the wrong action wins. */
+.jh-open {
+  background: none; border: 0; padding: 0; text-align: left; cursor: pointer;
+  color: inherit; font: inherit; display: flex; flex-direction: column; min-width: 0;
+}
+.jh-open:hover .jh-kind { text-decoration: underline; }
+.jh-stop { padding: 0.15rem 0.5rem; font-size: 0.75rem; }
+.jh-main + .jh-meta { margin-left: auto; }@media (max-width: 900px) {
+  .jh-row { grid-template-columns: 0.6rem minmax(0,1fr) auto; }
+  .jh-row .jh-meta:nth-of-type(2), .jh-row .jh-meta:nth-of-type(3) { display: none; }
+}
+
+/* Workbench (0.46.7): the interactive surface. */
+.wb-grid {
+  display: grid; grid-template-columns: minmax(240px, 300px) 1fr;
+  gap: 1rem; align-items: start;
+}
+.wb-side { display: flex; flex-direction: column; gap: 0.5rem; }
+.wb-side h3 { margin: 0.75rem 0 0.25rem; font-size: 0.95rem; }
+.wb-sessions { display: flex; flex-direction: column; gap: 0.35rem; max-height: 44vh; overflow: auto; }
+.wb-sess {
+  display: flex; gap: 0.5rem; align-items: flex-start; text-align: left;
+  background: var(--panel); border: 1px solid var(--border); color: var(--text);
+  padding: 0.45rem 0.6rem; border-radius: var(--radius); width: 100%;
+}
+.wb-sess:hover { border-color: var(--accent-dim); }
+.wb-sess.active { border-color: var(--accent); background: #1e2a36; }
+.wb-sess-state { width: 0.5rem; height: 0.5rem; border-radius: 50%; margin-top: 0.4rem; flex: 0 0 auto; background: var(--muted); }
+.wb-sess-state.ok { background: var(--ok); }
+.wb-sess-state.warn { background: var(--warn); }
+.wb-sess-state.bad { background: var(--danger); }
+.wb-sess-body { display: flex; flex-direction: column; min-width: 0; }
+.wb-sess-prompt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wb-sess-meta { font-size: 0.75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.wb-main {
+  display: flex; flex-direction: column; gap: 0.5rem;
+  min-height: 60vh; min-width: 0;
+}
+.wb-session-head { font-family: var(--mono); font-size: 0.8rem; }
+.wb-note {
+  padding: 0.45rem 0.65rem; border-radius: var(--radius);
+  border: 1px solid var(--border); border-left: 3px solid var(--warn);
+  background: var(--panel); font-size: 0.85rem;
+}
+.wb-stream {
+  flex: 1; min-height: 30vh; max-height: 62vh; overflow: auto;
+  display: flex; flex-direction: column; gap: 0.4rem;
+  padding: 0.5rem; border: 1px solid var(--border); border-radius: var(--radius);
+  background: #0f1620;
+}
+.wb-say { white-space: pre-wrap; line-height: 1.5; }
+.wb-tool { border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); }
+.wb-tool summary { cursor: pointer; padding: 0.35rem 0.55rem; font-size: 0.9rem; }
+.wb-tool-args, .wb-tool-out {
+  margin: 0; padding: 0.45rem 0.55rem; font-family: var(--mono); font-size: 0.78rem;
+  white-space: pre-wrap; word-break: break-word; max-height: 24vh; overflow: auto;
+}
+.wb-tool-out { border-top: 1px solid var(--border); color: var(--muted); }
+.wb-tool-error { border-color: var(--danger); }
+.wb-tool-error summary { color: var(--danger); }
+.wb-error { color: var(--danger); white-space: pre-wrap; }
+.wb-done { padding: 0.45rem 0.6rem; border-radius: var(--radius); border: 1px solid var(--ok); background: #14251c; }
+.wb-done-error { border-color: var(--danger); background: #2a1616; }
+.wb-done-cancelled { border-color: var(--warn); background: #2a2317; }
+.wb-todos { margin: 0; padding-left: 1.1rem; font-size: 0.85rem; }
+.wb-composer { display: flex; align-items: center; gap: 0.6rem; }
+
+@media (max-width: 900px) {
+  .wb-grid { grid-template-columns: 1fr; }
+  .wb-sessions { max-height: 22vh; }
+  .wb-stream { max-height: 52vh; }
+}
+
 /* Delivery UI (0.33) */
 .del-head {
   display: flex; justify-content: space-between; align-items: flex-start;
   gap: 1rem; margin-bottom: 0.75rem;
 }
-.del-head h2 { margin-bottom: 0.25rem; }
-.del-sub { margin: 0; font-size: 0.85rem; }
-.del-major-plan { margin-bottom: 1.25rem; }
+.del-head h2 { margin-bottom: 0.25rem; }.del-sub { margin: 0; font-size: 0.85rem; }
+
+/* Generation scope: one switcher, identical in all four sections. */
+.del-scope {
+  display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap;
+  margin: 0.6rem 0 0.9rem;
+}
+.del-scope-title { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; margin-right: 0.15rem; }
+.del-scope-chip {
+  display: inline-flex; align-items: center; gap: 0.35rem;
+  padding: 0.25rem 0.65rem; font-size: 0.85rem;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 999px;
+  color: var(--muted);
+}
+.del-scope-chip:hover { color: var(--text); border-color: var(--accent-dim); }
+.del-scope-chip.active {
+  background: var(--accent-dim); border-color: var(--accent); color: var(--text);
+}
+.del-scope-count { font-size: 0.75rem; opacity: 0.75; }
+.del-scope-chip.active .del-scope-count { opacity: 1; }
+
+/* Skeleton: sized like the real card so the swap does not shift layout. */
+.del-skeleton { display: flex; flex-direction: column; gap: 0.55rem; }
+.del-skeleton-row {
+  height: 74px; border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: linear-gradient(90deg, var(--panel) 25%, #212b36 37%, var(--panel) 63%);
+  background-size: 400% 100%;
+  animation: del-skeleton-shimmer 1.4s ease-in-out infinite;
+}
+@keyframes del-skeleton-shimmer {
+  0% { background-position: 100% 50%; }
+  100% { background-position: 0 50%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .del-skeleton-row { animation: none; }
+}
+
+/* Empty state: says what to do next, not just that there is nothing. */
+.del-empty {
+  padding: 1.5rem 1.25rem; text-align: center;
+  border: 1px dashed var(--border); border-radius: var(--radius);
+}
+.del-empty p { margin: 0 0 0.75rem; }
+
+/* Sticky job bar: one running job, visible from anywhere on the page. */
+.del-job-bar {
+  display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+  margin: 0.6rem 0 0.9rem; padding: 0.45rem 0.7rem;
+  background: var(--panel); border: 1px solid var(--border);
+  border-left: 3px solid var(--accent); border-radius: var(--radius);
+  font-size: 0.9rem;
+  position: sticky; top: 0; z-index: 5;
+}
+.del-job-bar:empty { display: none; }
+.del-job-dot {
+  width: 0.55rem; height: 0.55rem; border-radius: 50%;
+  background: var(--accent); flex: 0 0 auto;
+  animation: del-job-pulse 1.4s ease-in-out infinite;
+}
+.del-job-text { flex: 1; min-width: 8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.del-job-bar button { padding: 0.2rem 0.55rem; font-size: 0.82rem; }
+@keyframes del-job-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) {
+  .del-job-dot { animation: none; }
+}.del-major-plan { margin-bottom: 1.25rem; }
 .del-major-plan-head, .del-req-section-head {
   display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;
   margin-bottom: 0.65rem;

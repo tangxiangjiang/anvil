@@ -47,12 +47,9 @@ window.Features.clusters = {
     this.render();
   },
 
+  // Shared with Delivery and Nodes: one definition, in js/shared/esc.js.
   esc(s) {
-    return String(s ?? "")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
+    return window.AnvilUI.esc(s);
   },
 
   async refreshQuiet() {
@@ -273,7 +270,7 @@ window.Features.clusters = {
         });
         this.closeUiModal();
         await this.render();
-        alert("Workspace token (put in agentd cluster.workspace_token):\n\n" + ws.token);
+        this.showNotice("Workspace token (put in agentd cluster.workspace_token):\n\n" + ws.token, "Workspace token");
       } catch (e) {
         err.textContent = e.message || String(e);
       }
@@ -899,7 +896,7 @@ window.Features.clusters = {
         });
         location.hash = "#/delivery/requirements/" + encodeURIComponent(eng.id);
       } catch (e) {
-        alert(e.message || e);
+        this.showNotice(e.message || e, "Error");
       }
     });
     root.querySelector("#c-proj-edit-deps")?.addEventListener("click", () =>
@@ -923,7 +920,7 @@ window.Features.clusters = {
           await api.v1.startClusterWorker(fleetId, btn.getAttribute("data-node"), btn.getAttribute("data-w-start"));
           await this.render();
         } catch (e) {
-          alert(e.message || e);
+          this.showNotice(e.message || e, "Error");
         }
       });
     });
@@ -938,7 +935,7 @@ window.Features.clusters = {
           );
           await this.render();
         } catch (e) {
-          alert(e.message || e);
+          this.showNotice(e.message || e, "Error");
         }
       });
     });
@@ -986,7 +983,7 @@ window.Features.clusters = {
         this.closeUiModal();
         await this.render();
       } catch (e) {
-        alert(e.message || e);
+        this.showNotice(e.message || e, "Error");
       }
     };
   },
@@ -1072,6 +1069,38 @@ Created by Anvil.
 </textarea>
           <div id="c-ai-slot"></div>
         </div>
+        <label>AI provider (this worker)</label>
+        <p class="muted" style="margin:0 0 0.35rem;font-size:0.82rem">
+          Optional. Empty fields inherit agentd's llm block, so a worker that says
+          nothing behaves exactly as before. The key is read from the environment
+          variable you name here — it is never stored in the config or the request.
+        </p>
+        <div class="cl-llm-grid">
+          <div>
+            <label for="c-llm-provider">Provider</label>
+            <select id="c-llm-provider">
+              <option value="">(inherit)</option>
+              <option value="openai">openai</option>
+              <option value="anthropic">anthropic</option>
+            </select>
+          </div>
+          <div>
+            <label for="c-llm-model">Model</label>
+            <input id="c-llm-model" placeholder="(inherit)" />
+          </div>
+        </div>
+        <label for="c-llm-base">Base URL</label>
+        <input id="c-llm-base" placeholder="(inherit) http://127.0.0.1:8080/v1" />
+        <div class="cl-llm-grid">
+          <div>
+            <label for="c-llm-keyenv">API key env var</label>
+            <input id="c-llm-keyenv" placeholder="(inherit) ANVIL_API_KEY" />
+          </div>
+          <div>
+            <label for="c-llm-maxsteps">Max steps</label>
+            <input id="c-llm-maxsteps" type="number" min="0" placeholder="(inherit)" />
+          </div>
+        </div>
         <label>Depends on (other workers in this project)</label>
         <div id="c-w-deps" class="cl-deps"><p class="muted">Loading…</p></div>
         <div class="err" id="c-modal-err"></div>
@@ -1133,16 +1162,26 @@ Created by Anvil.
         placeholder: "How should the README describe this project?",
         rows: 2,
         tall: false,
-        sendLabel: "Polish README (mock)",
-        emptyHint: "Ask to polish the README for this new project.",
-        onSend: async ({ composed }, ch) => {
+        emptyHint: "Ask for a README for this new project.",
+        // Real drafting: the proposal fills the README field, and Create is still
+        // what writes it. Nothing here persists anything.
+        onSend: async ({ composed, cites }, ch) => {
           const ta = modal.querySelector("#c-readme");
-          const line = "\n\n## Notes\n\n" + composed.slice(0, 400);
-          ta.value = (ta.value || "").trim() + line;
-          ch.appendMessage("ai", "(mock) Appended notes to README. Review before Create.");
-        },
-      });
-      modal.querySelector("#c-ai-slot").innerHTML = chat.render();
+          await window.AnvilUI.assist.ask({
+            surface: "project_readme",
+            field: "readme",
+            instruction: composed,
+            cites,
+            current: { readme: (ta?.value || "").trim() },
+            host: modal.querySelector("#c-readme-assist"),
+            chat: ch,
+            onApply: async (_field, value) => {
+              if (ta) ta.value = value;
+            },
+          });
+        },      });
+      modal.querySelector("#c-ai-slot").innerHTML =
+        chat.render() + `<div id="c-readme-assist" class="assist-host"></div>`;
       chat.mount(modal);
     }
     syncMode();
@@ -1218,7 +1257,7 @@ Created by Anvil.
   async fsMkdir(modal) {
     const err = modal.querySelector("#c-modal-err");
     err.textContent = "";
-    const name = prompt("New folder name");
+    const name = await this.askText("New folder name");
     if (!name) return;
     const base = (this._addCtx.fsPath || "").replace(/\/+$/, "");
     const path = base ? base + "/" + name.trim() : name.trim();
@@ -1277,6 +1316,21 @@ Created by Anvil.
       } else if (git_url) {
         body.git_url = git_url;
       }
+      // Per-worker provider settings. Anything left blank is omitted, which the
+      // daemon reads as "inherit" rather than "clear".
+      const llm = {};
+      const provider = modal.querySelector("#c-llm-provider")?.value || "";
+      const model = modal.querySelector("#c-llm-model")?.value.trim() || "";
+      const baseUrl = modal.querySelector("#c-llm-base")?.value.trim() || "";
+      const keyEnv = modal.querySelector("#c-llm-keyenv")?.value.trim() || "";
+      const maxSteps = Number(modal.querySelector("#c-llm-maxsteps")?.value || 0);
+      if (provider) llm.provider = provider;
+      if (model) llm.model = model;
+      if (baseUrl) llm.base_url = baseUrl;
+      if (keyEnv) llm.api_key_env = keyEnv;
+      if (maxSteps > 0) llm.max_steps = maxSteps;
+      if (Object.keys(llm).length) body.llm = llm;
+
       const depends_on = [...modal.querySelectorAll("#c-w-deps input:checked")].map((x) => x.value);
       const res = await api.v1.addClusterWorker(this._addCtx.fleetId, this._addCtx.nodeId, body);
       const workerId = res?.worker?.id || res?.id;
@@ -1299,22 +1353,55 @@ Created by Anvil.
     return this.el?.querySelector("#c-ui-modal");
   },
   closeUiModal() {
-    const m = this.uiModal();
-    if (m) {
-      m.hidden = true;
-      m.innerHTML = "";
-    }
+    window.AnvilUI.modal.close(this.uiModal());
     this._addCtx = null;
   },
-  showUiModal(html) {
+  showUiModal(html, opts) {
     const m = this.uiModal();
-    m.innerHTML = html;
-    m.hidden = false;
-    m.querySelectorAll("[data-close-ui]").forEach((b) => {
-      b.onclick = () => this.closeUiModal();
+    if (!m) return;
+    window.AnvilUI.modal.open(m, html, opts || {});
+  },
+
+  showNotice(message, title = "Notice") {
+    window.AnvilUI.notice(this.uiModal(), message, title);
+  },
+
+  /** askText is prompt() without the browser dialog. */
+  askText(title, label = "Name") {
+    return new Promise((resolve) => {
+      let settled = false;
+      const done = (v) => {
+        if (settled) return;
+        settled = true;
+        resolve(v);
+      };
+      window.AnvilUI.modal.open(
+        this.uiModal(),
+        `
+        <div class="modal-card">
+          <h3 style="margin-top:0">${window.AnvilUI.esc(title)}</h3>
+          <label for="c-ask">${window.AnvilUI.esc(label)}</label>
+          <input id="c-ask" autocomplete="off" spellcheck="false" />
+          <div class="toolbar" style="margin-top:0.75rem;justify-content:flex-end">
+            <button type="button" class="ghost" data-close-ui>Cancel</button>
+            <button type="button" id="c-ask-ok">OK</button>
+          </div>
+        </div>`,
+        { title, onClose: () => done("") },
+      );
+      const m = this.uiModal();
+      const input = m.querySelector("#c-ask");
+      const submit = () => {
+        const v = (input.value || "").trim();
+        done(v);
+      };
+      m.querySelector("#c-ask-ok").addEventListener("click", submit);
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          submit();
+        }
+      });
     });
-    m.onclick = (ev) => {
-      if (ev.target === m) this.closeUiModal();
-    };
   },
 };
