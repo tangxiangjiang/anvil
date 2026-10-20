@@ -36,6 +36,7 @@
   ],
   "js/features/delivery/helpers.js": [
     "section",
+    "this.skeletonHtml(4)",
     "e.id",
     "cls",
     "on ? \"true\" : \"false\"",

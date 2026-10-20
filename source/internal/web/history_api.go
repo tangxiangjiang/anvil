@@ -193,6 +193,115 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"jobs": jobs})
 }
 
+// handleJobsOrCancel routes /api/v1/jobs/{id}/cancel to the cancel handler and
+// everything else to the read handler.
+//
+// Kept as one mux entry because both live under the same prefix; the dispatch is
+// by method and path suffix, and a POST to anything that is not a cancel is a 405
+// rather than a silent read.
+func (s *Server) handleJobsOrCancel(w http.ResponseWriter, r *http.Request) {
+	if strings.HasSuffix(strings.Trim(r.URL.Path, "/"), "/cancel") {
+		s.handleJobCancel(w, r)
+		return
+	}
+	s.handleJobs(w, r)
+}
+
+// handleJobCancel stops a job by id, dispatching on how it was started.
+//
+// Before this the caller had to try the Workbench cancel first and fall back to
+// the milestone lever - and for a phase job the first call always failed, because
+// the Workbench only knows its own sessions. The kind is in the job record, so the
+// decision belongs here rather than in every caller.
+func (s *Server) handleJobCancel(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.delivery == nil {
+		http.Error(w, "delivery store not configured", http.StatusServiceUnavailable)
+		return
+	}
+	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/jobs"), "/")
+	parts := strings.Split(path, "/")
+	if len(parts) != 2 || parts[1] != "cancel" || parts[0] == "" {
+		http.NotFound(w, r)
+		return
+	}
+	jobID := parts[0]
+
+	jobs, err := s.delivery.ListJobs(delivery.JobFilter{Limit: 500})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	var rec *delivery.JobRecord
+	for i := range jobs {
+		if jobs[i].JobID == jobID {
+			rec = &jobs[i]
+			break
+		}
+	}
+	if rec == nil {
+		http.Error(w, "unknown job: "+jobID, http.StatusNotFound)
+		return
+	}
+	if rec.Status != "running" && rec.Status != "queued" {
+		http.Error(w, "job is not running (status "+rec.Status+")", http.StatusConflict)
+		return
+	}
+
+	switch rec.Kind {
+	case "workbench":
+		// The session owns the stream; cancelling it ends the read and reports
+		// cancelled.
+		if sess, ok := s.workbench.byJob(jobID); ok {
+			s.cancelWorkbenchSession(sess)
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "job_id": jobID, "via": "workbench"})
+			return
+		}
+		// A workbench job with no live session is stale: it ended without its
+		// record being finished. Report it rather than pretending to stop it.
+		http.Error(w, "that session is no longer live; the job already ended", http.StatusConflict)
+		return
+
+	default:
+		// A phase / campaign / polish job: ask the scheduler, then stop the
+		// milestone loop so it does not enqueue the next phase.
+		if s.jobs != nil {
+			_ = s.jobsCancel(jobID)
+		}
+		if rec.MilestoneID != "" {
+			rs := delivery.RunStopped
+			if _, err := s.delivery.PatchMilestone(rec.MilestoneID, delivery.PatchMilestoneInput{RunState: &rs}); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		} else {
+			http.Error(w, "that job has no milestone to stop", http.StatusConflict)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "job_id": jobID, "via": "milestone"})
+		return
+	}
+}
+
+// cancelWorkbenchSession stops a live session's stream and records the intent.
+func (s *Server) cancelWorkbenchSession(sess *workbenchSession) {
+	if sess == nil {
+		return
+	}
+	if s.jobs != nil {
+		_ = s.jobsCancel(sess.JobID)
+	}
+	s.wbCancelMu.Lock()
+	cancel := s.wbCancel[sess.ID]
+	s.wbCancelMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
 // SearchHit is one result from the cross-surface search.
 type SearchHit struct {
 	Kind    string `json:"kind"`

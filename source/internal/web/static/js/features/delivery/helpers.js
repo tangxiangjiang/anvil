@@ -72,7 +72,13 @@ Object.assign(window.Features.delivery, {
 
   async mount(el) {
     this.el = el;
-    el.innerHTML = `<p class="muted">Loading Delivery…</p>`;
+    // A skeleton, not a line of text: the first paint should have the shape of
+    // the list it is about to become, so the swap does not shift layout. This is
+    // the component p_0.46.4 introduced; wiring it here is what makes that
+    // phase's "a top-level list shows a skeleton rather than a blank body" true.
+    el.innerHTML = `
+      <div class="del-head"><div><h2>&nbsp;</h2><p class="muted del-sub">&nbsp;</p></div></div>
+      ${this.skeletonHtml(4)}`;
     try {
       await this.reload();
       this.render();

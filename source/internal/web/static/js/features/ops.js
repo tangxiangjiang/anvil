@@ -119,26 +119,14 @@ window.Features.ops = {
   },
 
   /**
-   * stopJob asks the Workbench cancel first, then falls back to the milestone
-   * lever: a phase job has no direct cancel endpoint of its own, and the milestone
-   * run_state is what actually stops the loop from enqueuing the next phase.
+   * stopJob stops a job by id.
+   *
+   * The server decides *how*: it knows the job's kind from the record, so a
+   * Workbench session is cancelled and a phase job stops its milestone. This used
+   * to try the Workbench cancel first and fall back, which meant every phase job
+   * made a call that could only fail - the Workbench only knows its own sessions.
    */
   async stopJob(jobID) {
-    let cancelled = false;
-    try {
-      await api.v1.workbenchCancel(jobID);
-      cancelled = true;
-    } catch (_) {
-      cancelled = false;
-    }
-    if (cancelled) return;
-    // Fall back: find the milestone bound to this job through the history.
-    const data = await api.v1.jobs("");
-    const rec = (data.jobs || []).find((j) => j.job_id === jobID);
-    if (rec && rec.milestone_id) {
-      await api.v1.deliveryPatchMilestone(rec.milestone_id, { run_state: "stopped" });
-      return;
-    }
-    throw new Error("That job cannot be stopped from here.");
+    await api.v1.jobCancel(jobID);
   },
 };

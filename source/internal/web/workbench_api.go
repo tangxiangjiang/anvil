@@ -144,6 +144,22 @@ func (h *workbenchHub) drop(id string) {
 	h.mu.Unlock()
 }
 
+// byJob finds a session by its job id.
+//
+// A session id and a job id are different keys: the session table is keyed by
+// `wb-…` and the stream by `wbjob-…`. The cancel route only knows the job, so it
+// needs this lookup rather than a map hit that would silently miss.
+func (h *workbenchHub) byJob(jobID string) (*workbenchSession, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, s := range h.sessions {
+		if s.JobID == jobID {
+			return s, true
+		}
+	}
+	return nil, false
+}
+
 // liveForWorker reports whether a worker already has a running session, so the
 // UI can refuse a second one instead of starting two agents on one checkout.
 func (h *workbenchHub) liveForWorker(workerID string) (string, bool) {
@@ -548,17 +564,11 @@ func (s *Server) handleWorkbenchCancel(w http.ResponseWriter, r *http.Request, s
 		http.Error(w, "session already finished", http.StatusConflict)
 		return
 	}
-	// Ask the scheduler first: it owns the process. If it cannot be reached the
-	// local cancel still stops our reader, and the terminal state says cancelled.
-	if s.jobs != nil {
-		_ = s.jobsCancel(sess.JobID)
-	}
-	s.wbCancelMu.Lock()
-	cancel := s.wbCancel[sess.ID]
-	s.wbCancelMu.Unlock()
-	if cancel != nil {
-		cancel()
-	}
+	// One implementation: the job-level cancel decides how to stop a job, and this
+	// route is the session-shaped view of the same act. Two would drift, and the
+	// operator cannot tell which one is authoritative.
+	_ = s.jobsCancel(sess.JobID)
+	s.cancelWorkbenchSession(sess)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "session_id": sess.ID})
 }
 

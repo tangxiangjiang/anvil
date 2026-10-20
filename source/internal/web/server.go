@@ -80,7 +80,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/delivery", s.requireAuth(s.auditDelivery(s.handleDelivery)))
 	mux.HandleFunc("/api/v1/delivery/", s.requireAuth(s.auditDelivery(s.handleDelivery)))
 	mux.HandleFunc("/api/v1/jobs", s.requireAuth(s.handleJobs))
-	mux.HandleFunc("/api/v1/jobs/", s.requireAuth(s.handleJobs))
+	mux.HandleFunc("/api/v1/jobs/", s.requireAuth(s.handleJobsOrCancel))
 	mux.HandleFunc("/api/v1/search", s.requireAuth(s.handleSearch))
 	mux.HandleFunc("/api/v1/delivery/preflight", s.requireAuth(s.handlePreflight))
 	mux.HandleFunc("/api/v1/delivery/assist", s.requireAuth(s.handleAssist))

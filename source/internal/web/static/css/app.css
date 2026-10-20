@@ -478,9 +478,16 @@ button[disabled][aria-describedby] { opacity: 0.65; cursor: not-allowed; }
 .jh-main { display: flex; flex-direction: column; min-width: 0; }
 .jh-kind { font-size: 0.9rem; }
 .jh-id { font-family: var(--mono); font-size: 0.72rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.jh-meta { font-size: 0.75rem; white-space: nowrap; }
-.jh-progress, .jh-other { font-size: 0.8rem; }
-@media (max-width: 900px) {
+.jh-meta { font-size: 0.75rem; white-space: nowrap; }.jh-progress, .jh-other { font-size: 0.8rem; }
+/* The row is a container with two controls in it, not one big button: nesting a
+   Stop button inside a clickable row is a target the wrong action wins. */
+.jh-open {
+  background: none; border: 0; padding: 0; text-align: left; cursor: pointer;
+  color: inherit; font: inherit; display: flex; flex-direction: column; min-width: 0;
+}
+.jh-open:hover .jh-kind { text-decoration: underline; }
+.jh-stop { padding: 0.15rem 0.5rem; font-size: 0.75rem; }
+.jh-main + .jh-meta { margin-left: auto; }@media (max-width: 900px) {
   .jh-row { grid-template-columns: 0.6rem minmax(0,1fr) auto; }
   .jh-row .jh-meta:nth-of-type(2), .jh-row .jh-meta:nth-of-type(3) { display: none; }
 }

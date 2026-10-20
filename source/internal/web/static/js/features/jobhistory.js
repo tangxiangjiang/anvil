@@ -78,22 +78,44 @@ window.Features.jobhistory = {
         .map((j) => {
           const dur = j.duration_secs ? `${j.duration_secs}s` : "—";
           const when = window.AnvilUI.esc((j.started_at || "").replace("T", " ").slice(0, 19));
+          const running = j.status === "running" || j.status === "queued";
           return `
-          <button type="button" class="jh-row" data-jh-open="${window.AnvilUI.esc(j.job_id)}">
+          <div class="jh-row">
             <span class="jh-state ${window.AnvilUI.badgeClass(j.status)}"></span>
-            <span class="jh-main">
+            <button type="button" class="jh-main jh-open" data-jh-open="${window.AnvilUI.esc(j.job_id)}">
               <span class="jh-kind">${window.AnvilUI.esc(j.kind || "job")}</span>
               <span class="muted jh-id">${window.AnvilUI.esc(j.job_id)}</span>
-            </span>
+            </button>
             <span class="jh-meta muted">${when}</span>
             <span class="jh-meta muted">${dur}</span>
             <span class="jh-meta muted">${j.event_count || 0} events${j.truncated ? " (trimmed)" : ""}</span>
             <span class="badge ${window.AnvilUI.badgeClass(j.status)}">${window.AnvilUI.esc(j.status)}</span>
-          </button>`;
+            ${running ? `<button type="button" class="ghost jh-stop" data-jh-stop="${window.AnvilUI.esc(j.job_id)}">Stop</button>` : `<span></span>`}
+          </div>`;
         })
         .join("");
       box.querySelectorAll("[data-jh-open]").forEach((btn) => {
         btn.addEventListener("click", () => this.openJob(btn.getAttribute("data-jh-open")));
+      });
+      // Stop from here rather than only from #/ops: a desktop operator opens this
+      // list first when a job is running away, and sending them to a phone-sized
+      // screen to press one button is the wrong shape.
+      box.querySelectorAll("[data-jh-stop]").forEach((btn) => {
+        btn.addEventListener("click", () =>
+          window.AnvilUI.withAction(
+            btn,
+            {
+              key: "jh-stop:" + btn.getAttribute("data-jh-stop"),
+              runningLabel: "Stopping…",
+              host: this.el.querySelector("#del-ui-modal"),
+              errorTitle: "Stop failed",
+            },
+            async () => {
+              await api.v1.jobCancel(btn.getAttribute("data-jh-stop"));
+              await this.refresh();
+            },
+          ),
+        );
       });
     } catch (e) {
       box.innerHTML = `<div class="err">${window.AnvilUI.esc(e.message || String(e))}</div>`;
