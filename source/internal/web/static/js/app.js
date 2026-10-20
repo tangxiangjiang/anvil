@@ -24,6 +24,17 @@
   function showShell() {
     hideAll();
     document.getElementById("view-shell").hidden = false;
+    // Shell chrome: the health strip answers "is anything wrong right now" and
+    // the help button answers "which button now". Both cross surfaces, so they
+    // belong to the shell rather than to any one feature.
+    window.AnvilShell.mountHealth();
+    const help = document.getElementById("shell-help");
+    if (help && !help._wired) {
+      help._wired = true;
+      help.addEventListener("click", () => {
+        window.AnvilShell.openHelp(window.AnvilShell.surfaceForRoute(location.hash));
+      });
+    }
   }
 
   function showSetupBlocked(msg) {
@@ -93,6 +104,9 @@
       Features[current].unmount();
     }
     current = item.feature;
+    // Cheap: one probe per fleet with its own timeout, and it only repaints the
+    // strip.
+    void window.AnvilShell.refreshHealth();
     app.innerHTML = "";
     if (Features[current] && Features[current].mount) {
       await Features[current].mount(app);

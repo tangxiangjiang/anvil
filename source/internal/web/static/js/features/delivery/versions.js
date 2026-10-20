@@ -390,6 +390,55 @@ Object.assign(window.Features.delivery, {
       </div>`;
   },
 
+  /**
+   * auditHtml renders one entity's history (p_0.46.10 data, p_0.46.9 surface).
+   *
+   * Left collapsed: the audit is a reference the operator opens when they ask
+   * "who changed this", not something that should compete with the fields.
+   */
+  auditHtml(kind, id) {
+    return `<details class="audit-wrap" data-audit-kind="${this.esc(kind)}" data-audit-id="${this.esc(id)}">
+      <summary class="muted">History</summary>
+      <div class="audit-list" data-audit-list>${this.skeletonHtml(2)}</div>
+    </details>`;
+  },
+
+  /** loadAudit fills the list the first time it is opened. */
+  async loadAudit(wrap) {
+    if (!wrap || wrap.dataset.auditLoaded) return;
+    wrap.dataset.auditLoaded = "1";
+    const list = wrap.querySelector("[data-audit-list]");
+    const kind = wrap.getAttribute("data-audit-kind");
+    const id = wrap.getAttribute("data-audit-id");
+    try {
+      const data = await api.v1.deliveryAudit(kind, id, 50);
+      const rows = data.entries || [];
+      if (rows.length === 0) {
+        list.innerHTML = `<p class="muted">No recorded changes.</p>`;
+        return;
+      }
+      list.innerHTML = rows
+        .map(
+          (e) => `<div class="audit-row">
+            <span class="audit-what">${this.esc(e.summary || e.action)}${e.actor ? ` <span class="muted">by ${this.esc(e.actor)}</span>` : ""}</span>
+            <span class="audit-when">${this.esc((e.ts || "").replace("T", " ").slice(0, 16))}</span>
+          </div>`,
+        )
+        .join("");
+    } catch (e) {
+      list.innerHTML = `<p class="err">${this.esc(e.message || String(e))}</p>`;
+    }
+  },
+
+  /** bindAudit lazy-loads a trail when its details element is opened. */
+  bindAudit(root) {
+    root?.querySelectorAll(".audit-wrap").forEach((wrap) => {
+      wrap.addEventListener("toggle", () => {
+        if (wrap.open) void this.loadAudit(wrap);
+      });
+    });
+  },
+
   viewVersionDetail(engId, major, minor, patch) {
     const eng = this.findEng(engId);
     const ver = eng && this.findVersion(eng, major, minor, patch);
@@ -458,6 +507,7 @@ Object.assign(window.Features.delivery, {
         { label: `${major}.${minor}`, href: `#/delivery/requirements/${eng.id}/${major}/${minor}` },
         { label: key, href: null },
       ])}
+      ${this.auditHtml("requirement_version", `${eng.id}:${major}.${minor}.${patch}`)}
       <div class="del-split del-split-chatwide">
         <div class="del-main">
           <div class="card">

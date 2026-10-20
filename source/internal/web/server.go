@@ -85,6 +85,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/delivery/preflight", s.requireAuth(s.handlePreflight))
 	mux.HandleFunc("/api/v1/workbench", s.requireAuth(s.handleWorkbench))
 	mux.HandleFunc("/api/v1/workbench/", s.requireAuth(s.handleWorkbench))
+	mux.HandleFunc("/api/v1/health", s.requireAuth(s.handleHealth))
+	mux.HandleFunc("/api/v1/diagnostics/classify-error", s.requireAuth(s.handleClassifyError))
 
 	if s.static != nil {
 		fileServer := http.FileServer(http.FS(s.static))

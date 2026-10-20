@@ -45,6 +45,7 @@ const FILES = [
   "js/features/nodes.js",
   "js/features/usage.js",
   "js/shared/badge.js",
+  "js/shared/shell.js",
   "js/components/ai_chat.js",
   "js/components/md_preview.js",
   "js/app.js",

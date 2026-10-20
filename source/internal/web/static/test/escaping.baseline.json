@@ -184,6 +184,7 @@
     "editing ? `<button type=\"button\" class=\"ghost\" id=\"ms-ver-add\" title=\"Add version\">+</button>` : \"\"",
     "verCards || `<p class=\"muted\">No versions.</p>`",
     "chat.render()",
+    "this.skeletonHtml(2)",
     "engId",
     "viewDrag ? \" cite-drag\" : \"\"",
     "viewDrag ? 'draggable=\"true\"' : \"\"",
@@ -191,6 +192,7 @@
     "control",
     "editKey",
     "this.breadcrumbHtml([ { label: \"Generations\", href: \"#/delivery/requirements\" }, { label: this.majorLabel(major), href: `#/delivery/requirements/m/${major}` }, { label: eng.title || (w && w.label) || eng.worker_id, href: `#/delivery/requirements/${eng.id}` }, { label: `${major}.${minor}`, href: `#/delivery/requirements/${eng.id}/${major}/${minor}` }, { label: key, href: null }, ])",
+    "this.auditHtml(\"requirement_version\", `${eng.id}:${major}.${minor}.${patch}`)",
     "this.badge(ver.status)",
     "actions.join(\"\")",
     "chat.render()"
@@ -597,6 +599,13 @@
   ],
   "js/shared/badge.js": [
     "window.AnvilUI.badgeClass(status)"
+  ],
+  "js/shared/shell.js": [
+    "dot",
+    "idle",
+    "busy",
+    "f.id",
+    "f.reachable ? \"reachable\" : \"unreachable\" + (f.error ? \" — \" + f.error : \"\")"
   ],
   "js/components/ai_chat.js": [
     "items",

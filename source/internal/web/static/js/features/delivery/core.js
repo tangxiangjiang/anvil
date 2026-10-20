@@ -269,6 +269,7 @@ Object.assign(window.Features.delivery, {
       if (engId) this.openCreateWizardBound(engId);
     });
     this.bindJobBar();
+    this.bindAudit(this.el);
     this.bindGenerationScope();
     this.bindMajorPlan();
     this.bindWorkspaceCards();

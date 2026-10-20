@@ -265,6 +265,40 @@ input { width: 100%; margin-bottom: 0.75rem; }
   .side { border-right: 0; border-bottom: 1px solid var(--border); }
 }
 
+/* Shell chrome (p_0.46.9): health strip, help, actionable errors. */
+.help-btn {
+  float: right; width: 1.4rem; height: 1.4rem; padding: 0;
+  font-size: 0.8rem; line-height: 1; border-radius: 50%;
+  opacity: 0.7;
+}
+.help-btn:hover { opacity: 1; }
+.shell-health {
+  display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;
+  font-size: 0.78rem; padding: 0.35rem 0 0.55rem;
+  border-bottom: 1px solid var(--border); margin-bottom: 0.5rem;
+}
+.sh-dot { width: 0.5rem; height: 0.5rem; border-radius: 50%; background: var(--muted); flex: 0 0 auto; }
+.sh-dot.ok { background: var(--ok); }
+.sh-dot.warn { background: var(--warn); }
+.sh-dot.bad { background: var(--danger); }
+.sh-cap { font-size: 0.72rem; }
+.help-states { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+.help-states th, .help-states td { text-align: left; padding: 0.3rem 0.4rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+.help-states th { color: var(--muted); font-weight: 500; font-size: 0.78rem; }
+.help-keys { margin: 0.2rem 0 0; padding-left: 1.1rem; font-size: 0.85rem; }
+.err-detail { margin-top: 0.6rem; }
+.err-detail summary { cursor: pointer; color: var(--muted); font-size: 0.82rem; }
+.err-detail pre {
+  margin: 0.35rem 0 0; padding: 0.5rem; font-family: var(--mono); font-size: 0.75rem;
+  white-space: pre-wrap; word-break: break-word; max-height: 30vh; overflow: auto;
+  background: #0f1620; border-radius: var(--radius);
+}
+/* Audit trail on an entity (p_0.46.10 data, rendered here). */
+.audit-list { display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.82rem; }
+.audit-row { display: grid; grid-template-columns: 1fr auto; gap: 0.5rem; padding: 0.25rem 0; border-bottom: 1px solid var(--border); }
+.audit-what { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.audit-when { color: var(--muted); white-space: nowrap; font-size: 0.75rem; }
+
 /* Pre-flight blockers (p_0.46.11): why a button is disabled, next to it. */
 .del-blockers {
   margin: 0.45rem 0 0; padding: 0.4rem 0.55rem;

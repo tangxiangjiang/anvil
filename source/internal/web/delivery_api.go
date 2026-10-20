@@ -139,6 +139,33 @@ func (s *Server) handleDelivery(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if path == "audit" && r.Method == http.MethodGet {
+		if s.delivery == nil {
+			http.Error(w, "delivery store not configured", http.StatusServiceUnavailable)
+			return
+		}
+		q := r.URL.Query()
+		kind := strings.TrimSpace(q.Get("kind"))
+		id := strings.TrimSpace(q.Get("id"))
+		if kind == "" {
+			http.Error(w, "kind is required", http.StatusBadRequest)
+			return
+		}
+		limit := 50
+		if v := strings.TrimSpace(q.Get("limit")); v != "" {
+			if n, err := strconv.Atoi(v); err == nil {
+				limit = n
+			}
+		}
+		rows, err := s.delivery.ListAudit(kind, id, limit)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"kind": kind, "id": id, "entries": rows})
+		return
+	}
+
 	if path == "trash" && r.Method == http.MethodGet {
 		list, err := s.delivery.ListTrash()
 		if err != nil {

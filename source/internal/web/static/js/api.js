@@ -145,8 +145,14 @@ window.api = {
     },
     usage() { return api.req("GET", "/api/v1/usage"); },
     search(q) { return api.req("GET", "/api/v1/search?q=" + encodeURIComponent(q)); },
+    health() { return api.req("GET", "/api/v1/health"); },
+    classifyError(body) { return api.req("POST", "/api/v1/diagnostics/classify-error", body); },
     jobs(suffix) { return api.req("GET", "/api/v1/jobs" + (suffix || "")); },
     jobEvents(id) { return api.req("GET", "/api/v1/jobs/" + encodeURIComponent(id) + "/events"); },
+    deliveryAudit(kind, id, limit) {
+      const q = new URLSearchParams({ kind, id, limit: String(limit || 50) }).toString();
+      return api.req("GET", "/api/v1/delivery/audit?" + q);
+    },
     deliveryPreflight(transition, target) {
       const q = new URLSearchParams({ transition, target }).toString();
       return api.req("GET", "/api/v1/delivery/preflight?" + q);
