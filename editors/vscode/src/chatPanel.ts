@@ -36,7 +36,7 @@ import { HostRpcError } from './hostClient';
 import { ChatSession, SessionConfig, SessionState } from './session';
 import { PreviewDocuments } from './review';
 import { dedupeMentions, relativeMention } from './mentions';
-import { mcpEnabled, missingMcpSources, settingSourcesFor } from './mcp';
+import { McpCardServer, cardServer, hasRuntime, mcpEnabled, missingMcpSources, settingSourcesFor } from './mcp';
 import { shouldReattach } from './reattach';
 import { replayOf } from './transcript';
 import { CommandAction, SlashCommand, parseSlash, route } from './commands';
@@ -48,7 +48,6 @@ import {
   Decision,
   DoneParams,
   HostEvent,
-  McpServerInfo,
   PermissionMode,
   PermissionModeSource,
   PermissionModes,
@@ -219,10 +218,26 @@ type Outbound =
   | { type: 'rules'; files: RuleFileInfo[] }
   /**
    * What the enabled MCP layers declare, and which of their files are missing.
-   * Configuration only: there is no connected field, because the host cannot
-   * observe one.
+   *
+   * `runtime` says whether the host could observe a connection: with it, each
+   * server carries its state and tool count and the card draws them; without it
+   * the card is the configuration listing it always was. `problem` is a file that
+   * will not parse — a result, not an error, so the servers beside it still show.
    */
-  | { type: 'mcp'; servers: McpServerInfo[]; notes: string[]; error?: string }
+  | {
+      type: 'mcp';
+      runtime: boolean;
+      servers: McpCardServer[];
+      notes: string[];
+      problem?: string;
+      error?: string;
+    }
+  /**
+   * One server changed state while the card was on screen. Pushed by the host's
+   * runtime, filtered to this card's layers, and drawn onto the row that already
+   * names it.
+   */
+  | { type: 'mcpStatus'; server: McpCardServer }
   /**
    * The web tools this session was given. Posted only when enabled — the row's
    * absence is the "off" answer, not a row that says so. `key` is whether a
@@ -376,6 +391,17 @@ export class ChatPanel implements HostListener {
   private readonly partialReviews: ReviewPanels;
   /** The rule files the last session reported, re-announced to a reloaded view. */
   private rules: RuleFileInfo[] = [];
+  /**
+   * The MCP source set this document's card describes, and its subscription to
+   * the host's state transitions.
+   *
+   * The subscription is per document, not per panel: the card lives in one
+   * webview, and a reloaded document has to hear about the next transition
+   * rather than the one that happened while it was gone. A status naming a
+   * different source set belongs to another layer set's runtime and is dropped.
+   */
+  private mcpSources: string[] = [];
+  private mcpStatusSub: vscode.Disposable | undefined;
   /**
    * The permission mode this workspace last chose, remembered per workspace, or
    * undefined when it has chosen none. Undefined is not `ask`: it is the state
@@ -1318,30 +1344,67 @@ export class ChatPanel implements HostListener {
   }
 
   /**
-   * Reports the MCP servers this workspace's enabled files declare.
+   * Reports the MCP servers this workspace's enabled files declare, and what the
+   * host observed for them.
    *
    * Asked once per document: the layers are session config, so a tab in this
    * workspace loads the same set until the window reloads, and the settings are
    * where a different set is chosen. Nothing is posted when both layers are
    * off — a card on every conversation saying MCP is off is noise, and the
-   * setting is already the answer.
+   * setting is already the answer. The card is drawn from the listing and then
+   * kept current by `mcp.status`: a server that comes up while the tab is open
+   * turns its row from `connecting` to `connected` without a repaint of the
+   * conversation.
    */
   private async reportMcp(): Promise<void> {
     const { mcp } = readSettings();
     if (!mcpEnabled(mcp)) return;
+    const sources = settingSourcesFor(mcp);
+    this.listenForMcpStatus(sources);
     try {
-      const listing = await this.hub.mcpServers(settingSourcesFor(mcp));
+      const listing = await this.hub.mcpServers(sources);
+      const problem = listing.problem;
       this.post({
         type: 'mcp',
-        servers: listing.servers ?? [],
+        // A host from before 0.44 has no runtime and no state to draw; the card
+        // then says what the files declare and nothing more.
+        runtime: hasRuntime(listing),
+        servers: (listing.servers ?? []).map(cardServer),
         notes: missingMcpSources(listing.sources ?? []),
+        ...(problem
+          ? { problem: problem.message ? `${problem.path}: ${problem.message}` : problem.path }
+          : {}),
       });
     } catch (err) {
-      // A malformed file is the interesting failure, and an empty card would
-      // hide the one thing the user can fix. The hosts that predate the method
-      // fail too, and saying so once is honest: there is no listing to show.
-      this.post({ type: 'mcp', servers: [], notes: [], error: (err as Error).message });
+      // A host that predates the method fails too, and saying so once is honest:
+      // there is no listing to show. A malformed file is no longer an error here
+      // — the runtime reports it as `problem` and still answers.
+      this.post({ type: 'mcp', runtime: false, servers: [], notes: [], error: (err as Error).message });
     }
+  }
+
+  /**
+   * Forwards one server's transitions to the card, while this document is open.
+   *
+   * The host's notification is window-level — the runtime belongs to the child,
+   * not to a tab — so the panel filters it to the layers its own card is about.
+   * The webview ignores a server it has no row for, which is what an edit made in
+   * another tab looks like when it lands here.
+   */
+  private listenForMcpStatus(sources: string[]): void {
+    this.mcpStatusSub?.dispose();
+    this.mcpSources = sources;
+    this.mcpStatusSub = this.hub.onMcpStatus((params) => {
+      const server = params.server;
+      if (!server?.name) return;
+      // Sets, not lists: the host sorts its source names and this side does not
+      // promise an order, and `["user","project"]` is the same runtime as
+      // `["project","user"]`.
+      const key = [...this.mcpSources].sort().join(',');
+      const theirs = [...(params.setting_sources ?? [])].sort().join(',');
+      if (theirs !== '' && theirs !== key) return;
+      this.post({ type: 'mcpStatus', server: cardServer(server) });
+    });
   }
 
   /**
@@ -2122,6 +2185,8 @@ export class ChatPanel implements HostListener {
     this.listening = false;
     this.pending = [];
     this.partialReviews.dispose();
+    this.mcpStatusSub?.dispose();
+    this.mcpStatusSub = undefined;
     const session = this.session;
     // Closing the session stops its tasks on the host, and no terminal
     // notification follows a session that is no longer there. The count is

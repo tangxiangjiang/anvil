@@ -26,7 +26,16 @@ import {
   CheckpointRestoreResult,
   CheckpointRun,
   CodeNoSession,
+  McpAddParams,
+  McpAuthenticateParams,
+  McpAuthenticateResult,
   McpListResult,
+  McpReconnectParams,
+  McpRemoveParams,
+  McpSetEnabledParams,
+  McpSignOutParams,
+  McpStatusParams,
+  McpUpdateParams,
   ModelEntry,
   PermissionsAddResult,
   PermissionsResult,
@@ -489,15 +498,63 @@ export class Hub {
   }
 
   /**
-   * The MCP servers the given layers declare.
+   * The MCP servers the given layers declare, and what the host observed for each.
    *
    * Not cached, unlike the rules: the layers are the caller's, and a malformed
    * file is an answer the caller has to be able to see on every ask, not just
    * the first. The call reads two small files, so repeating it per tab costs
    * less than a cache that could answer for a different layer set.
    */
-  mcpServers(settingSources: string[]): Promise<McpListResult> {
-    return this.manager.mcpServers(settingSources);
+  mcpServers(settingSources: string[], includeTools?: boolean): Promise<McpListResult> {
+    return this.manager.mcpServers(settingSources, includeTools);
+  }
+
+  /**
+   * An MCP server changed state — connecting, connected, failed, needs a sign-in.
+   *
+   * Window-level, because the runtime behind it is: the transition happens in the
+   * host, not in a conversation. A listener is a view and must dispose what it
+   * gets back.
+   */
+  onMcpStatus(listener: (params: McpStatusParams) => void): vscode.Disposable {
+    return this.manager.onMcpStatus(listener);
+  }
+
+  /** Every management call answers with the listing as it stands after the write. */
+  addMcpServer(params: McpAddParams): Promise<McpListResult> {
+    return this.manager.addMcpServer(params);
+  }
+
+  updateMcpServer(params: McpUpdateParams): Promise<McpListResult> {
+    return this.manager.updateMcpServer(params);
+  }
+
+  removeMcpServer(params: McpRemoveParams): Promise<McpListResult> {
+    return this.manager.removeMcpServer(params);
+  }
+
+  setMcpServerEnabled(params: McpSetEnabledParams): Promise<McpListResult> {
+    return this.manager.setMcpServerEnabled(params);
+  }
+
+  reconnectMcpServer(params: McpReconnectParams): Promise<McpListResult> {
+    return this.manager.reconnectMcpServer(params);
+  }
+
+  /**
+   * Starts a sign-in and answers with the URL to open.
+   *
+   * The panel opens it with `vscode.env.openExternal`; the host is what completes
+   * the callback and reconnects. Completion arrives as an `mcp.status`, not as
+   * the resolution of this promise — the browser round trip is the user's, and
+   * how long it takes is not something to hold a request open for.
+   */
+  authenticateMcpServer(params: McpAuthenticateParams): Promise<McpAuthenticateResult> {
+    return this.manager.authenticateMcpServer(params);
+  }
+
+  signOutMcpServer(params: McpSignOutParams): Promise<McpListResult> {
+    return this.manager.signOutMcpServer(params);
   }
 
   /** The provider's model catalogue, for a tab's /model picker. */

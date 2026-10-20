@@ -68,11 +68,23 @@ export const Method = {
   SkillsList: 'skills.list',
   RulesList: 'rules.list',
   /**
-   * The MCP servers the enabled file layers declare. Additive: a host that
-   * predates it answers `-32601`, and the panel then shows no card rather than
-   * an error.
+   * The MCP servers the enabled file layers declare, and — from a host with the
+   * runtime (0.44) — what it observed for each. Additive: a host that predates
+   * it answers `-32601`, and the panel then shows no card rather than an error.
    */
   McpList: 'mcp.list',
+  /**
+   * The manager's writes and actions (0.44). Each returns a fresh `mcp.list`
+   * result, so a panel renders what a new session will read. A host that
+   * predates them answers `-32601`, and the manager then says so.
+   */
+  McpAdd: 'mcp.add',
+  McpUpdate: 'mcp.update',
+  McpRemove: 'mcp.remove',
+  McpSetEnabled: 'mcp.set_enabled',
+  McpReconnect: 'mcp.reconnect',
+  McpAuthenticate: 'mcp.authenticate',
+  McpSignOut: 'mcp.sign_out',
   PermissionsGet: 'permissions.get',
   PermissionsAdd: 'permissions.add',
   /**
@@ -112,6 +124,12 @@ export const Notify = {
    * the same `compact` payload.
    */
   Compact: 'compact',
+  /**
+   * One MCP server changed state (0.44). It carries the same server object the
+   * listing uses, so a panel left open follows background connection attempts
+   * and OAuth completion without polling.
+   */
+  McpStatus: 'mcp.status',
 } as const;
 
 // --- errors ------------------------------------------------------------------
@@ -887,17 +905,51 @@ export interface RulesResult {
 
 // --- mcp.list ----------------------------------------------------------------
 
+/** The states a server can be in. Older hosts report none at all. */
+export type McpState =
+  | 'disabled'
+  | 'connecting'
+  | 'connected'
+  | 'failed'
+  | 'auth_required';
+
 /**
- * One server a config file declares. It says what would be launched, not
- * whether it launched: the host reports no connection state, so there is no
- * field here to mistake for one.
+ * One server a config file declares, and — from a host with the runtime — what
+ * that host observed for it.
+ *
+ * The `state` fields are absent from a host that predates the runtime; a client
+ * then renders the configuration only, which is what the card did before 0.44.
  */
 export interface McpServerInfo {
   name: string;
   /** stdio | http | sse. Empty for an entry naming neither command nor URL. */
   transport?: string;
-  /** The config file that declared it. */
-  source: string;
+  /**
+   * The config file that declared it. Absent in an `mcp.status` notification
+   * whose listing could not be read.
+   */
+  source?: string;
+  /** False only when the file says `enabled: false`. */
+  enabled?: boolean;
+  state?: McpState;
+  tool_count?: number;
+  /** Present only when the request asked for `include_tools`. */
+  tools?: McpToolInfo[];
+  error?: string;
+  /** RFC 3339, UTC. Present only while connected. */
+  connected_at?: string;
+  command?: string;
+  args?: string[];
+  url?: string;
+  /** Keys only: an env or header map commonly holds a token. */
+  env_names?: string[];
+  header_names?: string[];
+}
+
+/** One tool a connected server offers. */
+export interface McpToolInfo {
+  name: string;
+  description?: string;
 }
 
 /** One config file the listing looked at. */
@@ -908,13 +960,107 @@ export interface McpSourceInfo {
   exists: boolean;
 }
 
+/**
+ * A file that will not parse. It is a result, not an error, so a panel can show
+ * the last good statuses beside it and make the document read-only.
+ */
+export interface McpProblem {
+  path: string;
+  message: string;
+  line?: number;
+  column?: number;
+}
+
 export interface McpListParams {
   setting_sources?: string[];
+  /** Ask for each connected server's tool catalogue. */
+  include_tools?: boolean;
 }
 
 export interface McpListResult {
+  /**
+   * True on a host that can observe state (0.44). Absent on a host that cannot,
+   * which is the signal to render the configuration-only card.
+   */
+  runtime?: boolean;
   servers: McpServerInfo[];
   sources: McpSourceInfo[];
+  problem?: McpProblem;
+}
+
+/** The params of an `mcp.status` notification. */
+export interface McpStatusParams {
+  server: McpServerInfo;
+  /** Which runtime the server belongs to, for a pane showing more than one. */
+  setting_sources?: string[];
+}
+
+/** One entry as the manager wants it written. Nil maps mean "keep". */
+export interface McpServerDraft {
+  name: string;
+  transport?: string;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  headers?: Record<string, string>;
+  url?: string;
+  enabled?: boolean;
+}
+
+/** `project` or `user`: the file a write lands in. */
+export type McpScope = 'project' | 'user';
+
+export interface McpAddParams {
+  scope: McpScope;
+  server: McpServerDraft;
+  setting_sources?: string[];
+  include_tools?: boolean;
+}
+
+export interface McpUpdateParams {
+  scope: McpScope;
+  server: McpServerDraft;
+  setting_sources?: string[];
+  include_tools?: boolean;
+}
+
+export interface McpRemoveParams {
+  scope: McpScope;
+  name: string;
+  setting_sources?: string[];
+  include_tools?: boolean;
+}
+
+export interface McpSetEnabledParams {
+  scope: McpScope;
+  name: string;
+  enabled: boolean;
+  setting_sources?: string[];
+  include_tools?: boolean;
+}
+
+export interface McpReconnectParams {
+  name: string;
+  setting_sources?: string[];
+  include_tools?: boolean;
+}
+
+export interface McpAuthenticateParams {
+  name: string;
+  setting_sources?: string[];
+}
+
+export interface McpAuthenticateResult {
+  server: string;
+  /** The authorization URL the browser opens. It carries no token. */
+  auth_url: string;
+  expires_at?: string;
+}
+
+export interface McpSignOutParams {
+  name: string;
+  setting_sources?: string[];
+  include_tools?: boolean;
 }
 
 // --- models.list -------------------------------------------------------------

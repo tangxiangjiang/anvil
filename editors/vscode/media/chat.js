@@ -1905,12 +1905,17 @@
 
   // --- mcp ------------------------------------------------------------------
 
+  /** The card the last `mcp` message drew, or null before one arrived. */
+  let mcpCard = null;
+
   /**
-   * What the enabled MCP layers will load, and from which file.
+   * What the enabled MCP layers declare, and — from a host with the runtime —
+   * what became of each.
    *
-   * It deliberately says nothing about whether a server connected: the host
-   * reports configuration only, so a green dot here would mean "the file
-   * mentioned it" — which is not the thing a person cares about.
+   * The state word and the tool count are the host's; this only draws them. A
+   * host from before 0.44 sends no `runtime` and no state, and the card stays the
+   * configuration listing it always was: a dot there would mean "the file
+   * mentioned it", which is not the thing a person cares about.
    */
   function showMcp(msg) {
     const card = el('div', 'commands mcp');
@@ -1922,18 +1927,23 @@
       endRound();
       return;
     }
+    const runtime = msg.runtime === true;
+    card.dataset.runtime = runtime ? '1' : '0';
     const servers = Array.isArray(msg.servers) ? msg.servers : [];
     for (const server of servers) {
-      const row = el('div', 'command');
-      row.appendChild(el('span', 'cmd', typeof server.name === 'string' ? server.name : ''));
-      row.appendChild(el('span', 'desc', typeof server.source === 'string' ? server.source : ''));
-      if (typeof server.transport === 'string' && server.transport !== '') {
-        row.appendChild(el('span', 'tag', server.transport));
-      }
+      const row = mcpRow(server, runtime);
       card.appendChild(row);
+      const reason = mcpErrorText(server);
+      if (reason !== '') card.appendChild(mcpErrorRow(reason));
     }
     if (servers.length === 0) {
       card.appendChild(el('div', 'command muted', 'No MCP servers are configured.'));
+    }
+    // A file that will not parse is the one thing here the user can fix, and the
+    // host still answered with whatever it last observed.
+    const problem = typeof msg.problem === 'string' ? msg.problem : '';
+    if (problem !== '') {
+      card.appendChild(el('div', 'command failed', 'Could not read the MCP configuration: ' + problem));
     }
     // Layers that are enabled but have no file. The path is the one the host
     // resolved, so it can be opened or created as printed.
@@ -1941,8 +1951,104 @@
     for (const note of notes) {
       if (typeof note === 'string' && note !== '') card.appendChild(el('div', 'command muted', note));
     }
+    // The card a later status is drawn onto. One per document: a second card
+    // would be a second conversation, and each document has its own here.
+    mcpCard = card;
     append(card);
     endRound();
+  }
+
+  /**
+   * One server's row: dot, name, file, transport, and the state in words.
+   *
+   * A legacy host gets the row it always got, with no dot and no word — not an
+   * empty span, which would take a gap in the row and shift everything after it.
+   */
+  function mcpRow(server, runtime) {
+    const row = el('div', 'command');
+    const name = typeof server.name === 'string' ? server.name : '';
+    row.dataset.name = name;
+    const state = typeof server.state === 'string' ? server.state : '';
+    if (runtime && state !== '') {
+      row.appendChild(el('span', 'mcp-dot ' + state, '●'));
+      row.classList.add('mcp-' + state);
+    }
+    row.appendChild(el('span', 'cmd', name));
+    row.appendChild(el('span', 'desc', typeof server.source === 'string' ? server.source : ''));
+    if (typeof server.transport === 'string' && server.transport !== '') {
+      row.appendChild(el('span', 'tag', server.transport));
+    }
+    if (runtime) {
+      const text = mcpStateText(server);
+      if (text !== '') row.appendChild(el('span', 'desc mcp-state', text));
+    }
+    return row;
+  }
+
+  /**
+   * The state in words, with the count only while it is a fact.
+   *
+   * A failed server's last tool count would read as though it still had them, so
+   * the number appears with `connected` and with nothing else.
+   */
+  function mcpStateText(server) {
+    const label = typeof server.state_label === 'string' ? server.state_label : '';
+    if (label === '') return '';
+    if (server.state !== 'connected') return label;
+    const tools = typeof server.tool_count === 'number' ? server.tool_count : 0;
+    return label + ' · ' + tools + (tools === 1 ? ' tool' : ' tools');
+  }
+
+  /** The line under a row that says why it is not working, if it is not. */
+  function mcpErrorText(server) {
+    const text = typeof server.error === 'string' ? server.error : '';
+    // Only a state that is not working has a reason worth the extra line; a
+    // connected server carries none, and a disabled one is disabled on purpose.
+    if (!(server.state === 'failed' || server.state === 'auth_required')) return '';
+    return text;
+  }
+
+  /**
+   * The reason as its own line.
+   *
+   * It is text, never markup: the host builds it from a child process's stderr.
+   */
+  function mcpErrorRow(text) {
+    const node = el('div', 'command muted mcp-error', text);
+    return node;
+  }
+
+  /**
+   * A state change lands on the row that already names the server.
+   *
+   * A server the card has no row for is one added after it was drawn — from the
+   * manager, in another tab — and the card grows a row rather than ignoring the
+   * news. A document with no card at all has nothing to update: its own listing
+   * will say the same thing when it arrives.
+   */
+  function updateMcp(server) {
+    if (!mcpCard) return;
+    const name = typeof server.name === 'string' ? server.name : '';
+    if (name === '' || mcpCard.dataset.runtime !== '1') return;
+    let row = null;
+    for (const child of mcpCard.children) {
+      if (child.dataset && child.dataset.name === name && child.classList.contains('command')) {
+        row = child;
+        break;
+      }
+    }
+    const reason = mcpErrorText(server);
+    const errorRow = row && row.nextElementSibling && row.nextElementSibling.classList.contains('mcp-error')
+      ? row.nextElementSibling
+      : null;
+    if (errorRow) mcpCard.removeChild(errorRow);
+    const fresh = mcpRow(server, true);
+    if (row) {
+      mcpCard.replaceChild(fresh, row);
+    } else {
+      mcpCard.appendChild(fresh);
+    }
+    if (reason !== '') mcpCard.insertBefore(mcpErrorRow(reason), fresh.nextSibling);
   }
 
   // --- web search -----------------------------------------------------------
@@ -2697,6 +2803,9 @@
       }
       case 'mcp':
         showMcp(msg);
+        return;
+      case 'mcpStatus':
+        updateMcp(msg.server);
         return;
       case 'webSearch':
         showWebSearch(msg);

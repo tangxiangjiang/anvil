@@ -1367,6 +1367,60 @@ body.dont-ask-mode .composer {
   font-size: 0.9em;
 }
 
+/* --- MCP card -----------------------------------------------------------------
+ * One dot per server, in the state's colour. The word is drawn beside it because
+ * a colour alone is not an answer to a person who cannot see it, and the row's
+ * classes carry the state so the manager's list can reuse the same vocabulary.
+ */
+
+.mcp-dot {
+  flex: none;
+  font-size: 0.62em;
+  line-height: 1;
+  color: var(--vscode-descriptionForeground);
+}
+
+.mcp-dot.connected {
+  color: var(--vscode-testing-iconPassed, #3fb950);
+}
+
+.mcp-dot.connecting {
+  color: var(--vscode-charts-yellow, #d29922);
+}
+
+.mcp-dot.auth_required {
+  color: var(--vscode-charts-yellow, #d29922);
+}
+
+.mcp-dot.failed {
+  color: var(--vscode-errorForeground, #f85149);
+}
+
+.mcp-dot.disabled {
+  opacity: 0.45;
+}
+
+/* A disabled entry is declared but not loaded; it stays legible, just quiet. */
+.command.mcp-disabled .cmd,
+.command.mcp-disabled .desc {
+  opacity: 0.65;
+}
+
+.mcp-state {
+  flex: none;
+}
+
+/* Why a server failed: the line under its row, in the same monospace a message
+ * is, because it is a child process's text and not this card's prose. */
+.mcp-error {
+  padding-left: 1.6em;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.85em;
+  color: var(--vscode-descriptionForeground);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* --- session marker ------------------------------------------------------- */
 
 .msg.session .body {

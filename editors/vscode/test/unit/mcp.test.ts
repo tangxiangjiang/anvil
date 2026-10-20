@@ -12,7 +12,15 @@ import { strict as assert } from 'node:assert';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { mcpEnabled, missingMcpSources, settingSourcesFor } from '../../src/mcp';
+import {
+  cardServer,
+  hasRuntime,
+  isActionable,
+  mcpEnabled,
+  missingMcpSources,
+  settingSourcesFor,
+  stateLabel,
+} from '../../src/mcp';
 
 const EXTENSION_ROOT = join(__dirname, '..', '..', '..');
 const CHAT_JS = readFileSync(join(EXTENSION_ROOT, 'media', 'chat.js'), 'utf8');
@@ -67,31 +75,125 @@ test('the card draws text only, never markup', () => {
   assert.doesNotMatch(body, /\.innerHTML\s*(\+)?=(?!=)/);
   assert.doesNotMatch(body, /insertAdjacentHTML\s*\(/);
   assert.match(body, /el\(/);
-  // Configuration, not connection: a field the host never sent must not be
-  // invented here.
-  assert.doesNotMatch(body, /connected|status|running/i);
   assert.match(CHAT_JS, /case 'mcp':/);
 });
 
-test('the card names the server, its file and its transport', () => {
+/**
+ * The pre-0.44 card asserted that this function never mentioned a state. Chapter
+ * 43 changes that deliberately: the host now observes a connection, so the card
+ * draws what it reports — and only when it says it can. A host without `runtime`
+ * still gets the configuration listing, because a dot for a file entry would
+ * mean "the file mentioned it", which is not the thing a person cares about.
+ */
+test('the card draws a state only from a host that reports one', () => {
   const body = bodyOf(CHAT_JS, 'showMcp');
-  assert.match(body, /server\.name/);
-  assert.match(body, /server\.source/);
-  assert.match(body, /server\.transport/);
-  assert.match(body, /msg\.notes/);
-  assert.match(body, /Could not read the MCP configuration/);
-  assert.match(body, /No MCP servers are configured\./);
+  assert.match(body, /msg\.runtime === true/);
+  const row = bodyOf(CHAT_JS, 'mcpRow');
+  assert.match(row, /server\.state/);
+  assert.match(row, /runtime && state !== ''/);
+  assert.match(bodyOf(CHAT_JS, 'mcpStateText'), /server\.state_label/);
+  assert.match(bodyOf(CHAT_JS, 'mcpStateText'), /server\.tool_count/);
+  // The reason a server failed is shown, but it is host text and goes through
+  // textContent like everything else in this card.
+  assert.match(bodyOf(CHAT_JS, 'mcpErrorText'), /server\.error/);
+  // A file that will not parse is a result field now, not only an error.
+  assert.match(body, /msg\.problem/);
+});
+
+test('a state is spelled once, for the card and the manager', () => {
+  assert.equal(stateLabel('connected'), 'connected');
+  assert.equal(stateLabel('connecting'), 'connecting');
+  assert.equal(stateLabel('failed'), 'failed');
+  assert.equal(stateLabel('disabled'), 'disabled');
+  // The one word that is not the enum's: what a person does about it.
+  assert.equal(stateLabel('auth_required'), 'needs sign-in');
+  // A host that reports nothing gets nothing invented for it.
+  assert.equal(stateLabel(undefined), '');
+});
+
+test('a listing is believed only when the host says it can observe state', () => {
+  assert.equal(hasRuntime({ servers: [], sources: [], runtime: true }), true);
+  assert.equal(hasRuntime({ servers: [], sources: [] }), false);
+});
+
+test('only the states with something to do are actionable', () => {
+  assert.equal(isActionable({ name: 'a', state: 'failed' }), true);
+  assert.equal(isActionable({ name: 'a', state: 'auth_required' }), true);
+  assert.equal(isActionable({ name: 'a', state: 'disabled' }), true);
+  assert.equal(isActionable({ name: 'a', state: 'connected' }), false);
+  assert.equal(isActionable({ name: 'a', state: 'connecting' }), false);
+  // A 0.40.6 host has no state to act on.
+  assert.equal(isActionable({ name: 'a' }), false);
+});
+
+test('a card row carries the state word and nothing it was not told', () => {
+  const row = cardServer({
+    name: 'docs',
+    transport: 'http',
+    source: 'E:\\ws\\.cursor\\mcp.json',
+    state: 'connected',
+    tool_count: 2,
+  });
+  assert.deepEqual(row, {
+    name: 'docs',
+    transport: 'http',
+    source: 'E:\\ws\\.cursor\\mcp.json',
+    state: 'connected',
+    state_label: 'connected',
+    tool_count: 2,
+  });
+  // An absent state stays absent: the configuration-only card.
+  const plain = cardServer({ name: 'docs', transport: 'stdio', source: 'x' });
+  assert.equal(plain.state, undefined);
+  assert.equal(plain.state_label, '');
+  assert.equal('tool_count' in plain, false);
+});
+
+test('the card names the server, its file and its transport', () => {
+  const row = bodyOf(CHAT_JS, 'mcpRow');
+  assert.match(row, /server\.name/);
+  assert.match(row, /server\.source/);
+  assert.match(row, /server\.transport/);
+  const card = bodyOf(CHAT_JS, 'showMcp');
+  assert.match(card, /msg\.notes/);
+  assert.match(card, /msg\.problem/);
+  assert.match(card, /Could not read the MCP configuration/);
+  assert.match(card, /No MCP servers are configured\./);
+});
+
+/**
+ * Acceptance for chapter 43 §7: a transition reaches the card that is already on
+ * screen. The row is rebuilt from the same builder the listing used, so the two
+ * cannot draw a server differently, and the update is text like everything else.
+ */
+test('a state change redraws the row it belongs to, in place', () => {
+  const update = bodyOf(CHAT_JS, 'updateMcp');
+  assert.match(update, /mcpCard/);
+  assert.match(update, /dataset\.name === name/);
+  assert.match(update, /replaceChild\(fresh, row\)/);
+  // A server added after the card was drawn gets a row rather than being lost.
+  assert.match(update, /appendChild\(fresh\)/);
+  assert.doesNotMatch(update, /\.innerHTML\s*(\+)?=(?!=)/);
+  assert.match(CHAT_JS, /case 'mcpStatus':\s*\n\s*updateMcp\(msg\.server\)/);
+  // A legacy card is drawn without a dot or a word, so a status must not add one.
+  assert.match(update, /dataset\.runtime !== '1'/);
 });
 
 test('the panel asks about the layers it enabled, once per document', () => {
   const report = memberOf(CHAT_PANEL, 'private async reportMcp(');
   assert.match(report, /const \{ mcp \} = readSettings\(\)/);
   assert.match(report, /mcpEnabled\(mcp\)/);
-  assert.match(report, /this\.hub\.mcpServers\(settingSourcesFor\(mcp\)\)/);
+  assert.match(report, /const sources = settingSourcesFor\(mcp\)/);
+  assert.match(report, /this\.hub\.mcpServers\(sources\)/);
   assert.match(report, /missingMcpSources\(listing\.sources/);
-  assert.match(report, /type: 'mcp',\s+servers: listing\.servers/);
-  // A file that will not parse has to say so; an empty card would hide it.
-  assert.match(report, /error: \(err as Error\)\.message/);
+  assert.match(report, /runtime: hasRuntime\(listing\)/);
+  assert.match(report, /\(listing\.servers \?\? \[\]\)\.map\(cardServer\)/);
+  // The card keeps itself current from the host's transitions, and the
+  // subscription is dropped with the document it belonged to.
+  assert.match(report, /this\.listenForMcpStatus\(sources\)/);
+  assert.match(CHAT_PANEL, /this\.hub\.onMcpStatus\(/);
+  assert.match(CHAT_PANEL, /type: 'mcpStatus', server: cardServer\(server\)/);
+  assert.match(CHAT_PANEL, /this\.mcpStatusSub\?\.dispose\(\)/);
   // The card describes a workspace, so it follows the restored conversation
   // rather than racing it.
   assert.match(CHAT_PANEL, /\.then\(\(\) => this\.reportMcp\(\)\)/);
@@ -101,6 +203,10 @@ test('the manager sends the sources it was given', () => {
   const call = memberOf(HOST_MANAGER, 'async mcpServers(');
   assert.match(call, /Method\.McpList/);
   assert.match(call, /setting_sources: settingSources/);
+  // The manager fans a status out to window-level listeners rather than letting
+  // the router drop it as a notification with no session.
+  assert.match(HOST_MANAGER, /method === Notify\.McpStatus/);
+  assert.match(HOST_MANAGER, /onMcpStatus\(listener/);
 });
 
 test('the settings default the project file on and the user file off', () => {
@@ -116,9 +222,16 @@ test('the settings default the project file on and the user file off', () => {
   assert.match(SETTINGS, /session\.setting_sources = sources/);
 });
 
-test('the protocol names the method and the listing shape', () => {
+test('the protocol names the methods and the listing shape', () => {
   assert.match(PROTOCOL, /McpList: 'mcp\.list'/);
+  // 0.44: the management surface and the push a transition arrives on.
+  for (const method of ['add', 'update', 'remove', 'set_enabled', 'reconnect', 'authenticate', 'sign_out']) {
+    assert.match(PROTOCOL, new RegExp(`Mcp\\w+: 'mcp\\.${method}'`), `mcp.${method} is declared`);
+  }
+  assert.match(PROTOCOL, /McpStatus: 'mcp\.status'/);
   assert.match(PROTOCOL, /interface McpServerInfo/);
   assert.match(PROTOCOL, /interface McpSourceInfo/);
   assert.match(PROTOCOL, /interface McpListResult/);
+  // The runtime flag is what a client degrades on.
+  assert.match(PROTOCOL, /runtime\?: boolean/);
 });

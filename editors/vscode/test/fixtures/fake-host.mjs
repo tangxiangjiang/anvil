@@ -44,12 +44,17 @@
  *                          checkpoint.list answers for the agent and
  *                          checkpoint.restore writes each path back, so the
  *                          extension's undo route is exercised without the SDK
- *   FAKE_HOST_MCP=<name:transport,…>  servers the workspace's project file is
- *                          said to declare. mcp.list reports them for the
+ *   FAKE_HOST_MCP=<name:transport[:state],…>  servers the workspace's project
+ *                          file is said to declare, and the state the runtime
+ *                          observes for each. mcp.list reports them for the
  *                          project layer and nothing else, because the file is
  *                          what the real host reads
- *   FAKE_HOST_MCP_BROKEN=1  answer mcp.list with the parse error a malformed
- *                          `.cursor/mcp.json` produces
+ *   FAKE_HOST_MCP_LEGACY=1  a host from before 0.44: no runtime, so the listing
+ *                          carries no state, and the management methods are
+ *                          -32601 — the pair the panel has to degrade against
+ *   FAKE_HOST_MCP_BROKEN=1  the project file will not parse. A runtime host
+ *                          answers with a `problem` in the result; a legacy one
+ *                          fails the call, as it did before chapter 43
  *
  * One thing here is not scripted: the mode a new session starts in. It is
  * resolved from what the client asked for and from the workspace's
@@ -103,15 +108,33 @@ const checkpoints = new Map();
 const workspaceCWD = process.env.FAKE_HOST_CWD || process.cwd();
 /** The project MCP file, as the host would resolve it. */
 const projectMCPPath = join(workspaceCWD, '.cursor', 'mcp.json');
-/** Servers the project file is said to declare, name and transport. */
+/** Servers the project file is said to declare, with their live state. */
 const mcpServers = (process.env.FAKE_HOST_MCP || '')
   .split(',')
   .map((entry) => entry.trim())
   .filter((entry) => entry !== '')
   .map((entry) => {
-    const [name, transport = 'stdio'] = entry.split(':');
-    return { name: name.trim(), transport: transport.trim() };
+    const [name, transport = 'stdio', state = ''] = entry.split(':');
+    return {
+      name: name.trim(),
+      transport: transport.trim(),
+      enabled: true,
+      state: state.trim(),
+      error: '',
+    };
   });
+/**
+ * Whether this host observes state at all.
+ *
+ * A 0.40.6 host has no runtime: `mcp.list` describes the files and nothing else,
+ * and there is no management surface. That is a supported pair beside a new
+ * extension, so the fixture can be one, and the default is the new shape.
+ */
+const mcpRuntime = process.env.FAKE_HOST_MCP_LEGACY !== '1';
+/** The state each server is in, as a runtime host would report it. */
+const mcpStates = new Map(
+  mcpServers.map((server) => [server.name, server.state || (mcpRuntime ? 'connected' : '')]),
+);
 /** Whether the project file is reported as one that will not parse. */
 const mcpBroken = process.env.FAKE_HOST_MCP_BROKEN === '1';
 /**
@@ -188,6 +211,82 @@ function windowOf(session) {
   return budget && typeof budget.window_tokens === 'number' ? budget.window_tokens : 0;
 }
 
+/**
+ * One server as `mcp.list` and `mcp.status` describe it.
+ *
+ * A legacy host answers with the three fields it always had; a runtime host adds
+ * the observed ones. `tools` is only present when the caller asked for it, which
+ * is the same bargain the real host makes: the chat card wants a count, the
+ * manager wants the catalogue.
+ */
+function mcpServerWire(server, includeTools) {
+  const wire = { name: server.name, transport: server.transport, source: projectMCPPath };
+  if (!mcpRuntime) return wire;
+  const state = mcpStates.get(server.name) || 'connecting';
+  wire.enabled = server.enabled !== false;
+  wire.state = server.enabled === false ? 'disabled' : state;
+  if (wire.state === 'connected') {
+    wire.tool_count = 2;
+    wire.connected_at = '2026-10-20T09:00:00Z';
+    if (includeTools) {
+      wire.tools = [
+        { name: 'echo', description: 'echoes text' },
+        { name: 'read_file', description: 'reads one file' },
+      ];
+    }
+  }
+  if (wire.state === 'failed') wire.error = 'spawn failed: command not found';
+  if (wire.state === 'auth_required') wire.error = 'sign-in required';
+  return wire;
+}
+
+/** The files the listing looked at, for the layers it was asked about. */
+function mcpSources(wanted) {
+  const sources = [];
+  if (wanted.includes('user')) {
+    sources.push({ source: 'user', path: join(homedir(), '.cursor', 'mcp.json'), exists: false });
+  }
+  if (wanted.includes('project')) {
+    sources.push({ source: 'project', path: projectMCPPath, exists: mcpServers.length > 0 });
+  }
+  return sources;
+}
+
+/**
+ * The listing, in the shape the host answers with.
+ *
+ * A malformed file is a `problem` on a runtime host — a result, not an error, so
+ * the panel can show the last good statuses beside it — and an RPC failure on a
+ * 0.40.6 host, which had no result field to put it in.
+ */
+function mcpListing(params) {
+  const wanted = Array.isArray(params.setting_sources) ? params.setting_sources : [];
+  const includeTools = params.include_tools === true;
+  const result = {
+    servers: wanted.includes('project') ? mcpServers.map((s) => mcpServerWire(s, includeTools)) : [],
+    sources: mcpSources(wanted),
+  };
+  if (!mcpRuntime) return result;
+  result.runtime = true;
+  // The runtime still holds what it last observed for entries it knew about, so
+  // the listing keeps them and names the file that would not parse.
+  if (mcpBroken) {
+    result.problem = {
+      path: projectMCPPath,
+      message: 'unexpected end of JSON input',
+      line: 1,
+      column: 17,
+    };
+  }
+  return result;
+}
+
+/** Pushes one server's state, the way the host's runtime does on a transition. */
+function mcpNotify(name, wanted = ['project']) {
+  const server = mcpServers.find((entry) => entry.name === name);
+  if (!server || !mcpRuntime) return;
+  notify('mcp.status', { server: mcpServerWire(server, false), setting_sources: wanted });
+}
 /** The `ContextInfo` shape the real host answers `session.context` with. */
 function contextInfo(session) {
   const ctx = contextOf(session);
@@ -656,7 +755,12 @@ async function handle(msg) {
         protocol,
         host: 'anvil-host (fake)',
         cwd: process.env.FAKE_HOST_CWD || process.cwd(),
-        capabilities: ['approval', 'sessions', 'store', 'mcp'],
+        // `mcp.runtime` is 0.44's: a host without it answers `mcp.list` with
+        // configuration only, which is what chapter 43 had to stay compatible
+        // with.
+        capabilities: mcpRuntime
+          ? ['approval', 'sessions', 'store', 'mcp', 'mcp.runtime']
+          : ['approval', 'sessions', 'store', 'mcp'],
       });
       return;
     case 'session.new':
@@ -801,9 +905,6 @@ async function handle(msg) {
       return;
     }
     case 'mcp.list': {
-      // Configuration, not connection: the listing names what a file says, and
-      // carries no field for whether a server started. The layers are exactly
-      // the ones asked for, as the real host reads only what the session reads.
       echo('mcp.list', msg.params || {});
       const params = msg.params || {};
       const wanted = Array.isArray(params.setting_sources) ? params.setting_sources : [];
@@ -812,25 +913,137 @@ async function handle(msg) {
         fail(msg.id, -32602, `unknown setting source: ${unknown}`);
         return;
       }
-      if (mcpBroken) {
+      // A 0.40.6 host had no place to report a broken file but an error.
+      if (mcpBroken && !mcpRuntime) {
         fail(msg.id, -32000, `load project mcp.json: parse ${projectMCPPath}: unexpected end of JSON input`);
         return;
       }
-      const sources = [];
-      if (wanted.includes('user')) {
-        sources.push({ source: 'user', path: join(homedir(), '.cursor', 'mcp.json'), exists: false });
+      ok(msg.id, mcpListing(params));
+      return;
+    }
+    case 'mcp.add':
+    case 'mcp.update':
+    case 'mcp.remove':
+    case 'mcp.set_enabled':
+    case 'mcp.reconnect':
+    case 'mcp.authenticate':
+    case 'mcp.sign_out': {
+      // One argument-recording entry point for the whole management surface:
+      // what these tests pin is the params the extension sends and the listing
+      // it reads back, not a second implementation of the writers.
+      echo(msg.method, msg.params || {});
+      if (!mcpRuntime) {
+        fail(msg.id, -32601, `unknown method ${msg.method}`);
+        return;
       }
-      if (wanted.includes('project')) {
-        sources.push({ source: 'project', path: projectMCPPath, exists: mcpServers.length > 0 });
+      const params = msg.params || {};
+      const scope = params.scope;
+      const name = params.name !== undefined ? params.name : (params.server || {}).name;
+      const reply = () => ok(msg.id, mcpListing({ setting_sources: params.setting_sources, include_tools: params.include_tools }));
+      if (msg.method !== 'mcp.reconnect' && msg.method !== 'mcp.authenticate' && msg.method !== 'mcp.sign_out') {
+        if (scope !== 'project' && scope !== 'user') {
+          fail(msg.id, -32602, `unknown scope: ${scope}`);
+          return;
+        }
       }
-      const servers = wanted.includes('project')
-        ? mcpServers.map((server) => ({
-            name: server.name,
-            transport: server.transport,
-            source: projectMCPPath,
-          }))
-        : [];
-      ok(msg.id, { servers, sources });
+      if (typeof name !== 'string' || name.trim() === '') {
+        fail(msg.id, -32602, `${msg.method}: name is required`);
+        return;
+      }
+      // A file that will not parse is never written: the bytes on disk are the
+      // user's, and a half-edit is worse than a failure.
+      if (
+        mcpBroken &&
+        (msg.method === 'mcp.add' ||
+          msg.method === 'mcp.update' ||
+          msg.method === 'mcp.remove' ||
+          msg.method === 'mcp.set_enabled')
+      ) {
+        fail(msg.id, -32000, `parse ${projectMCPPath}: unexpected end of JSON input`);
+        return;
+      }
+      const existing = mcpServers.find((entry) => entry.name === name);
+      switch (msg.method) {
+        case 'mcp.add': {
+          if (existing) {
+            fail(msg.id, -32000, `mcp.add: ${name} is already declared`);
+            return;
+          }
+          const draft = params.server || {};
+          // A user-scope write lands in the user file, which this fixture does
+          // not model as a layer of its own; the listing below is the project
+          // one either way, because that is what the client reads back.
+          if (scope === 'project') {
+            mcpServers.push({ name, transport: draft.transport || 'stdio', enabled: draft.enabled !== false, error: '' });
+            mcpStates.set(name, draft.enabled === false ? 'disabled' : 'connected');
+          }
+          break;
+        }
+        case 'mcp.update': {
+          if (!existing) {
+            fail(msg.id, -32000, `mcp.update: ${name} is not declared`);
+            return;
+          }
+          const draft = params.server || {};
+          if (typeof draft.transport === 'string' && draft.transport !== '') existing.transport = draft.transport;
+          break;
+        }
+        case 'mcp.remove': {
+          if (!existing) {
+            fail(msg.id, -32000, `mcp.remove: ${name} is not declared`);
+            return;
+          }
+          mcpServers.splice(mcpServers.indexOf(existing), 1);
+          mcpStates.delete(name);
+          break;
+        }
+        case 'mcp.set_enabled': {
+          if (!existing) {
+            fail(msg.id, -32000, `mcp.set_enabled: ${name} is not declared`);
+            return;
+          }
+          existing.enabled = params.enabled === true;
+          mcpStates.set(name, existing.enabled ? 'failed' : 'disabled');
+          break;
+        }
+        case 'mcp.reconnect': {
+          if (!existing) {
+            fail(msg.id, -32000, `mcp.reconnect: ${name} is not declared`);
+            return;
+          }
+          mcpStates.set(name, 'connected');
+          break;
+        }
+        case 'mcp.authenticate': {
+          if (!existing) {
+            fail(msg.id, -32000, `mcp.authenticate: ${name} is not declared`);
+            return;
+          }
+          // The browser round trip is the user's: the call answers with the URL,
+          // and completion arrives as a notification a moment later.
+          mcpStates.set(name, 'auth_required');
+          setTimeout(() => {
+            mcpStates.set(name, 'connected');
+            mcpNotify(name, Array.isArray(params.setting_sources) ? params.setting_sources : ['project']);
+          }, 20);
+          ok(msg.id, {
+            server: name,
+            auth_url: 'https://auth.example.test/authorize?state=fake-state',
+            expires_at: '2026-10-20T10:00:00Z',
+          });
+          return;
+        }
+        case 'mcp.sign_out': {
+          if (!existing) {
+            fail(msg.id, -32000, `mcp.sign_out: ${name} is not declared`);
+            return;
+          }
+          mcpStates.set(name, 'auth_required');
+          break;
+        }
+      }
+      mcpNotify(name, Array.isArray(params.setting_sources) ? params.setting_sources : ['project']);
+      reply();
       return;
     }
     case 'session.rename': {
