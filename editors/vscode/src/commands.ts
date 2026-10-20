@@ -45,6 +45,11 @@ export const BUILTIN_COMMANDS: readonly SlashCommand[] = [
     source: 'builtin',
   },
   {
+    name: 'rewind',
+    description: 'Rewind the last turn: branch before it, put its files back, or both',
+    source: 'builtin',
+  },
+  {
     name: 'clear',
     description: 'Start a new conversation',
     source: 'builtin',
@@ -164,6 +169,7 @@ export type CommandAction =
   | { kind: 'skill'; skillId: string; args: string }
   | { kind: 'model'; model: string }
   | { kind: 'resume'; agentId: string }
+  | { kind: 'rewind' }
   | { kind: 'clear' }
   | { kind: 'compact' }
   | { kind: 'tasks' }
@@ -184,6 +190,8 @@ export function route(text: string, commands: SlashCommand[]): CommandAction {
       return { kind: 'model', model: parsed.args };
     case 'resume':
       return { kind: 'resume', agentId: parsed.args };
+    case 'rewind':
+      return { kind: 'rewind' };
     case 'clear':
       return { kind: 'clear' };
     case 'compact':

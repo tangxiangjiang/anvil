@@ -64,6 +64,7 @@ test('the catalogue lists built-ins first and a skill never shadows one', () => 
     'plan',
     'model',
     'resume',
+    'rewind',
     'clear',
     'compact',
     'tasks',
@@ -98,7 +99,7 @@ test('the palette matches names first and descriptions second', () => {
   const catalogue = commandCatalogue(SKILLS);
   assert.deepEqual(
     matchCommands(catalogue, 're').map((command) => command.name),
-    ['resume', 'release-notes'],
+    ['resume', 'rewind', 'release-notes'],
   );
   // Nothing starts with "commit" except the skill, but "messages" only appears
   // in a description, so the fallback is what makes it findable at all.
@@ -128,6 +129,8 @@ test('every built-in routes to the capability it names', () => {
   assert.deepEqual(route('/model gpt-5.2', catalogue), { kind: 'model', model: 'gpt-5.2' });
   assert.deepEqual(route('/resume', catalogue), { kind: 'resume', agentId: '' });
   assert.deepEqual(route('/resume a7', catalogue), { kind: 'resume', agentId: 'a7' });
+  assert.deepEqual(route('/rewind', catalogue), { kind: 'rewind' });
+  assert.deepEqual(route('/Rewind', catalogue), { kind: 'rewind' });
   assert.deepEqual(route('/clear', catalogue), { kind: 'clear' });
   assert.deepEqual(route('/tasks', catalogue), { kind: 'tasks' });
   // The manager covers both layers, so nothing after `/mcp` is carried: there is

@@ -1177,6 +1177,62 @@ kbd {
   color: var(--vscode-errorForeground, #f85149);
 }
 
+/* --- rewind --------------------------------------------------------------- */
+
+/*
+ * A user message's own undo. It sits under the prompt because the undo is a
+ * turn: the checkpoint was taken before this message was answered, and no
+ * finer-grained promise can be kept.
+ */
+.rewind {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.rewind > button {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.85em;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.rewind > button:hover:not(:disabled) {
+  color: var(--vscode-foreground);
+}
+
+.rewind-menu {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 4px 0 0;
+}
+
+.rewind-row button {
+  text-align: left;
+}
+
+.rewind-note,
+.rewind-hint {
+  font-size: 0.85em;
+  color: var(--vscode-descriptionForeground);
+}
+
+.rewind .outcome.done {
+  font-size: 0.85em;
+  color: var(--vscode-gitDecoration-addedResourceForeground, #3fb950);
+}
+
+.rewind .outcome.failed {
+  font-size: 0.85em;
+  color: var(--vscode-errorForeground, #f85149);
+}
+
 /* --- mode select ---------------------------------------------------------- */
 
 /*

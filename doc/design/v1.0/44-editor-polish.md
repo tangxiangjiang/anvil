@@ -78,12 +78,20 @@ not a new granularity; it is a composition:
 |---|---|---|
 | Fork from here | `session.fork` at the **previous** run | touch any file |
 | Restore files | `checkpoint.restore` for **this** message's run | change the conversation |
-| Both | fork first, then restore in the new session | merge the two undo stacks |
+| Both | fork first, then put this turn's files back | merge the two undo stacks |
 
 The UI offers the three deliberately, labels the granularity ("this turn"), and decides
 availability by asking `checkpoint.list` rather than assuming a checkpoint exists — the
 same rule the current restore button already follows. A first message has no previous run;
-the fork option then means "start a new conversation" and says so.
+the fork option then means "start a new conversation" (what `/clear` does) and says so.
+
+**Where the combined restore is asked from.** A fork copies stored conversation records; it
+does not copy checkpoint directories, which live under the agent id
+(`<cwd>/.anvil/checkpoints/<agent>/<run>`). The restore in the combined action is therefore
+asked of the conversation that owns the checkpoint, not of the new one, and "in the new
+session" above means "on the same workspace root the new session opens in", not "through the
+fork's id". The files land where they were; the new tab opens on the history before the
+turn.
 
 No tool-call-level rewind is offered. A checkpoint records the workspace before the turn,
 not before each tool call; presenting per-tool undo would be a lie the code cannot back.

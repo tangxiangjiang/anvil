@@ -137,6 +137,21 @@
    * after the transcript has been replaced, so the map is cleared with it.
    */
   const forkBlocks = new Map();
+  /**
+   * One anchor per user message, in transcript order: the run that followed it
+   * once that run has ended, and the control it owns.
+   *
+   * The anchor is the message because the undo is a turn. A checkpoint is taken
+   * before a run, so the only honest place to say "go back to before this" is
+   * the prompt the run answered.
+   */
+  const rewindTurns = [];
+  /**
+   * The paths each finished run captured, by run id, as the extension read
+   * them. A missing key is "not answered yet", which is different from an empty
+   * list: the first waits, the second says the turn changed nothing.
+   */
+  const rewindStates = new Map();
   /** Referenced workspace paths, in the order they were picked. */
   let mentions = [];
   /** Pasted images, as data URLs. */
@@ -226,6 +241,8 @@
     approvals.clear();
     checkpointBlocks.clear();
     forkBlocks.clear();
+    rewindTurns.length = 0;
+    rewindStates.clear();
     mentions = [];
     images = [];
     renderChips();
@@ -272,6 +289,9 @@
       wrap.appendChild(shots);
     }
     append(wrap);
+    // Only the window's transcript gets a rewind: a spawned child's prompt is
+    // not a turn of this conversation, and its runs are not boundary candidates.
+    if (active === mainScope) rewindTurns.push({ wrap: wrap, runId: '', menu: null });
     endRound();
   }
 
@@ -1721,6 +1741,214 @@
     entry.button.textContent = 'Forked';
   }
 
+  // --- rewind ---------------------------------------------------------------
+
+  /**
+   * Gives a finished run to the turn it answered.
+   *
+   * Only the last turn can be unassigned. A run is one turn, so a run that ends
+   * with no prompt waiting — a transcript that started mid-turn, a replay with
+   * records left out — must not be pinned onto a message it did not answer.
+   */
+  function noteRun(runId) {
+    if (typeof runId !== 'string' || runId === '') return;
+    const turn = rewindTurns[rewindTurns.length - 1];
+    if (!turn || turn.runId !== '') return;
+    turn.runId = runId;
+    drawRewind(turn);
+  }
+
+  /** The last run before this turn; empty when this turn is the first one. */
+  function previousRunId(turn) {
+    for (let i = rewindTurns.indexOf(turn) - 1; i >= 0; i--) {
+      if (rewindTurns[i].runId !== '') return rewindTurns[i].runId;
+    }
+    return '';
+  }
+
+  /**
+   * The rewind control on one user message.
+   *
+   * It is quiet until opened: the transcript is the content, and an undo wants
+   * a label before it wants a toolbar. The three choices are drawn together so
+   * the difference between them — the conversation, the files, or both — is
+   * visible before either is chosen.
+   */
+  function drawRewind(turn) {
+    if (turn.menu) {
+      renderRewind(turn);
+      return;
+    }
+    const box = el('div', 'rewind');
+    const button = el('button', 'ghost', 'Rewind to here');
+    button.type = 'button';
+    button.title = 'Go back to before this turn';
+    const menu = el('div', 'rewind-menu');
+    menu.hidden = true;
+    const hint = el(
+      'div',
+      'rewind-hint',
+      'A checkpoint is taken before the turn, not before each tool call.',
+    );
+    hint.hidden = true;
+    button.addEventListener('click', () => {
+      menu.hidden = !menu.hidden;
+      hint.hidden = menu.hidden;
+      if (!menu.hidden) {
+        renderRewind(turn);
+        const first = menu.querySelector('button');
+        if (first && !first.disabled) first.focus();
+      }
+    });
+    box.appendChild(button);
+    box.appendChild(menu);
+    box.appendChild(hint);
+    turn.wrap.appendChild(box);
+    turn.menu = { box: box, button: button, menu: menu, hint: hint };
+    renderRewind(turn);
+  }
+
+  /**
+   * Draws the choices the extension's answer allows.
+   *
+   * Nothing here assumes a checkpoint exists: until `rewindState` says a run
+   * captured something, the file action is not offered, and the combined action
+   * has nothing to combine with. A turn the store recorded no files for says so
+   * rather than showing a button that would fail.
+   */
+  function renderRewind(turn) {
+    const menu = turn.menu.menu;
+    menu.textContent = '';
+    const prevRunId = previousRunId(turn);
+    const files = rewindStates.get(turn.runId);
+    const restore = Array.isArray(files) && files.length > 0;
+    const waiting = !rewindStates.has(turn.runId);
+
+    menu.appendChild(
+      rewindRow(
+        turn,
+        prevRunId === '' ? 'Start a new conversation' : 'Fork from before this turn',
+        prevRunId === ''
+          ? 'This is the first turn, so rewinding past it starts an empty conversation'
+          : 'Copy the conversation up to the turn before this one into a new tab',
+        'fork',
+        prevRunId,
+      ),
+    );
+
+    if (restore) {
+      menu.appendChild(
+        rewindRow(
+          turn,
+          'Restore this turn’s files',
+          'Put ' + files.length + ' file' + (files.length === 1 ? '' : 's') +
+            ' back as they were before this turn; the conversation is left as it is',
+          'restore',
+          prevRunId,
+        ),
+      );
+      menu.appendChild(
+        rewindRow(
+          turn,
+          'Fork and restore',
+          'Branch before this turn and put its files back; both halves report what happened',
+          'both',
+          prevRunId,
+        ),
+      );
+    } else if (waiting) {
+      menu.appendChild(el('div', 'rewind-note', 'Checking this turn’s files…'));
+    } else {
+      menu.appendChild(el('div', 'rewind-note', 'This turn changed no files, so there is nothing to restore.'));
+    }
+  }
+
+  /** One choice in the menu. It posts, then waits, so a second click is nothing. */
+  function rewindRow(turn, label, title, action, prevRunId) {
+    const row = el('div', 'rewind-row');
+    const button = el('button', 'ghost', label);
+    button.type = 'button';
+    button.title = title;
+    button.addEventListener('click', () => {
+      if (button.disabled) return;
+      for (const control of turn.menu.menu.querySelectorAll('button')) control.disabled = true;
+      turn.menu.menu.appendChild(el('div', 'rewind-note', 'Rewinding…'));
+      vscode.postMessage({ type: 'rewind', action: action, runId: turn.runId, prevRunId: prevRunId });
+    });
+    row.appendChild(button);
+    return row;
+  }
+
+  /** The extension's answer about one run: the paths it captured, or none. */
+  function showRewindState(msg) {
+    const runId = typeof msg.runId === 'string' ? msg.runId : '';
+    if (runId === '') return;
+    const files = Array.isArray(msg.files) ? msg.files.filter((path) => typeof path === 'string') : [];
+    rewindStates.set(runId, files);
+    const turn = rewindTurns.find((candidate) => candidate.runId === runId);
+    if (turn && turn.menu) renderRewind(turn);
+  }
+
+  /**
+   * Settles a rewind, half by half.
+   *
+   * A fork that worked and a restore that failed is not one outcome, and a
+   * single line saying "done" would erase the half the user has to deal with.
+   * Both endings are drawn, and the menu is offered again so a failed half can
+   * be retried.
+   */
+  function settleRewind(msg) {
+    const turn = rewindTurns.find((candidate) => candidate.runId === msg.runId);
+    if (!turn || !turn.menu) return;
+    turn.menu.menu.hidden = false;
+    turn.menu.hint.hidden = false;
+    renderRewind(turn);
+    if (msg.cancelled === true) {
+      turn.menu.menu.appendChild(el('div', 'rewind-note', 'Cancelled. Nothing changed.'));
+      return;
+    }
+    const outcomes = [];
+    if (typeof msg.forked === 'string' && msg.forked !== '') {
+      outcomes.push({ ok: true, text: 'Forked into a new tab.' });
+    }
+    if (typeof msg.forkError === 'string' && msg.forkError !== '') {
+      outcomes.push({ ok: false, text: 'Not forked: ' + msg.forkError + '.' });
+    }
+    if (typeof msg.restoreError === 'string' && msg.restoreError !== '') {
+      outcomes.push({ ok: false, text: 'Not restored: ' + msg.restoreError + '.' });
+    } else if (typeof msg.restored === 'number') {
+      outcomes.push({ ok: true, text: restoredText(msg.restored, msg.deleted) });
+    }
+    if (outcomes.length === 0) outcomes.push({ ok: true, text: 'Done.' });
+    for (const outcome of outcomes) {
+      turn.menu.box.appendChild(el('div', 'outcome ' + (outcome.ok ? 'done' : 'failed'), outcome.text));
+    }
+  }
+
+  /** What a restore actually did, in the words the card already uses. */
+  function restoredText(restored, deleted) {
+    const gone = typeof deleted === 'number' ? deleted : 0;
+    if (restored === 0 && gone === 0) return 'No files needed restoring.';
+    const put = 'put back ' + restored + ' file' + (restored === 1 ? '' : 's');
+    if (gone === 0) return 'Restored: ' + put + '.';
+    return 'Restored: ' + put + ', deleted ' + gone + ' file' + (gone === 1 ? '' : 's') + ' the turn created.';
+  }
+
+  /** `/rewind`: opens the control on the last turn that finished. */
+  function openLastRewind() {
+    for (let i = rewindTurns.length - 1; i >= 0; i--) {
+      const turn = rewindTurns[i];
+      if (turn.runId !== '' && turn.menu) {
+        turn.menu.menu.hidden = false;
+        turn.menu.hint.hidden = false;
+        renderRewind(turn);
+        turn.menu.button.focus();
+        return;
+      }
+    }
+    addNotice('There is no finished turn to rewind to.');
+  }
+
   // --- mode -----------------------------------------------------------------
 
   /**
@@ -2302,6 +2530,7 @@
     // "Stopped." is not a failure, but it is still something the user asked
     // for and should see once: a run that ends silently reads as a hang.
     if (failure && failure.message) addNotice(failure.message);
+    noteRun(done && done.run_id);
     showRunActions(done && done.run_id);
   }
 
@@ -2323,6 +2552,7 @@
     const line = el('div', 'msg run-end');
     line.appendChild(el('div', 'body', [word].concat(runSummary(done)).join(' · ')));
     append(line);
+    noteRun(done && done.run_id);
     showRunActions(done && done.run_id);
   }
 
@@ -2775,6 +3005,15 @@
         return;
       case 'forked':
         settleFork(msg);
+        return;
+      case 'rewindState':
+        showRewindState(msg);
+        return;
+      case 'rewound':
+        settleRewind(msg);
+        return;
+      case 'rewindOpen':
+        openLastRewind();
         return;
       case 'commands':
         catalogue = Array.isArray(msg.commands) ? msg.commands : [];

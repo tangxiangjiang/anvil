@@ -39,6 +39,7 @@ import { dedupeMentions, relativeMention } from './mentions';
 import { McpCardServer, cardServer, hasRuntime, mcpEnabled, missingMcpSources, settingSourcesFor } from './mcp';
 import { shouldReattach } from './reattach';
 import { replayOf } from './transcript';
+import { RewindAction, rewindPlan } from './rewind';
 import { CommandAction, SlashCommand, parseSlash, route } from './commands';
 import {
   ApprovalRequest,
@@ -90,6 +91,14 @@ type Inbound =
    * there is no second undo for it.
    */
   | { type: 'restoreCheckpoint'; runId: string }
+  /**
+   * "Rewind to here", from a user message. The turn is named by the run that
+   * followed it, and the branch point is the run before it — which the document
+   * knows and this side does not need to rediscover. The two halves stay
+   * separate until the user asks for both, and the confirmation covers whatever
+   * writes to disk.
+   */
+  | { type: 'rewind'; action: RewindAction; runId: string; prevRunId?: string }
   /**
    * "Show the background tasks of this window", from `/tasks` or a spawn card's
    * link. The panel is window-wide, so no session travels with it.
@@ -212,6 +221,35 @@ type Outbound =
    * endings: the new agent's id, or why the copy could not be made.
    */
   | { type: 'forked'; runId: string; agentId?: string; error?: string }
+  /**
+   * What the rewind menu may offer for a finished run. Sent for every run the
+   * tab replays or watches end, with an empty list when the run captured
+   * nothing: the menu hides the file action on an empty list, and a run it
+   * never heard about would leave the menu guessing.
+   */
+  | { type: 'rewindState'; runId: string; files: string[] }
+  /**
+   * What a rewind did, half by half. The fork and the restore are reported
+   * separately because one can succeed while the other fails, and the user has
+   * to be able to tell which happened.
+   */
+  | {
+      type: 'rewound';
+      runId: string;
+      action: RewindAction;
+      forked?: string;
+      forkError?: string;
+      restored?: number;
+      deleted?: number;
+      restoreError?: string;
+      cancelled?: boolean;
+    }
+  /**
+   * `/rewind` asks the document to open the control on its last finished turn.
+   * The runs live in the transcript, so the document is the only side that can
+   * say which one that is.
+   */
+  | { type: 'rewindOpen' }
   | { type: 'commands'; commands: SlashCommand[] }
   | { type: 'help'; commands: SlashCommand[] }
   | { type: 'mode'; mode: PermissionMode | ''; resolved: PermissionMode; source: PermissionModeSource }
@@ -720,6 +758,9 @@ export class ChatPanel implements HostListener {
       case 'forkSession':
         await this.forkSession(msg.runId);
         return;
+      case 'rewind':
+        await this.rewind(msg.action, msg.runId, msg.prevRunId);
+        return;
       case 'reviewCall':
         await this.openCallReview(msg);
         return;
@@ -1051,6 +1092,12 @@ export class ChatPanel implements HostListener {
         await this.pickResume();
         this.postState();
         return;
+      case 'rewind':
+        // The control is drawn on the message, so the document opens it there.
+        // It is the only side that knows which turn was the last one.
+        this.post({ type: 'rewindOpen' });
+        this.postState();
+        return;
       case 'clear':
         await this.clearConversation();
         return;
@@ -1160,11 +1207,26 @@ export class ChatPanel implements HostListener {
     const sessionId = this.session?.id ?? '';
     const steps = replayOf(result.entries ?? [], sessionId);
     if (steps.length === 0) return;
+    // Read once for the whole replay: the rewind menu draws its file action per
+    // run, and asking per run would be the same list again and again. A host
+    // without the method answers -32601, which is every run offering no
+    // restore rather than a replay that fails.
+    const checkpoints = new Map<string, string[]>();
+    try {
+      for (const run of await this.hub.listCheckpoints(agentId)) {
+        checkpoints.set(run.run_id, run.files.map((file) => file.path));
+      }
+    } catch (err) {
+      this.log(`no checkpoints for ${agentId}: ${(err as Error).message}`);
+    }
     for (const step of steps) {
       if (step.kind === 'user') this.post({ type: 'user', text: step.text });
       else if (step.kind === 'notice') this.post({ type: 'note', text: step.text });
-      else if (step.kind === 'runEnd') this.post({ type: 'runEnd', done: step.done });
-      else await this.postEvent(step.event);
+      else if (step.kind === 'runEnd') {
+        this.post({ type: 'runEnd', done: step.done });
+        const runId = step.done.run_id;
+        if (runId) this.post({ type: 'rewindState', runId, files: checkpoints.get(runId) ?? [] });
+      } else await this.postEvent(step.event);
     }
     if (this.dropped(result) > 0) {
       this.post({
@@ -1993,11 +2055,17 @@ export class ChatPanel implements HostListener {
     try {
       const runs = await this.hub.listCheckpoints(agentId);
       const run = runs.find((candidate) => candidate.run_id === runId);
+      const files = run ? run.files.map((file) => file.path) : [];
+      // The rewind menu is told either way: an empty list hides the file
+      // action, and a run it never heard about would leave the menu checking
+      // forever. A list with something in it also draws the run's own card.
+      this.post({ type: 'rewindState', runId, files });
       if (!run || run.files.length === 0) return;
       this.post({ type: 'checkpoint', runId, files: run.files.map((file) => file.path) });
     } catch (err) {
       // A host without the method answers -32601, which is "no checkpoints here"
       // rather than a failure worth a banner.
+      this.post({ type: 'rewindState', runId, files: [] });
       this.log(`could not read the checkpoint for ${runId}: ${(err as Error).message}`);
     }
   }
@@ -2059,6 +2127,106 @@ export class ChatPanel implements HostListener {
     } catch (err) {
       this.post({ type: 'forked', runId, error: (err as Error).message });
     }
+  }
+
+  /**
+   * Rewinds one turn: a branch before it, its files put back, or both.
+   *
+   * The two halves stay separate in the host: a fork copies stored records and
+   * touches no file, a restore writes files and changes no conversation. Asking
+   * for both, in that order, is what "go back to before this turn" means, and
+   * each half reports its own ending — one failing does not erase the other.
+   *
+   * The restore is asked of the conversation that owns the checkpoint. A fork
+   * does not copy checkpoint directories, and it does not need to: both
+   * conversations open on the same workspace root, which is where the files go
+   * back.
+   */
+  private async rewind(action: RewindAction, runId: string, prevRunId?: string): Promise<void> {
+    const agentId = this.currentAgentId();
+    if (!agentId || !runId) return;
+    const plan = rewindPlan(action, prevRunId);
+    if (!plan.fork && !plan.startOver && !plan.restore) return;
+
+    // One confirmation covers the whole action, asked before anything runs: it
+    // is the only chance to change one's mind. A fork opens a tab, and a
+    // restore has no second undo.
+    if (plan.restore) {
+      const choice = 'Rewind';
+      const answer = await vscode.window.showWarningMessage(
+        'Put this turn’s files back?',
+        {
+          modal: true,
+          detail:
+            'Every file the turn changed goes back to its content before the turn, and files ' +
+            'it created are deleted. This cannot be undone from here.',
+        },
+        choice,
+      );
+      if (answer !== choice) {
+        this.post({ type: 'rewound', runId, action, cancelled: true });
+        return;
+      }
+    }
+
+    const result: Extract<Outbound, { type: 'rewound' }> = { type: 'rewound', runId, action };
+    let cleared = false;
+    if (plan.fork) {
+      try {
+        result.forked = await this.hub.forkSession(agentId, plan.fork);
+      } catch (err) {
+        result.forkError = (err as Error).message;
+      }
+    }
+    if (plan.startOver) {
+      // Before the first turn a branch is an empty conversation. Clearing is
+      // also what takes away the transcript this result would settle — which is
+      // why the outcome is spoken as a banner below.
+      await this.clearConversation();
+      cleared = true;
+    }
+    if (plan.restore) {
+      try {
+        const restored = await this.hub.restoreCheckpoint(agentId, runId);
+        const deleted = restored.files.filter((file) => file.deleted).length;
+        result.restored = restored.files.length - deleted;
+        result.deleted = deleted;
+        // The changed-files card described a workspace that is no longer there.
+        this.changes.begin();
+        this.forgetChanges();
+      } catch (err) {
+        result.restoreError = (err as Error).message;
+      }
+    }
+    if (cleared) {
+      this.post({
+        type: 'notice',
+        level: result.restoreError ? 'error' : 'info',
+        message: this.rewindNotice(result),
+      });
+      return;
+    }
+    this.post(result);
+  }
+
+  /** What a rewind did, for the tab that was cleared out from under it. */
+  private rewindNotice(result: Extract<Outbound, { type: 'rewound' }>): string {
+    const parts = ['The turn was rewound.'];
+    parts.push(
+      result.forkError ? `The conversation could not be reset: ${result.forkError}.` : 'A new conversation started.',
+    );
+    if (result.restoreError) {
+      parts.push(`The files were not restored: ${result.restoreError}.`);
+    } else {
+      const restored = result.restored ?? 0;
+      const deleted = result.deleted ?? 0;
+      if (restored === 0 && deleted === 0) parts.push('No files needed restoring.');
+      else {
+        const put = `put back ${restored} file${restored === 1 ? '' : 's'}`;
+        parts.push(deleted > 0 ? `${put} and deleted ${deleted} the turn created.` : `${put}.`);
+      }
+    }
+    return parts.join(' ');
   }
 
   /**

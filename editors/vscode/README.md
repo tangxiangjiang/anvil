@@ -374,11 +374,20 @@ Type `/` in the composer for the catalogue. Built-ins:
 | `/plan [request]` | Switch to plan mode; anything after it is sent as the request |
 | `/model [id]` | Choose the model this conversation uses |
 | `/resume [agent id]` | Continue a past session in this workspace |
+| `/rewind` | Rewind the last turn: fork before it, put its files back, or both |
 | `/clear` | Start a new conversation |
 | `/compact` | Summarize the conversation so far; handled by the host, nothing is sent to the model. Refused while a turn is running |
 | `/tasks` | Open the background tasks panel; sends nothing to the model |
 | `/mcp` | Open the MCP manager; sends nothing to the model |
 | `/help` | List the commands |
+
+**Rewind to here** is on every user message; `/rewind` opens the same control on the last
+one. A run is one turn, and a checkpoint is taken before the turn rather than before each
+tool call, so the three choices are deliberate: fork before the turn (the conversation
+continues from the run before it, files untouched), restore this turn's files (the
+conversation is untouched), or both. The file action appears only when the host has a
+checkpoint for the run; the first message has no run before it, so its fork action starts a
+new conversation.
 
 **Anvil: Open Permission Rules** (also the **Permissions** button on the composer) opens the
 rules manager: this workspace's rules as a list of effect, tool, pattern and reason rows, plus
