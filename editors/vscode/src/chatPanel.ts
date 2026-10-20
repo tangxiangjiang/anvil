@@ -35,6 +35,8 @@ import { HostListener, HostManager, ResolvedMode } from './hostManager';
 import { HostRpcError } from './hostClient';
 import { ChatSession, SessionConfig, SessionState } from './session';
 import { PreviewDocuments } from './review';
+import { PLAN_APPROVED_PROMPT } from './plan';
+import { PlanDocuments } from './planDocument';
 import { dedupeMentions, relativeMention } from './mentions';
 import { McpCardServer, cardServer, hasRuntime, mcpEnabled, missingMcpSources, settingSourcesFor } from './mcp';
 import { shouldReattach } from './reattach';
@@ -99,6 +101,14 @@ type Inbound =
    * writes to disk.
    */
   | { type: 'rewind'; action: RewindAction; runId: string; prevRunId?: string }
+  /**
+   * A plan card's three answers. "Open" only reads; the other two settle the
+   * plan — approve returns to the mode before plan mode and sends the fixed
+   * instruction, reject stays where it is and sends nothing.
+   */
+  | { type: 'openPlan'; runId: string }
+  | { type: 'approvePlan'; runId: string }
+  | { type: 'rejectPlan'; runId: string }
   /**
    * "Show the background tasks of this window", from `/tasks` or a spawn card's
    * link. The panel is window-wide, so no session travels with it.
@@ -250,6 +260,14 @@ type Outbound =
    * say which one that is.
    */
   | { type: 'rewindOpen' }
+  /**
+   * A plan-mode turn ended with words to review. The card offers the document
+   * and the two answers; the text travels too, because the card shows nothing
+   * the transcript has not already said and the document is where it belongs.
+   */
+  | { type: 'plan'; runId: string; text: string }
+  /** What the reader decided, so the card stops offering the choice. */
+  | { type: 'planSettled'; runId: string; action: 'approve' | 'reject'; mode?: PermissionMode; error?: string }
   | { type: 'commands'; commands: SlashCommand[] }
   | { type: 'help'; commands: SlashCommand[] }
   | { type: 'mode'; mode: PermissionMode | ''; resolved: PermissionMode; source: PermissionModeSource }
@@ -320,6 +338,9 @@ type Outbound =
 
 /** Where the chosen permission mode is remembered between windows. */
 const MODE_KEY = 'anvil.permissionMode';
+
+/** How many plans a tab keeps in memory for the palette commands. */
+const PLAN_KEPT = 8;
 
 /**
  * How the modes are named to the user. The wire values are the SDK's.
@@ -454,11 +475,32 @@ export class ChatPanel implements HostListener {
    * was refused" are different things to say.
    */
   private announcedMode = '';
+  /**
+   * The mode plan was entered from, so an approval can put it back.
+   *
+   * Undefined means this tab never watched the switch — a session that opened
+   * in plan because the workspace's file says so. Approving then falls back to
+   * `ask`, the mode that writes nothing without asking, rather than guessing a
+   * looser one.
+   */
+  private modeBeforePlan: PermissionMode | undefined;
+  /**
+   * The words of the turn in flight, by paragraph, and the run they belong to.
+   *
+   * A plan is the model's prose, so the client keeps the turn's own assistant
+   * text rather than re-deriving it from the transcript. Paragraphs are split
+   * at a tool call: text on both sides of one is two blocks, and joining them
+   * with nothing would run two sentences together.
+   */
+  private planTurn: { run: string; parts: string[]; fresh: boolean } = { run: '', parts: [], fresh: true };
+  /** Plan texts by run id, with the conversation each one belongs to. */
+  private readonly planTexts = new Map<string, { agentId: string; text: string }>();
 
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly log: (line: string) => void,
     private readonly previews: PreviewDocuments,
+    private readonly plans: PlanDocuments,
     private readonly hub: Hub,
     agentId?: string,
   ) {
@@ -761,6 +803,15 @@ export class ChatPanel implements HostListener {
       case 'rewind':
         await this.rewind(msg.action, msg.runId, msg.prevRunId);
         return;
+      case 'openPlan':
+        await this.openPlan(msg.runId);
+        return;
+      case 'approvePlan':
+        await this.approvePlan(msg.runId);
+        return;
+      case 'rejectPlan':
+        this.rejectPlan(msg.runId);
+        return;
       case 'reviewCall':
         await this.openCallReview(msg);
         return;
@@ -951,9 +1002,17 @@ export class ChatPanel implements HostListener {
       this.postMode();
       return;
     }
+    // What plan mode replaced is recorded only when plan mode is entered from
+    // somewhere else. Approving a plan is then a way back rather than a guess,
+    // and a second `/plan` while already in plan mode does not overwrite the
+    // answer with `plan` itself.
+    const before = this.modeBeforePlan;
+    if (chosen === 'plan' && this.mode !== 'plan') this.modeBeforePlan = this.mode;
+    else if (chosen !== 'plan') this.modeBeforePlan = undefined;
     try {
       await this.applyOptions({ permission_mode: chosen });
     } catch (err) {
+      this.modeBeforePlan = before;
       this.post({ type: 'notice', level: 'error', message: `Could not change the mode: ${(err as Error).message}` });
       this.postMode();
       return;
@@ -1005,6 +1064,10 @@ export class ChatPanel implements HostListener {
     const session = this.session;
     if (session) await session.reset();
     await this.forgetAgent();
+    // The plans were answers about the conversation that just ended; approving
+    // one now would carry out a decision about somewhere else.
+    this.planTexts.clear();
+    this.modeBeforePlan = undefined;
     this.changes.begin();
     this.forgetChanges();
     this.post({ type: 'reset' });
@@ -1903,6 +1966,11 @@ export class ChatPanel implements HostListener {
   // --- HostListener ----------------------------------------------------------
 
   onEvent = (event: HostEvent): void => {
+    // The plan this turn is writing is kept as it arrives; a plan-mode answer
+    // must still be readable after a reload, and the transcript throws its runs
+    // away. It is not sent until the turn ends, so a reader is never handed half
+    // a plan dressed as the whole one.
+    this.trackPlanText(event);
     // The tool call is the last moment the file it names still holds its old
     // contents, and it arrives whether or not the call is gated — which is what
     // makes the changed-files list work in accept_edits and bypass too. The
@@ -1970,6 +2038,7 @@ export class ChatPanel implements HostListener {
 
   onDone = (done: DoneParams, failure: RunFailure): void => {
     this.post({ type: 'done', done, failure });
+    this.planFinished(done.run_id);
     void this.reportChanges(done.run_id);
     void this.reportCheckpoint(done.run_id);
     // The turn changed the stored record — its run count, its status, its
@@ -2227,6 +2296,132 @@ export class ChatPanel implements HostListener {
       }
     }
     return parts.join(' ');
+  }
+
+  // --- plans ------------------------------------------------------------------
+
+  /**
+   * Keeps the turn's own words as they arrive.
+   *
+   * Only the session's agent writes the answer: a child's steps arrive with a
+   * `parent_tool_call_id`, and its words belong to a tool call rather than to
+   * the plan. A tool call also ends the paragraph before it, so a plan whose
+   * report follows an inspection reads as two blocks rather than one run-on
+   * line.
+   */
+  private trackPlanText(event: HostEvent): void {
+    if (event.parent_tool_call_id) return;
+    if (event.type === 'assistant') {
+      if (event.run_id !== this.planTurn.run) {
+        this.planTurn = { run: event.run_id, parts: [], fresh: true };
+      }
+      const text = event.text ?? '';
+      if (this.planTurn.fresh) this.planTurn.parts.push(text);
+      else this.planTurn.parts[this.planTurn.parts.length - 1] += text;
+      this.planTurn.fresh = false;
+      return;
+    }
+    if (event.type === 'tool_call') this.planTurn.fresh = true;
+  }
+
+  /**
+   * Turns a finished plan-mode turn into something that can be reviewed.
+   *
+   * The mode is read now rather than remembered per event: a plan is whatever
+   * was written while plan mode was in force, and the turn resolving to plan is
+   * the same fact the host acted on.
+   */
+  private planFinished(runId: string): void {
+    const text =
+      this.planTurn.run === runId
+        ? this.planTurn.parts
+            .map((part) => part.trim())
+            .filter((part) => part !== '')
+            .join('\n\n')
+        : '';
+    this.planTurn = { run: '', parts: [], fresh: true };
+    const mode = this.resolvedMode?.mode ?? this.mode;
+    const agentId = this.currentAgentId();
+    // The conversation is part of the plan's identity: a tab can move to
+    // another agent, and a plan approved into a conversation it did not come
+    // from would carry out a decision about somewhere else.
+    if (text === '' || mode !== 'plan' || agentId === undefined) return;
+    this.planTexts.set(runId, { agentId, text });
+    if (this.planTexts.size > PLAN_KEPT) {
+      const oldest = this.planTexts.keys().next().value;
+      if (oldest !== undefined) this.planTexts.delete(oldest);
+    }
+    this.post({ type: 'plan', runId, text });
+  }
+
+  /** Opens a plan beside the conversation, read-only. */
+  async openPlan(runId: string): Promise<void> {
+    const plan = this.planTexts.get(runId);
+    if (!plan) {
+      this.post({ type: 'notice', level: 'warn', message: 'That plan is no longer held by this tab.' });
+      return;
+    }
+    await this.plans.open(plan.agentId, runId, plan.text);
+  }
+
+  /**
+   * Approves a plan by leaving plan mode and saying so.
+   *
+   * The order is the promise: the mode changes first, so the write tools are
+   * available before anything asks to use them. The turn then runs from the
+   * plan already in the history, under the one fixed sentence above.
+   */
+  async approvePlan(runId: string): Promise<void> {
+    const plan = this.planTexts.get(runId);
+    if (!plan) {
+      this.post({ type: 'notice', level: 'warn', message: 'That plan is no longer held by this tab.' });
+      return;
+    }
+    if (plan.agentId !== this.currentAgentId()) {
+      this.post({ type: 'notice', level: 'warn', message: 'That plan belongs to another conversation.' });
+      return;
+    }
+    const back = this.modeBeforePlan ?? 'ask';
+    try {
+      await this.applyOptions({ permission_mode: back });
+    } catch (err) {
+      const message = `Could not leave plan mode: ${(err as Error).message}`;
+      this.post({ type: 'planSettled', runId, action: 'approve', error: message });
+      this.post({ type: 'notice', level: 'error', message });
+      return;
+    }
+    this.mode = back;
+    this.modeBeforePlan = undefined;
+    await this.context.workspaceState.update(MODE_KEY, back);
+    // Settled before the turn starts: an approval pressed twice quickly must
+    // not send the instruction twice, and the plan is now history either way.
+    this.planTexts.delete(runId);
+    this.postMode();
+    this.postState();
+    this.post({ type: 'planSettled', runId, action: 'approve', mode: back });
+    await this.sendQuestion(PLAN_APPROVED_PROMPT, [], []);
+  }
+
+  /**
+   * Keeps the plan open and sends nothing.
+   *
+   * Plan mode stays in force, so the person can revise the question and the
+   * next answer is another plan. Focus returns to the composer for exactly that.
+   */
+  rejectPlan(runId: string): void {
+    if (!this.planTexts.has(runId)) return;
+    this.post({ type: 'planSettled', runId, action: 'reject' });
+    this.post({ type: 'focus' });
+  }
+
+  /** The newest plan this tab still holds, for the palette commands. */
+  latestPlanRun(): string | undefined {
+    const agentId = this.currentAgentId();
+    let latest: string | undefined;
+    for (const [runId, plan] of this.planTexts) {
+      if (plan.agentId === agentId) latest = runId;
+    }
+    return latest;
   }
 
   /**

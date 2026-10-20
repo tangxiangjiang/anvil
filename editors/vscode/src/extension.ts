@@ -11,6 +11,8 @@
 import * as vscode from 'vscode';
 import { ChatPanel } from './chatPanel';
 import { Hub } from './hub';
+import { PLAN_SCHEME, planTarget } from './plan';
+import { PlanDocuments } from './planDocument';
 import { PreviewDocuments } from './review';
 import { SessionInfo } from './protocol';
 import { SessionNode, SessionRow } from './sessionList';
@@ -37,7 +39,13 @@ export function activate(context: vscode.ExtensionContext): void {
   const previews = new PreviewDocuments();
   context.subscriptions.push(previews);
 
-  const hub = new Hub(context, log, previews);
+  // The same shape for plans, but the content is only ever read: there is no
+  // file system provider for `anvil-plan:`, so the document is a view of text
+  // this extension holds rather than a file anything can write.
+  const plans = new PlanDocuments();
+  context.subscriptions.push(plans);
+
+  const hub = new Hub(context, log, previews, plans);
   active = hub;
 
   // Registered before anything can await: VS Code hands a restored panel to the
@@ -97,6 +105,39 @@ export function activate(context: vscode.ExtensionContext): void {
     // mcp.json button takes this path for whichever layer it is looking at.
     vscode.commands.registerCommand('anvil.openMcpFile', async () => {
       await hub.openMcpFile();
+    }),
+
+    // Plan review from the palette. The card is the usual way in; these exist
+    // so that the same three choices are reachable when the plan document is
+    // the active editor and the webview is not on screen.
+    vscode.commands.registerCommand('anvil.openPlan', async () => {
+      const target = currentPlan(hub);
+      if (!target) {
+        void vscode.window.showInformationMessage('There is no plan to open.');
+        return;
+      }
+      await target.panel.openPlan(target.runId);
+    }),
+
+    vscode.commands.registerCommand('anvil.approvePlan', async () => {
+      const target = currentPlan(hub);
+      if (!target) {
+        void vscode.window.showInformationMessage('There is no plan to approve.');
+        return;
+      }
+      await target.panel.approvePlan(target.runId);
+    }),
+
+    vscode.commands.registerCommand('anvil.rejectPlan', () => {
+      const target = currentPlan(hub);
+      if (!target) {
+        void vscode.window.showInformationMessage('There is no plan to reject.');
+        return;
+      }
+      // Focus is asked of the composer, so the tab has to be visible for the
+      // refusal to mean anything. The plan document was the active editor.
+      target.panel.reveal();
+      target.panel.rejectPlan(target.runId);
     }),
 
     // Built here rather than in `activate`'s body so its lifetime is the
@@ -352,4 +393,24 @@ function sessionRowOf(arg: unknown): SessionRow | undefined {
 
 function setContext(key: string, value: unknown): Thenable<unknown> {
   return vscode.commands.executeCommand('setContext', key, value);
+}
+
+/**
+ * Which plan a palette command means.
+ *
+ * A plan document is the active editor as soon as it opens, and its URI names
+ * both the conversation and the run, so that is the precise answer. Everywhere
+ * else — the composer, another tab, an unrelated file — the command means the
+ * front tab's newest plan, which is the one the person was just shown.
+ */
+function currentPlan(hub: Hub): { panel: ChatPanel; runId: string } | undefined {
+  const uri = vscode.window.activeTextEditor?.document.uri;
+  if (uri?.scheme === PLAN_SCHEME) {
+    const target = planTarget(uri.query);
+    const panel = target ? hub.findByAgent(target.agentId) : undefined;
+    if (target && panel) return { panel, runId: target.runId };
+  }
+  const panel = hub.activePanel();
+  const runId = panel?.latestPlanRun();
+  return panel && runId ? { panel, runId } : undefined;
 }

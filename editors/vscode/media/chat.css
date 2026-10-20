@@ -1233,6 +1233,47 @@ kbd {
   color: var(--vscode-errorForeground, #f85149);
 }
 
+/* --- plan review ---------------------------------------------------------- */
+
+/*
+ * The card under a plan-mode answer. The plan itself is the bubble above it;
+ * this is only the three decisions and the sentence that says what the
+ * approving one costs.
+ */
+.plan {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 6px 0 12px 12px;
+  padding: 8px 12px;
+  border-left: 3px solid var(--vscode-focusBorder);
+  background: var(--vscode-textBlockQuote-background, rgba(127, 127, 127, 0.1));
+}
+
+.plan-title {
+  font-weight: 600;
+}
+
+.plan-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.plan-note {
+  font-size: 0.85em;
+  color: var(--vscode-descriptionForeground);
+}
+
+.plan-note.done {
+  color: var(--vscode-gitDecoration-addedResourceForeground, #3fb950);
+}
+
+.plan-note.failed {
+  color: var(--vscode-errorForeground, #f85149);
+}
+
 /* --- mode select ---------------------------------------------------------- */
 
 /*

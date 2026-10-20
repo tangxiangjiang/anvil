@@ -165,6 +165,21 @@
         "command": "anvil.openMcpFile",
         "title": "Anvil: Open mcp.json",
         "category": "Anvil"
+      },
+      {
+        "command": "anvil.openPlan",
+        "title": "Anvil: Open Plan",
+        "category": "Anvil"
+      },
+      {
+        "command": "anvil.approvePlan",
+        "title": "Anvil: Approve Plan and Run",
+        "category": "Anvil"
+      },
+      {
+        "command": "anvil.rejectPlan",
+        "title": "Anvil: Keep Planning",
+        "category": "Anvil"
       }
     ],
     "menus": {

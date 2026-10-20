@@ -389,6 +389,17 @@ conversation is untouched), or both. The file action appears only when the host 
 checkpoint for the run; the first message has no run before it, so its fork action starts a
 new conversation.
 
+**A plan is a document.** A plan-mode answer ends with a card offering **Open plan**,
+**Approve and run**, and **Keep planning**. *Open plan* (or **Anvil: Open Plan**) opens the
+turn's text in a read-only `anvil-plan:` document beside the conversation — there is no file
+system provider behind the scheme, so nothing in it can be edited, saved, or made to run.
+*Approve and run* (or **Anvil: Approve Plan and Run**) switches back to the mode that was in
+force before plan mode and sends one sentence, `The plan is approved. Carry it out.`;
+*Keep planning* (or **Anvil: Keep Planning**) stays in plan mode, sends nothing, and returns
+focus to the composer. The three commands are also in the palette, where they act on the plan
+document in front of you or on the front tab's newest plan. The approval is a new turn, not a
+continuation of the plan turn, so it appears in the transcript like any other.
+
 **Anvil: Open Permission Rules** (also the **Permissions** button on the composer) opens the
 rules manager: this workspace's rules as a list of effect, tool, pattern and reason rows, plus
 the mode new sessions start in. Save sends the whole list to the host, which compiles it with

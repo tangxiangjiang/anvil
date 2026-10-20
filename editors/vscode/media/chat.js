@@ -138,6 +138,12 @@
    */
   const forkBlocks = new Map();
   /**
+   * Plan cards by run id, so an approval or a refusal can settle the card it
+   * belongs to. A plan outlives its turn only as text in the extension; the
+   * card is transcript furniture and goes when the transcript does.
+   */
+  const planCards = new Map();
+  /**
    * One anchor per user message, in transcript order: the run that followed it
    * once that run has ended, and the control it owns.
    *
@@ -241,6 +247,7 @@
     approvals.clear();
     checkpointBlocks.clear();
     forkBlocks.clear();
+    planCards.clear();
     rewindTurns.length = 0;
     rewindStates.clear();
     mentions = [];
@@ -1949,6 +1956,85 @@
     addNotice('There is no finished turn to rewind to.');
   }
 
+  // --- plan review ----------------------------------------------------------
+
+  /**
+   * The plan a plan-mode turn produced.
+   *
+   * The card is the choices and nothing else: the plan's text is the assistant
+   * bubble above it, and a second copy here would be a copy that drifts. "Open
+   * plan" is what puts it in a document; approving is a mode change plus one
+   * sentence, both of which the extension does because neither is this
+   * document's to do.
+   */
+  function showPlan(msg) {
+    const runId = msg.runId;
+    if (typeof runId !== 'string' || runId === '' || planCards.has(runId)) return;
+    const card = el('div', 'plan');
+    card.appendChild(el('div', 'plan-title', 'Plan ready'));
+    const actions = el('div', 'plan-actions');
+    const open = el('button', 'ghost', 'Open plan');
+    open.type = 'button';
+    open.title = 'Open this plan in a read-only document beside the conversation';
+    const approve = el('button', 'primary', 'Approve and run');
+    approve.type = 'button';
+    approve.title = 'Leave plan mode and carry the plan out';
+    const reject = el('button', 'ghost', 'Keep planning');
+    reject.type = 'button';
+    reject.title = 'Stay in plan mode and revise the request';
+    open.addEventListener('click', () => {
+      vscode.postMessage({ type: 'openPlan', runId: runId });
+    });
+    approve.addEventListener('click', () => {
+      if (approve.disabled) return;
+      approve.disabled = true;
+      approve.textContent = 'Approving…';
+      vscode.postMessage({ type: 'approvePlan', runId: runId });
+    });
+    reject.addEventListener('click', () => {
+      if (reject.disabled) return;
+      vscode.postMessage({ type: 'rejectPlan', runId: runId });
+    });
+    actions.appendChild(open);
+    actions.appendChild(approve);
+    actions.appendChild(reject);
+    card.appendChild(actions);
+    // Says what approval costs before the button is pressed rather than after:
+    // it is the mode that withheld the write tools that is being left.
+    const note = el('div', 'plan-note', 'Approving leaves plan mode; keeping the plan sends nothing.');
+    card.appendChild(note);
+    planCards.set(runId, { card: card, approve: approve, reject: reject, note: note });
+    append(card);
+  }
+
+  /** The answer to one of the card's two decisions. */
+  function settlePlan(msg) {
+    const entry = planCards.get(msg.runId);
+    if (!entry) return;
+    if (typeof msg.error === 'string' && msg.error !== '') {
+      entry.approve.disabled = false;
+      entry.approve.textContent = 'Approve and run';
+      entry.note.className = 'plan-note failed';
+      entry.note.textContent = 'Not approved: ' + msg.error;
+      return;
+    }
+    entry.note.className = 'plan-note done';
+    if (msg.action === 'approve') {
+      entry.approve.disabled = true;
+      entry.approve.textContent = 'Approved';
+      entry.reject.disabled = true;
+      const mode = typeof msg.mode === 'string' ? msg.mode : '';
+      entry.note.textContent =
+        mode === ''
+          ? 'Approved. Carrying the plan out.'
+          : 'Approved in ' + (modeLabels[mode] || mode) + ' mode. Carrying the plan out.';
+      return;
+    }
+    entry.approve.disabled = true;
+    entry.approve.textContent = 'Not approved';
+    entry.note.textContent = 'Kept in plan mode. Revise the request and send it again.';
+  }
+
   // --- mode -----------------------------------------------------------------
 
   /**
@@ -3014,6 +3100,12 @@
         return;
       case 'rewindOpen':
         openLastRewind();
+        return;
+      case 'plan':
+        showPlan(msg);
+        return;
+      case 'planSettled':
+        settlePlan(msg);
         return;
       case 'commands':
         catalogue = Array.isArray(msg.commands) ? msg.commands : [];

@@ -24,6 +24,7 @@ import { HostRpcError } from './hostClient';
 import { McpSettings } from './mcp';
 import { McpPanels } from './mcpPanel';
 import { PermissionsPanels } from './permissionsPanel';
+import { PlanDocuments } from './planDocument';
 import { TaskRow, TasksPanels } from './tasksPanel';
 import {
   CheckpointRestoreResult,
@@ -104,6 +105,10 @@ export class Hub {
     private readonly context: vscode.ExtensionContext,
     private readonly log: (line: string) => void,
     private readonly previews: PreviewDocuments,
+    // One provider for the window: a plan document is addressed by conversation
+    // and run, so two tabs reviewing plans get two documents rather than a
+    // second registry.
+    private readonly plans: PlanDocuments,
   ) {
     // A crash or a restart ends every session this window holds. Each panel
     // drops its handle and opens a new one for its agent on the next prompt;
@@ -139,7 +144,7 @@ export class Hub {
    * construction and `open()` are separate.
    */
   createPanel(agentId?: string): ChatPanel {
-    const panel = new ChatPanel(this.context, this.log, this.previews, this, agentId);
+    const panel = new ChatPanel(this.context, this.log, this.previews, this.plans, this, agentId);
     this.panels.add(panel);
     this.tabsChanged.fire();
     return panel;

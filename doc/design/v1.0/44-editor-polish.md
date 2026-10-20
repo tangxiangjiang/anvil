@@ -112,6 +112,16 @@ switching modes by hand and typing.
   and returns focus to the composer.
 - The document cannot trigger execution; it is text plus client-side commands.
 
+**What "the assistant's text" means.** There is no single message to quote: a plan-mode turn
+may speak, call a read-only tool, and speak again. The client keeps the turn's own `assistant`
+events — a child agent's steps arrive with a `parent_tool_call_id` and are not the plan —
+splits them into paragraphs at each tool call, and joins them with blank lines. A card under
+the turn then offers *Open plan*, *Approve and run* and *Keep planning*, and the same three
+choices are palette commands, so a plan can still be acted on when the document is the active
+editor. The plan is held together with the conversation that produced it: a tab can move to
+another agent, and approving a plan into a conversation it did not come from would carry out a
+decision about somewhere else.
+
 The host is unchanged. A structured plan (steps, files, acceptance) would need a new turn
 contract and is deliberately not attempted here; the plan is prose because the model produces
 prose.
