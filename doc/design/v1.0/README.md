@@ -51,6 +51,10 @@ This tree is the **design cutoff** for 0.1–0.40 delivery. Later product lines 
 
 Parent index: [`doc/design/README.md`](../README.md).
 
+**0.46 anvil-web Delivery polish** has no design chapter of its own: it polishes surfaces that
+[33](33-delivery-ui.md) defines, under the shell contracts in [25](25-web-admin.md). See
+[m_0.46_web_polish.md](../../roadmaps/v1.0/m_0.46_web_polish.md).
+
 ## Relation to roadmaps
 
 - Design describes **what** and **why** for this cutoff.
