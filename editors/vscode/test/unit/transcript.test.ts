@@ -82,6 +82,52 @@ test('a stored conversation replays oldest first, in the shapes the tab draws', 
   assert.equal(end.done.session_id, 's1');
 });
 
+test('a result whose call fell outside the window gets the row it should have had', () => {
+  // A cap that lands inside a run leaves a result with no call before it. The
+  // renderer has no card to draw it into, and an error block is the wrong
+  // shape: the model got this result and continued. The replay synthesizes the
+  // row from the only part of the call the store kept, its name.
+  const steps = replayOf(
+    [
+      { kind: 'message', run_id: 'r1', role: 'tool', tool_call_id: 't9', name: 'read_file', content: 'contents' },
+    ],
+    's1',
+  );
+  assert.deepEqual(kinds(steps), ['event', 'event']);
+  const call = steps[0];
+  assert.ok(call.kind === 'event');
+  assert.equal(call.event.type, 'tool_call');
+  assert.equal(call.event.tool_call_id, 't9');
+  assert.equal(call.event.name, 'read_file');
+  // No arguments: the store keeps the result's tool name, not the call's JSON,
+  // and an invented IN would claim more than it holds.
+  assert.equal(call.event.args, undefined);
+  const result = steps[1];
+  assert.ok(result.kind === 'event');
+  assert.equal(result.event.type, 'tool_result');
+  assert.equal(result.event.tool_call_id, 't9');
+});
+
+test('a result whose call is already in the replay does not get a second row', () => {
+  const steps = replayOf(
+    [
+      {
+        kind: 'message',
+        run_id: 'r1',
+        role: 'assistant',
+        tool_calls: [{ id: 't1', name: 'shell', args: { command: 'ls' } }],
+      },
+      { kind: 'message', run_id: 'r1', role: 'tool', tool_call_id: 't1', name: 'shell', content: 'a' },
+    ],
+    's1',
+  );
+  assert.equal(steps.filter((step) => step.kind === 'event' && step.event.type === 'tool_call').length, 1);
+  // The call's own arguments survive; only a missing call is synthesized.
+  const call = steps[0];
+  assert.ok(call.kind === 'event');
+  assert.deepEqual(call.event.args, { command: 'ls' });
+});
+
 test('the loop’s own notes to the model are not replayed as the user’s turns', () => {
   // The store keeps these under `role:"user"`, so the only thing that tells them
   // apart is where they sit: a run opens with the one message that started it,

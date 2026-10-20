@@ -173,21 +173,35 @@ func transcriptFromRecords(recs []store.Record, limit int) TranscriptResult {
 		}
 	}
 
+	all := entries
 	dropped := 0
 	if len(entries) > limit {
 		dropped = len(entries) - limit
-		entries = entries[dropped:]
 	}
 	// Start where a run starts. A cap lands wherever the count falls, and a
 	// transcript that opened with a tool's result would show an OUT whose card
 	// was never drawn — or the tail of a reply attributed to a question that
 	// scrolled off. A run begins with the user turn that started it, so the
 	// window is moved forward to the first one it contains.
-	if first := firstUserTurn(entries); first > 0 {
+	window := all[dropped:]
+	if first := firstUserTurn(window); first > 0 {
 		dropped += first
-		entries = entries[first:]
+	} else if len(window) > 0 && !isUserTurn(window[0]) {
+		// The window holds no user turn at all: the cap landed inside one long
+		// run. Move back to the turn that opened it rather than opening on a
+		// result whose call was cut. One turn may then be longer than the cap,
+		// which is the honest trade: the cap bounds a render, and a render that
+		// starts mid-run is wrong rather than merely large.
+		if start := lastUserTurnBefore(all, dropped); start >= 0 {
+			dropped = start
+		}
 	}
-	return TranscriptResult{Entries: entries, Dropped: dropped}
+	return TranscriptResult{Entries: all[dropped:], Dropped: dropped}
+}
+
+// isUserTurn reports whether an entry is the message that starts a run.
+func isUserTurn(entry TranscriptEntry) bool {
+	return entry.Kind == TranscriptMessage && entry.Role == "user"
 }
 
 // firstUserTurn is the index of the first entry that begins a run, or 0 when
@@ -195,9 +209,24 @@ func transcriptFromRecords(recs []store.Record, limit int) TranscriptResult {
 // returning what it has beats returning nothing.
 func firstUserTurn(entries []TranscriptEntry) int {
 	for i, entry := range entries {
-		if entry.Kind == TranscriptMessage && entry.Role == "user" {
+		if isUserTurn(entry) {
 			return i
 		}
 	}
 	return 0
+}
+
+// lastUserTurnBefore is the index of the newest user turn before at, or -1 when
+// the store has none. It is what extends a window that landed inside a run back
+// to the message that opened it.
+func lastUserTurnBefore(entries []TranscriptEntry, at int) int {
+	if at > len(entries) {
+		at = len(entries)
+	}
+	for i := at - 1; i >= 0; i-- {
+		if isUserTurn(entries[i]) {
+			return i
+		}
+	}
+	return -1
 }

@@ -1609,12 +1609,21 @@
   }
 
   function addToolResult(event) {
-    const card = event.tool_call_id ? toolCards.get(event.tool_call_id) : undefined;
+    let card = event.tool_call_id ? toolCards.get(event.tool_call_id) : undefined;
     if (!card) {
-      // A result without a card (a reloaded webview, a dropped call): show it
-      // rather than dropping what the model just saw.
-      addNotice(`tool result: ${event.content || ''}`);
-      return;
+      if (!event.tool_call_id) {
+        // A result that names no call cannot be attached to one. It is still
+        // something the model saw, so it is said in one muted line with the
+        // output behind a caption — never printed as an error.
+        addOrphanResult(event);
+        return;
+      }
+      // A result whose call is not on screen (a window that opened mid-run, a
+      // reloaded webview): draw the row it should have had, then settle it
+      // through the normal path. The result is information, not a failure.
+      addToolCall({ ...event, type: 'tool_call', args: undefined }, false);
+      card = toolCards.get(event.tool_call_id);
+      if (!card) return;
     }
     if (event.tool_call_id && spawnScopes.has(event.tool_call_id)) {
       addSpawnResult(card, event);
@@ -1672,18 +1681,16 @@
   }
 
   /**
-   * The small grey line under a finished row that opens the whole result.
+   * The caption a result offers: small grey text that opens the whole output in
+   * a tab. Null when there is nothing to show.
    *
-   * It is a sibling of the `<details>`, not a child: a folded details hides
-   * everything but its summary, and this line has to be readable while the row
-   * is closed. The rail pass treats it as part of the reply, so the line does
-   * not stop around it.
+   * It is a button rather than a link so following it never toggles a folded
+   * row, and the text is the count rather than the output so a card stays one
+   * line. One builder for the two places a result can land.
    */
-  function addOutputLink(card, event, content) {
+  function outputNote(name, event, content) {
     const count = lineCount(content);
-    if (count === 0) return;
-    const label = card.querySelector('.name');
-    const name = label ? label.textContent.trim() : 'Tool';
+    if (count === 0) return null;
     const note = el(
       'button',
       'output-link',
@@ -1699,8 +1706,41 @@
         text: content,
       }),
     );
+    return note;
+  }
+
+  /**
+   * The caption under a settled row.
+   *
+   * It is a sibling of the `<details>`, not a child: a folded details hides
+   * everything but its summary, and this line has to be readable while the row
+   * is closed. The rail pass treats it as part of the reply, so the line does
+   * not stop around it.
+   */
+  function addOutputLink(card, event, content) {
+    const label = card.querySelector('.name');
+    const note = outputNote(label ? label.textContent.trim() : 'Tool', event, content);
+    if (!note) return;
     card.parentNode.insertBefore(note, card.nextSibling);
     syncRail(card.parentElement);
+  }
+
+  /**
+   * A result that names no call at all.
+   *
+   * The host always sends an id, so this is defensive: without one there is no
+   * row to draw, and the old fallback printed the whole result in the error
+   * colour. The block says what came back and leaves the text behind the usual
+   * caption.
+   */
+  function addOrphanResult(event) {
+    const name = toolTitle(event.name);
+    const wrap = el('div', 'msg result-note');
+    wrap.appendChild(el('div', 'body', `${name} returned output, but its call is not in this transcript.`));
+    const note = outputNote(name, event, event.content || '');
+    if (note) wrap.appendChild(note);
+    append(wrap);
+    endRound();
   }
 
   /** A button in a spawn card's action row. */

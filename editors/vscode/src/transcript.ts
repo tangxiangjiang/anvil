@@ -53,6 +53,10 @@ export function replayOf(entries: TranscriptEntry[], sessionId = ''): ReplayStep
   // it. A run end puts it back, which is what makes this work for a store whose
   // records carry no run id.
   let awaitingUser = true;
+  // The calls already emitted. A result whose call is not here — the window
+  // opened mid-run, or a call was cut — gets the row it should have had, so the
+  // renderer never has to show a result with nothing to attach it to.
+  const seenCalls = new Set<string>();
 
   for (const entry of entries) {
     const runId = entry.run_id ?? '';
@@ -117,6 +121,7 @@ export function replayOf(entries: TranscriptEntry[], sessionId = ''): ReplayStep
             args: call.args,
           },
         });
+        if (call.id) seenCalls.add(call.id);
         // A checklist has no record of its own: it is an ordinary tool call,
         // and the arguments are the whole list. Synthesising the live `todo`
         // event here gives the webview one renderer for both paths. A call
@@ -137,6 +142,23 @@ export function replayOf(entries: TranscriptEntry[], sessionId = ''): ReplayStep
     }
 
     if (entry.role === 'tool') {
+      // The store keeps the result's tool name but not the call's arguments, so
+      // a synthesized row says what ran and leaves IN empty. Emitting the call
+      // here rather than in the renderer keeps one path: a replayed result is
+      // drawn by the same code as a live one.
+      if (entry.tool_call_id && !seenCalls.has(entry.tool_call_id)) {
+        steps.push({
+          kind: 'event',
+          event: {
+            session_id: sessionId,
+            run_id: runId,
+            type: 'tool_call',
+            tool_call_id: entry.tool_call_id,
+            name: entry.name ?? '',
+          },
+        });
+        seenCalls.add(entry.tool_call_id);
+      }
       steps.push({
         kind: 'event',
         event: {

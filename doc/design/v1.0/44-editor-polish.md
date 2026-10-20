@@ -296,17 +296,20 @@ which is how the extension already degrades (`runtime`, `permission_mode_source`
 | [p_0.47.12](../../roadmaps/v1.0/m_0.47/p_0.47.12.md) | Dot markers, more air, a configurable chat text size |
 | [p_0.47.13](../../roadmaps/v1.0/m_0.47/p_0.47.13.md) | A step rail, coloured operations, human tool titles and file links |
 | [p_0.47.14](../../roadmaps/v1.0/m_0.47/p_0.47.14.md) | One rail per reply, a folded Thought, tool output in a read-only tab |
+| [p_0.47.15](../../roadmaps/v1.0/m_0.47/p_0.47.15.md) | A replay window that starts at a turn, and a result that draws its own row |
+| [p_0.47.16](../../roadmaps/v1.0/m_0.47/p_0.47.16.md) | Moderate density, coloured state words, larger dots, a framed pane, a summary ending |
 
-0.47.9–0.47.14 were written after the milestone was accepted. Their findings came from the
+0.47.9–0.47.16 were written after the milestone was accepted. Their findings came from the
 first real use of the panel, not from a test: a capability that existed and was never turned
 on, an error that only reached the log, a block with no way out — and then a transcript that
 was tiring to read, followed by four manager panels that each declared their own copy of the
 same document chrome, and finally a row marker, a spacing and a text size that the reader
 named directly, and then the rail, operation colour and human names that the same reader
 recognised from another editor, and then the reply-wide rail, the folded Thought and the
-output tab that the same reader asked of the first rail. The lesson is recorded here rather
-than in a commit message — the manual passes the earlier phases wrote down as "still worth
-doing" are the ones that would have found all of these.
+output tab that the same reader asked of the first rail, and then a stored conversation that
+opened on a result whose call the window had cut. The lesson is recorded here rather than in
+a commit message — the manual passes the earlier phases wrote down as "still worth doing" are
+the ones that would have found all of these.
 
 ## 15. The visual grammar after use
 
@@ -414,3 +417,26 @@ included. §17 records that unit and the two things that hang from it.
   can edit it. The suffix is a hash of the tool call id and the URI carries the id itself, so
   a second click reveals the same tab. The row's OUT pane keeps its display cap and its
   "show all" button; the tab is where the rest is read.
+
+## 18. A replay starts at a turn
+
+p_0.47.15 is the first correction to the replay itself rather than to how a block looks. Two
+properties of a stored conversation met a reader at once.
+
+- **A window is moved to a turn, not to a count.** The host keeps the newest 200 entries and
+  moves forward to the first user turn in that window. A window with no user turn at all — a
+  single long run — used to stay where the cap fell, so the transcript opened with an OUT
+  whose call was never drawn. The window now moves back to the user turn that opened the run.
+  A run longer than the cap is shown whole: the cap bounds a render, and a render that starts
+  mid-run is wrong rather than merely large.
+- **A result is information, not an error.** The renderer's fallback for a result with no
+  card was `addNotice`, which prints the text in the failure colour. A result the model
+  already acted on did not fail. The replay now synthesizes the call that the window cut,
+  from the one part of it the store keeps — the tool's name — and the live renderer draws
+  the same row before settling it. The synthesized call carries no arguments because the
+  store has none; an empty IN is what is known. A result with no id at all gets one muted
+  line and the usual output caption.
+
+The shape that makes this work is the replay's own: it emits events, never markup, so a
+synthesized call and a stored one are drawn by one renderer, and a fix here is a fix for both
+paths.

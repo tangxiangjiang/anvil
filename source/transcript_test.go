@@ -170,6 +170,20 @@ func TestTranscriptCapKeepsTheNewestRun(t *testing.T) {
 		t.Fatalf("window ends on %+v", e)
 	}
 
+	// A cap that lands inside run two, with no user turn in the window at all:
+	// the window moves back to the turn that opened the run rather than opening
+	// on the assistant's reply. The extra entries are reported as dropped.
+	got, err = LoadTranscript(ctx, id, TranscriptOptions{Local: LocalOptions{CWD: dir}, Limit: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Entries) != 3 || got.Dropped != 5 {
+		t.Fatalf("entries=%d dropped=%d %+v", len(got.Entries), got.Dropped, got.Entries)
+	}
+	if e := got.Entries[0]; e.Role != "user" || e.Content != "second" {
+		t.Fatalf("window opens on %+v", e)
+	}
+
 	// A cap that already lands on the boundary reports the excess and no more.
 	got, err = LoadTranscript(ctx, id, TranscriptOptions{Local: LocalOptions{CWD: dir}, Limit: 3})
 	if err != nil {
@@ -186,6 +200,42 @@ func TestTranscriptCapKeepsTheNewestRun(t *testing.T) {
 	}
 	if len(got.Entries) != 8 || got.Dropped != 0 {
 		t.Fatalf("entries=%d dropped=%d", len(got.Entries), got.Dropped)
+	}
+}
+
+// A store with no user turn at all has no boundary to move to, so the window is
+// what it would have been: the cap's tail. Returning it beats returning nothing,
+// and moving in either direction would invent a start the store does not have.
+func TestTranscriptCapWithoutAUserTurnKeepsTheTail(t *testing.T) {
+	dir := t.TempDir()
+	a, err := Create(context.Background(), Options{
+		APIKey: "k", Model: Model{ID: "m"}, Local: LocalOptions{CWD: dir},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	id := a.AgentID()
+
+	for _, role := range []string{"tool", "assistant"} {
+		if err := a.store.Append(id, store.Record{
+			Type: store.TypeMessage, RunID: "r1", Role: role, Content: role,
+			Time: time.Now().UTC(),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := LoadTranscript(context.Background(), id, TranscriptOptions{
+		Local: LocalOptions{CWD: dir}, Limit: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Entries) != 1 || got.Dropped != 1 {
+		t.Fatalf("entries=%d dropped=%d", len(got.Entries), got.Dropped)
+	}
+	if e := got.Entries[0]; e.Role != "assistant" {
+		t.Fatalf("window opens on %+v", e)
 	}
 }
 

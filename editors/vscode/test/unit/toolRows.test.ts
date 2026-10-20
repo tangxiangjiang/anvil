@@ -158,16 +158,19 @@ test('a result offers its whole output in a tab', () => {
   assert.match(count, /replace\(\/\\r\?\\n\+\$\/, ''\)/);
   assert.match(count, /split\(\/\\r\?\\n\/\)\.length/);
 
-  const link = bodyOf(CHAT_JS, 'addOutputLink');
+  const link = bodyOf(CHAT_JS, 'outputNote');
   assert.match(link, /const count = lineCount\(content\)/);
   assert.match(link, /count === 1 \? '1 line of output' : count \+ ' lines of output'/);
-  // It is a sibling of the details, not a child: a folded row hides its
-  // children, and this caption has to be readable while the row is closed.
-  assert.match(link, /card\.parentNode\.insertBefore\(note, card\.nextSibling\)/);
   assert.match(link, /type: 'openOutput'/);
   assert.match(link, /id: event\.tool_call_id/);
   assert.match(link, /text: content/);
-  assert.match(link, /syncRail\(card\.parentElement\)/);
+
+  // It is a sibling of the details, not a child: a folded row hides its
+  // children, and this caption has to be readable while the row is closed.
+  const add = bodyOf(CHAT_JS, 'addOutputLink');
+  assert.match(add, /outputNote\(/);
+  assert.match(add, /card\.parentNode\.insertBefore\(note, card\.nextSibling\)/);
+  assert.match(add, /syncRail\(card\.parentElement\)/);
 
   assert.match(bodyOf(CHAT_JS, 'addToolResult'), /addOutputLink\(card, event, content\)/);
 
@@ -193,4 +196,24 @@ test('a result offers its whole output in a tab', () => {
     HUB,
     /new ChatPanel\(this\.context, this\.log, this\.previews, this\.plans, this\.outputs, this, agentId, focus\)/,
   );
+});
+
+test('a result with no card draws a row rather than an error', () => {
+  // A window that opened mid-run leaves a result whose call is not on screen.
+  // Printing the whole text in the error colour said the run failed; it did
+  // not. The row the result should have had is drawn, then settled normally.
+  const result = bodyOf(CHAT_JS, 'addToolResult');
+  assert.match(result, /addToolCall\(\{ \.\.\.event, type: 'tool_call', args: undefined \}, false\)/);
+  assert.match(result, /card = toolCards\.get\(event\.tool_call_id\)/);
+  assert.match(result, /addOrphanResult\(event\)/);
+  assert.doesNotMatch(result, /addNotice\(`tool result/);
+  assert.doesNotMatch(result, /addNotice\(/);
+
+  // A result that names no call at all has nothing to attach a card to: one
+  // muted line and the usual caption, not the text as an error.
+  const orphan = bodyOf(CHAT_JS, 'addOrphanResult');
+  assert.match(orphan, /el\('div', 'msg result-note'\)/);
+  assert.match(orphan, /outputNote\(/);
+  assert.match(orphan, /endRound\(\)/);
+  assert.doesNotMatch(orphan, /innerHTML|outerHTML|insertAdjacentHTML|document\.write/);
 });

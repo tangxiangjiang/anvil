@@ -225,6 +225,20 @@ body {
   color: var(--vscode-errorForeground);
 }
 
+/*
+ * A result that arrived without its call. It is a note, not an error: the
+ * model received this output and continued, so the text is muted and the whole
+ * thing usually fits in one line with the output behind the usual caption.
+ */
+.msg.result-note .body {
+  color: var(--ui-muted);
+  font-size: 0.9em;
+}
+
+.msg.result-note .output-link {
+  padding-left: 0;
+}
+
 /* --- markdown ------------------------------------------------------------- */
 
 /*
