@@ -270,9 +270,72 @@ input { width: 100%; margin-bottom: 0.75rem; }
   display: flex; justify-content: space-between; align-items: flex-start;
   gap: 1rem; margin-bottom: 0.75rem;
 }
-.del-head h2 { margin-bottom: 0.25rem; }
-.del-sub { margin: 0; font-size: 0.85rem; }
-.del-major-plan { margin-bottom: 1.25rem; }
+.del-head h2 { margin-bottom: 0.25rem; }.del-sub { margin: 0; font-size: 0.85rem; }
+
+/* Generation scope: one switcher, identical in all four sections. */
+.del-scope {
+  display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap;
+  margin: 0.6rem 0 0.9rem;
+}
+.del-scope-title { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; margin-right: 0.15rem; }
+.del-scope-chip {
+  display: inline-flex; align-items: center; gap: 0.35rem;
+  padding: 0.25rem 0.65rem; font-size: 0.85rem;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 999px;
+  color: var(--muted);
+}
+.del-scope-chip:hover { color: var(--text); border-color: var(--accent-dim); }
+.del-scope-chip.active {
+  background: var(--accent-dim); border-color: var(--accent); color: var(--text);
+}
+.del-scope-count { font-size: 0.75rem; opacity: 0.75; }
+.del-scope-chip.active .del-scope-count { opacity: 1; }
+
+/* Skeleton: sized like the real card so the swap does not shift layout. */
+.del-skeleton { display: flex; flex-direction: column; gap: 0.55rem; }
+.del-skeleton-row {
+  height: 74px; border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: linear-gradient(90deg, var(--panel) 25%, #212b36 37%, var(--panel) 63%);
+  background-size: 400% 100%;
+  animation: del-skeleton-shimmer 1.4s ease-in-out infinite;
+}
+@keyframes del-skeleton-shimmer {
+  0% { background-position: 100% 50%; }
+  100% { background-position: 0 50%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .del-skeleton-row { animation: none; }
+}
+
+/* Empty state: says what to do next, not just that there is nothing. */
+.del-empty {
+  padding: 1.5rem 1.25rem; text-align: center;
+  border: 1px dashed var(--border); border-radius: var(--radius);
+}
+.del-empty p { margin: 0 0 0.75rem; }
+
+/* Sticky job bar: one running job, visible from anywhere on the page. */
+.del-job-bar {
+  display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+  margin: 0.6rem 0 0.9rem; padding: 0.45rem 0.7rem;
+  background: var(--panel); border: 1px solid var(--border);
+  border-left: 3px solid var(--accent); border-radius: var(--radius);
+  font-size: 0.9rem;
+  position: sticky; top: 0; z-index: 5;
+}
+.del-job-bar:empty { display: none; }
+.del-job-dot {
+  width: 0.55rem; height: 0.55rem; border-radius: 50%;
+  background: var(--accent); flex: 0 0 auto;
+  animation: del-job-pulse 1.4s ease-in-out infinite;
+}
+.del-job-text { flex: 1; min-width: 8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.del-job-bar button { padding: 0.2rem 0.55rem; font-size: 0.82rem; }
+@keyframes del-job-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) {
+  .del-job-dot { animation: none; }
+}.del-major-plan { margin-bottom: 1.25rem; }
 .del-major-plan-head, .del-req-section-head {
   display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;
   margin-bottom: 0.65rem;
