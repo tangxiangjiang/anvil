@@ -50,6 +50,13 @@ type Options struct {
 	// When SettingSources load file MCP, inline entries override same-named file servers.
 	MCPServers map[string]MCPServerConfig
 
+	// MCPRuntime, when set, is the sole source of MCP tools (0.44+): the agent
+	// registers tools from the runtime instead of starting servers, and it
+	// refreshes them before a turn when the runtime's version moved. The agent
+	// never closes the runtime's sessions — whoever created the runtime does.
+	// File layers are not read while it is set; the runtime already did.
+	MCPRuntime *MCPRuntime
+
 	// Permission is invoked before a gated tool call. Which calls that covers is
 	// set by PermissionGroups; with no groups it is the historical set of
 	// mutating built-ins (write_file, edit_file, apply_patch, shell).

@@ -417,6 +417,9 @@ func (a *Agent) childOptions(in spawnParams, selectors []string, depth int) Opti
 	}
 	if hasMCPSelector(selectors) {
 		opts.MCPServers = a.opts.MCPServers
+		// The child borrows the parent's connections; it must not open a
+		// second set of processes or close the ones it borrowed (0.44+).
+		opts.MCPRuntime = a.opts.MCPRuntime
 	} else {
 		// SettingSources are inherited (see the table in chapter 41), and they are
 		// also what loads .cursor/mcp.json. The merge runs inside Create, so the

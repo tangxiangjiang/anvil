@@ -33,7 +33,7 @@ func mcpObject(t *testing.T, raw []byte) map[string]json.RawMessage {
 	return out
 }
 
-func mcpEntry(t *testing.T, top map[string]json.RawMessage, name string) map[string]json.RawMessage {
+func mcpEntryObject(t *testing.T, top map[string]json.RawMessage, name string) map[string]json.RawMessage {
 	t.Helper()
 	servers := mcpObject(t, top["mcpServers"])
 	raw, ok := servers[name]
@@ -82,7 +82,7 @@ func TestAddMCPServerPreservesUnknownFields(t *testing.T) {
 	if string(top["$schema"]) != `"https://example.test/schema.json"` {
 		t.Fatalf("top-level unknown field=%s want it kept", top["$schema"])
 	}
-	keep := mcpEntry(t, top, "keep")
+	keep := mcpEntryObject(t, top, "keep")
 	vendor, ok := keep["vendor"]
 	if !ok {
 		t.Fatal("keep.vendor was dropped")
@@ -111,7 +111,7 @@ func TestAddMCPServerPreservesUnknownFields(t *testing.T) {
 		t.Fatalf("UpdateMCPServer: %v", err)
 	}
 	top = mcpObject(t, readMCPFile(t, path))
-	keep = mcpEntry(t, top, "keep")
+	keep = mcpEntryObject(t, top, "keep")
 	if _, ok := keep["vendor"]; !ok {
 		t.Fatal("update dropped keep.vendor")
 	}
@@ -182,7 +182,7 @@ func TestSetMCPServerEnabledWritesAndRemovesTheField(t *testing.T) {
 	if !ok || server.Enabled {
 		t.Fatalf("listing=%+v want files disabled", listing.Servers)
 	}
-	entry := mcpEntry(t, mcpObject(t, readMCPFile(t, path)), "files")
+	entry := mcpEntryObject(t, mcpObject(t, readMCPFile(t, path)), "files")
 	if string(entry["enabled"]) != "false" {
 		t.Fatalf("enabled=%s want false", entry["enabled"])
 	}
@@ -195,7 +195,7 @@ func TestSetMCPServerEnabledWritesAndRemovesTheField(t *testing.T) {
 	if !ok || !server.Enabled {
 		t.Fatalf("listing=%+v want files enabled", listing.Servers)
 	}
-	entry = mcpEntry(t, mcpObject(t, readMCPFile(t, path)), "files")
+	entry = mcpEntryObject(t, mcpObject(t, readMCPFile(t, path)), "files")
 	if _, ok := entry["enabled"]; ok {
 		t.Fatalf("enabled=%s want the key gone", entry["enabled"])
 	}
@@ -265,18 +265,18 @@ func TestListMCPServersReportsLaunchFieldsAndNamesOnly(t *testing.T) {
 // reject the shapes a mis-typed entry can take.
 func TestMCPServerDraftValidation(t *testing.T) {
 	cases := map[string]MCPServerDraft{
-		"no name":          {Command: "npx"},
-		"padded name":      {Name: " files", Command: "npx"},
+		"no name":           {Command: "npx"},
+		"padded name":       {Name: " files", Command: "npx"},
 		"separator in name": {Name: "a/b", Command: "npx"},
 		"unknown transport": {Name: "a", Command: "npx", Transport: "websocket"},
-		"stdio no command": {Name: "a", Transport: "stdio"},
-		"http no url":      {Name: "a", Transport: "http", Command: "npx"},
-		"command and url":  {Name: "a", Command: "npx", URL: "https://example.test"},
-		"relative url":     {Name: "a", URL: "/mcp"},
-		"ftp url":          {Name: "a", URL: "ftp://example.test/mcp"},
-		"empty env name":   {Name: "a", Command: "npx", Env: map[string]string{"": "x"}},
-		"named env key":    {Name: "a", Command: "npx", Env: map[string]string{"A=B": "x"}},
-		"empty header":     {Name: "a", URL: "https://example.test", Headers: map[string]string{"": "x"}},
+		"stdio no command":  {Name: "a", Transport: "stdio"},
+		"http no url":       {Name: "a", Transport: "http", Command: "npx"},
+		"command and url":   {Name: "a", Command: "npx", URL: "https://example.test"},
+		"relative url":      {Name: "a", URL: "/mcp"},
+		"ftp url":           {Name: "a", URL: "ftp://example.test/mcp"},
+		"empty env name":    {Name: "a", Command: "npx", Env: map[string]string{"": "x"}},
+		"named env key":     {Name: "a", Command: "npx", Env: map[string]string{"A=B": "x"}},
+		"empty header":      {Name: "a", URL: "https://example.test", Headers: map[string]string{"": "x"}},
 	}
 	for label, draft := range cases {
 		dir := t.TempDir()
@@ -368,7 +368,7 @@ func TestUpdateMCPServerEnvNilKeepsAndEmptyClears(t *testing.T) {
 	if _, err := UpdateMCPServer(dir, SettingSourceProject, MCPServerDraft{Name: "a", Command: "x"}, []SettingSource{SettingSourceProject}); err != nil {
 		t.Fatalf("update with nil env: %v", err)
 	}
-	entry := mcpEntry(t, mcpObject(t, readMCPFile(t, path)), "a")
+	entry := mcpEntryObject(t, mcpObject(t, readMCPFile(t, path)), "a")
 	if string(mcpObject(t, entry["env"])["TOKEN"]) != `"one"` {
 		t.Fatalf("env=%s want it kept", entry["env"])
 	}
@@ -376,7 +376,7 @@ func TestUpdateMCPServerEnvNilKeepsAndEmptyClears(t *testing.T) {
 	if _, err := UpdateMCPServer(dir, SettingSourceProject, MCPServerDraft{Name: "a", Command: "x", Env: map[string]string{}}, []SettingSource{SettingSourceProject}); err != nil {
 		t.Fatalf("update with empty env: %v", err)
 	}
-	entry = mcpEntry(t, mcpObject(t, readMCPFile(t, path)), "a")
+	entry = mcpEntryObject(t, mcpObject(t, readMCPFile(t, path)), "a")
 	if _, ok := entry["env"]; ok {
 		t.Fatalf("env=%s want it cleared", entry["env"])
 	}

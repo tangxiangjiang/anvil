@@ -42,6 +42,7 @@ type Session struct {
 	name      string
 	transport string // stdio | http | sse
 	cmd       *exec.Cmd
+	cancel    context.CancelFunc
 	stdin     io.WriteCloser
 	stdout    *bufio.Reader
 	mu        sync.Mutex
@@ -100,28 +101,37 @@ func startStdio(ctx context.Context, cfg ServerConfig) (*Session, error) {
 	if cfg.Command == "" {
 		return nil, fmt.Errorf("mcp %s: command is required", cfg.Name)
 	}
-	cmd := exec.CommandContext(ctx, cfg.Command, cfg.Args...)
+	// The process outlives the handshake. ctx bounds initialize and tools/list,
+	// and a runtime cancels it as soon as Start returns; tying the child to it
+	// would kill the server at that moment. The session's own cancel is what
+	// stops the child, through Close.
+	lifetime, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	cmd := exec.CommandContext(lifetime, cfg.Command, cfg.Args...)
 	if len(cfg.Env) > 0 {
 		cmd.Env = append(os.Environ(), cfg.Env...)
-	}
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return nil, err
-	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, err
-	}
-	cmd.Stderr = os.Stderr
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("mcp %s start: %w", cfg.Name, err)
 	}
 	s := &Session{
 		name:      cfg.Name,
 		transport: "stdio",
 		cmd:       cmd,
-		stdin:     stdin,
-		stdout:    bufio.NewReader(stdout),
+		cancel:    cancel,
+	}
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	s.stdin = stdin
+	s.stdout = bufio.NewReader(stdout)
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		cancel()
+		return nil, fmt.Errorf("mcp %s start: %w", cfg.Name, err)
 	}
 	if err := s.initialize(ctx); err != nil {
 		_ = s.Close()
@@ -188,6 +198,9 @@ func (s *Session) Close() error {
 	if s == nil {
 		return nil
 	}
+	if s.cancel != nil {
+		s.cancel()
+	}
 	if s.sseBody != nil {
 		_ = s.sseBody.Close()
 	}
@@ -217,33 +230,49 @@ func (s *Session) initialize(ctx context.Context) error {
 }
 
 func (s *Session) listTools(ctx context.Context) ([]ToolInfo, error) {
-	raw, err := s.request(ctx, "tools/list", map[string]any{})
-	if err != nil {
-		return nil, err
-	}
-	var result struct {
-		Tools []struct {
-			Name        string          `json:"name"`
-			Description string          `json:"description"`
-			InputSchema json.RawMessage `json:"inputSchema"`
-		} `json:"tools"`
-	}
-	if err := json.Unmarshal(raw, &result); err != nil {
-		return nil, err
-	}
-	out := make([]ToolInfo, 0, len(result.Tools))
-	for _, t := range result.Tools {
-		schema := t.InputSchema
-		if len(schema) == 0 {
-			schema = json.RawMessage(`{"type":"object","properties":{}}`)
+	var out []ToolInfo
+	cursor := ""
+	for page := 0; ; page++ {
+		params := map[string]any{}
+		if cursor != "" {
+			params["cursor"] = cursor
 		}
-		out = append(out, ToolInfo{
-			Name:        t.Name,
-			Description: t.Description,
-			InputSchema: schema,
-		})
+		raw, err := s.request(ctx, "tools/list", params)
+		if err != nil {
+			return nil, err
+		}
+		var result struct {
+			Tools []struct {
+				Name        string          `json:"name"`
+				Description string          `json:"description"`
+				InputSchema json.RawMessage `json:"inputSchema"`
+			} `json:"tools"`
+			NextCursor string `json:"nextCursor"`
+		}
+		if err := json.Unmarshal(raw, &result); err != nil {
+			return nil, err
+		}
+		for _, t := range result.Tools {
+			schema := t.InputSchema
+			if len(schema) == 0 {
+				schema = json.RawMessage(`{"type":"object","properties":{}}`)
+			}
+			out = append(out, ToolInfo{
+				Name:        t.Name,
+				Description: t.Description,
+				InputSchema: schema,
+			})
+		}
+		if result.NextCursor == "" {
+			return out, nil
+		}
+		// A server that repeats a cursor is not paging; treating it as "more"
+		// would loop forever while holding the session lock.
+		if result.NextCursor == cursor || page >= 100 {
+			return nil, fmt.Errorf("mcp %s: tools/list cursor loop", s.name)
+		}
+		cursor = result.NextCursor
 	}
-	return out, nil
 }
 
 func (s *Session) notify(ctx context.Context, method string, params any) error {

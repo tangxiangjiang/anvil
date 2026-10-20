@@ -58,13 +58,17 @@ type Agent struct {
 	// running is a turn in flight; compacting is a manual compaction, which is
 	// also a model call and therefore must not overlap a turn. They are separate
 	// flags because a refused Send and a refused Compact say different things.
-	running      bool
-	compacting   bool
-	activeRun    *Run
-	history      []llm.Message
-	complete     llm.Completer
-	registry     *tools.Registry
-	mcp          []*mcp.Session
+	running    bool
+	compacting bool
+	activeRun  *Run
+	history    []llm.Message
+	complete   llm.Completer
+	registry   *tools.Registry
+	mcp        []*mcp.Session
+	// mcpTools is the set of registry names the last refresh registered, and
+	// mcpVersion the runtime version that produced it (0.44+).
+	mcpTools     []string
+	mcpVersion   int64
 	plugins      *plugin.Manager
 	lsp          *lsp.Supervisor
 	systemPrompt string
@@ -83,9 +87,13 @@ func createAgent(ctx context.Context, opts Options, ident subagentIdentity) (*Ag
 	if err != nil {
 		return nil, err
 	}
-	opts, err = mergeMCPFromSources(cwd, opts)
-	if err != nil {
-		return nil, err
+	// A runtime already resolved the file layers; reading them again would
+	// start a second set of processes behind its back.
+	if opts.MCPRuntime == nil {
+		opts, err = mergeMCPFromSources(cwd, opts)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if opts.skipFileMCP {
 		opts.MCPServers = nil
@@ -152,6 +160,7 @@ func createAgent(ctx context.Context, opts Options, ident subagentIdentity) (*Ag
 		cleanupRegistry(sessions, plugMgr, lspSup)
 		return nil, newError("load project rules", false, err)
 	}
+	mcpTools, mcpVersion := runtimeMCPState(opts)
 	return &Agent{
 		id:           agentID,
 		opts:         opts,
@@ -163,6 +172,8 @@ func createAgent(ctx context.Context, opts Options, ident subagentIdentity) (*Ag
 		complete:     completer,
 		registry:     reg,
 		mcp:          sessions,
+		mcpTools:     mcpTools,
+		mcpVersion:   mcpVersion,
 		plugins:      plugMgr,
 		lsp:          lspSup,
 		history:      nil,
@@ -199,9 +210,11 @@ func Resume(ctx context.Context, agentID string, opts Options) (*Agent, error) {
 	if agentID == "" {
 		return nil, newError("agent id is required", false, nil)
 	}
-	opts, err = mergeMCPFromSources(cwd, opts)
-	if err != nil {
-		return nil, err
+	if opts.MCPRuntime == nil {
+		opts, err = mergeMCPFromSources(cwd, opts)
+		if err != nil {
+			return nil, err
+		}
 	}
 	completer, err := newCompleter(opts)
 	if err != nil {
@@ -241,6 +254,7 @@ func Resume(ctx context.Context, agentID string, opts Options) (*Agent, error) {
 		return nil, newError("load project rules", false, err)
 	}
 	pruneCheckpoints(cwd, agentID, opts.Checkpoints)
+	mcpTools, mcpVersion := runtimeMCPState(opts)
 	return &Agent{
 		id:           agentID,
 		opts:         opts,
@@ -252,6 +266,8 @@ func Resume(ctx context.Context, agentID string, opts Options) (*Agent, error) {
 		complete:     completer,
 		registry:     reg,
 		mcp:          sessions,
+		mcpTools:     mcpTools,
+		mcpVersion:   mcpVersion,
 		plugins:      plugMgr,
 		lsp:          lspSup,
 		history:      historyFromRecords(records),
@@ -601,35 +617,44 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 		reg.EnsureTaskTools()
 	}
 	var sessions []*mcp.Session
-	for name, cfg := range opts.MCPServers {
-		sess, err := mcp.Start(ctx, mcp.ServerConfig{
-			Name:      name,
-			Transport: cfg.Transport,
-			Command:   cfg.Command,
-			Args:      cfg.Args,
-			Env:       cfg.Env,
-			URL:       cfg.URL,
-			Headers:   cfg.Headers,
-		})
-		if err != nil {
-			cleanupRegistry(sessions, nil, lspSup)
-			return nil, nil, nil, nil, nil, newError("mcp server "+name, false, err)
+	if opts.MCPRuntime != nil {
+		// The runtime owns the processes. The handlers proxy by server and tool
+		// name, so a reconnect replaces the session under a live tool.
+		if _, err := registerMCPRuntimeTools(reg, opts.MCPRuntime); err != nil {
+			cleanupRegistry(nil, nil, lspSup)
+			return nil, nil, nil, nil, nil, err
 		}
-		sessions = append(sessions, sess)
-		for _, t := range sess.Tools() {
-			toolName := "mcp_" + sanitizeName(name) + "_" + sanitizeName(t.Name)
-			mcpName := t.Name
-			session := sess
-			if err := reg.Register(&tools.FuncTool{
-				Name:        toolName,
-				Description: fmt.Sprintf("[mcp:%s] %s", name, t.Description),
-				Parameters:  t.InputSchema,
-				Handler: func(ctx context.Context, args json.RawMessage) (string, error) {
-					return session.Call(ctx, mcpName, args)
-				},
-			}); err != nil {
+	} else {
+		for name, cfg := range opts.MCPServers {
+			sess, err := mcp.Start(ctx, mcp.ServerConfig{
+				Name:      name,
+				Transport: cfg.Transport,
+				Command:   cfg.Command,
+				Args:      cfg.Args,
+				Env:       cfg.Env,
+				URL:       cfg.URL,
+				Headers:   cfg.Headers,
+			})
+			if err != nil {
 				cleanupRegistry(sessions, nil, lspSup)
-				return nil, nil, nil, nil, nil, newError(err.Error(), false, nil)
+				return nil, nil, nil, nil, nil, newError("mcp server "+name, false, err)
+			}
+			sessions = append(sessions, sess)
+			for _, t := range sess.Tools() {
+				toolName := "mcp_" + sanitizeName(name) + "_" + sanitizeName(t.Name)
+				mcpName := t.Name
+				session := sess
+				if err := reg.Register(&tools.FuncTool{
+					Name:        toolName,
+					Description: fmt.Sprintf("[mcp:%s] %s", name, t.Description),
+					Parameters:  t.InputSchema,
+					Handler: func(ctx context.Context, args json.RawMessage) (string, error) {
+						return session.Call(ctx, mcpName, args)
+					},
+				}); err != nil {
+					cleanupRegistry(sessions, nil, lspSup)
+					return nil, nil, nil, nil, nil, newError(err.Error(), false, nil)
+				}
 			}
 		}
 	}
@@ -975,6 +1000,15 @@ func (a *Agent) Send(ctx context.Context, message string, opts ...SendOption) (*
 		a.mu.Unlock()
 		return nil, newError("a compaction is in progress", false, nil)
 	}
+	// A runtime may have reconnected, added or removed a server since the last
+	// turn. The swap happens here — idle, under a.mu, before running is set — so
+	// no turn ever sees the registry change under it.
+	if a.opts.MCPRuntime != nil && a.opts.MCPRuntime.Version() != a.mcpVersion {
+		if err := a.refreshMCPLocked(); err != nil {
+			a.mu.Unlock()
+			return nil, err
+		}
+	}
 	a.running = true
 	historyCopy := append([]llm.Message(nil), a.history...)
 	wall := a.opts.MaxWallTime
@@ -1006,9 +1040,12 @@ func (a *Agent) Reload(ctx context.Context) error {
 	oldLSP := a.lsp
 	a.mu.Unlock()
 
-	opts, err := mergeMCPFromSources(cwd, opts)
-	if err != nil {
-		return err
+	if opts.MCPRuntime == nil {
+		merged, err := mergeMCPFromSources(cwd, opts)
+		if err != nil {
+			return err
+		}
+		opts = merged
 	}
 	reg, sessions, plugMgr, hookFile, lspSup, err := buildRegistry(ctx, cwd, opts)
 	if err != nil {
@@ -1039,10 +1076,59 @@ func (a *Agent) Reload(ctx context.Context) error {
 	a.opts = opts
 	a.registry = reg
 	a.mcp = sessions
+	if opts.MCPRuntime != nil {
+		a.mcpTools, a.mcpVersion = runtimeMCPState(opts)
+	} else {
+		a.mcpTools, a.mcpVersion = nil, 0
+	}
 	a.plugins = plugMgr
 	a.lsp = lspSup
 	a.systemPrompt = sysPrompt
 	a.hookFile = hookFile
+	return nil
+}
+
+// RefreshMCP re-registers the runtime's tools without disposing the agent
+// (0.44+). It refuses while a run or a compaction is in progress: a running
+// turn keeps the registry it started with. The next Send picks the change up
+// on its own, so a refusal is a deferral, not a loss.
+func (a *Agent) RefreshMCP() error {
+	if a == nil {
+		return newError("nil agent", false, nil)
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.closed {
+		return newError("agent is closed", false, nil)
+	}
+	if a.opts.MCPRuntime == nil {
+		return newError("agent has no MCP runtime", false, nil)
+	}
+	if a.running || a.compacting {
+		return newError("cannot refresh MCP tools while a run is in progress", false, nil)
+	}
+	return a.refreshMCPLocked()
+}
+
+// refreshMCPLocked swaps only the mcp_* names. Built-in, plugin and caller
+// tools are untouched; the allow/deny lists are re-applied so a filtered tool
+// does not come back through a refresh.
+func (a *Agent) refreshMCPLocked() error {
+	rt := a.opts.MCPRuntime
+	if rt == nil || a.registry == nil {
+		return nil
+	}
+	for _, name := range a.mcpTools {
+		a.registry.Unregister(name)
+	}
+	names, err := registerMCPRuntimeTools(a.registry, rt)
+	if err != nil {
+		a.mcpTools = nil
+		return err
+	}
+	applyBuiltinToolFilters(a.registry, a.opts)
+	a.mcpTools = names
+	a.mcpVersion = rt.Version()
 	return nil
 }
 
