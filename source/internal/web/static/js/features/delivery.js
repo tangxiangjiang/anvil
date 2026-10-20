@@ -23,6 +23,7 @@ if (typeof module !== "undefined" && module.exports) {
     patchChecklistItem: (...a) => window.Features.delivery.patchChecklistItem(...a),
     composeDesignMarkdown: (...a) => window.Features.delivery.composeDesignMarkdown(...a),
     campaignPassReady: (...a) => window.Features.delivery.campaignPassReady(...a),
+    parseCasePaste: (...a) => window.Features.delivery.parseCasePaste(...a),
     lifecycleLabel: (...a) => window.AnvilUI.lifecycleLabel(...a),
     badgeClass: (...a) => window.AnvilUI.badgeClass(...a),
     esc: (...a) => window.AnvilUI.esc(...a),

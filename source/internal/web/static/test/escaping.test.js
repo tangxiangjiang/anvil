@@ -46,6 +46,7 @@ const FILES = [
   "js/features/usage.js",
   "js/shared/badge.js",
   "js/shared/shell.js",
+  "js/shared/selection.js",
   "js/components/ai_chat.js",
   "js/components/md_preview.js",
   "js/app.js",
@@ -94,6 +95,12 @@ function isEscaped(expr) {
   // "probably" is what the baseline is for.
   if (/^-?\d+$/.test(expr)) return true;
   if (/^[A-Za-z_$][\w$]*$/.test(expr) && /^(i|n|j|k|w|h|x|y|major|minor|patch|index|count|len|size)$/.test(expr)) {
+    return true;
+  }
+  // A numeric property read: `.length`, `.major`, `.minor`, `.patch`, `.sort_order`,
+  // `.step`, `.id` on a numeric field. These are numbers by construction and cannot
+  // carry markup, so they do not belong in the baseline as if they were debt.
+  if (/^[A-Za-z_$][\w$.?[\]()'" -]*\.(length|major|minor|patch|sort_order|step|index|count)$/.test(expr)) {
     return true;
   }
   return false;

@@ -265,6 +265,23 @@ input { width: 100%; margin-bottom: 0.75rem; }
   .side { border-right: 0; border-bottom: 1px solid var(--border); }
 }
 
+/* Selection and batch actions (p_0.46.8). */
+.del-sel-row { position: relative; border-radius: var(--radius); }
+.del-sel-row.sel-on {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.del-sel-row:focus-visible { outline: 2px solid var(--accent-dim); outline-offset: -2px; }
+.del-sel-bar {
+  display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+  margin: 0.5rem 0; padding: 0.4rem 0.65rem;
+  background: var(--panel); border: 1px solid var(--accent-dim);
+  border-left: 3px solid var(--accent); border-radius: var(--radius);
+  font-size: 0.85rem; position: sticky; top: 0; z-index: 6;
+}
+.del-sel-bar[hidden] { display: none !important; }
+.del-sel-bar button { padding: 0.2rem 0.55rem; font-size: 0.8rem; }
+
 /* Shell chrome (p_0.46.9): health strip, help, actionable errors. */
 .help-btn {
   float: right; width: 1.4rem; height: 1.4rem; padding: 0;

@@ -169,3 +169,44 @@ test("campaignPassReady is false with no cases at all", () => {
   const d = ui();
   assert.strictEqual(d.campaignPassReady([], []), false);
 });
+
+// --------------------------------------------------------- parseCasePaste
+test("parseCasePaste takes one case per line", () => {
+  const d = ui();
+  const cases = d.parseCasePaste("Checkpoint restore\nLogging works");
+  assert.strictEqual(cases.length, 2);
+  assert.strictEqual(cases[0].title, "Checkpoint restore");
+  assert.strictEqual(cases[0].body, "Checkpoint restore");
+  assert.strictEqual(cases[1].title, "Logging works");
+});
+
+test("parseCasePaste splits a multi-line body on a bare ---", () => {
+  const d = ui();
+  const cases = d.parseCasePaste(
+    "Given a CRLF file\nWhen a run edits it\nThen endings survive\n---\nSecond case",
+  );
+  assert.strictEqual(cases.length, 2);
+  assert.strictEqual(cases[0].title, "Given a CRLF file");
+  // The body keeps its lines; the title is only the first one.
+  assert.strictEqual(cases[0].body.split("\n").length, 3);
+  assert.strictEqual(cases[1].title, "Second case");
+});
+
+test("parseCasePaste strips a leading 'Case:' label", () => {
+  const d = ui();
+  assert.strictEqual(d.parseCasePaste("Case: something works")[0].title, "something works");
+});
+
+test("parseCasePaste ignores blank input and blank blocks", () => {
+  const d = ui();
+  assert.strictEqual(d.parseCasePaste("").length, 0);
+  assert.strictEqual(d.parseCasePaste("   \n  \n").length, 0);
+  assert.strictEqual(d.parseCasePaste("a\n---\n---\nb").length, 2);
+});
+
+test("parseCasePaste titles an empty first line", () => {
+  const d = ui();
+  const cases = d.parseCasePaste("\n---\nbody only");
+  assert.strictEqual(cases.length, 1);
+  assert.strictEqual(cases[0].title, "body only");
+});

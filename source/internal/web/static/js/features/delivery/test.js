@@ -256,6 +256,10 @@ Object.assign(window.Features.delivery, {
             <button type="button" class="ghost" data-test-ai-cases
               data-eng="${this.esc(bind.engId)}" data-major="${bind.major}" data-minor="${bind.minor}"
               data-title="${this.esc(m.title)}" data-accept="${this.esc(success.slice(0, 400))}">Draft cases</button>
+            <button type="button" class="ghost" data-test-paste-cases
+              data-eng="${this.esc(bind.engId)}" data-major="${bind.major}" data-minor="${bind.minor}"
+              data-title="${this.esc(m.title)}"
+              title="One case per line; --- splits a multi-line body">Paste cases</button>
           </div>
           ${caseRows}
         </div>
@@ -301,6 +305,16 @@ Object.assign(window.Features.delivery, {
             this.showNotice(e.message || String(e), "Could not save note");
           }
         }, 500);
+      });
+    });
+    el.querySelectorAll("[data-test-paste-cases]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        this.openCasesPasteModal({
+          engId: btn.getAttribute("data-eng"),
+          major: Number(btn.getAttribute("data-major")),
+          minor: Number(btn.getAttribute("data-minor")),
+          msTitle: btn.getAttribute("data-title") || "",
+        });
       });
     });
     el.querySelectorAll("[data-test-ai-cases]").forEach((btn) => {
@@ -426,9 +440,82 @@ Object.assign(window.Features.delivery, {
       });
     });
   },
+  /**
+   * parseCasePaste turns pasted text into cases.
+   *
+   * One case per line; `---` on its own line splits a multi-line body. This is
+   * the non-chat path to the same result the assistant proposes, and it is what
+   * makes ten cases take ten lines instead of ten conversations.
+   */
+  parseCasePaste(text) {
+    const out = [];
+    const raw = String(text || "");
+    // Two input shapes, and the button promises both:
+    //   - one case per line (the common paste from a bug tracker or a doc),
+    //   - `---` on its own line when a case needs a multi-line body.
+    // The first must not swallow the second: if any separator is present the
+    // text is block-shaped, because a line-shaped paste never contains one.
+    const hasSeparator = /(^|\n)\s*---+\s*(\n|$)/.test(raw);
+    const blocks = hasSeparator ? raw.split(/\n\s*---+\s*\n/) : raw.split("\n");
+    for (const block of blocks) {
+      const body = String(block || "").trim();
+      if (!body) continue;
+      const lines = body.split("\n");
+      const first = (lines[0] || "").replace(/^case:\s*/i, "").trim();
+      out.push({ title: first || body || "Untitled case", body });
+    }
+    return out;
+  },
 
-  openTestCasesModal({ engId, major, minor, msTitle, acceptance }) {
-    const key = `tcases:${engId}:${major}.${minor}`;
+  /** openCasesPasteModal is the bulk counterpart to the assistant dialog. */
+  openCasesPasteModal({ engId, major, minor, msTitle }) {
+    this.showUiModal(
+      `
+      <div class="modal-card modal-wide">
+        <h3 style="margin-top:0">Paste cases · ${this.esc(msTitle || `${major}.${minor}`)}</h3>
+        <p class="muted" style="margin-top:0">
+          One case per line; the first line becomes the title. Use <code>---</code> on its own line
+          to give a case a multi-line body.
+        </p>
+        <textarea id="tc-paste" rows="10" placeholder="Checkpoint restore keeps CRLF&#10;---&#10;Given a CRLF file&#10;When a run edits it&#10;Then the line endings survive"></textarea>
+        <div class="muted" id="tc-paste-count">0 cases</div>
+        <div class="err" id="tc-paste-err"></div>
+        <div class="toolbar" style="margin-top:0.75rem;justify-content:flex-end">
+          <button type="button" class="ghost" data-close-ui>Cancel</button>
+          <button type="button" id="tc-paste-save">Save cases</button>
+        </div>
+      </div>`,
+      { title: "Paste cases" },
+    );
+    const modal = this.uiModal();
+    const ta = modal.querySelector("#tc-paste");
+    const count = modal.querySelector("#tc-paste-count");
+    const sync = () => {
+      const n = this.parseCasePaste(ta.value).length;
+      count.textContent = n + (n === 1 ? " case" : " cases");
+    };
+    ta.addEventListener("input", sync);
+    sync();
+    modal.querySelector("#tc-paste-save").addEventListener("click", async () => {
+      const err = modal.querySelector("#tc-paste-err");
+      if (err) err.textContent = "";
+      const cases = this.parseCasePaste(ta.value);
+      if (!cases.length) {
+        if (err) err.textContent = "Nothing to save yet.";
+        return;
+      }
+      try {
+        await api.v1.deliveryCreateTestCases({ eng_req_id: engId, major, minor, cases });
+        this.closeUiModal();
+        await this.reload();
+        this.render();
+        this.showNotice(`${cases.length} case(s) saved.`, "Cases");
+      } catch (e) {
+        if (err) err.textContent = e.message || String(e);
+      }
+    });
+  },
+  openTestCasesModal({ engId, major, minor, msTitle, acceptance }) {    const key = `tcases:${engId}:${major}.${minor}`;
     const chat = this.polishChat(key, {
       id: "tc-cases-chat",
       title: "Chat",

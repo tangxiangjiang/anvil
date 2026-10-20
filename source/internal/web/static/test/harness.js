@@ -24,6 +24,7 @@ const FILES = [
   "js/shared/esc.js",
   "js/shared/badge.js",
   "js/shared/action.js",
+  "js/shared/selection.js",
   "js/features/delivery/core.js",
   "js/features/delivery/helpers.js",
   "js/features/delivery/modals.js",
