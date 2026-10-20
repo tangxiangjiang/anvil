@@ -1499,6 +1499,12 @@
   }
 
   /**
+   * How to draw each comparison again in the other shape, keyed by its element.
+   * A WeakMap so a card removed from the transcript is not kept alive by it.
+   */
+  const diffPainters = new WeakMap();
+
+  /**
    * A short comparison of the two sides, capped so a large replacement does not
    * become the whole transcript. The lines are text nodes: the strings are
    * model output.
@@ -1562,25 +1568,85 @@
     if (adds > 0 || dels > 0) {
       box.appendChild(el('div', 'note', changeNote(adds, dels)));
     }
+    const pairs = rows.slice(0, cap);
     const pre = el('pre', numbered ? 'diff numbered side' : 'diff side');
-    for (const pair of rows.slice(0, cap)) {
-      const node = el('div', 'row ' + pair.kind);
-      for (const side of ['old', 'new']) {
-        const row = pair[side];
-        const cell = el('span', 'cell ' + side + (row ? ' ' + row.kind : ' empty'));
-        if (row) {
-          if (numbered) cell.appendChild(el('span', 'ln', String(row.line)));
-          cell.appendChild(el('span', 'code', row.sign + ' ' + row.text));
-        }
-        node.appendChild(cell);
-      }
-      pre.appendChild(node);
+
+    // One side of a pair: a line number when the comparison has them, then the
+    // sign and the text. The cell stays the box that carries the row's colour
+    // and the high-contrast edge, so only the clipping element changed.
+    function rowNode(side, row) {
+      const node = el('div', 'row ' + row.kind);
+      const cell = el('span', 'cell ' + side + ' ' + row.kind);
+      if (numbered) cell.appendChild(el('span', 'ln', String(row.line)));
+      cell.appendChild(el('span', 'code', row.sign + ' ' + row.text));
+      node.appendChild(cell);
+      return node;
     }
+
+    /**
+     * The comparison has two shapes. Wide, each side is one pane, so a long
+     * line scrolls its side rather than drawing a bar under itself; narrow, the
+     * sides are interleaved into one unified column. A pane is a whole side and
+     * cannot be hidden into a column, so the pairs are kept and painted again
+     * when the width class flips (`repaintDiffs`).
+     */
+    function paint() {
+      const narrow = document.body.classList.contains('diff-narrow');
+      pre.textContent = '';
+      pre.className = 'diff side' + (numbered ? ' numbered' : '') + (narrow ? ' narrow' : '');
+      if (narrow) {
+        // A context line is the same on both sides and is said once; the two
+        // sides of a change stack, old above new.
+        for (const pair of pairs) {
+          for (const side of ['old', 'new']) {
+            const row = pair[side];
+            if (row && !(side === 'new' && pair.kind === 'ctx')) {
+              pre.appendChild(rowNode(side, row));
+            }
+          }
+        }
+        return;
+      }
+      for (const side of ['old', 'new']) {
+        const pane = el('div', 'pane ' + side);
+        for (const pair of pairs) {
+          const row = pair[side];
+          // The side that has nothing keeps its row: the panes must have the
+          // same number of lines, or the next line would be compared with the
+          // wrong one.
+          pane.appendChild(row ? rowNode(side, row) : el('div', 'row empty'));
+        }
+        pre.appendChild(pane);
+      }
+      syncDiffScroll(pre);
+    }
+
+    paint();
+    diffPainters.set(pre, paint);
     box.appendChild(pre);
     if (rows.length > cap) {
       box.appendChild(el('div', 'more-note', 'Showing the first ' + cap + ' rows of this change.'));
     }
     return box;
+  }
+
+  /**
+   * The two sides are one picture. A drag on either bar, or a wheel over either
+   * pane, puts the other pane at the same offset — the same line and the same
+   * character column — so the halves of a change never drift apart. The write is
+   * compared first, so the copy does not come back as another scroll event.
+   */
+  function syncDiffScroll(pre) {
+    const panes = pre.querySelectorAll('.pane');
+    if (panes.length !== 2) return;
+    const follow = (from, to) => {
+      from.addEventListener('scroll', () => {
+        if (to.scrollTop !== from.scrollTop) to.scrollTop = from.scrollTop;
+        if (to.scrollLeft !== from.scrollLeft) to.scrollLeft = from.scrollLeft;
+      });
+    };
+    follow(panes[0], panes[1]);
+    follow(panes[1], panes[0]);
   }
 
   /** "Added 1 line", "Removed 2 lines", or both, from the counts above. */
@@ -3674,10 +3740,11 @@
    * Chooses the diff's shape from the width the transcript actually gives it.
    *
    * `chat.css` must stay free of at-rules for `chatLayout.test.ts` to parse it,
-   * so the narrow fallback is a class on the body: the DOM is the same in both
-   * modes and CSS decides which cell is visible. The padding is subtracted
-   * because the reading column is capped at `--anvil-read-width`, so a wide
-   * window and a 52em column are not the same thing.
+   * so the narrow fallback is a class on the body. Unlike a cell, a pane cannot
+   * be hidden into a single column, so a flip repaints the comparisons on
+   * screen; one rendered afterwards reads the class when it paints. The padding
+   * is subtracted because the reading column is capped at `--anvil-read-width`,
+   * so a wide window and a 52em column are not the same thing.
    */
   function syncDiffWidth() {
     const pinned = atBottom();
@@ -3687,8 +3754,20 @@
     if (width <= 0) return; // the tab is not visible yet
     const font = parseFloat(style.fontSize) || DIFF_SIDE_BASE;
     const min = Math.round(DIFF_SIDE_MIN * (font / DIFF_SIDE_BASE));
-    document.body.classList.toggle('diff-narrow', width < min);
+    const narrow = width < min;
+    if (document.body.classList.contains('diff-narrow') !== narrow) {
+      document.body.classList.toggle('diff-narrow', narrow);
+      repaintDiffs();
+    }
     scrollIfPinned(pinned);
+  }
+
+  /** Draws every comparison on screen in the shape the body class now asks for. */
+  function repaintDiffs() {
+    for (const pre of document.querySelectorAll('.tool .edit-diff .diff')) {
+      const paint = diffPainters.get(pre);
+      if (paint) paint();
+    }
   }
 
   let diffWidthQueued = false;

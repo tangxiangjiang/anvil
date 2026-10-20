@@ -1158,15 +1158,17 @@ button.ghost[aria-pressed='true'] {
 }
 
 /*
- * Old beside new. Each side scrolls its own long line, so one file's 200-column
- * line cannot push the other column out of the card. The narrow fallback is on
- * the body (see `syncDiffWidth`): the markup is the same in both shapes.
+ * Old beside new, one scrolling pane each. A cell used to scroll its own line,
+ * which drew a horizontal bar under every line of both sides; the overflow
+ * belongs to the side now, so each pane has one bar at its foot. A row is
+ * `max-content` wide so a long line widens its own pane, and `min-width: 100%`
+ * keeps a short row's background across the pane. The narrow shape is painted
+ * rather than hidden (see `paint` in `renderEditDiff`): the panes cannot become
+ * one column.
  */
 .tool .edit-diff .diff {
+  display: flex;
   margin: 0;
-  max-height: 18em;
-  overflow-y: auto;
-  overflow-x: hidden;
   font-family: var(--ui-mono);
   font-size: 0.9em;
   line-height: 1.6;
@@ -1175,20 +1177,32 @@ button.ghost[aria-pressed='true'] {
   padding: 0;
 }
 
+.tool .edit-diff .diff > .pane {
+  flex: 1 1 0;
+  min-width: 0;
+  max-height: 18em;
+  overflow: scroll;
+}
+
+.tool .edit-diff .diff > .pane.old {
+  border-right: 1px solid var(--ui-hairline);
+}
+
 .tool .edit-diff .diff .row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  display: flex;
+  width: max-content;
+  min-width: 100%;
+}
+
+.tool .edit-diff .diff .row.empty {
+  background: rgba(128, 128, 128, 0.06);
 }
 
 .tool .edit-diff .diff .cell {
   display: flex;
+  flex: 1 1 auto;
   align-items: baseline;
-  min-width: 0;
   padding: 0 8px;
-}
-
-.tool .edit-diff .diff .cell.old {
-  border-right: 1px solid var(--ui-hairline);
 }
 
 .tool .edit-diff .diff .cell .ln {
@@ -1201,10 +1215,59 @@ button.ghost[aria-pressed='true'] {
 }
 
 .tool .edit-diff .diff .cell .code {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow-x: auto;
+  flex: 0 0 auto;
   white-space: pre;
+}
+
+/*
+ * The bars are a tool, not part of the frame: the track and thumb are
+ * transparent until the pointer is over the comparison, then the thumb takes
+ * the editor's own scrollbar colours. Both axes are styled because a pane
+ * scrolls in both; `scroll` rather than `auto` keeps the feet of the two panes
+ * level when only one side overflows.
+ */
+.tool .edit-diff .diff > .pane::-webkit-scrollbar,
+.tool .edit-diff .diff.narrow::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.tool .edit-diff .diff > .pane::-webkit-scrollbar-track,
+.tool .edit-diff .diff.narrow::-webkit-scrollbar-track,
+.tool .edit-diff .diff > .pane::-webkit-scrollbar-corner,
+.tool .edit-diff .diff.narrow::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.tool .edit-diff .diff > .pane::-webkit-scrollbar-thumb,
+.tool .edit-diff .diff.narrow::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 5px;
+}
+
+.tool .edit-diff .diff:hover > .pane::-webkit-scrollbar-thumb,
+.tool .edit-diff .diff.narrow:hover::-webkit-scrollbar-thumb {
+  background: var(--vscode-scrollbarSlider-background, rgba(128, 128, 128, 0.4));
+}
+
+.tool .edit-diff .diff > .pane::-webkit-scrollbar-thumb:hover,
+.tool .edit-diff .diff.narrow::-webkit-scrollbar-thumb:hover {
+  background: var(--vscode-scrollbarSlider-hoverBackground, rgba(128, 128, 128, 0.6));
+}
+
+/*
+ * One vertical bar for two panes that scroll as one; the old side keeps none of
+ * its own, so the hairline divider stays the only thing between the sides.
+ */
+.tool .edit-diff .diff > .pane.old::-webkit-scrollbar:vertical {
+  width: 0;
+}
+
+/* The narrow shape: one column that scrolls as a whole. */
+.tool .edit-diff .diff.narrow {
+  display: block;
+  max-height: 18em;
+  overflow: auto;
 }
 
 /*
@@ -1224,22 +1287,6 @@ button.ghost[aria-pressed='true'] {
     --vscode-diffEditor-removedLineBackground,
     var(--vscode-diffEditor-removedTextBackground, rgba(248, 81, 73, 0.10))
   );
-}
-
-body.diff-narrow .tool .edit-diff .diff .row {
-  display: block;
-}
-
-body.diff-narrow .tool .edit-diff .diff .cell.old {
-  border-right: 0;
-}
-
-body.diff-narrow .tool .edit-diff .diff .cell.empty {
-  display: none;
-}
-
-body.diff-narrow .tool .edit-diff .diff .row.ctx .cell.new {
-  display: none;
 }
 
 .tool .edit-diff .more-note {

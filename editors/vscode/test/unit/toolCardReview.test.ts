@@ -55,9 +55,9 @@ test('an edit card opens onto a short comparison, and the button stays under it'
   assert.match(diff, /el\('span', 'ln', String\(row\.line\)\)/);
   assert.match(diff, /el\('span', 'code'/);
   assert.doesNotMatch(diff, /innerHTML/);
-  // Two cells per row, old and new, and the cap counts what the reader sees.
+  // One row per side, and the cap counts what the reader sees.
   assert.match(diff, /const rows = pairDiffRows\(raw\);/);
-  assert.match(diff, /el\('div', 'row ' \+ pair\.kind\)/);
+  assert.match(diff, /el\('div', 'row ' \+ row\.kind\)/);
   assert.match(diff, /for \(const side of \['old', 'new'\]\)/);
   assert.match(diff, /el\('span', 'cell ' \+ side/);
   assert.match(diff, /const cap = 24;/);

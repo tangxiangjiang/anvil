@@ -213,23 +213,28 @@ test('the stylesheet has no at-rules, which is what lets it be parsed as text', 
   assert.doesNotMatch(SOURCE, /@[a-z-]+\s*[({]/, 'chat.css must stay free of at-rules');
 });
 
-test('an edit diff is two columns, and a body class narrows it without an at-rule', () => {
+test('an edit diff scrolls by the side, and a body class narrows it without an at-rule', () => {
+  // Each side is one pane, so the overflow belongs to the side rather than to
+  // every line: the pane is what carries the scrollbar now.
+  assert.match(SOURCE, /\.tool \.edit-diff \.diff \{[^}]*display:\s*flex/);
   assert.match(
     SOURCE,
-    /\.tool \.edit-diff \.diff \.row \{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) minmax\(0, 1fr\)/,
+    /\.tool \.edit-diff \.diff > \.pane \{[^}]*flex: 1 1 0[^}]*max-height: 18em[^}]*overflow: scroll/,
+  );
+  // A long line widens its own pane; a short row still paints across it.
+  assert.match(SOURCE, /\.tool \.edit-diff \.diff \.row \{[^}]*width: max-content/);
+  assert.match(SOURCE, /\.tool \.edit-diff \.diff \.row \{[^}]*min-width: 100%/);
+  // The bars are invisible until the comparison is pointed at.
+  assert.match(
+    SOURCE,
+    /\.tool \.edit-diff \.diff > \.pane::-webkit-scrollbar-thumb,[\s\S]*?\{[^}]*background: transparent/,
   );
   assert.match(
     SOURCE,
-    /body\.diff-narrow \.tool \.edit-diff \.diff \.row \{[^}]*display:\s*block/,
+    /\.tool \.edit-diff \.diff:hover > \.pane::-webkit-scrollbar-thumb,[\s\S]*?\{[^}]*--vscode-scrollbarSlider-background/,
   );
-  assert.match(
-    SOURCE,
-    /body\.diff-narrow \.tool \.edit-diff \.diff \.cell\.empty \{[^}]*display:\s*none/,
-  );
-  assert.match(
-    SOURCE,
-    /body\.diff-narrow \.tool \.edit-diff \.diff \.row\.ctx \.cell\.new \{[^}]*display:\s*none/,
-  );
+  // The narrow shape is a painted unified column, not a hidden cell.
+  assert.match(SOURCE, /\.tool \.edit-diff \.diff\.narrow \{[^}]*display: block/);
 
   // The script is the other half of the agreement: one threshold, one class,
   // and one throttled listener rather than a layout per card.
@@ -241,6 +246,9 @@ test('an edit diff is two columns, and a body class narrows it without an at-rul
   assert.match(JS, /addEventListener\('resize', queueDiffWidth\)/);
   assert.match(JS, /classList\.toggle\('diff-narrow'/);
   assert.match(JS, /requestAnimationFrame\(\(\) => \{[\s\S]{0,200}syncDiffWidth\(\)/);
+  // A flip repaints what is on screen; a comparison drawn afterwards reads the
+  // class when it paints.
+  assert.match(JS, /repaintDiffs\(\)/);
 });
 
 test('the diff takes its line colours from the editor theme', () => {

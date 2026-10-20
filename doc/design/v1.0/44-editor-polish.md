@@ -300,8 +300,9 @@ which is how the extension already degrades (`runtime`, `permission_mode_source`
 | [p_0.47.16](../../roadmaps/v1.0/m_0.47/p_0.47.16.md) | Moderate density, coloured state words, larger dots, a framed pane, a summary ending |
 | [p_0.47.17](../../roadmaps/v1.0/m_0.47/p_0.47.17.md) | The summary endings marked by the live path as well as the replay |
 | [p_0.47.18](../../roadmaps/v1.0/m_0.47/p_0.47.18.md) | A reply's start marker, one fold per turn, history closed and the newest open |
+| [p_0.47.19](../../roadmaps/v1.0/m_0.47/p_0.47.19.md) | One scrollbar per side of an edit diff, revealed on hover and moving both sides together |
 
-0.47.9–0.47.18 were written after the milestone was accepted. Their findings came from the
+0.47.9–0.47.19 were written after the milestone was accepted. Their findings came from the
 first real use of the panel, not from a test: a capability that existed and was never turned
 on, an error that only reached the log, a block with no way out — and then a transcript that
 was tiring to read, followed by four manager panels that each declared their own copy of the
@@ -312,8 +313,9 @@ output tab that the same reader asked of the first rail, and then a stored conve
 opened on a result whose call the window had cut, and finally a long conversation that read as
 too sparse, whose state words said nothing, whose dots sat under the line, whose opened call
 had no edge, and whose final answer had no ending — and then that ending missing from the live
-turn because the live path asked for a failure that is never absent, and finally a turn with
-no beginning and no way to close the ones already read. The lesson is recorded here rather
+turn because the live path asked for a failure that is never absent, then a turn with no
+beginning and no way to close the ones already read, and finally an edit comparison that drew
+a scrollbar under every line it contained. The lesson is recorded here rather
 than in a commit message — the manual passes the earlier phases wrote down as "still worth
 doing" are the ones that would have found all of these.
 
@@ -555,3 +557,30 @@ reply" — for a reason that did not exist then.
 Two costs are accepted and written down: a closed `<details>` is not searched by find-in-page,
 and a spawn card's pane keeps the flat grammar because it already folds and because its rounds
 need a name to tell parent from child.
+
+## 22. A scrollbar under every line
+
+p_0.47.10 made an edit's comparison two columns and let each cell scroll its own long line.
+The cost only showed on a file whose lines overflow: every line of both sides grew a
+horizontal scrollbar, so a twenty-four-row comparison drew up to forty-eight bars inside
+itself. p_0.47.19 makes the side the scroll region instead.
+
+- **The pane is the scroller.** One scroll position per side is what makes the overflow
+  countable and, more importantly, what makes the two sides synchronizable. The rows keep
+  the same classes and backgrounds; only the element that clips them changed.
+- **Two panes, not one shared bar.** A single horizontal scroller would have to sit either
+  outside the vertical one — putting the vertical bar at the right edge of the widest line,
+  off screen — or inside it, putting the horizontal bar under the last row instead of at the
+  foot of the box. A pane per side keeps the vertical bar on the visible edge and puts each
+  horizontal bar at the foot of its own pane.
+- **Equal offsets.** The panes copy `scrollLeft` and `scrollTop` to each other rather than
+  scaling by their scroll ranges: the same offset is the same character column on both sides,
+  which is the comparison the reader is making. A narrower side simply stops at its own end.
+- **Hidden until hover.** The bar is a tool for reaching a long line, not a permanent piece of
+  the diff's frame. A transparent track and thumb leave the rows as the only visible thing;
+  the theme's `--vscode-scrollbarSlider-*` colours appear when the pointer is over the
+  comparison.
+- **The narrow shape is a repaint.** The p_0.47.10 fallback kept one DOM and hid cells with
+  CSS. A pane is a whole side, so a unified column cannot be carved out of two of them; the
+  comparison keeps its pairs and paints either shape from them when the body class flips.
+  This is the one place where the diff's two shapes are different DOM.
