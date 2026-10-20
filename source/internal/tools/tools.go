@@ -4,6 +4,7 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1077,20 +1078,43 @@ func (t *shellTool) Execute(ctx context.Context, args json.RawMessage) Result {
 	}
 	cmd.Dir = t.r.cwd
 	configureShellCommand(cmd)
-	out, err := cmd.CombinedOutput()
-	content := string(out)
+	// Output is collected through a buffer rather than CombinedOutput, because
+	// CombinedOutput does not return until the process's stdout and stderr pipes
+	// close. A child that inherited them — a background job, a daemon, a `cmd /C`
+	// wrapper whose own child ignored the kill — can hold those pipes open past
+	// the kill, and the run would then wait out the full command timeout for a
+	// command that is already dead. Waiting on the process and the cancel signal
+	// instead is what makes "stopped" actually stop.
+	var buf bytes.Buffer
+	cmd.Stdout = &buf
+	cmd.Stderr = &buf
+	err := runShellCommand(ctx, cmd)
+	content := buf.String()
 	if err != nil {
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		switch {
+		case errors.Is(ctx.Err(), context.Canceled):
+			// Cancelled by the caller (the user pressed stop, the run was
+			// replaced, the host is going away). Reported as a plain result so the
+			// call still gets a tool message: an unanswered tool_call is what
+			// poisons every later turn of the session.
+			if content != "" {
+				content += "\n"
+			}
+			return Result{Content: content + "command cancelled", IsError: true}
+		case errors.Is(ctx.Err(), context.DeadlineExceeded):
 			note := fmt.Sprintf("command killed after %s", timeout)
 			if content == "" {
 				content = note
 			} else {
 				content = content + "\n" + note
 			}
-		} else if content == "" {
-			content = err.Error()
-		} else {
-			content = content + "\n" + err.Error()
+			return Result{Content: content, IsError: true}
+		default:
+			if content == "" {
+				content = err.Error()
+			} else {
+				content = content + "\n" + err.Error()
+			}
 		}
 		return Result{Content: content, IsError: true}
 	}
@@ -1103,6 +1127,39 @@ func (t *shellTool) Execute(ctx context.Context, args json.RawMessage) Result {
 func isWindows() bool {
 	return runtime.GOOS == "windows"
 }
+
+// runShellCommand waits for cmd to exit or for ctx to be cancelled, whichever
+// happens first, and returns as soon as either does.
+//
+// cmd.Wait alone would already return on cancellation — exec.Cmd runs its
+// Cancel hook and then bounds the wait with WaitDelay. The explicit select is
+// what makes that guarantee independent of the pipes: a grandchild holding
+// stdout open cannot extend the wait past the cancellation, because the
+// cancellation path does not wait for io at all.
+func runShellCommand(ctx context.Context, cmd *exec.Cmd) error {
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		// configureShellCommand's Cancel hook has killed the tree at this point
+		// (exec.Cmd calls it on ctx). Give Wait a moment to reap so the process
+		// table does not leak, but do not block the run on it.
+		select {
+		case <-done:
+		case <-time.After(shellReapGrace):
+		}
+		return ctx.Err()
+	}
+}
+
+// shellReapGrace bounds how long cancellation waits for the process to be
+// reaped after it has been killed.
+const shellReapGrace = 2 * time.Second
 
 func nearestContextHint(text, needle string) string {
 	lines := strings.Split(text, "\n")
