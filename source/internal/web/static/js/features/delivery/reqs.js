@@ -704,6 +704,7 @@ Object.assign(window.Features.delivery, {
           · project <code>${this.esc(w ? w.project_rel : "?")}</code>
           · reqs <code>${this.esc(eng.reqs_rel)}</code>
         </p>
+        ${this.auditHtml("requirement", eng.id)}
       </div>
       ${this.viewMajorPlan()}
       <div class="del-req-section-head">

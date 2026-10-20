@@ -921,6 +921,7 @@ Object.assign(window.Features.delivery, {
         <span class="muted">/</span>
         <span>${this.esc(d.title)}</span>
       </p>
+      ${this.auditHtml("design", d.id)}
       <div class="del-split${approved ? "" : " del-split-chatwide"}">
         <div class="del-main">
           <div class="card${approved ? " del-des-locked" : ""}">

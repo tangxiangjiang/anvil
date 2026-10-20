@@ -363,6 +363,7 @@ Object.assign(window.Features.delivery, {
         { label: eng.title || (w && w.label) || eng.worker_id, href: `#/delivery/requirements/${eng.id}` },
         { label: msKey, href: null },
       ])}
+      ${this.auditHtml("milestone", "ms_" + engId + "_" + major + "_" + minor)}
       <div class="del-split del-split-chatwide">
         <div class="del-main">
           <div class="card">
