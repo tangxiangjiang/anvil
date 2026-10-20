@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -19,6 +20,34 @@ type MCPServer struct {
 	Env     map[string]string `json:"env"`
 	URL     string            `json:"url"`
 	Headers map[string]string `json:"headers"`
+	// Enabled turns a declared server off without deleting it. Absent means
+	// enabled: a file written before the field existed keeps working.
+	Enabled *bool `json:"enabled"`
+	// Transport names the wire. Type is the older spelling some files use;
+	// TransportName settles which one applies.
+	Transport string `json:"transport"`
+	Type      string `json:"type"`
+}
+
+// TransportName is the transport the entry declares, normalized the way the
+// client names it: streamable-http is the same server as http. An empty result
+// means the entry did not say, and the command/url shape decides.
+func (s MCPServer) TransportName() string {
+	name := s.Transport
+	if name == "" {
+		name = s.Type
+	}
+	return foldTransport(name)
+}
+
+// foldTransport normalizes a transport spelling. streamable-http names the
+// same wire as http; the client has one implementation for it.
+func foldTransport(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "streamable-http" {
+		return "http"
+	}
+	return name
 }
 
 type mcpFile struct {
@@ -40,6 +69,19 @@ func LoadMCPJSON(path string) (map[string]MCPServer, error) {
 	}
 	if f.MCPServers == nil {
 		return map[string]MCPServer{}, nil
+	}
+	// Two spellings of the same field that disagree make the entry's transport
+	// guesswork, and guessing wrong would launch a process where a URL belongs.
+	names := make([]string, 0, len(f.MCPServers))
+	for name := range f.MCPServers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		s := f.MCPServers[name]
+		if s.Transport != "" && s.Type != "" && foldTransport(s.Transport) != foldTransport(s.Type) {
+			return nil, fmt.Errorf("parse %s: server %q declares transport %q and type %q", path, name, s.Transport, s.Type)
+		}
 	}
 	return f.MCPServers, nil
 }

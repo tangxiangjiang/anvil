@@ -390,8 +390,14 @@ type MCPServerConfig struct {
 	Args      []string
 	Env       []string // KEY=VAL for stdio process
 	URL       string   // http / sse base URL
-	// Headers are sent on HTTP/SSE requests (0.9+). Ignored for stdio. Not for OAuth flows.
+	// Headers are sent on HTTP/SSE requests (0.9+). Ignored for stdio. OAuth
+	// tokens do not belong here: the runtime owns them (0.44+, chapter 43).
 	Headers map[string]string
+	// Enabled is carried from a file entry so a caller can see what the file
+	// said (0.44+). Entries merged from a file with `enabled: false` are not
+	// started; an inline config is the caller's direct intent and is always
+	// started, whatever this says.
+	Enabled *bool
 }
 
 // PermissionFunc decides whether a gated tool may run.

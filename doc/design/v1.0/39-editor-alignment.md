@@ -352,6 +352,8 @@ Nothing in this milestone changes the trust boundary:
 - Anthropic thinking blocks and a configurable output cap. The provider line is OpenAI-compatible.
 - Checkpoints for shell redirection.
 - MCP OAuth, remote transports beyond what the SDK supports, and a marketplace listing.
+  *(MCP OAuth and Streamable HTTP are no longer out of scope: 0.44 owns them, see chapter 43.
+  The marketplace listing stays excluded.)*
 - Remote / SSH / dev-container targets, and cross-window session sync.
 - Automatic context compaction.
 - Notebook cell editing and multi-root in one panel — unchanged from 35.

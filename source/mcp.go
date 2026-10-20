@@ -15,9 +15,9 @@ import (
 //
 // It describes configuration, not connection. A server appears here because a
 // file mentions it; nothing in this type says it started, or which tools it
-// brought. The SDK exposes no introspection for that, and a field that could
-// only be filled from "the file mentioned it" would be a green light about the
-// one thing a person actually cares about.
+// brought. Connection state is a runtime fact (MCPServerStatus, 0.44+), and a
+// field that could only be filled from "the file mentioned it" would be a green
+// light about the one thing a person actually cares about.
 type MCPListing struct {
 	// Sources are the layers that were inspected, lowest precedence first, in
 	// the order the session applies them. A source whose file is absent is
@@ -41,6 +41,10 @@ type MCPSourceInfo struct {
 }
 
 // MCPServerInfo is one declared MCP server.
+//
+// The launch fields are what a manager needs to show and edit the entry; the
+// env and header fields are names only, because those maps commonly hold
+// bearer tokens and API keys.
 type MCPServerInfo struct {
 	Name string
 	// Transport is stdio, http or sse, decided the way the SDK decides it. It
@@ -48,6 +52,16 @@ type MCPServerInfo struct {
 	Transport string
 	// Source is the config file that declared this server.
 	Source string
+	// Enabled is false only when the file says `enabled: false`; an absent
+	// field means enabled (0.44+).
+	Enabled bool
+	Command string
+	Args    []string
+	URL     string
+	// EnvNames and HeaderNames are the keys, sorted. Values never leave the
+	// file through a listing.
+	EnvNames    []string
+	HeaderNames []string
 }
 
 // ListMCPServers reports the MCP servers the given setting sources declare.
@@ -106,7 +120,17 @@ func ListMCPServers(cwd string, sources []SettingSource) (MCPListing, error) {
 		}
 		for name, s := range servers {
 			cfg := mcpFromSettings(s)
-			byName[name] = MCPServerInfo{Name: name, Transport: mcpTransport(cfg), Source: l.path}
+			byName[name] = MCPServerInfo{
+				Name:        name,
+				Transport:   mcpTransport(cfg),
+				Source:      l.path,
+				Enabled:     cfg.Enabled == nil || *cfg.Enabled,
+				Command:     cfg.Command,
+				Args:        cfg.Args,
+				URL:         cfg.URL,
+				EnvNames:    sortedKeys(s.Env),
+				HeaderNames: sortedKeys(s.Headers),
+			}
 		}
 	}
 
@@ -119,6 +143,19 @@ func ListMCPServers(cwd string, sources []SettingSource) (MCPListing, error) {
 		out.Servers = append(out.Servers, byName[name])
 	}
 	return out, nil
+}
+
+// sortedKeys names the keys of a secret-bearing map. It never reads a value.
+func sortedKeys(m map[string]string) []string {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // mcpTransport names the transport the SDK would pick for cfg, mirroring

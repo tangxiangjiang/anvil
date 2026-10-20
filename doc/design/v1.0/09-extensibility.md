@@ -23,6 +23,7 @@ MCPServers: map[name] => {
 
 - On Resume: re-pass MCP configs (not persisted with secrets).
 - Static `Headers` (e.g. `Authorization`) are supported for remote MCP; OAuth / browser auth remains out of scope.
+  *(Superseded by 0.44: the host now owns the OAuth flow and the tokens, see [43-mcp-management.md](43-mcp-management.md) §6. Static headers still work.)*
 
 ## Permission hooks
 
