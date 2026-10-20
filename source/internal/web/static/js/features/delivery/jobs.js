@@ -50,7 +50,13 @@ Object.assign(window.Features.delivery, {
     for (const a of annotations) {
       const res = await this.preflight(a.transition, a.target);
       const btn = el.querySelector(a.selector);
-      if (!btn) continue;
+      if (!btn) {
+        // A selector that matches nothing is a bug in this file, not a policy.
+        // Say so once rather than silently annotating zero buttons: a preflight
+        // that quietly does nothing is indistinguishable from one that passed.
+        console.warn("preflight: no button for", a.selector);
+        continue;
+      }
       const advisory = (res.blockers || []).filter((b) => b.code === "open_work");
       const hard = (res.blockers || []).filter((b) => b.code !== "open_work");
       if (hard.length) {
@@ -81,6 +87,28 @@ Object.assign(window.Features.delivery, {
       });
       btn.closest(".card, .del-ms-card, .del-test-card")?.appendChild(why);
     }
+  },
+
+  /**
+   * runPreflight is the call site's entry point.
+   *
+   * It exists because applyPreflight used to be fire-and-forget: a throw inside
+   * it left every guarded button enabled and unannotated, so the preflight
+   * silently degraded to no preflight — the exact failure it exists to prevent.
+   * Here a failure is visible and the buttons stay usable: the server refuses
+   * with the same reason, and a broken preview is not a policy.
+   */
+  runPreflight(el, annotations) {
+    return this.applyPreflight(el, annotations).catch((e) => {
+      console.error("preflight failed:", e);
+      const box = el?.querySelector(".del-preflight-warn");
+      if (box) return;
+      const warn = document.createElement("div");
+      warn.className = "del-blockers advisory del-preflight-warn";
+      warn.textContent =
+        "Could not check whether these actions are ready; the server will refuse them with the reason.";
+      el?.querySelector(".del-head")?.appendChild(warn);
+    });
   },
 
   /** setActiveJob records what is running; null clears the bar. */

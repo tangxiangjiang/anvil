@@ -130,7 +130,7 @@ Object.assign(window.Features.delivery, {
         selector: '[data-ms-accept="' + t + '"]',
       });
     });
-    void this.applyPreflight(el, annotations);
+    this.runPreflight(el, annotations);
 
     el.querySelectorAll(".del-ms-worker").forEach((sel) => {
       sel.addEventListener("change", async () => {

@@ -216,6 +216,29 @@ window.Features.workbench = {
     if (el) el.textContent = text || "";
   },
 
+  /**
+   * showApprovalLimit renders the capability note for a session.
+   *
+   * It reads approval_supported from the session payload rather than assuming:
+   * if the job protocol ever gains an approval channel, the backend flips this
+   * flag and the note disappears without a client change.
+   */
+  async showApprovalLimit(sessionId) {
+    const note = this.el?.querySelector("#wb-approval-note");
+    if (!note) return;
+    note.hidden = true;
+    note.textContent = "";
+    try {
+      const sess = await api.v1.workbenchSession(sessionId);
+      if (sess.approval_supported) return;
+      note.hidden = false;
+      note.textContent =
+        "Approvals are not delivered for this run: a gated tool call is decided by the worker's own options, not here.";
+    } catch (_) {
+      // A session that cannot be described must not produce a claim about it.
+    }
+  },
+
   /** attach opens a session: replay first, then follow. */
   async attach(sessionId) {
     this.closeStream();
@@ -229,6 +252,13 @@ window.Features.workbench = {
     stream.innerHTML = "";
     this.setStatus("connecting…");
     if (head) head.textContent = sessionId;
+
+    // State the limit the backend reports, once, per attached session. The job
+    // protocol carries no approval event and no channel to answer one, so a
+    // gated tool call inside this run is decided by the worker's options - not
+    // by a person here. Saying so is the difference between a known limit and a
+    // missing feature someone waits for.
+    this.showApprovalLimit(sessionId);
 
     const ac = new AbortController();
     this._abort = ac;
@@ -320,7 +350,6 @@ window.Features.workbench = {
         }
         if (line === "") name = "";
       }
-      if (this._abortEndedEarly) return;
     }
   },
 
