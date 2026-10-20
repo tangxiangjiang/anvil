@@ -837,29 +837,30 @@ Object.assign(window.Features.delivery, {
           window.AiChat.flash(card);
         }
       },
+      // A mock assistant must not write to the database.
+      //
+      // It used to append "· (AI mock) <your text>" straight into the ADR and,
+      // if a version was cited, into that version's Gate - on Send, with no
+      // confirmation. The reply looks like advice, so the text that landed in
+      // the record was the operator's own prose wearing an AI label, and the
+      // Gate it touched gates real phase jobs. Nothing is applied now: the
+      // draft is shown, and applying it is an explicit edit-and-save.
       onSend: async ({ composed }, c) => {
         if (approved) return;
-        c.appendMessage(
-          "ai",
-          "(mock) Noted. Suggested polish applied to ADR.Decision (and cited Version Gate when present).",
-        );
-        const line = "· (AI mock) " + composed.slice(0, 160);
-        const decision = (this.adrFieldValue(d, "adr_decision") || "").trim();
-        await api.v1.deliveryPatchDesign(d.id, {
-          adr_decision: decision ? decision + "\n" + line : line,
-        });
+        const draft = String(composed || "").trim();
         const citeVer = vers.find(
           (v) =>
             composed.includes("@" + (v.title || "")) ||
             composed.includes(`@V${v.sort_order}.Gate`),
         );
-        if (citeVer) {
-          await api.v1.deliveryPatchDesignVersion(d.id, citeVer.id, {
-            gate: ((citeVer.gate || "").trim() ? citeVer.gate + "\n" : "") + line,
-          });
-        }
-        await this.reload();
-        this.render();
+        const target = citeVer ? "Version " + citeVer.sort_order + " Gate" : "Decision";
+        c.appendMessage(
+          "ai",
+          "[mock assistant - nothing was saved]\n" +
+            "Draft for " + target + ":\n" +
+            draft +
+            "\n\nCopy it into the field and press Save.",
+        );
       },
     });
     const actions = [];

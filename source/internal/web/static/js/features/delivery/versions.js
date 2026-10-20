@@ -338,21 +338,15 @@ Object.assign(window.Features.delivery, {
           this.openCiteVersionPicker(engId, major, minor, c);
         }
       },
+      // Same rule as the detail view: a mock drafts, it does not write.
       onSend: async ({ composed }, c) => {
         c.appendMessage(
           "ai",
-          "(mock) Noted. Suggested polish applied to Completion criteria.",
+          "[mock assistant - nothing was saved]\n" +
+            "Draft for Completion criteria:\n" +
+            String(composed || "").trim() +
+            "\n\nOpen a version and press Edit to apply it.",
         );
-        const next =
-          (head.success || "").trim() +
-          (head.success ? "\n" : "") +
-          "· (AI mock) " +
-          composed.slice(0, 200);
-        await api.v1.deliveryPatchVersion(engId, major, minor, head.patch, {
-          success: next,
-        });
-        await this.reload();
-        this.render();
       },
     });
     return `
@@ -443,21 +437,17 @@ Object.assign(window.Features.delivery, {
           this.openCiteVersionPicker(engId, major, minor, c);
         }
       },
+      // Mock assistant: drafts only, never writes. See the note in designs.js -
+      // the previous version appended the operator's own text into Completion
+      // criteria on Send, which is a silent edit of a persisted requirement.
       onSend: async ({ composed }, c) => {
         c.appendMessage(
           "ai",
-          "(mock) Noted. Suggested polish applied to Completion criteria.",
+          "[mock assistant - nothing was saved]\n" +
+            "Draft for Completion criteria:\n" +
+            String(composed || "").trim() +
+            "\n\nCopy it into the field and press Save.",
         );
-        const next =
-          (ver.success || "").trim() +
-          (ver.success ? "\n" : "") +
-          "· (AI mock) " +
-          composed.slice(0, 200);
-        await api.v1.deliveryPatchVersion(engId, major, minor, patch, {
-          success: next,
-        });
-        await this.reload();
-        this.render();
       },
     });
     return `
