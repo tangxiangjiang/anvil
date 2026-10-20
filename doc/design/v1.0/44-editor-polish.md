@@ -35,8 +35,11 @@ a language server is a stdio command mapped from a language or a glob, the SDK r
 `lsp_*` tools, and `Required` decides whether a failed start aborts `Create`.
 
 The SDK has had this since 0.16. The editor host has never set `opts.LSP` — `grep -n LSP
-source/internal/editorhost/*.go` finds nothing — so no VS Code session has ever had a
-language server, and no setting in the extension could have changed that.
+source/internal/editorhost/*.go` finds nothing — and the extension has no setting. A
+workspace that writes `.anvil/lsp.json` does get language tools today, because the SDK reads
+that file whenever the session loads the project setting source; what has never existed is
+the user's way to declare a server once, in settings, and the wire path that carries it. The
+gap is narrower than "LSP is absent", and the milestone page says so.
 
 0.47 adds the missing path:
 

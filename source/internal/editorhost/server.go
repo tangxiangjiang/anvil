@@ -1326,10 +1326,38 @@ func (s *Server) buildOptions(ctx context.Context, p SessionParams, sess *sessio
 		}
 	}
 	if len(p.TestCommand) > 0 {
+		if strings.TrimSpace(p.TestCommand[0]) == "" {
+			return opts, errInvalidParams("test_command: command is required")
+		}
 		opts.Test = anvil.TestOptions{Command: p.TestCommand}
 	}
 	if len(p.BuildCommand) > 0 {
+		if strings.TrimSpace(p.BuildCommand[0]) == "" {
+			return opts, errInvalidParams("build_command: command is required")
+		}
 		opts.Build = anvil.BuildOptions{Command: p.BuildCommand}
+	}
+	// Language servers are the client's declaration. Required stays false: a
+	// server that cannot start removes tools, it does not refuse the session.
+	// The SDK still merges {cwd}/.anvil/lsp.json underneath, so this list adds
+	// to what the workspace already declared.
+	if p.LSP != nil && p.LSP.Enabled {
+		servers := make([]anvil.LSPServerConfig, 0, len(p.LSP.Servers))
+		for i, srv := range p.LSP.Servers {
+			if strings.TrimSpace(srv.Command) == "" {
+				return opts, errInvalidParams(fmt.Sprintf("lsp.servers[%d]: command is required", i))
+			}
+			if srv.Language == "" && srv.Pattern == "" {
+				return opts, errInvalidParams(fmt.Sprintf("lsp.servers[%d]: language or pattern is required", i))
+			}
+			servers = append(servers, anvil.LSPServerConfig{
+				Language: srv.Language,
+				Pattern:  srv.Pattern,
+				Command:  srv.Command,
+				Args:     srv.Args,
+			})
+		}
+		opts.LSP = anvil.LSPOptions{Enabled: true, Servers: servers}
 	}
 	if opts.Provider == "" {
 		opts.Provider = anvil.ProviderOpenAI

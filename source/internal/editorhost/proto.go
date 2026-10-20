@@ -277,6 +277,17 @@ type SessionParams struct {
 	TestCommand  []string `json:"test_command,omitempty"`
 	BuildCommand []string `json:"build_command,omitempty"`
 
+	// LSP enables the language tools. Absent means off. A configured server
+	// registers definition, references, hover and the rest through the SDK's
+	// LSP supervisor; a server that cannot start is a missing tool, not a
+	// refused session, which is why Required is not on the wire.
+	//
+	// The SDK also reads {cwd}/.anvil/lsp.json when the session loads the
+	// project setting source. Servers sent here are appended to that file's
+	// list and win on the switches; the file stays the workspace's own way to
+	// describe a language server.
+	LSP *LSPParams `json:"lsp,omitempty"`
+
 	// Vision enables image attachments for the session. It is off by default:
 	// a prompt carrying attachments to a session that did not opt in is
 	// refused, so a client never gets a run that quietly ignores the image.
@@ -303,6 +314,23 @@ type SessionParams struct {
 	// existed: a client that never declares a window cannot have its session
 	// summarized behind its back. Negative values are normalized by the SDK.
 	Context *ContextParams `json:"context,omitempty"`
+}
+
+// LSPParams is the wire form of anvil.LSPOptions. Enabled is explicit because
+// a client may switch language servers off without clearing the entries it
+// keeps for later, the same shape the MCP layer settings use.
+type LSPParams struct {
+	Enabled bool              `json:"enabled"`
+	Servers []LSPServerParams `json:"servers,omitempty"`
+}
+
+// LSPServerParams maps a language or glob to a stdio language server. Command
+// and Args stay separate: the host never joins them into a shell string.
+type LSPServerParams struct {
+	Language string   `json:"language,omitempty"`
+	Pattern  string   `json:"pattern,omitempty"`
+	Command  string   `json:"command"`
+	Args     []string `json:"args,omitempty"`
 }
 
 // ContextParams is the wire form of anvil.ContextOptions. The SDK fills the

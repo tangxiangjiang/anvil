@@ -10,6 +10,7 @@
 
 import * as vscode from 'vscode';
 import { ApiKeyStore, applyApiKeyEnv, forgetApiKey, loadApiKey, saveApiKey } from './apiKeyStore';
+import { argv, lspParams } from './languageTools';
 import { McpSettings, settingSourcesFor } from './mcp';
 import { SessionConfig } from './session';
 import { WebSearchSettings, webSearchParams } from './webSearch';
@@ -108,6 +109,16 @@ export function readSettings(): ResolvedSettings {
   // is not this client's to assume, and turning it off has to reach the session
   // that was just opened rather than the next one.
   session.subagents = cfg.get<boolean>('subagents', true) ?? true;
+  // Language servers, the test command and the build command are all "a tool
+  // the user configured": when nothing is configured the fields are omitted,
+  // so the request is exactly the one an older client sent. A workspace's
+  // `.anvil/lsp.json` is merged by the SDK independently; this list adds to it.
+  const lsp = lspParams(cfg.get<boolean>('lsp.enabled', false) ?? false, cfg.get<unknown>('lsp.servers', []));
+  if (lsp) session.lsp = lsp;
+  const testCommand = argv(cfg.get<unknown>('testCommand', []));
+  if (testCommand) session.test_command = testCommand;
+  const buildCommand = argv(cfg.get<unknown>('buildCommand', []));
+  if (buildCommand) session.build_command = buildCommand;
   // MCP is per source, with deliberately different defaults. The workspace file
   // is reviewed like the rest of the workspace, and the extension refuses
   // untrusted workspaces; a home-directory file a user may not remember writing

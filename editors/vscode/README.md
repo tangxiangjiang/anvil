@@ -127,7 +127,19 @@ names both sides and stops rather than failing later inside a tool call.
 | `anvil.webSearch.provider` | `http` (default) calls the endpoint in `anvil.webSearch.baseUrl`; `mcp` registers no built-ins and expects a search server from `.cursor/mcp.json` |
 | `anvil.webSearch.baseUrl` | The JSON search endpoint for the `http` provider. Required with that provider — the session refuses to open without it, naming the setting |
 | `anvil.webSearch.maxResults` | Results per search, 1–10; `0` uses the provider default of 5 |
+| `anvil.lsp.enabled` | Give the session the language tools (`definition`, `references`, `hover`, `rename_symbol`). Off by default. A workspace's `.anvil/lsp.json` is read independently when the project layer is loaded, so this switch is for servers the editor declares |
+| `anvil.lsp.servers` | Language servers, each `{language, pattern, command, args}`. The command is an executable, never a shell string; it runs with the host's privileges in a trusted workspace |
+| `anvil.testCommand` | The argv of the test command, for example `["go", "test", "./..."]`; setting it registers `run_tests` |
+| `anvil.buildCommand` | The argv of the build command; setting it registers `build` |
 | `anvil.hostPath` | The sidecar to spawn; empty uses the bundled one, then `PATH` |
+
+**Language tools.** A configured language server is started by the host, and its tools are
+registered for the session: a server that cannot start removes its tools and never refuses
+the conversation. The workspace can also describe servers in `.anvil/lsp.json`; the list in
+settings is appended to that file. `testCommand` and `buildCommand` are argv arrays, so a
+path with a space is one argument and nothing is handed to a shell. All three are omitted
+from `session.new` when unset, which is why an unconfigured session is exactly the request
+it was before they existed.
 
 The API key is **not** a setting. If the VS Code process already has
 `ANVIL_API_KEY`, that is enough and **Anvil: Set API Key** is unnecessary. A

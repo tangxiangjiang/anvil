@@ -217,6 +217,12 @@ export interface SessionParams {
   test_command?: string[];
   build_command?: string[];
   /**
+   * Language servers for this session. Omitted means off. A server that cannot
+   * start removes its tools rather than refusing the session, and the SDK
+   * still merges the workspace's `.anvil/lsp.json` underneath.
+   */
+  lsp?: LspParams;
+  /**
    * Opt in to image attachments. Off by default: the host refuses an
    * attachment on a session that did not ask, because the SDK's
    * `Vision.Enabled` is what makes it accept one at all.
@@ -244,6 +250,24 @@ export interface SessionParams {
    * environment the extension spawns it with.
    */
   web_search?: WebSearchParams;
+}
+
+/**
+ * The language servers a session may start. Presence is the switch: the
+ * extension sends this only when at least one valid entry is configured.
+ */
+export interface LspParams {
+  enabled: boolean;
+  servers: LspServerParams[];
+}
+
+/** One stdio language server, mapped from a language or a glob. */
+export interface LspServerParams {
+  language?: string;
+  pattern?: string;
+  /** The executable. Never a shell string; args travel separately. */
+  command: string;
+  args?: string[];
 }
 
 /**
