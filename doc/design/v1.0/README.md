@@ -1,8 +1,8 @@
 # Design v1.0 (cutoff)
 
-Anvil **local-only** Go Agent SDK design through product milestone **0.44**. The chapters end at **43** (MCP management): 0.39 is the Delivery **execute / test campaign loop**, and it is designed by [33](33-delivery-ui.md) together with [DELIVERY_PIPELINE_VISION.md](../../../DELIVERY_PIPELINE_VISION.md) rather than by a chapter of its own. Read chapters in order before implementing the matching roadmap phase.
+Anvil **local-only** Go Agent SDK design through product milestone **0.47**. The chapters end at **44** (editor polish): 0.39 is the Delivery **execute / test campaign loop**, and it is designed by [33](33-delivery-ui.md) together with [DELIVERY_PIPELINE_VISION.md](../../../DELIVERY_PIPELINE_VISION.md) rather than by a chapter of its own. Read chapters in order before implementing the matching roadmap phase.
 
-This tree is the **design cutoff** for 0.1–0.44 delivery. Later product lines get a new `doc/design/v…/` directory.
+This tree is the **design cutoff** for 0.1–0.47 delivery. Later product lines get a new `doc/design/v…/` directory.
 
 ## Read order
 
@@ -52,6 +52,7 @@ This tree is the **design cutoff** for 0.1–0.44 delivery. Later product lines 
 | 41 | [41-subagents-and-tasks.md](41-subagents-and-tasks.md) | Agent-in-agent, background tasks and `/tasks`, and declarative workflows → **0.42** |
 | 42 | [42-context-management.md](42-context-management.md) | A token budget, safe compaction at run start and mid-run, `/compact`, and the cache clock → **0.43** |
 | 43 | [43-mcp-management.md](43-mcp-management.md) | A host-owned MCP runtime with observable state, safe config edits, reconnect, Streamable HTTP and OAuth → **0.44** |
+| 44 | [44-editor-polish.md](44-editor-polish.md) | Wiring LSP and test/build, rewind, plan review, reading, accessibility, rule scopes, and one root per window → **0.47** |
 
 Parent index: [`doc/design/README.md`](../README.md).
 
@@ -65,4 +66,4 @@ it is written down as [40](40-web-assist.md) rather than assumed. See
 
 - Design describes **what** and **why** for this cutoff.
 - [`doc/roadmaps/v1.0/`](../../roadmaps/v1.0/) describes **when**.
-- Chapters 11–43 map to [m_0.11](../../roadmaps/v1.0/m_0.11_worker_daemon.md) … [m_0.44](../../roadmaps/v1.0/m_0.44_mcp_management.md). [m_0.39](../../roadmaps/v1.0/m_0.39_execute.md) maps back to chapter 33.
+- Chapters 11–44 map to [m_0.11](../../roadmaps/v1.0/m_0.11_worker_daemon.md) … [m_0.47](../../roadmaps/v1.0/m_0.47_editor_polish.md). [m_0.39](../../roadmaps/v1.0/m_0.39_execute.md) maps back to chapter 33.
