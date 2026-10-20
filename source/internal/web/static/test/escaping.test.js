@@ -40,6 +40,7 @@ const FILES = [
   "js/features/delivery/test.js",
   "js/features/delivery/wizard.js",
   "js/features/clusters.js",
+  "js/features/workbench.js",
   "js/features/nodes.js",
   "js/features/usage.js",
   "js/shared/badge.js",

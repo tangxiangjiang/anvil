@@ -546,6 +546,19 @@
     "sub",
     "nodeOpts"
   ],
+  "js/features/workbench.js": [
+    "this.skeleton(3)",
+    "out",
+    "s.id === this._sessionId ? \" active\" : \"\"",
+    "window.AnvilUI.badgeClass(s.state)",
+    "ev.name || \"tool\"",
+    "ev.max_steps",
+    "this._steps",
+    "max",
+    "it.status === \"done\" ? \"✔\" : \"○\"",
+    "it.text",
+    "done.error"
+  ],
   "js/features/nodes.js": [
     "w.id",
     "w.status",

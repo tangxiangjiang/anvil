@@ -265,6 +265,68 @@ input { width: 100%; margin-bottom: 0.75rem; }
   .side { border-right: 0; border-bottom: 1px solid var(--border); }
 }
 
+/* Workbench (0.46.7): the interactive surface. */
+.wb-grid {
+  display: grid; grid-template-columns: minmax(240px, 300px) 1fr;
+  gap: 1rem; align-items: start;
+}
+.wb-side { display: flex; flex-direction: column; gap: 0.5rem; }
+.wb-side h3 { margin: 0.75rem 0 0.25rem; font-size: 0.95rem; }
+.wb-sessions { display: flex; flex-direction: column; gap: 0.35rem; max-height: 44vh; overflow: auto; }
+.wb-sess {
+  display: flex; gap: 0.5rem; align-items: flex-start; text-align: left;
+  background: var(--panel); border: 1px solid var(--border); color: var(--text);
+  padding: 0.45rem 0.6rem; border-radius: var(--radius); width: 100%;
+}
+.wb-sess:hover { border-color: var(--accent-dim); }
+.wb-sess.active { border-color: var(--accent); background: #1e2a36; }
+.wb-sess-state { width: 0.5rem; height: 0.5rem; border-radius: 50%; margin-top: 0.4rem; flex: 0 0 auto; background: var(--muted); }
+.wb-sess-state.ok { background: var(--ok); }
+.wb-sess-state.warn { background: var(--warn); }
+.wb-sess-state.bad { background: var(--danger); }
+.wb-sess-body { display: flex; flex-direction: column; min-width: 0; }
+.wb-sess-prompt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wb-sess-meta { font-size: 0.75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.wb-main {
+  display: flex; flex-direction: column; gap: 0.5rem;
+  min-height: 60vh; min-width: 0;
+}
+.wb-session-head { font-family: var(--mono); font-size: 0.8rem; }
+.wb-note {
+  padding: 0.45rem 0.65rem; border-radius: var(--radius);
+  border: 1px solid var(--border); border-left: 3px solid var(--warn);
+  background: var(--panel); font-size: 0.85rem;
+}
+.wb-stream {
+  flex: 1; min-height: 30vh; max-height: 62vh; overflow: auto;
+  display: flex; flex-direction: column; gap: 0.4rem;
+  padding: 0.5rem; border: 1px solid var(--border); border-radius: var(--radius);
+  background: #0f1620;
+}
+.wb-say { white-space: pre-wrap; line-height: 1.5; }
+.wb-tool { border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); }
+.wb-tool summary { cursor: pointer; padding: 0.35rem 0.55rem; font-size: 0.9rem; }
+.wb-tool-args, .wb-tool-out {
+  margin: 0; padding: 0.45rem 0.55rem; font-family: var(--mono); font-size: 0.78rem;
+  white-space: pre-wrap; word-break: break-word; max-height: 24vh; overflow: auto;
+}
+.wb-tool-out { border-top: 1px solid var(--border); color: var(--muted); }
+.wb-tool-error { border-color: var(--danger); }
+.wb-tool-error summary { color: var(--danger); }
+.wb-error { color: var(--danger); white-space: pre-wrap; }
+.wb-done { padding: 0.45rem 0.6rem; border-radius: var(--radius); border: 1px solid var(--ok); background: #14251c; }
+.wb-done-error { border-color: var(--danger); background: #2a1616; }
+.wb-done-cancelled { border-color: var(--warn); background: #2a2317; }
+.wb-todos { margin: 0; padding-left: 1.1rem; font-size: 0.85rem; }
+.wb-composer { display: flex; align-items: center; gap: 0.6rem; }
+
+@media (max-width: 900px) {
+  .wb-grid { grid-template-columns: 1fr; }
+  .wb-sessions { max-height: 22vh; }
+  .wb-stream { max-height: 52vh; }
+}
+
 /* Delivery UI (0.33) */
 .del-head {
   display: flex; justify-content: space-between; align-items: flex-start;
