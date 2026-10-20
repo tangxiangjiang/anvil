@@ -23,6 +23,7 @@
  */
 
 import { randomBytes } from 'node:crypto';
+import { isAbsolute, relative } from 'node:path';
 import * as vscode from 'vscode';
 import { ChangesTracker, ChangedFile } from './changes';
 import { EditAnchor, PreImage, locateEdit, planReview, reviewOf } from './editDiff';
@@ -139,6 +140,7 @@ type Inbound =
   | { type: 'reviewCall'; toolCallId: string; runId?: string; name?: string; args?: unknown }
   /** A link the transcript rendered. The URL is re-checked before it is opened. */
   | { type: 'openLink'; url: string }
+  | { type: 'openPath'; path: string; line?: number }
   /**
    * "Put this answer on the clipboard." The text is the raw Markdown the bubble
    * holds; the host writes it, because the clipboard belongs to the editor.
@@ -875,6 +877,9 @@ export class ChatPanel implements HostListener {
       case 'openLink':
         await this.openLink(msg.url);
         return;
+      case 'openPath':
+        await this.openPath(msg.path, msg.line);
+        return;
       case 'copy':
         await this.copy(msg.text);
         return;
@@ -908,6 +913,41 @@ export class ChatPanel implements HostListener {
     const trimmed = url.trim();
     if (!/^https?:\/\/\S+$/i.test(trimmed)) return;
     await vscode.env.openExternal(vscode.Uri.parse(trimmed));
+  }
+
+  /**
+   * Opens the file a tool row named, at the line the call started from.
+   *
+   * The path is model output, so it is resolved the way every other path in
+   * this class is: under the window's chosen root and nowhere else. A relative
+   * path is joined to that root; an absolute one is accepted only when it is
+   * already inside it. The webview only posts a path it drew as a link, so a
+   * refusal here is silent — the document is not the one this extension wrote,
+   * or the file has moved since the call.
+   */
+  private async openPath(path: unknown, line: unknown): Promise<void> {
+    if (typeof path !== 'string') return;
+    const trimmed = path.trim();
+    if (trimmed === '') return;
+    const root = rootUri();
+    if (!root) return;
+    const uri = isAbsolute(trimmed)
+      ? vscode.Uri.file(trimmed)
+      : this.fileUri(trimmed.replace(/\\/g, '/'));
+    if (!uri) return;
+    const inside = relative(root.fsPath, uri.fsPath);
+    if (inside === '' || inside.startsWith('..') || isAbsolute(inside)) return;
+    const first = typeof line === 'number' && Number.isFinite(line) && line > 0
+      ? Math.floor(line)
+      : undefined;
+    try {
+      const document = await vscode.workspace.openTextDocument(uri);
+      const selection = first ? new vscode.Range(first - 1, 0, first - 1, 0) : undefined;
+      await vscode.window.showTextDocument(document, { preview: true, selection });
+    } catch {
+      // A path the row offered but the disk no longer has is not worth a
+      // notification: the file may have been renamed since the call.
+    }
   }
 
   /**

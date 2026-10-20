@@ -294,15 +294,17 @@ which is how the extension already degrades (`runtime`, `permission_mode_source`
 | [p_0.47.10](../../roadmaps/v1.0/m_0.47/p_0.47.10.md) | The transcript's visual grammar: rows instead of cards, calmer type, a side-by-side edit diff |
 | [p_0.47.11](../../roadmaps/v1.0/m_0.47/p_0.47.11.md) | One visual grammar for all five webviews: shared tokens and panel chrome |
 | [p_0.47.12](../../roadmaps/v1.0/m_0.47/p_0.47.12.md) | Dot markers, more air, a configurable chat text size |
+| [p_0.47.13](../../roadmaps/v1.0/m_0.47/p_0.47.13.md) | A step rail, coloured operations, human tool titles and file links |
 
-0.47.9–0.47.12 were written after the milestone was accepted. Their findings came from the
+0.47.9–0.47.13 were written after the milestone was accepted. Their findings came from the
 first real use of the panel, not from a test: a capability that existed and was never turned
 on, an error that only reached the log, a block with no way out — and then a transcript that
 was tiring to read, followed by four manager panels that each declared their own copy of the
 same document chrome, and finally a row marker, a spacing and a text size that the reader
-named directly. The lesson is recorded here rather than in a commit message — the manual
-passes the earlier phases wrote down as "still worth doing" are the ones that would have found
-all of these.
+named directly, and then the rail, operation colour and human names that the same reader
+recognised from another editor. The lesson is recorded here rather than in a commit message —
+the manual passes the earlier phases wrote down as "still worth doing" are the ones that
+would have found all of these.
 
 ## 15. The visual grammar after use
 
@@ -350,3 +352,37 @@ p_0.47.12 settle on, so a later change to one panel has something to agree with.
 - **High contrast gets a non-colour cue.** A tinted line background is not guaranteed there,
   so added and removed rows also carry a 2px left edge, and the quiet rows switch to the
   normal foreground. The focus rings the accessibility phase pinned are untouched.
+
+## 16. The rail, the operation, and the file link
+
+p_0.47.13 answers one more reading of the same transcript. §15 made a step a row; §16 makes a
+run of steps a sequence, and makes the row say what the step was.
+
+- **A rail belongs to a run.** A tool row and a Thinking row are steps in a turn; a user
+  message and an assistant paragraph are not. The stylesheet draws one 1px segment per step
+  at the dot's centre, and `syncRail` gives a step `rail-up` / `rail-down` only where another
+  step follows it in the same container. A run of one draws nothing, so the line begins and
+  ends on a dot; prose flushes the run, so the line never crosses an answer. The segment
+  reaches 10px into the gap on a side where the run continues, which meets across the 20px a
+  message's margin and the transcript's gap add up to.
+- **An operation is not a success state.** The tool dot is green — the editor's
+  `testing-iconPassed` with `charts-green` behind it — before, during and after a call.
+  Finishing dims it slightly rather than fading it to muted; failure is the error colour and
+  the open/stopped ring is green. Only Thinking stays grey, because reasoning is not an
+  operation.
+- **The row names the act, not the implementation.** The webview keeps a display map from
+  the SDK's names (`read_file`, `shell`) to titles (`Read`, `Bash`); an unknown name is
+  de-slugged instead of shown raw. The title is the body's size, weight 600, in the
+  foreground, and the approval card's heading and announcement use the same map. The host,
+  the rules and the wire keep the SDK's names.
+- **The argument completes the sentence.** `Read` carries the file and, when the call had
+  one, its range (`lines 113–130`, from the 1-based `offset` and `limit` the host accepts);
+  `Edit` carries its path; `Bash` its command; `Grep` its pattern. The path is the link
+  colour and a link in fact: `openPath` opens the file at the call's first line. A relative
+  path is joined to the window's chosen root and an absolute one is accepted only when it is
+  inside it, so the webview cannot make the extension open anything the row did not draw.
+- **The edit's counts move out of the diff.** The path is in the row, where a reader looks
+  first, so the comparison starts with `Added 1 line` / `Removed 2 lines` and keeps its two
+  columns, its own line numbers and the narrow fallback. The old path line inside the diff is
+  gone rather than duplicated.
+

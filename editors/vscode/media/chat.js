@@ -312,7 +312,51 @@
     const pinned = atBottom();
     clearEmpty();
     active.container.appendChild(node);
+    syncRail(active.container);
     scrollIfPinned(pinned);
+  }
+
+  /**
+   * The vertical line through a run of steps.
+   *
+   * A rail belongs to a run, not to the transcript: a user message or an
+   * assistant paragraph is not a step and the line stops at it. A `.tool` is a
+   * step; a `.msg` contributes its direct `.think` children and is a step only
+   * while it has no prose. Each step draws its own `::after` segment, extended
+   * into the gap on a side where the run continues — a single step draws
+   * nothing, so the line begins and ends on a dot rather than in mid-air.
+   *
+   * The markup stays flat. A wrapper per run would have to be learned by the
+   * replay, the spawn scopes and the focus view; two classes per row are enough
+   * for one line.
+   */
+  function syncRail(container) {
+    if (!container) return;
+    let run = [];
+    const flush = () => {
+      for (let i = 0; i < run.length; i += 1) {
+        run[i].classList.toggle('rail-up', i > 0);
+        run[i].classList.toggle('rail-down', i < run.length - 1);
+      }
+      run = [];
+    };
+    for (const child of container.children) {
+      if (child.classList.contains('tool')) {
+        run.push(child);
+        continue;
+      }
+      if (child.classList.contains('msg')) {
+        const thinks = [...child.querySelectorAll(':scope > .think')];
+        for (const think of thinks) run.push(think);
+        // Prose after the reasoning is where the run ends: the next call is
+        // after an answer, not after this thought.
+        const body = child.querySelector(':scope > .body');
+        if (body && body.textContent.trim() !== '') flush();
+        continue;
+      }
+      flush();
+    }
+    flush();
   }
 
   /**
@@ -559,6 +603,7 @@
       state.think = think;
       state.thinkBody = body;
       state.thinkSealed = false;
+      syncRail(state.wrap.parentElement);
     }
     const pinned = atBottom();
     state.thinkBody.textContent += text;
@@ -927,6 +972,9 @@
       state.paintQueued = false;
       const pinned = atBottom();
       paintMarkdown(state.md, state.text);
+      // Prose on the body is what turns a Thinking-only message from a step
+      // into an answer, and that is the moment the rail's run changes.
+      syncRail(state.wrap.parentElement);
       scrollIfPinned(pinned);
     });
   }
@@ -1030,6 +1078,202 @@
   }
 
   /**
+   * The name a reader knows the call by. The SDK names a tool for its
+   * implementation (`read_file`); the transcript names it for the act. The map
+   * is display only: the host, the rules and the wire keep the SDK's names.
+   */
+  const TOOL_TITLES = {
+    read_file: 'Read',
+    read_image: 'Read image',
+    write_file: 'Write',
+    edit_file: 'Edit',
+    apply_patch: 'Patch',
+    grep: 'Grep',
+    glob: 'Find',
+    semantic_search: 'Search',
+    shell: 'Bash',
+    web_search: 'Web search',
+    fetch_url: 'Fetch',
+    list_skills: 'Skills',
+    read_skill: 'Skill',
+    task_list: 'Tasks',
+    task_output: 'Task output',
+    task_cancel: 'Stop task',
+    spawn_agent: 'Agent',
+    build: 'Build',
+    diagnostics: 'Diagnostics',
+    definition: 'Definition',
+    references: 'References',
+    hover: 'Hover',
+    rename_symbol: 'Rename',
+    git_status: 'Git status',
+    git_diff: 'Git diff',
+    git_log: 'Git log',
+    memory_list: 'Memory',
+    memory_read: 'Recall',
+    memory_search: 'Recall',
+    memory_write: 'Remember',
+    memory_delete: 'Forget',
+    run_workflow: 'Workflow',
+    plugin_ping: 'Plugin',
+  };
+
+  function toolTitle(name) {
+    if (typeof name !== 'string' || name === '') return 'Tool';
+    if (TOOL_TITLES[name]) return TOOL_TITLES[name];
+    // An unknown name is still words rather than an identifier: a new tool
+    // reads as "Some tool", not as `some_new_tool`.
+    const words = name.replace(/_/g, ' ');
+    return words.charAt(0).toUpperCase() + words.slice(1);
+  }
+
+  /** A trimmed string argument, or ''. */
+  function textArg(args, key) {
+    const value = args && typeof args === 'object' ? args[key] : undefined;
+    return typeof value === 'string' ? value.trim() : '';
+  }
+
+  /** A finite numeric argument, or 0. */
+  function numberArg(args, key) {
+    const value = args && typeof args === 'object' ? args[key] : undefined;
+    return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+  }
+
+  /**
+   * A path in a row, as a link.
+   *
+   * Only the argument the row knows is a file becomes one. The click is stopped
+   * and its default prevented, because the link lives inside `<summary>` and
+   * following the path should not also open the row. Enter and Space do the same
+   * thing for a reader who reaches it from the keyboard.
+   */
+  function fileLink(path, line) {
+    const link = el('span', 'file', path);
+    link.setAttribute('role', 'link');
+    link.tabIndex = 0;
+    link.title = 'Open ' + path;
+    const open = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (line > 0) vscode.postMessage({ type: 'openPath', path, line });
+      else vscode.postMessage({ type: 'openPath', path });
+    };
+    link.addEventListener('click', open);
+    link.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') open(event);
+    });
+    return link;
+  }
+
+  /**
+   * The second half of a row: what the call touched, as the parts that read as
+   * one sentence. `file` is the only part that is a link, `meta` is the muted
+   * range that rides beside it, and `text` is a command, pattern or title.
+   * A call whose arguments say nothing useful falls back to the old one-line
+   * hint rather than to an empty row.
+   */
+  function toolDetail(name, args) {
+    const parts = [];
+    const file = textArg(args, 'path') || textArg(args, 'file_path');
+    const addFile = (line) => {
+      if (file !== '') parts.push({ kind: 'file', text: file, line });
+    };
+    switch (name) {
+      case 'read_file': {
+        // offset is 1-based and limit counts lines, the same reading the host
+        // uses. No range means no parentheses, not a made-up one.
+        const offset = numberArg(args, 'offset');
+        const limit = numberArg(args, 'limit');
+        addFile(offset > 0 ? offset : undefined);
+        if (offset > 0 && limit > 0) {
+          parts.push({ kind: 'meta', text: `(lines ${offset}-${offset + limit - 1})` });
+        } else if (offset > 0) {
+          parts.push({ kind: 'meta', text: `(from line ${offset})` });
+        } else if (limit > 0) {
+          parts.push({ kind: 'meta', text: `(first ${limit} lines)` });
+        }
+        break;
+      }
+      case 'write_file':
+      case 'edit_file':
+      case 'read_image':
+        addFile(undefined);
+        break;
+      case 'grep': {
+        const pattern = textArg(args, 'pattern');
+        if (pattern !== '') parts.push({ kind: 'text', text: pattern });
+        addFile(undefined);
+        break;
+      }
+      case 'glob': {
+        const pattern = textArg(args, 'pattern');
+        if (pattern !== '') parts.push({ kind: 'text', text: pattern });
+        break;
+      }
+      case 'semantic_search': {
+        const query = textArg(args, 'query');
+        if (query !== '') parts.push({ kind: 'text', text: query });
+        break;
+      }
+      case 'shell': {
+        const command = textArg(args, 'command');
+        if (command !== '') parts.push({ kind: 'text', text: command });
+        break;
+      }
+      case 'web_search': {
+        const query = textArg(args, 'query');
+        if (query !== '') parts.push({ kind: 'text', text: query });
+        break;
+      }
+      case 'fetch_url': {
+        const url = textArg(args, 'url');
+        if (url !== '') parts.push({ kind: 'text', text: url });
+        break;
+      }
+      case 'spawn_agent': {
+        const description = textArg(args, 'description');
+        if (description !== '') parts.push({ kind: 'text', text: description });
+        break;
+      }
+      case 'apply_patch': {
+        // The patch names its files in its own text; the first one is the best
+        // one-line answer to "what did this touch?".
+        const patch = textArg(args, 'patch');
+        const match = patch.match(/\*\*\* (?:Update|Add|Delete) File: (.+)/);
+        if (match) parts.push({ kind: 'file', text: match[1].trim() });
+        break;
+      }
+      case 'task_output':
+      case 'task_cancel': {
+        const id = textArg(args, 'task_id');
+        if (id !== '') parts.push({ kind: 'text', text: id });
+        break;
+      }
+      case 'read_skill': {
+        const id = textArg(args, 'id');
+        if (id !== '') parts.push({ kind: 'text', text: id });
+        break;
+      }
+      case 'rename_symbol': {
+        const line = numberArg(args, 'line');
+        addFile(line > 0 ? line : undefined);
+        const next = textArg(args, 'new_name');
+        if (next !== '') parts.push({ kind: 'text', text: `→ ${next}` });
+        break;
+      }
+      default:
+        // Any other tool that names a path is still about that file.
+        addFile(undefined);
+        break;
+    }
+    if (parts.length === 0) {
+      const fallback = callHint(name, args);
+      if (fallback !== '') parts.push({ kind: 'text', text: fallback });
+    }
+    return parts;
+  }
+
+  /**
    * One labelled half of a tool card. The label is most of what makes the card
    * readable: two unlabelled blocks leave the reader to work out which one the
    * model asked for and which one it got back, and for a call whose arguments
@@ -1063,22 +1307,18 @@
     return lines.join('\n');
   }
 
-  /** The one-line hint on a spawn card's summary. */
-  function spawnDescription(args) {
-    if (args && typeof args === 'object' && typeof args.description === 'string') {
-      const description = args.description.trim();
-      if (description !== '') return description;
-    }
-    return callHint('spawn_agent', args);
-  }
-
   function addToolCall(event, reviewable, anchor) {
     endRound();
     const spawn = event.name === 'spawn_agent';
     const card = el('details', 'tool' + (spawn ? ' spawn' : ''));
     const summary = el('summary');
-    summary.appendChild(el('span', 'name', spawn ? 'subagent' : event.name || 'tool'));
-    summary.appendChild(el('span', 'hint', spawn ? spawnDescription(event.args) : callHint(event.name, event.args)));
+    summary.appendChild(el('span', 'name', toolTitle(event.name)));
+    const hint = el('span', 'hint');
+    for (const part of toolDetail(event.name, event.args)) {
+      if (part.kind === 'file') hint.appendChild(fileLink(part.text, part.line));
+      else hint.appendChild(el('span', part.kind, part.text));
+    }
+    summary.appendChild(hint);
     summary.appendChild(el('span', 'state', spawn ? 'starting…' : 'running…'));
     card.appendChild(summary);
 
@@ -1228,21 +1468,13 @@
     }
     const cap = 24;
     const rows = pairDiffRows(raw);
-    // The path and its counts sit above the comparison: the first question
-    // about an edit is what it touched and how much, and both are known before
-    // the rows are drawn.
-    if (change.path) {
-      const head = el('div', 'path');
-      head.appendChild(el('span', 'file', change.path));
-      const adds = raw.filter((row) => row.kind === 'add').length;
-      const dels = raw.filter((row) => row.kind === 'del').length;
-      if (adds > 0 || dels > 0) {
-        const stat = el('span', 'stat');
-        stat.appendChild(el('span', 'add', '+' + adds));
-        stat.appendChild(el('span', 'del', '−' + dels));
-        head.appendChild(stat);
-      }
-      box.appendChild(head);
+    // The path is in the row above this pane; the comparison says how much
+    // changed, which is the one question the rows below do not answer at a
+    // glance. On a one-line edit this is the whole summary.
+    const adds = raw.filter((row) => row.kind === 'add').length;
+    const dels = raw.filter((row) => row.kind === 'del').length;
+    if (adds > 0 || dels > 0) {
+      box.appendChild(el('div', 'note', changeNote(adds, dels)));
     }
     const pre = el('pre', numbered ? 'diff numbered side' : 'diff side');
     for (const pair of rows.slice(0, cap)) {
@@ -1263,6 +1495,17 @@
       box.appendChild(el('div', 'more-note', 'Showing the first ' + cap + ' rows of this change.'));
     }
     return box;
+  }
+
+  /** "Added 1 line", "Removed 2 lines", or both, from the counts above. */
+  function changeNote(adds, dels) {
+    const lines = (count) => (count === 1 ? '1 line' : count + ' lines');
+    const parts = [];
+    if (adds > 0) parts.push('Added ' + lines(adds));
+    if (dels > 0) {
+      parts.push((parts.length > 0 ? 'removed ' : 'Removed ') + lines(dels));
+    }
+    return parts.join(', ');
   }
 
   /** Line comparison of the two sides. A huge pair is clipped rather than diffed. */
@@ -1625,7 +1868,7 @@
     const headId = 'approval-head-' + ++approvalSeq;
     head.id = headId;
     head.appendChild(el('span', null, 'Allow '));
-    head.appendChild(el('span', 'tool-name', request.tool));
+    head.appendChild(el('span', 'tool-name', toolTitle(request.tool)));
     head.appendChild(el('span', null, '?'));
     card.appendChild(head);
     // A rule that insists on asking is part of why the card is here at all, and
@@ -1664,13 +1907,16 @@
 
     approvals.set(request.request_id, card);
     transcript.appendChild(card);
+    // An approval is not a step, so a run ends at it; the rows above may still
+    // carry a `rail-down` from before the card existed.
+    syncRail(transcript);
     transcript.scrollTop = transcript.scrollHeight;
     // A card that only appears is a turn waiting behind a reader's back. The
     // turn is running, so the composer is disabled and nothing else owns the
     // keyboard: saying it, and putting focus on the first answer, is the whole
     // keyboard path to deciding it.
     const preview = request.preview || {};
-    announceAlert('Approval needed: ' + request.tool + (preview.summary ? '. ' + preview.summary : ''));
+    announceAlert('Approval needed: ' + toolTitle(request.tool) + (preview.summary ? '. ' + preview.summary : ''));
     const first = buttons.querySelector('button');
     if (first) first.focus();
   }
@@ -1700,7 +1946,7 @@
     const options = Array.isArray(request.remember) ? request.remember : [];
     if (options.length === 0) {
       const scope = request.preview && request.preview.path ? request.preview.path : undefined;
-      const label = scope ? `Always allow for ${scope}` : `Always allow ${request.tool} this session`;
+      const label = scope ? `Always allow for ${scope}` : `Always allow ${toolTitle(request.tool)} this session`;
       const button = decisionButton(request, 'allow_session', label, 'secondary', scope);
       button.title = 'For this session only: nothing is written to .anvil/permissions.json.';
       return [button];

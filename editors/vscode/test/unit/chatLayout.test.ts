@@ -277,13 +277,15 @@ test('a row is marked by a state dot, not a caret', () => {
   assert.match(dot, /height:\s*6px/);
   assert.match(dot, /border-radius:\s*50%/);
 
-  // State is a colour on the same mark: a finished row is quiet, a failure is
-  // the error colour, and a row that never got a result is a ring. The row
-  // gains no second word or icon for any of them.
+  // A call is an operation while and after it runs: the dot is the editor's
+  // green, a little quieter when finished. Failure is the error colour, and a
+  // row that never got a result is a ring. The row gains no second word or
+  // icon for any of them.
   assert.match(
-    bodiesOf('.tool.done > summary::before').join(';'),
-    /--dot:\s*var\(--ui-muted\)/,
+    bodiesOf('.tool > summary::before').join(';'),
+    /--dot:\s*var\(--vscode-testing-iconPassed, var\(--vscode-charts-green/,
   );
+  assert.match(bodiesOf('.tool.done > summary::before').join(';'), /opacity:\s*0\.85/);
   assert.match(
     bodiesOf('.tool.failed > summary::before').join(';'),
     /--dot:\s*var\(--vscode-errorForeground\)/,
@@ -298,6 +300,30 @@ test('a row is marked by a state dot, not a caret', () => {
     bodiesOf('.msg .think > summary::before').join(';'),
     /border-radius:\s*50%/,
   );
+});
+
+test('a run of steps is joined by one rail', () => {
+  // The segment is a pseudo-element on the row, so the markup stays flat and
+  // the replay, the spawn scopes and the focus view need to learn nothing.
+  const rail = bodiesOf('.tool::after').join(';');
+  assert.match(rail, /content:\s*''/);
+  assert.match(rail, /left:\s*9px/);
+  assert.match(rail, /width:\s*1px/);
+  assert.match(rail, /display:\s*none/);
+  assert.match(bodiesOf('.tool.rail-up::after').join(';'), /top:\s*-10px/);
+  assert.match(bodiesOf('.tool.rail-down::after').join(';'), /bottom:\s*-10px/);
+
+  // The class pass: a tool is a step, a message contributes its thinking, and
+  // anything else ends the run — so prose is never crossed by the line. A run
+  // of one draws nothing, which is why the line begins and ends on a dot.
+  assert.match(JS, /function syncRail\(container\)/);
+  assert.match(JS, /run\[i\]\.classList\.toggle\('rail-up', i > 0\)/);
+  assert.match(JS, /run\[i\]\.classList\.toggle\('rail-down', i < run\.length - 1\)/);
+  assert.match(JS, /child\.classList\.contains\('tool'\)/);
+  assert.match(JS, /querySelectorAll\(':scope > \.think'\)/);
+  assert.match(JS, /syncRail\(active\.container\)/);
+  // A Thinking-only message stops being a step when its body gains prose.
+  assert.match(JS, /syncRail\(state\.wrap\.parentElement\)/);
 });
 
 test('the chat text size is a variable the script writes and the body reads', () => {

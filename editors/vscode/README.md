@@ -2,8 +2,10 @@
 
 The editor surface for the Anvil agent. The conversation is an **editor tab**
 that streams a turn, typesets the model's Markdown, shows its reasoning in a
-collapsed row above the answer, and gives every tool call a compact row with
-what went in and what came back; it stops for your approval before anything
+collapsed row above the answer, and gives every tool call a compact row joined
+to the step before it: the call by a name a reader knows (`Read`, `Edit`,
+`Bash`), the file it touched as a link that opens at the line used, and what
+went in and came back; it stops for your approval before anything
 writes to the workspace. The **activity bar** lists this workspace's past sessions, one click
 to continue, and the composer floats over the transcript so the conversation
 scrolls underneath it.

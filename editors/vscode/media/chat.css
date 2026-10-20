@@ -486,7 +486,7 @@ button.ghost[aria-pressed='true'] {
   gap: 10px;
   align-items: baseline;
   font-family: var(--ui-mono);
-  font-size: 0.9em;
+  font-size: 1em;
   line-height: var(--ui-line-tight);
   list-style: none;
   border-radius: var(--ui-radius-sm);
@@ -502,13 +502,13 @@ button.ghost[aria-pressed='true'] {
 
 /*
  * The dot. It says three things at once, all of them already in the row: a call
- * is here (a mark rather than a caret's "there is more to read"), how it ended
- * (the state sets `--dot`), and whether its body is open (the ring). The ring
- * doubles as the mark for a call whose result never arrived: both mean the row
- * does not tell the whole story.
+ * is here (a mark rather than a caret's "there is more to read"), what it is
+ * (an operation, in the editor's green), and whether its body is open (the
+ * ring). The ring doubles as the mark for a call whose result never arrived:
+ * both mean the row does not tell the whole story.
  */
 .tool > summary::before {
-  --dot: var(--vscode-foreground);
+  --dot: var(--vscode-testing-iconPassed, var(--vscode-charts-green, #3fb950));
   content: '';
   flex: 0 0 auto;
   align-self: center;
@@ -516,12 +516,16 @@ button.ghost[aria-pressed='true'] {
   height: 6px;
   border-radius: 50%;
   background: var(--dot);
-  opacity: 0.6;
+  opacity: 1;
 }
 
+/*
+ * A finished call is still an operation: the dot stays green and only loses a
+ * little of its weight. The old rule faded it to grey, which made the normal
+ * case the quietest thing in the transcript.
+ */
 .tool.done > summary::before {
-  --dot: var(--ui-muted);
-  opacity: 0.45;
+  opacity: 0.85;
 }
 
 .tool.failed > summary::before {
@@ -530,7 +534,6 @@ button.ghost[aria-pressed='true'] {
 }
 
 .tool.stopped > summary::before {
-  --dot: var(--ui-muted);
   background: transparent;
   box-shadow: inset 0 0 0 1.5px var(--dot);
 }
@@ -540,16 +543,98 @@ button.ghost[aria-pressed='true'] {
   box-shadow: inset 0 0 0 1.5px var(--dot);
 }
 
-.tool .name {
-  font-weight: 500;
+/*
+ * The rail through a run of steps.
+ *
+ * `syncRail` gives a row `rail-up` / `rail-down` only where another step
+ * follows, so a single step draws nothing and the line begins and ends on a
+ * dot. The segment sits at 9px — the summary's 6px padding and half the 6px
+ * dot — and reaches 10px into the gap on a side where the run continues. Ten
+ * pixels on each side meet across the 20px a message's margin and the
+ * transcript's gap add up to.
+ */
+.tool,
+.msg .think {
+  position: relative;
 }
 
+.tool::after,
+.msg .think::after {
+  content: '';
+  position: absolute;
+  left: 9px;
+  top: 9px;
+  bottom: 9px;
+  width: 1px;
+  background: var(--ui-hairline);
+  pointer-events: none;
+  display: none;
+}
+
+.tool.rail-up::after,
+.tool.rail-down::after,
+.msg .think.rail-up::after,
+.msg .think.rail-down::after {
+  display: block;
+}
+
+.tool.rail-up::after,
+.msg .think.rail-up::after {
+  top: -10px;
+}
+
+.tool.rail-down::after,
+.msg .think.rail-down::after {
+  bottom: -10px;
+}
+
+/*
+ * The operation is the row's subject: the body's size, bold, and in the
+ * foreground. The old 0.9em/500 name made the verb quieter than the state
+ * word beside it.
+ */
+.tool .name {
+  flex: none;
+  font-weight: 600;
+  color: var(--vscode-foreground);
+}
+
+/*
+ * What the call touched, as one line: the file in the link colour (it opens),
+ * a line range muted beside it, or a command or pattern in the foreground. The
+ * file is the part allowed to shrink; the range stays whole.
+ */
 .tool .hint {
-  flex: 1;
-  color: var(--ui-muted);
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  color: var(--vscode-foreground);
+  white-space: nowrap;
+}
+
+.tool .hint .file,
+.tool .hint .text {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.tool .hint .file {
+  color: var(--vscode-textLink-foreground, #3794ff);
+  cursor: pointer;
+}
+
+.tool .hint .file:hover,
+.tool .hint .file:focus-visible {
+  text-decoration: underline;
+}
+
+.tool .hint .meta {
+  flex: 0 0 auto;
+  color: var(--ui-muted);
 }
 
 .tool .state {
@@ -766,41 +851,15 @@ button.ghost[aria-pressed='true'] {
 }
 
 /*
- * The file and how much of it changed, on one line above the comparison. The
- * counts are the reader's first question about a diff ("is this a one-line
- * fix?"), and they cost one row rather than a second heading.
+ * How much changed, above the comparison. The path is in the row itself now,
+ * so this line answers the second question — "is this a one-line fix?" — where
+ * the comparison starts.
  */
-.tool .edit-diff .path {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
+.tool .edit-diff .note {
   font-family: var(--ui-mono);
   color: var(--ui-muted);
   font-size: 0.85em;
-  margin-bottom: 4px;
-}
-
-.tool .edit-diff .path .file {
-  min-width: 0;
-  word-break: break-all;
-}
-
-.tool .edit-diff .path .stat {
-  margin-left: auto;
-  flex: none;
-  font-variant-numeric: tabular-nums;
-}
-
-.tool .edit-diff .path .stat .add {
-  color: var(--vscode-gitDecoration-addedResourceForeground, #3fb950);
-}
-
-.tool .edit-diff .path .stat .del {
-  color: var(--vscode-gitDecoration-deletedResourceForeground, #f85149);
-}
-
-.tool .edit-diff .path .stat .add + .del {
-  margin-left: 6px;
+  margin-bottom: 6px;
 }
 
 /*
@@ -910,6 +969,15 @@ body.vscode-high-contrast-light .tool > summary::before,
 body.vscode-high-contrast .msg .think > summary::before,
 body.vscode-high-contrast-light .msg .think > summary::before {
   opacity: 1;
+}
+
+/* The hairline may be too quiet to read as a line in high contrast. */
+body.vscode-high-contrast .tool::after,
+body.vscode-high-contrast-light .tool::after,
+body.vscode-high-contrast .msg .think::after,
+body.vscode-high-contrast-light .msg .think::after {
+  background: var(--vscode-foreground);
+  opacity: 0.6;
 }
 
 body.vscode-high-contrast .tool .hint,
