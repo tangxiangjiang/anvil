@@ -340,8 +340,8 @@
         },
         "anvil.vision": {
           "type": "boolean",
-          "default": false,
-          "markdownDescription": "Let the session accept pasted images. Off by default: an image sent to a session created without this is refused, which is what keeps a stray paste from becoming a model request."
+          "default": true,
+          "markdownDescription": "Let the session accept pasted images. On by default: a screenshot pasted into a chat is a request to send it, and the session then also advertises the `read_image` tool. Off means the composer warns on a paste and the host refuses the attachment, naming this setting. The model still has to accept images."
         },
         "anvil.rules": {
           "type": "boolean",

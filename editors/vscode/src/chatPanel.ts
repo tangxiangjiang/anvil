@@ -1593,7 +1593,19 @@ export class ChatPanel implements HostListener {
     this.forgetChanges();
     await this.liveSession()
       .then((session) => session.send(text, { context, attachments }))
-      .catch(() => undefined);
+      .catch((err: unknown) => {
+        // The webview drew this message optimistically, so a refusal that is
+        // only logged reads as a turn that vanished. Vision is the usual cause
+        // — an image sent to a session created without `anvil.vision` is
+        // refused by the host, and that refusal names the setting — and the
+        // design says an image must never be dropped quietly.
+        this.post({
+          type: 'notice',
+          level: 'error',
+          message: `The turn was not sent: ${(err as Error).message}`,
+        });
+        this.postState();
+      });
     // The session exists now, so what it loaded can be reported. This is the
     // first moment the rules are a fact about a session rather than a guess.
     await this.reportRules();
@@ -2839,8 +2851,18 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri, focus = f
       not about the conversation, so it does not belong in the transcript. Every
       todo event carries the whole list and replaces this block; an empty list
       hides it.
+      The head sits outside the scrolling list so its close button stays put
+      with a long plan. Closing hides the block until a different plan arrives:
+      a status change on the same plan is the model working, not a new plan, and
+      reopening it then would undo the reader's click.
     -->
-    <div id="todos" class="todos" role="list" hidden aria-label="Task list"></div>
+    <div id="todos" class="todos" hidden>
+      <div class="todos-head">
+        <span class="todos-title">Plan</span>
+        <button id="todosClose" type="button" class="todos-close" aria-label="Hide the task list" title="Hide the task list">×</button>
+      </div>
+      <div id="todoList" class="todo-list" role="list" aria-label="Task list"></div>
+    </div>
   </div>
   <!--
     The Markdown parser first, because it is a plain script assigning a global

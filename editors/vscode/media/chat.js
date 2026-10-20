@@ -38,6 +38,8 @@
   const dock = document.getElementById('composerDock');
   const meter = document.getElementById('meter');
   const todoBlock = document.getElementById('todos');
+  const todoList = document.getElementById('todoList');
+  const todosClose = document.getElementById('todosClose');
   /**
    * The page's two live regions. `srStatus` is polite — a finished answer and
    * the end of a turn; `srAlert` is assertive and reserved for the two things
@@ -2822,6 +2824,25 @@
   const todoMarks = { pending: '○', in_progress: '◐', done: '✓' };
 
   /**
+   * The plan the reader closed, and the one on screen.
+   *
+   * A closed plan stays closed while the model moves its rows — a status change
+   * is the plan being worked, not a new plan — and a plan whose text changed is
+   * a different plan that should appear. An empty list ends both: there is
+   * nothing to keep closed, and the next plan opens normally.
+   */
+  let dismissedTodos = '';
+  let todoSignature = '';
+  /**
+   * Which turn a dismissal belongs to. Closing hides the plan for that turn;
+   * a later turn is a new plan even when the model reuses the same words, so
+   * the epoch is what keeps "closed" from following the session forever — a
+   * model that keeps one list across turns would otherwise never show it again.
+   */
+  let todoEpoch = 0;
+  let dismissedEpoch = -1;
+
+  /**
    * Replaces the task list under the composer.
    *
    * It replaces rather than appends because every call carries the whole list:
@@ -2830,13 +2851,19 @@
    * list hides the block entirely, which is how a call clears it.
    */
   function setTodos(items) {
-    if (!todoBlock) return;
+    if (!todoBlock || !todoList) return;
     const list = Array.isArray(items) ? items : [];
-    todoBlock.textContent = '';
+    todoList.textContent = '';
     if (list.length === 0) {
+      dismissedTodos = '';
+      todoSignature = '';
       todoBlock.hidden = true;
       return;
     }
+    const signature = list
+      .map((item) => (item && typeof item.text === 'string' ? item.text : ''))
+      .join('\n');
+    todoSignature = signature;
     for (const item of list) {
       const text = item && typeof item.text === 'string' ? item.text : '';
       if (text === '') continue;
@@ -2848,9 +2875,14 @@
       if (todoMarks[status]) row.dataset.status = status;
       row.appendChild(el('span', 'todo-mark', todoMarks[status] || '·'));
       row.appendChild(el('span', 'todo-text', text));
-      todoBlock.appendChild(row);
+      todoList.appendChild(row);
     }
-    todoBlock.hidden = todoBlock.childNodes.length === 0;
+    // Same plan, closed earlier in this turn: status moved, and it stays
+    // closed. A plan whose text changed is a new plan and appears, and so is
+    // any plan in a later turn.
+    todoBlock.hidden =
+      todoList.childNodes.length === 0 ||
+      (signature === dismissedTodos && dismissedEpoch === todoEpoch);
   }
 
   /**
@@ -3070,6 +3102,9 @@
     // but the composer must lock immediately or a double Enter sends twice.
     setRunning(true);
     statusLine.hidden = true;
+    // A new turn: a plan the reader closed last time is allowed to appear
+    // again, even if the model repeats it word for word.
+    todoEpoch += 1;
     vscode.postMessage({ type: 'send', text, mentions: sentMentions, images: sentImages });
   });
 
@@ -3206,6 +3241,18 @@
     // there is no round trip to wait for. The palette command and the key
     // binding take the other path — the extension asks the document to flip.
     focusButton.addEventListener('click', () => setFocus(!focusView));
+  }
+
+  if (todosClose) {
+    // Closing is about this plan, not about the feature: the list reappears
+    // when a different plan arrives. The button goes with the block, so focus
+    // moves to the control that still does something.
+    todosClose.addEventListener('click', () => {
+      dismissedTodos = todoSignature;
+      dismissedEpoch = todoEpoch;
+      todoBlock.hidden = true;
+      sendButton.focus();
+    });
   }
 
   // A paste is only ours when it carries an image; text pastes stay the

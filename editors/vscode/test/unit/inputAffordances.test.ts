@@ -18,6 +18,20 @@ const CHAT_JS = readFileSync(join(EXTENSION_ROOT, 'media', 'chat.js'), 'utf8');
 const CHAT_CSS = readFileSync(join(EXTENSION_ROOT, 'media', 'chat.css'), 'utf8');
 const CHAT_PANEL = readFileSync(join(EXTENSION_ROOT, 'src', 'chatPanel.ts'), 'utf8');
 const ATTACHMENTS = readFileSync(join(EXTENSION_ROOT, 'src', 'attachments.ts'), 'utf8');
+const PACKAGE_JSON = readFileSync(join(EXTENSION_ROOT, 'package.json'), 'utf8');
+const SETTINGS = readFileSync(join(EXTENSION_ROOT, 'src', 'settings.ts'), 'utf8');
+
+test('vision is on by default, and the setting is the switch that turns it off', () => {
+  // A screenshot pasted into a chat is a request to send it (p_0.47.9). The
+  // declaration and the reader must agree: the declaration is what the settings
+  // UI shows, the fallback is what a session gets before anyone opened it.
+  const declaration = /"anvil\.vision": \{[\s\S]*?\n {8}\}/.exec(PACKAGE_JSON);
+  assert.ok(declaration, 'anvil.vision is declared');
+  assert.match(declaration[0], /"default": true/);
+  assert.match(SETTINGS, /session\.vision = cfg\.get<boolean>\('vision', true\) \?\? true/);
+  // Off is still a choice the user can make, and the composer still says so.
+  assert.match(CHAT_JS, /if \(!vision\) \{[\s\S]{0,200}'Images are off for this session/);
+});
 
 test('Escape interrupts only when a turn is running', () => {
   const handler = /window\.addEventListener\('keydown', \(event\) => \{[\s\S]*?\n {2}\}\);/.exec(CHAT_JS);
@@ -86,6 +100,20 @@ test('images are attached from a drop, everything else is resolved as a mention'
   assert.match(CHAT_PANEL, /this\.post\(\{ type: 'mentions', paths: unique \}\)/);
   // A file outside the root is refused with a sentence, not silently.
   assert.match(CHAT_PANEL, /outside this window's root folder, so it was not added/);
+});
+
+test('a refused turn is reported, not swallowed', () => {
+  const send = /private async sendQuestion[\s\S]*?\n {2}\}/.exec(CHAT_PANEL);
+  assert.ok(send, 'sendQuestion must be findable');
+  // The webview has already drawn the bubble, so a failure that is only
+  // logged looks like a turn that vanished. The host's vision refusal is the
+  // common case, and it names the setting to turn on.
+  assert.match(send[0], /type: 'notice',\s*level: 'error'/);
+  assert.match(send[0], /The turn was not sent/);
+  // The optimistic `running` state has to be undone, or the composer stays
+  // locked with nothing running.
+  assert.match(send[0], /this\.postState\(\)/);
+  assert.doesNotMatch(send[0], /catch\(\(\) => undefined\)/);
 });
 
 test('Copy is offered on a finished answer and writes through the host', () => {

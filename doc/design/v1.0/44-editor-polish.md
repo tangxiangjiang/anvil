@@ -290,3 +290,10 @@ which is how the extension already degrades (`runtime`, `permission_mode_source`
 | [p_0.47.6](../../roadmaps/v1.0/m_0.47/p_0.47.6.md) | User-scope rules and protected paths |
 | [p_0.47.7](../../roadmaps/v1.0/m_0.47/p_0.47.7.md) | One root per window, explicit in multi-root |
 | [p_0.47.8](../../roadmaps/v1.0/m_0.47/p_0.47.8.md) | Version alignment and documentation |
+| [p_0.47.9](../../roadmaps/v1.0/m_0.47/p_0.47.9.md) | Acceptance fixes: vision on by default, a refused turn visible, the plan block closable |
+
+p_0.47.9 is the one phase written after the milestone was accepted. Its three findings came
+from the first real use of the panel, not from a test: a capability that existed and was never
+turned on, an error that only reached the log, and a block with no way out. The lesson is
+recorded here rather than in a commit message — the manual passes the earlier phases wrote
+down as "still worth doing" are the ones that would have found all three.

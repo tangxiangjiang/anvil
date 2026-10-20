@@ -913,16 +913,50 @@ body.vscode-high-contrast-light .body.md .md-link:focus-visible {
 /*
  * Below the composer, because it is about the work in flight rather than the
  * conversation's history: the transcript stays the record, and the plan is the
- * one thing that is replaced as it changes instead of appended to. Capped and
- * scrollable so a long plan cannot take the panel from the conversation.
+ * one thing that is replaced as it changes instead of appended to. The head is
+ * outside the scrolling list so the close button is always reachable, and the
+ * list is capped so a long plan cannot take the panel from the conversation.
  */
 .todos {
   margin-top: 6px;
   padding: 0 calc(var(--anvil-gap) + 1px);
-  max-height: 9em;
-  overflow-y: auto;
   font-size: 0.88em;
   color: var(--vscode-descriptionForeground);
+}
+
+.todos-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  line-height: 1.6;
+}
+
+.todos-title {
+  flex: 0 0 auto;
+  font-size: 0.9em;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.8;
+}
+
+.todos-close {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: 1;
+  padding: 0 4px;
+  cursor: pointer;
+}
+
+.todos-close:hover {
+  color: var(--vscode-foreground);
+}
+
+.todo-list {
+  max-height: 9em;
+  overflow-y: auto;
 }
 
 .todo-row {

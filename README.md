@@ -274,7 +274,7 @@ Tools: `memory_write` / `memory_read` / `memory_search` / `memory_list` / `memor
 
 ### Vision / images (0.19)
 
-Opt-in multimodal attachments (off by default). Set `Options.Vision.Enabled` and pass images via `WithAttachments` / `Options.Attachments` (path under cwd or in-memory bytes). Optional builtin `read_image` (tool group `vision`) queues a sandbox file for the next Completer turn. Images are downscaled (default longest side 2048, ~4MiB encoded budget). Gateway catalog may advertise `anvil.vision: true` on models.
+Opt-in multimodal attachments (off by default in the SDK; the VS Code extension asks for it unless `anvil.vision` is false). Set `Options.Vision.Enabled` and pass images via `WithAttachments` / `Options.Attachments` (path under cwd or in-memory bytes). Optional builtin `read_image` (tool group `vision`) queues a sandbox file for the next Completer turn. Images are downscaled (default longest side 2048, ~4MiB encoded budget). Gateway catalog may advertise `anvil.vision: true` on models.
 
 ```go
 Vision: anvil.VisionOptions{Enabled: true},

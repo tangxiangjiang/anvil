@@ -123,7 +123,7 @@ names both sides and stops rather than failing later inside a tool call.
 | `anvil.contextKeepRecent` | Messages a compaction keeps verbatim (default `8`, minimum `2`) |
 | `anvil.cacheTtlSeconds` | How long the provider keeps its prompt cache, for the meter's countdown. `0` (the default) means the provider's default: five minutes for Anthropic, and no countdown for a provider that never states one |
 | `anvil.store` | `jsonl`, `sqlite`, or empty for the host's default |
-| `anvil.vision` | Accept pasted images; off by default |
+| `anvil.vision` | Accept pasted images; on by default. Off means the composer warns on a paste and the host refuses the attachment, naming this setting. The model still has to accept images |
 | `anvil.rules` | Load `AGENTS.md` and `.anvil/rules/*.md`; on by default |
 | `anvil.cursorRules` | Also load `.cursor/rules/*.md|.mdc`; on by default |
 | `anvil.permissions` | Read the workspace's `.anvil/permissions.json` and your `~/.anvil/permissions.json`; on by default. Off means the session ignores both files — the rules **and** the `defaultMode` the workspace file may declare — and an approval card has nothing to offer under "always allow", because a rule written into a file this session does not read would not be in force |

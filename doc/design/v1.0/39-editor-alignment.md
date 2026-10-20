@@ -289,6 +289,12 @@ Three details make the contract hold:
    arguments and applies the tool's own rule — non-empty text, one of the three statuses. A call
    the host refused therefore replays as a card with no list, which is what it was, instead of a
    plan the model never managed to send.
+4. **The block can be closed — for that plan, in that turn.** A head above the scrolling list
+   carries a labelled close control (p_0.47.9). Closing records the plan's row texts and the turn
+   it was closed in and hides the block; the same plan with a changed status stays closed, a plan
+   whose text changed or any plan in a later turn appears again, and an empty list clears the
+   dismissal. The alternative — a permanent switch — is a preference nobody asked for, and the
+   checklist exists to be visible while it is being worked.
 
 ## Input
 

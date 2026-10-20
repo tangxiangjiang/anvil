@@ -125,7 +125,8 @@ test('vision is asked for when the session sets it, and not otherwise', async (t
   const off = await host(t);
 
   assert.equal(only(readEcho(on.echo), 'session.new').params.vision, true);
-  // Off is the default and stays off: a session that never asked for vision is
-  // one the host will refuse an image on, which is the intended refusal.
+  // Off is the host's default and stays off: a session that never asked for
+  // vision is one the host will refuse an image on, which is the intended
+  // refusal. Which way the editor asks is its own decision (p_0.47.9).
   assert.equal('vision' in only(readEcho(off.echo), 'session.new').params, false);
 });

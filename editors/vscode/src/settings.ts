@@ -89,10 +89,12 @@ export function readSettings(): ResolvedSettings {
   };
   if (maxSteps > 0) session.max_steps = maxSteps;
   if (store !== '') session.store = store;
-  // Vision is opt-in, and the setting is the whole switch: a prompt carrying an
-  // image on a session created without it is refused by the host, so a paste
-  // path with this off would fail every time.
-  session.vision = cfg.get<boolean>('vision', false) ?? false;
+  // Vision is on by default: pasting a screenshot into a chat is a request to
+  // send it, and the setting is the switch that turns the capability off rather
+  // than the one that turns it on. The session still asks explicitly, so the
+  // host's refusal — and its message naming this setting — is unchanged for a
+  // user who does turn it off.
+  session.vision = cfg.get<boolean>('vision', true) ?? true;
   // The workspace, not the process, decides where sessions land: an editor
   // session belongs to the folder the user opened.
   session.load_rules = loadProject;
