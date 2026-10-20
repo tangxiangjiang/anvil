@@ -60,6 +60,11 @@ export const BUILTIN_COMMANDS: readonly SlashCommand[] = [
     source: 'builtin',
   },
   {
+    name: 'mcp',
+    description: 'Show MCP servers, their state, and add or edit them',
+    source: 'builtin',
+  },
+  {
     name: 'help',
     description: 'List the available commands',
     source: 'builtin',
@@ -162,6 +167,7 @@ export type CommandAction =
   | { kind: 'clear' }
   | { kind: 'compact' }
   | { kind: 'tasks' }
+  | { kind: 'mcp' }
   | { kind: 'help' };
 
 export function route(text: string, commands: SlashCommand[]): CommandAction {
@@ -184,6 +190,8 @@ export function route(text: string, commands: SlashCommand[]): CommandAction {
       return { kind: 'compact' };
     case 'tasks':
       return { kind: 'tasks' };
+    case 'mcp':
+      return { kind: 'mcp' };
     case 'help':
       return { kind: 'help' };
     default:

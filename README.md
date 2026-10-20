@@ -61,7 +61,7 @@ func main() {
 
 ## Status
 
-Product is at **0.43 delivered** — a session declares its context window, compacts before the window fills and mid-run, a person can ask for a compaction with `/compact`, and the editor's meter counts down the context left and the prompt cache's remaining life. 0.35–0.38 are the editor line (VS Code extension, tool permissions, permission modes, session identity); **0.39** is the Delivery execute/test campaign loop, **0.40** is the editor alignment, **0.41** is auto mode and the permissions manager, **0.42** is subagents, background tasks and workflows, and **0.43** is context management. Full per-milestone index: [`doc/roadmaps/v1.0/README.md`](doc/roadmaps/v1.0/README.md).
+Product is at **0.44 delivered** — MCP servers have a real state in the editor: connected, connecting, failed or needing a sign-in, with their tool lists, and a manager panel that adds, edits, enables, disables, reconnects, signs in and out, writing `.cursor/mcp.json` without dropping what it does not own. 0.35–0.38 are the editor line (VS Code extension, tool permissions, permission modes, session identity); **0.39** is the Delivery execute/test campaign loop, **0.40** is the editor alignment, **0.41** is auto mode and the permissions manager, **0.42** is subagents, background tasks and workflows, **0.43** is context management, and **0.44** is MCP management. Full per-milestone index: [`doc/roadmaps/v1.0/README.md`](doc/roadmaps/v1.0/README.md).
 
 | Era | Milestones | What |
 |-----|-----------|------|
@@ -76,6 +76,7 @@ Product is at **0.43 delivered** — a session declares its context window, comp
 | Auto & rules manager | 0.41 | An `auto` rung that runs what the analyzer can prove and asks about the rest, and a structured manager for `.anvil/permissions.json` — [design 40](doc/design/v1.0/40-permission-auto-and-manager.md) |
 | Subagents & workflows | 0.42 | `spawn_agent` creates a child agent with inherited permissions, background shell and subagents share one task table, `/tasks` draws it in the editor, and `run_workflow` evaluates a declarative DAG — [design 41](doc/design/v1.0/41-subagents-and-tasks.md) |
 | Context management | 0.43 | A declared token budget with a safe cut, auto-compaction at run start and mid-run, `Agent.Compact` and the editor's `/compact`, cached-token accounting, and a meter that counts context left and the cache's remaining life — [design 42](doc/design/v1.0/42-context-management.md) |
+| MCP management | 0.44 | A host-owned MCP runtime with per-server state and failure isolation, atomic edits to `.cursor/mcp.json` that preserve unknown fields, reconnect, Streamable HTTP, host-owned OAuth tokens, a manager panel and `/mcp` — [design 43](doc/design/v1.0/43-mcp-management.md) |
 
 ### VS Code extension (0.35)
 

@@ -25,7 +25,8 @@ narrow, and 0.40.6 wrote the narrowness down as a contract rather than an accide
 
 Chapter [39](39-editor-alignment.md) listed "MCP OAuth, remote transports beyond what the SDK
 supports" as a non-goal, and chapter [09](09-extensibility.md) said OAuth stays out of scope.
-This chapter supersedes those sentences: the capability is now designed, and 0.44 delivers it.
+This chapter supersedes those sentences: the capability is designed here, and 0.44 delivered it
+in the six phases of §10.
 
 ## 2. One runtime, many agents
 

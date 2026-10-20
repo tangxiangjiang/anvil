@@ -1066,6 +1066,12 @@ export class ChatPanel implements HostListener {
         this.hub.openTasks();
         this.postState();
         return;
+      case 'mcp':
+        // The manager covers both layers rather than this conversation's, so the
+        // command is the document, not a filtered view of it.
+        this.hub.openMcp();
+        this.postState();
+        return;
       case 'help':
         this.post({ type: 'help', commands: await this.commandCatalogue() });
         this.postState();

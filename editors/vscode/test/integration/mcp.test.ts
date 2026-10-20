@@ -24,6 +24,7 @@ import {
   Notify,
 } from '../../src/protocol';
 import { startFakeHost, waitFor } from '../helpers/harness';
+import { draftFromForm, formValues } from '../../src/mcp';
 
 async function scratch(t: TestContext, env: NodeJS.ProcessEnv = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), 'anvil-mcp-'));
@@ -282,3 +283,93 @@ test('a legacy host fails the listing when the file will not parse', async (t) =
     /parse .*mcp\.json/,
   );
 });
+
+// The manager's listing, as its document asks for it: both layers, and the tool
+// catalogue — the rows show what a connected server offers, so the count alone
+// would leave the list empty until a second round trip.
+test('the manager lists both layers with their tool catalogues', async (t) => {
+  const { echo, harness } = await scratch(t, { FAKE_HOST_MCP: 'files:stdio' });
+
+  const listed = await harness.client.request<McpListResult>(Method.McpList, {
+    setting_sources: ['project', 'user'],
+    include_tools: true,
+  });
+
+  assert.equal(listed.runtime, true);
+  assert.deepEqual(
+    listed.sources.map((source) => source.source),
+    ['user', 'project'],
+  );
+  assert.deepEqual(
+    (listed.servers[0].tools ?? []).map((tool) => tool.name),
+    ['echo', 'read_file'],
+  );
+  assert.deepEqual(lastParams(echo, Method.McpList), {
+    setting_sources: ['project', 'user'],
+    include_tools: true,
+  });
+});
+
+// The form half and the wire half agree: what `draftFromForm` builds is what
+// goes out, and a blank env section is absent rather than an empty map — the
+// latter would erase values the host never sent back.
+test('the form draft is what the manager sends, and a blank map is omitted', async (t) => {
+  const { echo, harness } = await scratch(t, { FAKE_HOST_MCP: 'files:stdio' });
+
+  const added = draftFromForm({
+    name: 'toolbox',
+    transport: 'stdio',
+    command: 'npx',
+    args: '-y\ntoolbox\n',
+    env: 'TOKEN=s3cret\n',
+    url: '',
+    headers: '',
+    enabled: true,
+  });
+  assert.ok('draft' in added);
+
+  const listed = await harness.client.request<McpListResult>(Method.McpAdd, {
+    scope: 'project',
+    server: added.draft,
+    setting_sources: ['project', 'user'],
+    include_tools: true,
+  });
+  assert.deepEqual(lastParams(echo, Method.McpAdd), {
+    scope: 'project',
+    server: {
+      name: 'toolbox',
+      transport: 'stdio',
+      command: 'npx',
+      args: ['-y', 'toolbox'],
+      env: { TOKEN: 's3cret' },
+      enabled: true,
+    },
+    setting_sources: ['project', 'user'],
+    include_tools: true,
+  });
+  assert.equal(listed.servers.some((server) => server.name === 'toolbox'), true);
+
+  const form = formValues({
+    name: 'toolbox',
+    transport: 'stdio',
+    command: 'npx',
+    args: '-y\ntoolbox\n',
+    env: '',
+    url: '',
+    headers: '',
+    enabled: true,
+  });
+  assert.ok(form);
+  const edited = draftFromForm(form);
+  assert.ok('draft' in edited);
+  await harness.client.request<McpListResult>(Method.McpUpdate, {
+    scope: 'project',
+    server: edited.draft,
+    setting_sources: ['project', 'user'],
+    include_tools: true,
+  });
+  const sent = lastParams(echo, Method.McpUpdate) as { server: Record<string, unknown> };
+  assert.equal('env' in sent.server, false, 'a blank env keeps the file’s values');
+  assert.equal('headers' in sent.server, false);
+});
+

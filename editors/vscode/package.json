@@ -155,6 +155,16 @@
         "command": "anvil.openTasks",
         "title": "Anvil: Open Tasks",
         "category": "Anvil"
+      },
+      {
+        "command": "anvil.openMcp",
+        "title": "Anvil: Open MCP Servers",
+        "category": "Anvil"
+      },
+      {
+        "command": "anvil.openMcpFile",
+        "title": "Anvil: Open mcp.json",
+        "category": "Anvil"
       }
     ],
     "menus": {

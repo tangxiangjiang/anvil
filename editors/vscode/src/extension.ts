@@ -87,6 +87,18 @@ export function activate(context: vscode.ExtensionContext): void {
       hub.openTasks();
     }),
 
+    // The MCP manager: every server of both layers with what it is doing, and the
+    // form that changes it. `/mcp` in a composer opens the same document.
+    vscode.commands.registerCommand('anvil.openMcp', () => {
+      hub.openMcp();
+    }),
+
+    // One layer's `mcp.json`, created when it is not there. The manager's Open
+    // mcp.json button takes this path for whichever layer it is looking at.
+    vscode.commands.registerCommand('anvil.openMcpFile', async () => {
+      await hub.openMcpFile();
+    }),
+
     // Built here rather than in `activate`'s body so its lifetime is the
     // extension's: the item and its two subscriptions are disposed together.
     new ChatStatusBar(hub),

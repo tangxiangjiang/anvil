@@ -13,13 +13,16 @@
  * (the Stop command has to mean the one in front of them).
  */
 
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
+import { homedir } from 'node:os';
 import * as vscode from 'vscode';
 import { ChatPhase, phaseOf } from './chatStatus';
 import { ChatPanel } from './chatPanel';
 import { SlashCommand, commandCatalogue } from './commands';
 import { HostManager } from './hostManager';
 import { HostRpcError } from './hostClient';
+import { McpSettings } from './mcp';
+import { McpPanels } from './mcpPanel';
 import { PermissionsPanels } from './permissionsPanel';
 import { TaskRow, TasksPanels } from './tasksPanel';
 import {
@@ -32,6 +35,7 @@ import {
   McpListResult,
   McpReconnectParams,
   McpRemoveParams,
+  McpScope,
   McpSetEnabledParams,
   McpSignOutParams,
   McpStatusParams,
@@ -59,6 +63,8 @@ export class Hub {
   private readonly panels = new Set<ChatPanel>();
   /** The window's rules manager; one document, revealed rather than duplicated. */
   private readonly permissions: PermissionsPanels;
+  /** The window's MCP manager; one document for every layer's servers. */
+  private readonly mcp: McpPanels;
   /** The window's Tasks panel; one table of background work, revealed the same. */
   private readonly tasks: TasksPanels;
   /**
@@ -113,6 +119,7 @@ export class Hub {
       this.forgetAllTasks();
     });
     this.permissions = new PermissionsPanels(context.extensionUri, this);
+    this.mcp = new McpPanels(context.extensionUri, this);
     this.tasks = new TasksPanels(context.extensionUri, {
       listTasks: () => this.listTasks(),
       taskOutput: (sessionId, taskId, offset, limit) =>
@@ -557,6 +564,63 @@ export class Hub {
     return this.manager.signOutMcpServer(params);
   }
 
+  /** Whether sessions load each MCP layer; the manager says so when one is off. */
+  loadMcpSettings(): McpSettings {
+    return readSettings().mcp;
+  }
+
+  /** Opens the MCP manager: every server, with what it is doing and what to do. */
+  openMcp(): void {
+    this.mcp.open();
+  }
+
+  /**
+   * Shows one layer's `mcp.json` where it lives, creating it when it is not
+   * there.
+   *
+   * The paths are the ones the host uses — the first folder's `.cursor/mcp.json`
+   * and `~/.cursor/mcp.json` — because a file the manager edits is the file a
+   * session reads, and a person sent to the wrong path would edit a file nothing
+   * looks at. The seed is the smallest document the writer accepts, so the next
+   * add has a file to write into rather than a directory to guess at.
+   *
+   * Hand editing stays one click away for the same reason the permissions
+   * manager keeps its Open JSON: an entry with an OAuth block or a field this
+   * milestone does not model is easier to see in the file than in the form.
+   */
+  async openMcpFile(scope: McpScope = 'project'): Promise<void> {
+    const path = mcpFilePath(scope);
+    if (path === undefined) {
+      this.notice('error', 'Could not find a workspace folder to resolve mcp.json against.');
+      return;
+    }
+    const uri = vscode.Uri.file(path);
+    const exists = await vscode.workspace.fs.stat(uri).then(
+      () => true,
+      () => false,
+    );
+    if (!exists) {
+      const create = 'Create it';
+      const answer = await vscode.window.showInformationMessage(
+        scope === 'user'
+          ? 'This user account has no MCP configuration yet.'
+          : 'This workspace has no MCP configuration yet.',
+        { modal: false, detail: path },
+        create,
+      );
+      if (answer !== create) return;
+      try {
+        await vscode.workspace.fs.createDirectory(vscode.Uri.file(dirname(path)));
+        await vscode.workspace.fs.writeFile(uri, Buffer.from('{\n  "mcpServers": {}\n}\n', 'utf8'));
+      } catch (err) {
+        this.notice('error', `Could not create ${path}: ${(err as Error).message}`);
+        return;
+      }
+    }
+    const document = await vscode.workspace.openTextDocument(uri);
+    await vscode.window.showTextDocument(document);
+  }
+
   /** The provider's model catalogue, for a tab's /model picker. */
   listModels(options: { provider?: string; base_url?: string } = {}): Promise<ModelEntry[]> {
     return this.manager.listModels(options);
@@ -685,7 +749,25 @@ export class Hub {
     this.diagnostics = undefined;
     this.permissions.dispose();
     this.tasks.dispose();
+    this.mcp.dispose();
     for (const panel of panels) await panel.dispose().catch(() => undefined);
     await this.manager.dispose();
   }
+}
+
+/**
+ * One layer's `mcp.json`, resolved the way the host resolves it.
+ *
+ * `undefined` when a project path has no workspace folder to sit in — the host
+ * would be launched without a cwd, so there is no file to open either.
+ *
+ * The paths are computed rather than asked for so this works when the file is
+ * the problem: `mcp.list` answers with a path only after it has parsed, and the
+ * button that opens a file that will not parse is the one worth having.
+ */
+function mcpFilePath(scope: McpScope): string | undefined {
+  if (scope === 'user') return join(homedir(), '.cursor', 'mcp.json');
+  const folder = vscode.workspace.workspaceFolders?.[0];
+  if (!folder || folder.uri.scheme !== 'file') return undefined;
+  return join(folder.uri.fsPath, '.cursor', 'mcp.json');
 }

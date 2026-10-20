@@ -173,12 +173,15 @@ spawned with.
   loaded — `AGENTS.md`, `.anvil/rules/*.md`, and optionally `.cursor/rules/*` —
   and says so plainly when one was skipped or cut short by the size budget.
   It does the same for MCP: a card lists the servers the enabled `mcp.json`
-  layers declare — name, transport, source file — and names a layer whose file
-  is not there. It says nothing about whether a server connected, because the
-  host can only report what a file says; a green dot from that would mean "the
-  file mentioned it", not "it works". A file that will not parse is reported as
-  an error, since an empty list would hide the one thing you can fix. Calls
-  through MCP tools stay behind the `mcp` permission group. When the web tools
+  layers declare — name, transport, source file — with a state dot and word for
+  each one and, once connected, how many tools it offers; a failure shows the
+  error instead of breaking the session, and a layer whose file is not there is
+  named. The dot is only drawn when the host can actually observe a connection:
+  a host from before this milestone reports configuration alone, and the card
+  then stays the plain list it was rather than inventing a status. A file that
+  will not parse is reported as an error, since an empty list would hide the one
+  thing you can fix. `/mcp` is where any of it is changed. Calls through MCP
+  tools stay behind the `mcp` permission group. When the web tools
   are on, the tab adds one row saying so and whether a key is stored — present
   or absent, never the value; when they are off there is no row at all. With
   the `mcp` provider it says what that really means: no built-in tools are
@@ -362,6 +365,7 @@ Type `/` in the composer for the catalogue. Built-ins:
 | `/clear` | Start a new conversation |
 | `/compact` | Summarize the conversation so far; handled by the host, nothing is sent to the model. Refused while a turn is running |
 | `/tasks` | Open the background tasks panel; sends nothing to the model |
+| `/mcp` | Open the MCP manager; sends nothing to the model |
 | `/help` | List the commands |
 
 **Anvil: Open Permission Rules** (also the **Permissions** button on the composer) opens the
@@ -372,6 +376,24 @@ read-only in the manager rather than overwritten. **Open JSON** in the manager, 
 **Anvil: Open Permission Rules File** in the palette, open `.anvil/permissions.json` itself —
 creating it with an empty rule set if it is not there yet. That file is what decides whether a
 tool call runs, stops to ask you, or is refused outright — see *Permission modes and rules*.
+
+**Anvil: Open MCP Servers** (also `/mcp`) opens the MCP manager: every server of both layers
+with its state dot and word — `connected` with its tool list, `connecting`, `failed` with the
+error, `needs sign-in` — its transport, the file it came from, the command or URL it runs, and
+the names (never the values) of the env vars and headers it declares. Each row has Enable or
+Disable, Reconnect, Delete (which asks again in place), and Sign out; a server that wants a
+sign-in also has Sign in, which opens the address the host answers with in your browser — the
+token is stored by the host, never by the editor. The form adds or edits a server in the
+project file or the user file: name, transport, and either a command, arguments and env vars or
+a URL and headers, one `KEY=value` per line. A blank env or header section means *keep what
+the file has*, which is why editing prefills key names rather than secrets. A write goes
+through the host, which rewrites the file atomically and preserves fields this build does not
+model; the manager then shows the host's own fresh reading, not the edit it sent. A file that
+will not parse turns the manager read-only and shows the parser's message, and **Open
+mcp.json** — also **Anvil: Open mcp.json** in the palette — opens the file itself, creating it
+when it is not there. The manager lists both layers even when a setting excludes one, and says
+so in a banner: those are the files it edits, and the setting only decides what a session
+reads.
 
 Skills in the workspace (`.anvil/skills/<id>/SKILL.md`) are listed as commands
 of their own: running one turns that skill on for the conversation. `@`
