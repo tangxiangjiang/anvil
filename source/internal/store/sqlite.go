@@ -60,6 +60,27 @@ func (s *SQLite) Close() error {
 	return s.db.Close()
 }
 
+// TryLock claims exclusive write ownership of one agent id.
+//
+// SQLite serialises writers inside one process already, but a second process
+// (or a second Anvil host on the same workspace) is exactly the case that
+// interleaves transcripts, so the same OS claim is taken here. The lock file
+// goes beside the database.
+func (s *SQLite) TryLock(agentID string) (*SessionLock, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("nil store")
+	}
+	var path string
+	if err := s.db.QueryRow(`PRAGMA database_list`).Scan(new(int), new(string), &path); err != nil {
+		return nil, fmt.Errorf("resolve agents.db path: %w", err)
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, fmt.Errorf("create store dir: %w", err)
+	}
+	return AcquireSessionLock(dir, agentID)
+}
+
 // Exists reports whether any records exist for agentID.
 func (s *SQLite) Exists(agentID string) bool {
 	if s == nil {

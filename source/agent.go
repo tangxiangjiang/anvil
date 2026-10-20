@@ -44,6 +44,11 @@ type Agent struct {
 	closed bool
 
 	store store.Backend
+	// lock is the exclusive claim on this agent id. Two live handles on one id
+	// interleave their runs into a single transcript, which is what strands a
+	// tool_call without its result. Nil when the backend does not lock (a
+	// caller-supplied store) or when the handle never took one (Create).
+	lock *store.SessionLock
 
 	mu           sync.Mutex
 	running      bool
@@ -177,8 +182,25 @@ func Resume(ctx context.Context, agentID string, opts Options) (*Agent, error) {
 		}
 		return nil, newError("load agent store", false, err)
 	}
+	// One writer per transcript. Resuming an id that a live handle already owns
+	// used to succeed, and the two then wrote their runs into one file — the
+	// editor makes that easy to reach, because closing a chat tab does not stop
+	// the turn it was showing. The claim is taken before the history is loaded
+	// and released on Close, so the second caller is refused instead of
+	// corrupting the first one's conversation.
+	lock, err := st.TryLock(agentID)
+	if err != nil {
+		_ = st.Close()
+		cleanupRegistry(sessions, plugMgr, lspSup)
+		if errors.Is(err, store.ErrSessionBusy) {
+			return nil, newError("session is already open in another window or session; "+
+				"close it there before resuming "+agentID, false, err)
+		}
+		return nil, newError("lock agent store", false, err)
+	}
 	sysPrompt, err := buildSystemPrompt(cwd, opts)
 	if err != nil {
+		_ = lock.Release()
 		_ = st.Close()
 		cleanupRegistry(sessions, plugMgr, lspSup)
 		return nil, newError("load project rules", false, err)
@@ -189,6 +211,7 @@ func Resume(ctx context.Context, agentID string, opts Options) (*Agent, error) {
 		opts:         opts,
 		cwd:          cwd,
 		store:        st,
+		lock:         lock,
 		complete:     completer,
 		registry:     reg,
 		mcp:          sessions,
@@ -1120,6 +1143,8 @@ func (a *Agent) Close() error {
 	cwd := a.cwd
 	st := a.store
 	a.store = nil
+	lk := a.lock
+	a.lock = nil
 	sessions := a.mcp
 	a.mcp = nil
 	plugMgr := a.plugins
@@ -1130,6 +1155,11 @@ func (a *Agent) Close() error {
 
 	if st != nil {
 		_ = st.Close()
+	}
+	// Released after the store so no record can be written between the two:
+	// the claim covers the whole life of the handle, not just its reads.
+	if lk != nil {
+		_ = lk.Release()
 	}
 	for _, s := range sessions {
 		_ = s.Close()
