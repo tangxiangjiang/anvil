@@ -35,6 +35,9 @@ type slot struct {
 	projectPath string
 	gitRemote   string
 	repoID      string
+	// llm overrides agentd's llm block for jobs on this slot (0.47). Nil means
+	// inherit, which is what every worker did before the field existed.
+	llm *WorkerLLMBody
 }
 
 // NewSlots creates a registry with max concurrent busy slots.
@@ -50,6 +53,32 @@ func NewSlots(max int) *Slots {
 		s.byID[id] = &slot{id: id, status: SlotIdle}
 	}
 	return s
+}
+
+// SetWorkerLLM replaces one worker's provider override (nil clears it).
+//
+// A worker whose provider changed should pick it up on its next job rather than
+// after a daemon restart: the whole reason a per-worker model exists is to switch
+// cost per phase, and a restart to change a model defeats that.
+func (s *Slots) SetWorkerLLM(workerID string, llm *WorkerLLMBody) (WorkerState, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sl := s.byID[workerID]
+	if sl == nil {
+		return WorkerState{}, fmt.Errorf("unknown worker %q", workerID)
+	}
+	sl.llm = llm
+	return s.snapshotLocked(sl), nil
+}
+
+// LLMFor returns a worker's override, or nil when it inherits.
+func (s *Slots) LLMFor(workerID string) *WorkerLLMBody {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if sl := s.byID[workerID]; sl != nil {
+		return sl.llm
+	}
+	return nil
 }
 
 // Max returns configured capacity.
@@ -178,6 +207,15 @@ func (s *Slots) Counts() (idle, busy int) {
 // AddBoundWorker registers a project-bound worker. When start is false the worker
 // is stopped (config only) until StartWorker.
 func (s *Slots) AddBoundWorker(id, name, description, projectPath, gitRemote, repoID string, start bool) (WorkerState, error) {
+	return s.AddBoundWorkerWithLLM(id, name, description, projectPath, gitRemote, repoID, start, nil)
+}
+
+// AddBoundWorkerWithLLM is AddBoundWorker plus the worker's own provider settings.
+//
+// The argument is a pointer so "no override" (nil) and "an empty override" stay
+// distinguishable: nil inherits agentd's llm block, which is what every worker
+// created before this field did.
+func (s *Slots) AddBoundWorkerWithLLM(id, name, description, projectPath, gitRemote, repoID string, start bool, llm *WorkerLLMBody) (WorkerState, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if id == "" {
@@ -201,6 +239,7 @@ func (s *Slots) AddBoundWorker(id, name, description, projectPath, gitRemote, re
 		projectPath: projectPath,
 		gitRemote:   gitRemote,
 		repoID:      repoID,
+		llm:         llm,
 	}
 	s.max = len(s.byID)
 	return WorkerState{

@@ -156,7 +156,7 @@ func gitInitWithReadme(absPath, readme string) error {
 
 // AddProjectWorker prepares the path under sandbox, registers a repo, and opens a capacity slot.
 // When worktreeBase is set, creates a git worktree at projectPath (-b branch) from that base checkout.
-func (s *Server) AddProjectWorker(workerID, name, description, projectPath, gitURL string, initGit bool, readme, worktreeBase, branch string) (WorkerState, error) {
+func (s *Server) AddProjectWorker(workerID, name, description, projectPath, gitURL string, initGit bool, readme, worktreeBase, branch string, llm *WorkerLLMBody) (WorkerState, error) {
 	abs, rel, err := s.resolveInSandbox(projectPath)
 	if err != nil {
 		return WorkerState{}, err
@@ -246,7 +246,7 @@ func (s *Server) AddProjectWorker(workerID, name, description, projectPath, gitU
 	s.mu.Unlock()
 
 	// Add as stopped config; operator starts via StartWorker.
-	ws, err := s.slots.AddBoundWorker(id, name, description, abs, remote, id, false)
+	ws, err := s.slots.AddBoundWorkerWithLLM(id, name, description, abs, remote, id, false, llm)
 	if err != nil {
 		s.mu.Lock()
 		s.removeReposForCWDLocked(abs)

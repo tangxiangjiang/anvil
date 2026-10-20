@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -47,8 +48,21 @@ func (r *EmbeddedRunner) llmSnapshot() LLMConfig {
 	return r.LLM
 }
 
+// RunOn runs a job with an explicit provider override.
+//
+// A nil llm means "inherit agentd's block", which is what Run does. The override
+// exists per slot rather than per daemon because one fleet routinely points at
+// more than one model, and the daemon-wide block could only express one.
+func (r *EmbeddedRunner) RunOn(ctx context.Context, job JobAssignBody, cwd string, llm *WorkerLLMBody, emit func(JobEventBody)) JobDoneBody {
+	return r.runWith(ctx, job, cwd, llm, emit)
+}
+
 // Run implements JobRunner.
 func (r *EmbeddedRunner) Run(ctx context.Context, job JobAssignBody, cwd string, emit func(JobEventBody)) JobDoneBody {
+	return r.runWith(ctx, job, cwd, nil, emit)
+}
+
+func (r *EmbeddedRunner) runWith(ctx context.Context, job JobAssignBody, cwd string, workerLLM *WorkerLLMBody, emit func(JobEventBody)) JobDoneBody {
 	if r == nil {
 		return JobDoneBody{JobID: job.JobID, Status: "error", Error: "nil runner"}
 	}
@@ -57,6 +71,7 @@ func (r *EmbeddedRunner) Run(ctx context.Context, job JobAssignBody, cwd string,
 	}
 	opts := worker.OptionsFromEnv()
 	applyLLMDefaults(&opts, r.llmSnapshot())
+	applyWorkerLLM(&opts, workerLLM)
 	opts.Local.CWD = cwd
 	if job.MaxSteps > 0 {
 		opts.MaxSteps = job.MaxSteps
@@ -143,6 +158,37 @@ func applyLLMDefaults(opts *anvil.Options, llm LLMConfig) {
 	}
 	if opts.MaxSteps == 0 && llm.MaxSteps > 0 {
 		opts.MaxSteps = llm.MaxSteps
+	}
+}
+
+// applyWorkerLLM layers a worker's own provider settings over the daemon's.
+//
+// Empty fields are not "clear the value", they are "inherit": a worker that sets
+// only a model keeps the fleet's base URL and key, which is the common case (one
+// gateway, several models).
+//
+// The key is read from the environment variable the worker names, never from the
+// request or from workers.json. A worker that sets no key inherits the daemon's.
+func applyWorkerLLM(opts *anvil.Options, w *WorkerLLMBody) {
+	if opts == nil || w == nil {
+		return
+	}
+	if v := strings.TrimSpace(w.Provider); v != "" {
+		opts.Provider = anvil.Provider(v)
+	}
+	if v := strings.TrimSpace(w.BaseURL); v != "" {
+		opts.BaseURL = strings.TrimRight(v, "/")
+	}
+	if v := strings.TrimSpace(w.Model); v != "" {
+		opts.Model.ID = v
+	}
+	if v := strings.TrimSpace(w.APIKeyEnv); v != "" {
+		if key := os.Getenv(v); key != "" {
+			opts.APIKey = key
+		}
+	}
+	if w.MaxSteps > 0 {
+		opts.MaxSteps = w.MaxSteps
 	}
 }
 

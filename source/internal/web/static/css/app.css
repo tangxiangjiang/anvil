@@ -376,9 +376,16 @@ input { width: 100%; margin-bottom: 0.75rem; }
 .ops-row:last-child { border-bottom: 0; }
 .ops-row .ops-grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ops-row button { padding: 0.25rem 0.6rem; font-size: 0.82rem; }
+/* Per-worker provider settings in the Add worker dialog (0.47). */
+.cl-llm-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 0 0.6rem;
+}
+.cl-llm-grid input, .cl-llm-grid select { margin-bottom: 0.75rem; }
+@media (max-width: 600px) {
+  .cl-llm-grid { grid-template-columns: 1fr; }
+}
 
-/* Selection and batch actions (p_0.46.8). */
-.del-sel-row { position: relative; border-radius: var(--radius); }
+/* Selection and batch actions (p_0.46.8). */.del-sel-row { position: relative; border-radius: var(--radius); }
 .del-sel-row.sel-on {
   outline: 2px solid var(--accent);
   outline-offset: -2px;

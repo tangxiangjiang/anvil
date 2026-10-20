@@ -35,6 +35,12 @@ type PersistedWorker struct {
 	ProjectRel  string `json:"project_rel"`
 	GitURL      string `json:"git_url,omitempty"`
 	Enabled     bool   `json:"enabled"` // true → start (idle) after restore
+	// LLM is the worker's provider override (0.47). Absent means inherit agentd's.
+	//
+	// The key is not here on purpose: this file is plain JSON on disk under the
+	// sandbox, and a provider key does not belong in it. APIKeyEnv names the
+	// variable instead.
+	LLM *WorkerLLMBody `json:"llm,omitempty"`
 }
 
 func (s *Server) workersStatePath() string {
@@ -91,7 +97,7 @@ func (s *Server) restoreProjectWorkers() {
 		if _, ok := s.slots.Get(id); ok {
 			continue
 		}
-		ws, err := s.AddProjectWorker(id, w.Name, w.Description, rel, w.GitURL, false, "", "", "")
+		ws, err := s.AddProjectWorker(id, w.Name, w.Description, rel, w.GitURL, false, "", "", "", w.LLM)
 		if err != nil {
 			s.stateLog().Printf("workers restore %q (%s): %v", id, rel, err)
 			continue

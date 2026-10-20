@@ -151,7 +151,7 @@ func (e *ClusterEdge) session(ctx context.Context, url string) error {
 			case KindClusterWorkerAdd:
 				var req ClusterWorkerAddBody
 				_ = DecodeBody(msg, &req)
-				ws, err := e.server.AddProjectWorker(req.WorkerID, req.Name, req.Description, req.ProjectPath, req.GitURL, req.InitGit, req.Readme, req.WorktreeBase, req.Branch)
+				ws, err := e.server.AddProjectWorker(req.WorkerID, req.Name, req.Description, req.ProjectPath, req.GitURL, req.InitGit, req.Readme, req.WorktreeBase, req.Branch, req.LLM)
 				res := ClusterWorkerResultBody{Request: "add", Worker: ws}
 				if err != nil {
 					res.Error = err.Error()

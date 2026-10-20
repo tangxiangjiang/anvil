@@ -1069,6 +1069,38 @@ Created by Anvil.
 </textarea>
           <div id="c-ai-slot"></div>
         </div>
+        <label>AI provider (this worker)</label>
+        <p class="muted" style="margin:0 0 0.35rem;font-size:0.82rem">
+          Optional. Empty fields inherit agentd's llm block, so a worker that says
+          nothing behaves exactly as before. The key is read from the environment
+          variable you name here — it is never stored in the config or the request.
+        </p>
+        <div class="cl-llm-grid">
+          <div>
+            <label for="c-llm-provider">Provider</label>
+            <select id="c-llm-provider">
+              <option value="">(inherit)</option>
+              <option value="openai">openai</option>
+              <option value="anthropic">anthropic</option>
+            </select>
+          </div>
+          <div>
+            <label for="c-llm-model">Model</label>
+            <input id="c-llm-model" placeholder="(inherit)" />
+          </div>
+        </div>
+        <label for="c-llm-base">Base URL</label>
+        <input id="c-llm-base" placeholder="(inherit) http://127.0.0.1:8080/v1" />
+        <div class="cl-llm-grid">
+          <div>
+            <label for="c-llm-keyenv">API key env var</label>
+            <input id="c-llm-keyenv" placeholder="(inherit) ANVIL_API_KEY" />
+          </div>
+          <div>
+            <label for="c-llm-maxsteps">Max steps</label>
+            <input id="c-llm-maxsteps" type="number" min="0" placeholder="(inherit)" />
+          </div>
+        </div>
         <label>Depends on (other workers in this project)</label>
         <div id="c-w-deps" class="cl-deps"><p class="muted">Loading…</p></div>
         <div class="err" id="c-modal-err"></div>
@@ -1284,6 +1316,21 @@ Created by Anvil.
       } else if (git_url) {
         body.git_url = git_url;
       }
+      // Per-worker provider settings. Anything left blank is omitted, which the
+      // daemon reads as "inherit" rather than "clear".
+      const llm = {};
+      const provider = modal.querySelector("#c-llm-provider")?.value || "";
+      const model = modal.querySelector("#c-llm-model")?.value.trim() || "";
+      const baseUrl = modal.querySelector("#c-llm-base")?.value.trim() || "";
+      const keyEnv = modal.querySelector("#c-llm-keyenv")?.value.trim() || "";
+      const maxSteps = Number(modal.querySelector("#c-llm-maxsteps")?.value || 0);
+      if (provider) llm.provider = provider;
+      if (model) llm.model = model;
+      if (baseUrl) llm.base_url = baseUrl;
+      if (keyEnv) llm.api_key_env = keyEnv;
+      if (maxSteps > 0) llm.max_steps = maxSteps;
+      if (Object.keys(llm).length) body.llm = llm;
+
       const depends_on = [...modal.querySelectorAll("#c-w-deps input:checked")].map((x) => x.value);
       const res = await api.v1.addClusterWorker(this._addCtx.fleetId, this._addCtx.nodeId, body);
       const workerId = res?.worker?.id || res?.id;

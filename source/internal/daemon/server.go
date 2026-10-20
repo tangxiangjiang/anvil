@@ -303,7 +303,7 @@ func (s *Server) handleJobAssign(parent context.Context, w *connWriter, env Enve
 	job.Plugins = resolvedPlugins
 
 	ctx, cancel := context.WithCancel(parent)
-	_, err = s.slots.TryAcquire(job.JobID, cancel)
+	workerID, err := s.slots.TryAcquire(job.JobID, cancel)
 	if err != nil {
 		cancel()
 		_ = s.writeErr(w, env.ID, err.Error(), job.JobID)
@@ -313,6 +313,18 @@ func (s *Server) handleJobAssign(parent context.Context, w *connWriter, env Enve
 	go func() {
 		defer s.slots.Release(job.JobID)
 		defer cancel()
+		// The slot the job landed on is the one whose provider settings apply. Read
+		// here rather than passed in: a worker can be re-pointed at another model
+		// between jobs, and the job should use what is configured now.
+		var workerLLM *WorkerLLMBody
+		if r, ok := s.runner.(*EmbeddedRunner); ok {
+			workerLLM = s.slots.LLMFor(workerID)
+			done := r.RunOn(ctx, job, cwd, workerLLM, func(ev JobEventBody) {
+				_ = w.WriteEnvelope(Envelope{Kind: KindJobEvent, Body: mustBody(ev)})
+			})
+			_ = w.WriteEnvelope(Envelope{Kind: KindJobDone, Body: mustBody(done)})
+			return
+		}
 		done := s.runner.Run(ctx, job, cwd, func(ev JobEventBody) {
 			_ = w.WriteEnvelope(Envelope{Kind: KindJobEvent, Body: mustBody(ev)})
 		})
