@@ -239,6 +239,29 @@
       .replace(/"/g, "&quot;");
   }
 
+  // The sidebar is an overlay under 600px; one button opens and closes it.
+  // Escape closes it too, because a phone user who opened it by accident should
+  // not have to find the button again.
+  function wireNavToggle() {
+    const btn = document.getElementById("nav-toggle");
+    if (!btn) return;
+    const setOpen = (open) => {
+      document.body.classList.toggle("nav-open", open);
+      btn.setAttribute("aria-expanded", open ? "true" : "false");
+    };
+    btn.addEventListener("click", () => {
+      setOpen(!document.body.classList.contains("nav-open"));
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") setOpen(false);
+    });
+    // Choosing a destination closes it: the overlay covers the page it navigates to.
+    document.getElementById("nav").addEventListener("click", (e) => {
+      if (e.target.closest("a")) setOpen(false);
+    });
+  }
+
+  wireNavToggle();
   wireGlobalSearch();
 
   window.addEventListener("hashchange", () => { route(); });

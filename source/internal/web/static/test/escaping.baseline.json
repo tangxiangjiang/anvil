@@ -487,6 +487,12 @@
     "ev.is_error ? \" wb-tool-error\" : \"\"",
     "ev.is_error ? \"✗\" : \"✓\""
   ],
+  "js/features/ops.js": [
+    "f.reachable ? \"ok\" : \"bad\"",
+    "f.reachable ? `${f.idle} idle · ${f.busy} busy` : \"unreachable\"",
+    "fleetRows",
+    "jobRows"
+  ],
   "js/features/nodes.js": [
     "w.id",
     "w.status",
@@ -517,6 +523,7 @@
     "f.reachable ? \"reachable\" : \"unreachable\" + (f.error ? \" — \" + f.error : \"\")"
   ],
   "js/shared/selection.js": [],
+  "js/shared/stream.js": [],
   "js/components/ai_chat.js": [
     "items",
     "self._logHtml()",

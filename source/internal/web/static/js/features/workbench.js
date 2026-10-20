@@ -61,6 +61,7 @@ window.Features.workbench = {
         <section class="wb-main">
           <div id="wb-session-head" class="wb-session-head muted">No session selected.</div>
           <div id="wb-approval-note" class="wb-note" hidden></div>
+          <div id="wb-conn" class="wb-conn" hidden></div>
           <div id="wb-stream" class="wb-stream" role="log" aria-live="polite"></div>
           <div class="wb-composer">
             <button type="button" id="wb-stop" class="danger" disabled>Stop</button>
@@ -245,6 +246,10 @@ window.Features.workbench = {
     this._sessionId = sessionId;
     this._cards = new Map();
     this._steps = 0;
+    // A fresh resumer per session: seq numbers belong to one job, so carrying a
+    // seen-set across sessions would drop the first events of the next one.
+    this._resumer = window.AnvilUI.stream.createResumer();
+    this._ended = false;
     const stream = this.el?.querySelector("#wb-stream");
     const head = this.el?.querySelector("#wb-session-head");
     const stop = this.el?.querySelector("#wb-stop");
@@ -260,23 +265,53 @@ window.Features.workbench = {
     // missing feature someone waits for.
     this.showApprovalLimit(sessionId);
 
-    const ac = new AbortController();
-    this._abort = ac;
-    // The stream replays every event then follows, so a reload lands on the same
-    // conversation rather than mid-sentence.
-    await this.consume(api.v1.workbenchEventsURL(sessionId), ac.signal, {
-      onEvent: (ev) => this.renderEvent(ev),
-      onDone: (done) => {
-        if (stop) stop.disabled = true;
-        this.renderDone(done);
-        this.setStatus(done.status === "cancelled" ? "stopped" : done.status);
-        this.refresh();
-      },
-      onOpen: () => {
-        if (stop) stop.disabled = false;
-        this.setStatus("running");
-      },
-    });
+    // Follow, and keep following: the stream replays then goes live, so a drop
+    // resumes without losing or duplicating an event. Without the dedupe a
+    // reconnect would redraw the whole conversation.
+    for (;;) {
+      const ac = new AbortController();
+      this._abort = ac;
+      const outcome = await this.consume(api.v1.workbenchEventsURL(sessionId), ac.signal, {
+        onEvent: (ev) => {
+          if (!this._resumer.firstSeen(ev)) return;
+          this.renderEvent(ev);
+        },
+        onDone: (done) => {
+          this._ended = true;
+          if (stop) stop.disabled = true;
+          this.renderDone(done);
+          this.setStatus(done.status === "cancelled" ? "stopped" : done.status);
+          this.setConn("ended");
+          this.refresh();
+        },
+        onOpen: () => {
+          this._resumer.opened();
+          if (stop) stop.disabled = false;
+          this.setStatus("running");
+          this.setConn("live");
+        },
+      });
+      if (this._ended || outcome === "aborted" || this._sessionId !== sessionId) return;
+      const next = this._resumer.dropped();
+      if (!next.retry) {
+        this.setConn("offline");
+        this.setStatus("disconnected — press Refresh to retry");
+        return;
+      }
+      this.setConn("reconnecting");
+      await new Promise((r) => setTimeout(r, next.delayMs));
+      if (this._sessionId !== sessionId) return;
+    }
+  },
+
+  /** setConn reflects the connection state in the banner. */
+  setConn(state) {
+    const el = this.el?.querySelector("#wb-conn");
+    if (!el) return;
+    const label = window.AnvilUI.stream.connectionLabel(state);
+    el.hidden = state === "live" || state === "";
+    el.textContent = label;
+    el.className = "wb-conn" + (state === "offline" ? " bad" : state === "reconnecting" ? " warn" : "");
   },
 
   closeStream() {
@@ -306,13 +341,10 @@ window.Features.workbench = {
         signal,
       });
     } catch (e) {
-      if (e?.name !== "AbortError") this.setStatus("connection failed");
-      return;
+      if (e?.name === "AbortError") return "aborted";
+      return "dropped";
     }
-    if (!res.ok || !res.body) {
-      this.setStatus("could not open the stream");
-      return;
-    }
+    if (!res.ok || !res.body) return "dropped";
     if (onOpen) onOpen();
     const reader = res.body.getReader();
     const dec = new TextDecoder();
@@ -323,10 +355,10 @@ window.Features.workbench = {
       try {
         chunk = await reader.read();
       } catch (e) {
-        if (e?.name !== "AbortError") this.setStatus("stream ended");
-        return;
+        if (e?.name === "AbortError") return "aborted";
+        return "dropped";
       }
-      if (chunk.done) break;
+      if (chunk.done) return this._ended ? "ended" : "dropped";
       buf += dec.decode(chunk.value, { stream: true });
       const lines = buf.split("\n");
       buf = lines.pop() || "";
@@ -351,6 +383,7 @@ window.Features.workbench = {
         if (line === "") name = "";
       }
     }
+    return this._ended ? "ended" : "dropped";
   },
 
   /** renderEvent appends one frame: assistant text, a tool card, or progress. */

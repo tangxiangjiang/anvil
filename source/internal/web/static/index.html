@@ -53,6 +53,7 @@
       </div>
     </aside>
     <main class="main" id="app"></main>
+    <button type="button" id="nav-toggle" class="nav-toggle" aria-label="Menu" aria-expanded="false">☰</button>
   </div>
 
   <script defer src="/vendor/alpine.min.js"></script>
@@ -67,11 +68,13 @@
   <script src="/js/shared/action.js"></script>
   <script src="/js/shared/shell.js"></script>
   <script src="/js/shared/selection.js"></script>
+  <script src="/js/shared/stream.js"></script>
   <script src="/js/components/ai_chat.js"></script>
   <script src="/js/components/md_preview.js"></script>
   <script src="/js/features/clusters.js"></script>
   <script src="/js/features/workbench.js"></script>
   <script src="/js/features/jobhistory.js"></script>
+  <script src="/js/features/ops.js"></script>
   <!--
     Delivery: eleven files, each assigning onto window.Features.delivery.
     Order matters — core defines the router, helpers/modals/jobs are its

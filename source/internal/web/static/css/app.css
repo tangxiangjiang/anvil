@@ -265,6 +265,93 @@ input { width: 100%; margin-bottom: 0.75rem; }
   .side { border-right: 0; border-bottom: 1px solid var(--border); }
 }
 
+/* Connection banner (p_0.46.12): a stale stream that looks live is worse than
+   a visible disconnection. */
+.wb-conn {
+  padding: 0.35rem 0.6rem; border-radius: var(--radius);
+  font-size: 0.8rem; border: 1px solid var(--border);
+}
+.wb-conn.warn { border-color: var(--warn); color: var(--warn); }
+.wb-conn.bad { border-color: var(--danger); color: var(--danger); }
+.wb-conn[hidden] { display: none !important; }
+
+/* ---------------------------------------------------------------- reachable
+   (p_0.46.12) The console assumed a wide, stable desktop. These rules make the
+   two things an operator does away from a desk - see state, stop a runaway job -
+   work on a phone, and they name the surfaces that genuinely do not work small
+   instead of rendering them half-broken. */
+@media (max-width: 900px) {
+  :root { --sidebar: 56px; }
+  .side { padding: 0.75rem 0.5rem; }
+  .brand span, .nav-parent, .nav-child, .side-foot #whoami, .shell-health .sh-cap { display: none; }
+  .brand { font-size: 0.9rem; text-align: center; }
+  .nav a, .nav-fold { padding: 0.5rem 0.35rem; text-align: center; }
+  .del-scope { gap: 0.25rem; }
+  .del-scope-title { display: none; }
+  .jh-row { grid-template-columns: 0.6rem minmax(0,1fr) auto; }
+}
+
+@media (max-width: 600px) {
+  :root { --sidebar: 0px; }
+  .shell { grid-template-columns: 1fr; }
+  /* The sidebar becomes an overlay toggled from the header rather than a
+     column that squeezes content to nothing. */
+  .side {
+    position: fixed; inset: 0 auto 0 0; width: 240px; z-index: 50;
+    transform: translateX(-100%); transition: transform 0.18s ease;
+    box-shadow: 0 0 32px rgba(0,0,0,0.5);
+  }
+  body.nav-open .side { transform: translateX(0); }
+  .brand span, .nav-parent, .nav-child, .side-foot #whoami, .shell-health .sh-cap { display: block; }
+  .main { padding: 0.85rem 0.8rem; }
+  .del-head { flex-direction: column; align-items: stretch; gap: 0.4rem; }
+  .del-head h2 { font-size: 1.1rem; }
+  .del-split { display: block; }
+  .del-scope { overflow-x: auto; flex-wrap: nowrap; padding-bottom: 0.25rem; }
+  .del-scope-chip { flex: 0 0 auto; }
+  .del-job-bar, .del-sel-bar { position: static; }
+  .toolbar { flex-wrap: wrap; }
+  .jh-row { grid-template-columns: 0.6rem minmax(0,1fr); }
+  .jh-row .jh-meta { display: none; }
+  .wb-grid { grid-template-columns: 1fr; }
+  .wb-stream { max-height: 46vh; }
+  .modal-card { width: 94vw !important; max-height: 88vh; overflow: auto; }
+  .modal-stack { width: 96vw; }
+}
+
+/* A surface that genuinely needs a wide screen says so rather than rendering a
+   broken layout. Naming the limit is more useful than a half-working one. */
+.desktop-only { display: none; }
+@media (max-width: 900px) {
+  .desktop-only {
+    display: block; padding: 0.75rem 0.85rem; margin: 0 0 0.75rem;
+    border: 1px dashed var(--border); border-radius: var(--radius);
+    font-size: 0.85rem; color: var(--muted);
+  }
+  .needs-wide { display: none; }
+}
+
+/* Mobile nav toggle: hidden on wide screens, shown when the sidebar is an
+   overlay. */
+.nav-toggle {
+  display: none; position: fixed; left: 0.6rem; bottom: 0.8rem; z-index: 60;
+  width: 2.6rem; height: 2.6rem; border-radius: 50%; padding: 0;
+  font-size: 1rem; box-shadow: 0 4px 16px rgba(0,0,0,0.45);
+}
+@media (max-width: 600px) {
+  .nav-toggle { display: block; }
+}
+
+/* ---------------------------------------------------------------- ops view
+   One screen for a phone: state and a stop button. */
+.ops-grid { display: flex; flex-direction: column; gap: 0.75rem; }
+.ops-card { padding: 0.75rem 0.85rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); }
+.ops-card h3 { margin: 0 0 0.4rem; font-size: 0.95rem; }
+.ops-row { display: flex; align-items: center; gap: 0.5rem; padding: 0.3rem 0; border-bottom: 1px solid var(--border); }
+.ops-row:last-child { border-bottom: 0; }
+.ops-row .ops-grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ops-row button { padding: 0.25rem 0.6rem; font-size: 0.82rem; }
+
 /* Selection and batch actions (p_0.46.8). */
 .del-sel-row { position: relative; border-radius: var(--radius); }
 .del-sel-row.sel-on {
