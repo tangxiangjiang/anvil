@@ -184,6 +184,8 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; img-src data: ${webview.cspSource}; script-src 'nonce-${nonce}';">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="${asset('tokens.css')}">
+<link rel="stylesheet" href="${asset('panel.css')}">
 <link rel="stylesheet" href="${asset('review.css')}">
 <title>Review changes</title>
 </head>

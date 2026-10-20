@@ -4,53 +4,10 @@
  * hardcoded background is what makes a diff unreadable.
  */
 
-:root {
-  --review-gap: 10px;
-  --review-radius: 6px;
-  --review-mono: var(--vscode-editor-font-family, monospace);
-}
-
-* {
-  box-sizing: border-box;
-}
-
-html,
-body {
-  height: 100%;
-}
-
-body {
-  margin: 0;
-  padding: 16px;
-  font-family: var(--vscode-font-family);
-  font-size: var(--vscode-font-size, 13px);
-  color: var(--vscode-foreground);
-  background: var(--vscode-editor-background);
-}
-
 #root {
   max-width: 72em;
-  margin: 0 auto;
   /* Room for the sticky footer, so the last hunk is not hidden behind it. */
   padding-bottom: 72px;
-}
-
-.title {
-  margin: 0 0 4px;
-  font-size: 1.2em;
-  font-weight: 600;
-}
-
-.path {
-  font-family: var(--review-mono);
-  color: var(--vscode-descriptionForeground);
-  word-break: break-all;
-  margin-bottom: 4px;
-}
-
-.hint {
-  color: var(--vscode-descriptionForeground);
-  margin: 4px 0 12px;
 }
 
 .hunks {
@@ -59,38 +16,34 @@ body {
   gap: 12px;
 }
 
-.hunk {
-  border: 1px solid var(--vscode-panel-border);
-  border-radius: var(--review-radius);
-  overflow: hidden;
-}
-
+/* A hunk is a section, not a card: a rule under its head separates it from
+ * the lines, and the next gap separates it from the next hunk. */
 .hunk-head {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 10px;
-  background: var(--vscode-editorWidget-background);
+  padding: 6px 0;
+  border-bottom: 1px solid var(--ui-hairline);
   cursor: pointer;
 }
 
 .hunk-range {
-  font-family: var(--review-mono);
+  font-family: var(--ui-mono);
   font-size: 0.95em;
-  color: var(--vscode-descriptionForeground);
+  color: var(--ui-muted);
 }
 
 .hunk-body {
-  font-family: var(--review-mono);
+  font-family: var(--ui-mono);
   font-size: var(--vscode-editor-font-size, 12px);
-  line-height: 1.5;
+  line-height: var(--ui-line-tight);
   overflow-x: auto;
 }
 
 .line {
   /* Diff lines are file content: indentation and tabs must be shown as written. */
   white-space: pre;
-  padding: 0 10px;
+  padding: 0 8px;
   min-height: 1.5em;
 }
 
@@ -112,48 +65,9 @@ body {
   gap: 8px;
   padding: 10px 16px;
   background: var(--vscode-editorWidget-background);
-  border-top: 1px solid var(--vscode-panel-border);
+  border-top: 1px solid var(--ui-hairline);
 }
 
 .count {
-  color: var(--vscode-descriptionForeground);
-}
-
-.spacer {
-  flex: 1;
-}
-
-button {
-  font-family: inherit;
-  font-size: inherit;
-  padding: 4px 12px;
-  border-radius: var(--review-radius);
-  border: 1px solid var(--vscode-button-border, transparent);
-  cursor: pointer;
-}
-
-button:disabled {
-  cursor: default;
-  opacity: 0.5;
-}
-
-button.primary {
-  color: var(--vscode-button-foreground);
-  background: var(--vscode-button-background);
-  border-color: var(--vscode-button-border, transparent);
-}
-
-button.primary:hover:not(:disabled) {
-  background: var(--vscode-button-hoverBackground);
-}
-
-button.secondary {
-  color: var(--vscode-secondaryButton-foreground, var(--vscode-button-foreground));
-  background: var(--vscode-secondaryButton-background, var(--vscode-button-secondaryBackground, transparent));
-}
-
-button.ghost {
-  color: var(--vscode-foreground);
-  background: transparent;
-  border-color: var(--vscode-panel-border);
+  color: var(--ui-muted);
 }
