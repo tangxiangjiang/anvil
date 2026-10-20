@@ -187,6 +187,7 @@ func projectEvent(sessionID, runID string, ev anvil.Event) (EventParams, bool) {
 		MaxSteps:   ev.MaxSteps,
 		Code:       string(ev.Code),
 		Rule:       ruleInfo(ev.Rule),
+		Protected:  ev.Protected,
 		Usage:      usageWire(ev.Usage),
 		Items:      items,
 		Compact:    compactWire(ev.Compact),
@@ -244,6 +245,7 @@ func ruleInfo(m *anvil.PermissionRuleMatch) *RuleInfo {
 	}
 	return &RuleInfo{
 		Index:    m.Index + 1,
+		Source:   m.Source,
 		RuleSpec: ruleSpec(m),
 		Describe: m.Describe(),
 	}

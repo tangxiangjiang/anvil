@@ -3,17 +3,44 @@
 
 // Package permissions decides one thing about a tool call: is it allowed,
 // denied, or must somebody be asked? The rules are written by the user in
-// .anvil/permissions.json, and this package is the only thing that reads them.
+// .anvil/permissions.json and, since 0.47, in ~/.anvil/permissions.json, and
+// this package is the only thing that reads them.
 //
 // It knows nothing about tools beyond the facts a call carries — see CallFacts —
 // which is deliberate on two counts. There is no import back into
 // internal/tools, so no cycle; and a rule can only match facts the approval card
 // also shows, so nothing is ever allowed on evidence the user was not shown.
 //
-// See doc/design/v1.0/36-tool-permissions.md.
+// See doc/design/v1.0/36-tool-permissions.md and, for scopes and protected
+// paths, doc/design/v1.0/37-permission-modes.md.
 package permissions
 
 import "fmt"
+
+// Rule sources. A compiled rule remembers where it was written, because a
+// citation has to name a line the reader can open: with two files, a position
+// in the merged list names no line in either.
+const (
+	// SourceUser is the user file, ~/.anvil/permissions.json.
+	SourceUser = "user"
+	// SourceWorkspace is the workspace file, .anvil/permissions.json.
+	SourceWorkspace = "workspace"
+	// SourceCode is a rule a program supplied through Options.PermissionRules.
+	SourceCode = "code"
+)
+
+// sourceLabel is how a citation names a source: the file a reader opens, or the
+// caller's list when there is no file.
+func sourceLabel(source string) string {
+	switch source {
+	case SourceUser:
+		return "user " + FileName
+	case SourceCode:
+		return "session rules"
+	default:
+		return ".anvil/" + FileName
+	}
+}
 
 // Effect is what a matching rule does to a call.
 type Effect uint8
@@ -71,6 +98,13 @@ type Rule struct {
 	Tool    string `json:"tool"`
 	Pattern string `json:"pattern,omitempty"`
 	Reason  string `json:"reason,omitempty"`
+
+	// Source and Index are where the rule was read from, not part of the file:
+	// they are filled by a reader and ignored when writing. Index is one-based,
+	// counted in that source's own file, so a citation lands on a line the reader
+	// can find.
+	Source string `json:"-"`
+	Index  int    `json:"-"`
 }
 
 // File is the on-disk shape of .anvil/permissions.json.
@@ -88,6 +122,21 @@ type File struct {
 	// — so only the shape is checked here.
 	DefaultMode *string `json:"defaultMode,omitempty"`
 	Rules       []Rule  `json:"rules"`
+}
+
+// UserFile is the on-disk shape of ~/.anvil/permissions.json.
+//
+// It is deliberately not the workspace file's shape. A user file may add
+// protected-path globs; a workspace file may declare a starting mode. Neither
+// parser accepts the other's key, so a repository cannot widen what a person may
+// rewrite without asking, and a machine-wide file cannot choose the mode of a
+// repository's sessions.
+type UserFile struct {
+	Version int `json:"version,omitempty"`
+	// Protected are globs for paths an allow rule may not cover, in addition to
+	// the fixed list in Protection.
+	Protected []string `json:"protected,omitempty"`
+	Rules     []Rule   `json:"rules"`
 }
 
 // modeWord reports whether s could be a mode name at all: one lowercase word of
@@ -132,8 +181,11 @@ type Decision struct {
 	// it did before there were rules at all.
 	Matched bool
 	Effect  Effect
-	// Index is the matching rule's position in the file, counted from zero, in
-	// the order the file lists them.
+	// Source is where the deciding rule was written: SourceUser,
+	// SourceWorkspace or SourceCode. Empty reads as the workspace, which is what
+	// a decision built by hand for display has always meant.
+	Source string
+	// Index is the matching rule's position in its own file, counted from zero.
 	Index int
 	// Tool and Pattern are the rule as written, so a client can say which rule
 	// decided.
@@ -141,6 +193,11 @@ type Decision struct {
 	Pattern string
 	// Reason is the rule's reason, empty when it gave none.
 	Reason string
+	// Protected lists the paths this call touches that an allow rule may not
+	// cover — see Protection. It is set whether or not a rule matched, because
+	// "this path is protected" is a fact about the call, not about a rule. An
+	// allow rule is skipped for such a call; deny and ask still decide.
+	Protected []string
 }
 
 // String names the rule the way the file spells it, for a message a reader can
@@ -158,9 +215,11 @@ func (d Decision) String() string {
 // Ref names the rule the way a reader of the file finds it: the file, the
 // rule's position counted the way a reader counts, the rule as written, and its
 // reason. A denial and an approval card both quote this, so the same words
-// appear wherever the decision is explained.
+// appear wherever the decision is explained. The position is counted inside the
+// rule's own source, so `user permissions.json rule 2` and
+// `.anvil/permissions.json rule 1` are both lines a reader can open.
 func (d Decision) Ref() string {
-	ref := fmt.Sprintf(".anvil/%s rule %d (%s)", FileName, d.Index+1, d.String())
+	ref := fmt.Sprintf("%s rule %d (%s)", sourceLabel(d.Source), d.Index+1, d.String())
 	if d.Reason != "" {
 		ref += ": " + d.Reason
 	}
@@ -176,25 +235,39 @@ type Set struct {
 	// empty when it declares none. A successfully parsed file cannot hold an empty
 	// declaration — Parse refuses one — so empty means "nothing declared".
 	defaultMode string
+	// protection is what an allow rule may not cover; nil means nothing is
+	// protected, which is the right answer for a set nobody gave a workspace.
+	protection *Protection
 }
 
 // rule is a validated Rule: the effect is already parsed, so the decision path
-// does no string comparisons of its own.
+// does no string comparisons of its own. source and index are where it was read
+// from; index is zero-based and counted inside that source.
 type rule struct {
 	effect  Effect
 	tool    string // a glob over the tool name
 	pattern string // as written; what it is compared against depends on the call
 	reason  string
+	source  string
+	index   int
 }
 
-// Rules returns the rules as written, in the order they decide.
+// Rules returns the rules as written, in the order they decide, each carrying
+// the source it came from and its one-based position there.
 func (s *Set) Rules() []Rule {
 	if s == nil {
 		return nil
 	}
 	out := make([]Rule, 0, len(s.rules))
 	for _, r := range s.rules {
-		out = append(out, Rule{Effect: r.effect.String(), Tool: r.tool, Pattern: r.pattern, Reason: r.reason})
+		out = append(out, Rule{
+			Effect:  r.effect.String(),
+			Tool:    r.tool,
+			Pattern: r.pattern,
+			Reason:  r.reason,
+			Source:  r.source,
+			Index:   r.index + 1,
+		})
 	}
 	return out
 }
@@ -230,22 +303,31 @@ func (s *Set) Describe(i int) string {
 	return Decision{
 		Matched: true,
 		Effect:  r.effect,
-		Index:   i,
+		Source:  r.source,
+		Index:   r.index,
 		Tool:    r.tool,
 		Pattern: r.pattern,
 		Reason:  r.reason,
 	}.Ref()
 }
 
-// Evaluate decides a call. Rules are tried in file order and the outcome is:
+// Evaluate decides a call. Rules are tried in the set's order — user, then
+// workspace, then code, for a set built by Merge — and the outcome is:
 //
 //   - across effects, deny > ask > allow — one matching deny defeats every
-//     allow and ask, wherever in the file it sits;
-//   - within one effect, the first rule in the file wins, and Index names it.
+//     allow and ask, wherever in the set it sits;
+//   - within one effect, the first rule in that order wins, and Source and Index
+//     name it.
 //
 // "Most specific wins" is deliberately not implemented: specificity is not
 // written in the file, so a reader would have to recompute a metric nobody
 // agrees on. File order can be read top to bottom instead.
+//
+// A call that touches a protected path is never decided by an allow rule: the
+// allow is skipped, and deny and ask decide as usual. With no rule left the
+// call falls through to the mode, exactly as it would have without the allow.
+// The protected paths are reported either way, because "this path is protected"
+// is a fact about the call that survives whichever rule (or mode) decided it.
 //
 // goos selects the shell dialect the analyzer models; it is ignored for every
 // call that carries no command.
@@ -253,9 +335,13 @@ func (s *Set) Evaluate(f CallFacts, goos string) Decision {
 	if s == nil {
 		return Decision{}
 	}
+	protected := s.protectedPaths(f)
 	var best Decision
 	for i := range s.rules {
 		r := s.rules[i]
+		if len(protected) > 0 && r.effect == Allow {
+			continue
+		}
 		if !r.covers(f, goos) {
 			continue
 		}
@@ -268,11 +354,13 @@ func (s *Set) Evaluate(f CallFacts, goos string) Decision {
 		best = Decision{
 			Matched: true,
 			Effect:  r.effect,
-			Index:   i,
+			Source:  r.source,
+			Index:   r.index,
 			Tool:    r.tool,
 			Pattern: r.pattern,
 			Reason:  r.reason,
 		}
 	}
+	best.Protected = protected
 	return best
 }

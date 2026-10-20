@@ -31,6 +31,18 @@ export function emptyRulesFile(): string {
 }
 
 /**
+ * The bytes of a user rule file that decides nothing (0.47).
+ *
+ * A different shape from the workspace's, on purpose: the user file carries the
+ * protected-path globs and no starting mode. `protected` is written out even
+ * when empty so the one field that only exists here is visible to the person
+ * about to type into the file.
+ */
+export function emptyUserRulesFile(): string {
+  return `${JSON.stringify({ version: RULES_FILE_VERSION, protected: [], rules: [] }, null, 2)}\n`;
+}
+
+/**
  * Where a problem points, as zero-based positions a `vscode.Position` takes.
  *
  * The parser counts lines and columns from one, and reports zero when the

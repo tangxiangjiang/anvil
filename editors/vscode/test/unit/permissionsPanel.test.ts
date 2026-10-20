@@ -67,15 +67,59 @@ test('a project file cannot be given bypass from the form', () => {
 });
 
 test('a file that will not parse is read-only, Save included', () => {
-  // A problem in the state message turns the controls off; Save is then disabled
-  // by the same flag, so the form cannot overwrite the text it is showing.
-  assert.match(DOC, /editable = !problem && !failure;/);
-  assert.match(DOC, /save\.disabled = !editable \|\| saving \|\| !dirty;/);
+  // A problem in the state message turns that layer's controls off; its Save is
+  // then disabled by the same flag, so the form cannot overwrite the text it is
+  // showing. The two layers are refused independently (0.47): a broken user file
+  // must not freeze the workspace's rules, and the other way round.
+  assert.match(DOC, /editable\.workspace = !problem && !failure;/);
+  assert.match(DOC, /editable\.user = hasUser && userExists && !userProblem && !failure;/);
+  assert.match(DOC, /save\.disabled = !editable\[scope\] \|\| saving \|\| !dirty\[scope\];/);
   assert.match(DOC, /Editing is off so the file is not overwritten/);
-  assert.match(DOC, /if \(!editable\) status\.textContent = 'Read-only until the problem is fixed\.'/);
+  assert.match(DOC, /if \(!editable\[scope\]\)/);
+  assert.match(DOC, /'Read-only until the problem is fixed\.'/);
   // And the host refuses independently: a client that skipped the form does not
-  // get to replace a file this build could not read.
+  // get to replace a file this build could not read. Both layers are named.
   assert.match(SERVER_GO, /anvil\.LoadPermissionRuleFile\(cwd\); err != nil \{\s*return nil, errCode\(CodeInvalidRequest/);
+  assert.match(SERVER_GO, /anvil\.LoadUserPermissionRuleFile\(\); err != nil \{\s*return nil, errCode\(CodeInvalidRequest/);
+});
+
+test('the two rule files are drawn as two sections, saved one at a time', () => {
+  // permissions.get answers one list with each rule's source; the panel splits
+  // it where the grouping decision belongs, and a host without scopes (no
+  // source) reads as the workspace's only layer.
+  assert.match(PANEL, /userRules: rowsFor\(state\.rules, 'user'\)/);
+  assert.match(PANEL, /workspaceRules: rowsFor\(state\.rules, 'workspace'\)/);
+  assert.match(PANEL, /rule\.source === 'user' : rule\.source !== 'user'/);
+  assert.match(DOC, /hasUser = userPath !== ''/);
+  assert.match(DOC, /if \(hasUser\) userSection\(msg, userPath, userExists, userProblem\);/);
+  assert.match(DOC, /el\('section', 'scope user'\)/);
+  assert.match(DOC, /el\('section', 'scope workspace'\)/);
+
+  // A save names the layer it replaces. The user layer carries protected globs
+  // and never a starting mode; the workspace layer is the reverse — the host
+  // refuses each other's field, so the document must not send both shapes.
+  assert.match(PANEL, /source: 'user',\s*rules,\s*protected: protectedPaths/);
+  assert.match(PANEL, /source: 'workspace',\s*rules,\s*default_mode:/);
+  assert.match(DOC, /type: 'save',\s*source: 'user',\s*rules,\s*protected:/);
+  assert.match(DOC, /type: 'save',\s*source: 'workspace',\s*rules,\s*defaultMode:/);
+
+  // A missing user file is read-only until a person asks for it: the create
+  // step is its own message with create:true, and the host refuses a save that
+  // did not ask.
+  assert.match(DOC, /if \(!userExists && !userProblem\)/);
+  assert.match(DOC, /source: 'user', create: true, rules: \[\], protected: \[\]/);
+  assert.match(DOC, /Create user file/);
+  assert.match(SERVER_GO, /p\.Create/);
+});
+
+test('protected paths are a user-file field and are shown as one', () => {
+  // The form offers them only where the host accepts them, and says what the
+  // fixed list already covers — a person adding "secrets/**" should not think
+  // they have to add ".git" too.
+  assert.match(DOC, /id = 'protected-paths'/);
+  assert.match(DOC, /\.git, \.anvil\/checkpoints\/ and the Anvil home are always protected/);
+  assert.match(DOC, /function protectedPaths\(\)/);
+  assert.match(PANEL, /protected \?\? \[\]/);
 });
 
 test('both entry points exist and the composer opens the manager', () => {
@@ -87,14 +131,17 @@ test('both entry points exist and the composer opens the manager', () => {
   // The panel is what the manager command opens; the old file-opening path is
   // still the Open JSON button's.
   assert.match(HUB, /openPermissionRules\(\): void \{\s*this\.permissions\.open\(\);/);
-  assert.match(DOC, /vscode\.postMessage\(\{ type: 'openFile' \}\)/);
-  assert.match(PANEL, /case 'openFile':\s*await this\.host\.openPermissionRulesFile\(\);/);
+  assert.match(DOC, /vscode\.postMessage\(\{ type: 'openFile', source: openSource \}\)/);
+  assert.match(
+    PANEL,
+    /await this\.host\.openPermissionRulesFile\(\s*message\.source === 'user' \? 'user' : 'workspace',/,
+  );
   // The composer's Permissions button is the manager, not the file.
   assert.match(CHAT_PANEL, /case 'openPermissions':\s*await this\.hub\.openPermissionRules\(\);/);
 });
 
 test('a workspace that does not read the file says so in the panel', () => {
-  assert.match(DOC, /anvil\.permissions is off, so this file is not read/);
+  assert.match(DOC, /anvil\.permissions is off, so these files are not read/);
   assert.match(HUB, /loadPermissionsEnabled\(\): boolean \{\s*return readSettings\(\)\.session\.load_permissions !== false;/);
   assert.match(PANEL, /loadPermissions: this\.host\.loadPermissionsEnabled\(\)/);
 });

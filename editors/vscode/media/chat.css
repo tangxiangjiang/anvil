@@ -754,6 +754,13 @@ button.ghost[aria-pressed='true'] {
   color: var(--vscode-descriptionForeground);
   font-size: 0.9em;
 }
+/* A protected path is the reason a rule that says allow did not settle the
+ * call, so it is worth the theme's warning colour rather than the quiet grey
+ * of an ordinary rule citation. */
+.tool .rule-ref.protected,
+.approval .why.protected {
+  color: var(--vscode-editorWarning-foreground, var(--vscode-descriptionForeground));
+}
 
 /*
  * The review affordance on a finished tool card. It sits below the summary and

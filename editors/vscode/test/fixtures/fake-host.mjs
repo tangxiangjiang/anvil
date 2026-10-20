@@ -144,12 +144,60 @@ const mcpBroken = process.env.FAKE_HOST_MCP_BROKEN === '1';
 const finishedRuns = new Map();
 /** Its rules, as a session that appended them would have them. */
 const rules = [];
+/** The person's own file (0.47), reported beside the workspace's. */
+const userRulesPath = join(process.env.FAKE_HOST_HOME || homedir(), '.anvil', 'permissions.json');
+/** The user layer's rules, in the same shape as `rules`. */
+const userRules = [];
+/** The globs the user file adds to the fixed protected list. */
+const userProtected = [];
+/** Whether the user file is reported as present; `permissions.set` creates it. */
+let userExists = process.env.FAKE_HOST_USER_RULES === '1';
+/** Whether the user file is reported as one that will not parse. */
+const userRulesBroken = process.env.FAKE_HOST_USER_RULES_BROKEN === '1';
 /** Where the parse error is reported: the place, not a line for the file. */
 const rulesProblem = {
   message: 'rule 2: effect "maybe" is not one of allow, ask, deny',
   line: 4,
   column: 12,
 };
+/** The user file's place, for the same kind of report. */
+const userRulesProblem = {
+  message: 'rule 1: effect "maybe" is not one of allow, ask, deny',
+  line: 3,
+  column: 9,
+};
+/** A starting mode a save wrote, when a save wrote one. */
+let savedMode;
+
+/**
+ * One rule as a layer reports it: its own file's name and its own one-based
+ * position, never a position in the merged list.
+ */
+function ruleInfo(rule, source, index) {
+  const label = source === 'user' ? 'user permissions.json' : '.anvil/permissions.json';
+  return {
+    index: index + 1,
+    source,
+    ...rule,
+    describe: `${label} rule ${index + 1} (${rule.effect} ${rule.tool} "${rule.pattern}")`,
+  };
+}
+
+/** `permissions.get`'s answer, from both layers. */
+function permissionsState() {
+  const declared = declaredMode();
+  return {
+    path: rulesPath,
+    exists: rules.length > 0 || Boolean(declared.mode || declared.refused),
+    rules: [...userRules, ...rules],
+    default_mode: declared.mode,
+    default_mode_refused: declared.refused,
+    user_path: userRulesPath,
+    user_exists: userExists,
+    user_problem: userRulesBroken ? userRulesProblem : undefined,
+    protected: userProtected.slice(),
+  };
+}
 
 const out = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
 const notify = (method, params) => out({ jsonrpc: '2.0', method, params });
@@ -314,6 +362,7 @@ function contextInfo(session) {
  * path pass without ever being exercised.
  */
 function declaredMode() {
+  if (savedMode !== undefined) return savedMode;
   let file;
   try {
     file = JSON.parse(readFileSync(rulesPath, 'utf8'));
@@ -1160,45 +1209,46 @@ async function handle(msg) {
       if (rulesBroken) {
         // A result, not an error: the client asked about the state of the file,
         // and a file somebody is halfway through editing is one of its states.
-        ok(msg.id, { path: rulesPath, exists: true, rules: [], problem: rulesProblem });
+        ok(msg.id, {
+          path: rulesPath,
+          exists: true,
+          rules: userRules.slice(),
+          problem: rulesProblem,
+          user_path: userRulesPath,
+          user_exists: userExists,
+          user_problem: userRulesBroken ? userRulesProblem : undefined,
+          protected: userProtected.slice(),
+        });
         return;
       }
-      // The declared starting mode travels with the rules, because it is a
-      // field of the same file: a panel that showed one without the other
-      // would be showing a file it had only half read.
-      const declared = declaredMode();
-      ok(msg.id, {
-        path: rulesPath,
-        exists: rules.length > 0 || Boolean(declared.mode || declared.refused),
-        rules,
-        default_mode: declared.mode,
-        default_mode_refused: declared.refused,
-      });
+      ok(msg.id, permissionsState());
       return;
     }
     case 'permissions.add': {
       echo('permissions.add', msg.params || {});
-      if (rulesBroken) {
+      const params = msg.params || {};
+      const source = params.source === 'user' ? 'user' : 'workspace';
+      if (source === 'user' ? userRulesBroken : rulesBroken) {
+        const problem = source === 'user' ? userRulesProblem : rulesProblem;
+        const path = source === 'user' ? userRulesPath : rulesPath;
         // The same place, in the shape a session failure would carry it.
-        fail(msg.id, -32000, `${rulesPath}:${rulesProblem.line}:${rulesProblem.column}: ${rulesProblem.message}`);
+        fail(msg.id, -32000, `${path}:${problem.line}:${problem.column}: ${problem.message}`);
         return;
       }
-      const params = msg.params || {};
       // An empty effect means allow, as it does in the SDK, and the appended
       // rule lands last — which is where the index it reports points.
       const rule = { effect: 'allow', ...(params.rule || {}) };
-      const info = {
-        index: rules.length + 1,
-        ...rule,
-        describe: `.anvil/permissions.json rule ${rules.length + 1} (${rule.effect} ${rule.tool} "${rule.pattern}")`,
-      };
-      rules.push(info);
+      const list = source === 'user' ? userRules : rules;
+      const info = ruleInfo(rule, source, list.length);
+      list.push(info);
+      if (source === 'user') userExists = true;
       const requestId = params.request_id;
       const resolve = requestId ? approvals.get(requestId) : undefined;
       ok(msg.id, {
-        path: rulesPath,
+        path: source === 'user' ? userRulesPath : rulesPath,
+        source,
         index: info.index,
-        rules,
+        rules: [...userRules, ...rules],
         decided_by: info,
         approved: resolve !== undefined,
       });
@@ -1208,6 +1258,61 @@ async function handle(msg) {
         approvals.delete(requestId);
         resolve({ request_id: requestId, decision: 'allow', rule: info });
       }
+      return;
+    }
+    case 'permissions.set': {
+      echo('permissions.set', msg.params || {});
+      const params = msg.params || {};
+      const source = params.source === 'user' ? 'user' : 'workspace';
+      const rows = Array.isArray(params.rules) ? params.rules : [];
+      if (source === 'user') {
+        if (userRulesBroken) {
+          fail(
+            msg.id,
+            -32000,
+            `${userRulesPath}:${userRulesProblem.line}:${userRulesProblem.column}: ${userRulesProblem.message}`,
+          );
+          return;
+        }
+        if (params.default_mode) {
+          fail(msg.id, -32602, 'permissions.set: the user file has no starting mode');
+          return;
+        }
+        if (!userExists && params.create !== true) {
+          fail(msg.id, -32602, 'permissions.set: create the user rule file first');
+          return;
+        }
+        userRules.length = 0;
+        for (const row of rows) {
+          userRules.push(ruleInfo({ effect: 'allow', ...row }, 'user', userRules.length));
+        }
+        userProtected.length = 0;
+        for (const glob of Array.isArray(params.protected) ? params.protected : []) {
+          if (typeof glob === 'string' && glob.trim() !== '') userProtected.push(glob.trim());
+        }
+        userExists = true;
+      } else {
+        if (rulesBroken) {
+          fail(msg.id, -32000, `${rulesPath}:${rulesProblem.line}:${rulesProblem.column}: ${rulesProblem.message}`);
+          return;
+        }
+        if (Array.isArray(params.protected) && params.protected.length > 0) {
+          fail(msg.id, -32602, 'permissions.set: protected paths belong to the user file');
+          return;
+        }
+        rules.length = 0;
+        for (const row of rows) {
+          rules.push(ruleInfo({ effect: 'allow', ...row }, 'workspace', rules.length));
+        }
+        // The declaration is what the save asked for; an empty one is none.
+        savedMode = params.default_mode ? { mode: params.default_mode } : {};
+        if (savedMode.mode === 'bypass') {
+          savedMode = {
+            refused: `the workspace's .anvil/permissions.json declares defaultMode "bypass", which a project file may not grant: a mode that approves everything without showing it is a choice a person makes for a session, not one a repository makes for whoever opens it`,
+          };
+        }
+      }
+      ok(msg.id, permissionsState());
       return;
     }
     case 'models.list':

@@ -132,6 +132,11 @@ type Event struct {
 	// read, a call the mode gate allowed untouched, or one a callback approved —
 	// so a client shows "allowed by rule 2" only where a rule is really why.
 	Rule *PermissionRuleMatch
+	// Protected are the paths this call touched that an allow rule may not cover
+	// (0.47+), set on EventToolResult. It is a fact about the call, not about a
+	// rule: it is set even when no rule decided, so a client can say why a
+	// remembered allow did not cover a `.git` write. Nil on every other event.
+	Protected []string
 	// Items is the model's task list, set on EventTodo (0.40.9) and nil on every
 	// other event. It is the complete list the call wrote, not a change: a
 	// client replaces its checklist, and an empty list means the call cleared it.

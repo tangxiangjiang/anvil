@@ -41,6 +41,10 @@ type Event struct {
 	// nil when no rule did — including when the call was allowed by a callback or
 	// ran ungated.
 	Rule *permissions.Decision
+	// Protected are the paths a tool call touched that an allow rule may not
+	// cover, on tool_result (0.47+). It is a fact about the call, so it is set
+	// even when no rule decided it.
+	Protected []string
 	// Items is the model's complete task list, on the `todo` event that follows
 	// a successful todo_write call. It is the whole list rather than a change:
 	// a client replaces what it shows, and an empty list clears it.
@@ -438,7 +442,8 @@ func runToolCalls(
 			// The rule travels with the result rather than with the call: which
 			// rule decides a call is only known once it has been decided, and the
 			// card it explains is the one keyed by this call id.
-			Rule: results[i].Rule,
+			Rule:      results[i].Rule,
+			Protected: results[i].Protected,
 		})
 		// A checklist is a statement about the session, not about this call, so
 		// it is its own event rather than a field on the result: a client draws

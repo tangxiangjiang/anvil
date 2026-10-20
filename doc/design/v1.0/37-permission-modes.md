@@ -105,6 +105,56 @@ The cost is visible: a card can appear in a mode whose banner says calls run wit
 That is why the card carries the rule that asked (p_0.36.2) — it can say *why* it appeared in a
 mode that promised it would not.
 
+## Scopes and protected paths (0.47)
+
+A rule written once for one repository is the wrong shape for a preference that is about the
+person: "never run `rm -rf`" was being copied into every `.anvil/permissions.json`. 0.47 gives
+rules a second scope.
+
+**Where the rules come from.** The workspace file is unchanged. The user file is
+`$ANVIL_HOME/permissions.json`, or `~/.anvil/permissions.json` when the variable is unset —
+the same `.anvil` directory the MCP token store already uses. The two files have different
+shapes on purpose: the user file may carry `protected`, the workspace file keeps `defaultMode`,
+and each parser refuses the other's key. A repository cannot widen what a person may rewrite
+without asking, and a machine-wide file cannot choose the mode of every session in every
+repository.
+
+**How they combine.** The compiled set is user rules, then workspace rules, then rules passed
+in `Options.PermissionRules`. Severity decides across the whole set — `deny > ask > allow` — so a
+workspace `allow` cannot weaken a user `deny`. Within one effect the first rule in that order
+wins. Each rule keeps the file it came from and its one-based position *in that file*, so a
+citation is traceable: `user permissions.json rule 2`, `.anvil/permissions.json rule 1`, or
+`session rules rule 3`. Reporting the merged position, as 0.36 did, would name a line that is in
+no file the user can open.
+
+`permissions.get` keeps one `rules` array in that order, each entry carrying its `source`; the
+manager groups by it. A same-severity conflict keeps both rules and displays both sources rather
+than the merge picking a winner the file does not.
+
+**Protected paths.** Three locations are never covered by an `allow` rule, however specific it
+is: any `.git/` segment, the workspace's `.anvil/checkpoints/`, and `~/.anvil/`. The user file
+may add globs of its own. Evaluation skips `allow` rules when the call touches one of them and
+lets `deny` and `ask` decide as usual; with no rule left, the mode decides exactly as it would
+have without the allow. So `bypass` still runs the call and `dont_ask` still refuses it — what
+cannot happen is a remembered "always allow" silently including the repository's history. The
+decision carries the protected paths, and they travel on the approval card and the tool result
+so the record says after the fact why no allow covered the call. A shell rule is matched on the
+command line, not on paths, so this protection is about tools whose calls name files; chapter
+36's rule that a call's facts are what the card shows is what keeps that honest.
+
+A malformed user file is reported like a malformed workspace file — session creation names the
+file and refuses to run under a policy it cannot read — and the manager shows it read-only. The
+manager itself needs no session, so the file can always be fixed.
+
+**Writing one layer at a time.** `permissions.add` and `permissions.set` name the file they
+write with `source`: `workspace` is the default and the only meaning an older client has, and
+`user` names the person's file. A save carries the fields of one shape only — `protected` and
+`create` belong to the user layer, `default_mode` to the workspace layer — and the host refuses
+the other rather than dropping it, because a save that silently loses half of what it was asked
+to write is how the two files would drift into each other's shape. `create` is the manager's
+"create user file" step: an ordinary save of a user layer that does not exist is refused, while
+the workspace layer keeps create-on-save, which is what its Open JSON button has always done.
+
 ## Where a session's starting mode comes from
 
 Three steps, resolved in the host in this order:

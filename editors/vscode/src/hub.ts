@@ -47,6 +47,7 @@ import {
   PermissionsSetParams,
   RuleFileInfo,
   RuleProblem,
+  RuleSource,
   RuleSpec,
   SessionInfo,
   SessionTranscriptResult,
@@ -54,7 +55,7 @@ import {
   TaskInfo,
 } from './protocol';
 import { PreviewDocuments } from './review';
-import { describeProblem, emptyRulesFile, problemPosition } from './rulesFile';
+import { describeProblem, emptyRulesFile, emptyUserRulesFile, problemPosition } from './rulesFile';
 import { readSettings } from './settings';
 
 export class Hub {
@@ -667,12 +668,13 @@ export class Hub {
   }
 
   /**
-   * Shows the workspace rule file where it lives, creating it when this
-   * workspace has written no rules yet.
+   * Shows one rule file where it lives, creating it when that layer has
+   * written nothing yet.
    *
-   * The manager's Open JSON button and the `Anvil: Open Permission Rules File`
-   * command are this path. Hand editing is not the legacy way to edit a rule —
-   * a pattern with quoting in it is still easier to see in the file — so it stays
+   * The manager's Open JSON buttons and the `Anvil: Open Permission Rules File`
+   * command are this path; the user file is reached by its section's button, or
+   * by `source: 'user'`. Hand editing is not the legacy way to edit a rule — a
+   * pattern with quoting in it is still easier to see in the file — so it stays
    * one click from the form rather than behind an advanced setting.
    *
    * A file that will not compile is opened at the place the parser objected to,
@@ -682,7 +684,7 @@ export class Hub {
    * session itself reports the same problem as a failure to open, and this is
    * the way to it.
    */
-  async openPermissionRulesFile(): Promise<void> {
+  async openPermissionRulesFile(source: RuleSource = 'workspace'): Promise<void> {
     let state: PermissionsResult;
     try {
       state = await this.manager.permissionRules();
@@ -690,39 +692,71 @@ export class Hub {
       this.notice('error', `Could not read the permission rules: ${(err as Error).message}`);
       return;
     }
-    const uri = vscode.Uri.file(state.path);
-    if (!state.exists) {
+    if (source === 'user') {
+      const path = state.user_path ?? '';
+      if (path === '') {
+        this.notice('error', 'The home directory could not be resolved, so there is no user rule file to open.');
+        return;
+      }
+      await this.openRulesFile(
+        path,
+        state.user_exists === true,
+        state.user_problem,
+        emptyUserRulesFile(),
+        'You have no user permission rules. Nothing follows you between workspaces by rule yet.',
+      );
+      return;
+    }
+    await this.openRulesFile(
+      state.path,
+      state.exists,
+      state.problem,
+      emptyRulesFile(),
+      'This workspace has no permission rules. Nothing is allowed or refused by rule yet.',
+    );
+  }
+
+  /** Opens one layer's rule file, offering to create it when it is missing. */
+  private async openRulesFile(
+    path: string,
+    exists: boolean,
+    problem: RuleProblem | undefined,
+    empty: string,
+    missing: string,
+  ): Promise<void> {
+    const uri = vscode.Uri.file(path);
+    if (!exists) {
       const create = 'Create it';
       const answer = await vscode.window.showInformationMessage(
-        'This workspace has no permission rules. Nothing is allowed or refused by rule yet.',
-        { modal: false, detail: state.path },
+        missing,
+        { modal: false, detail: path },
         create,
       );
       if (answer !== create) return;
       try {
-        await vscode.workspace.fs.createDirectory(vscode.Uri.file(dirname(state.path)));
-        await vscode.workspace.fs.writeFile(uri, Buffer.from(emptyRulesFile(), 'utf8'));
+        await vscode.workspace.fs.createDirectory(vscode.Uri.file(dirname(path)));
+        await vscode.workspace.fs.writeFile(uri, Buffer.from(empty, 'utf8'));
       } catch (err) {
-        this.notice('error', `Could not create ${state.path}: ${(err as Error).message}`);
+        this.notice('error', `Could not create ${path}: ${(err as Error).message}`);
         return;
       }
     }
     const document = await vscode.workspace.openTextDocument(uri);
     const editor = await vscode.window.showTextDocument(document);
-    this.reportProblem(state.path, state.problem);
+    this.reportProblem(path, problem);
     // A file the session does not read is a file whose rules do nothing. The
     // setting is what turns it off, so saying which setting is the whole help
     // a user needs — the alternative is editing a rule and watching it be
     // ignored, which reads as the feature being broken.
     if (readSettings().session.load_permissions === false) {
-      this.notice('warn', `anvil.permissions is off, so ${state.path} is not read: its rules decide nothing.`);
+      this.notice('warn', `anvil.permissions is off, so ${path} is not read: its rules decide nothing.`);
     }
-    if (!state.problem) return;
-    const position = problemPosition(state.problem);
+    if (!problem) return;
+    const position = problemPosition(problem);
     const at = new vscode.Position(position.line, position.column);
     editor.selection = new vscode.Selection(at, at);
     editor.revealRange(new vscode.Range(at, at), vscode.TextEditorRevealType.InCenter);
-    this.notice('warn', describeProblem(state.path, state.problem));
+    this.notice('warn', describeProblem(path, problem));
   }
 
   /** Reports a rule file that will not compile against the file itself. */

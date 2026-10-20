@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // FileName is the rule file, workspace-relative. It is meant to be committed
@@ -71,16 +72,113 @@ func Load(cwd string) (*Set, error) {
 	return set, nil
 }
 
+// HomeEnv names the directory that replaces ~/.anvil. It is what tests use to
+// keep a machine-wide policy out of a test run, and what a portable install can
+// use to keep everything under one directory.
+const HomeEnv = "ANVIL_HOME"
+
+// AnvilHome is the directory this product keeps user-level state in:
+// $ANVIL_HOME when set, else ~/.anvil.
+func AnvilHome() (string, error) {
+	if dir := strings.TrimSpace(os.Getenv(HomeEnv)); dir != "" {
+		return dir, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".anvil"), nil
+}
+
+// UserPath is the user-level rule file: $ANVIL_HOME/permissions.json, else
+// ~/.anvil/permissions.json.
+func UserPath() (string, error) {
+	dir, err := AnvilHome()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, FileName), nil
+}
+
+// HomeDir is the user's home directory, empty when it cannot be resolved. It is
+// what a `~` in a protected-path glob expands to.
+func HomeDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return home
+}
+
+// LoadUser reads the user rule file from path. A missing file is (nil, nil,
+// nil); a file that will not parse is an error naming the path and the place,
+// never a silent ignore.
+func LoadUser(path string) (*Set, []string, error) {
+	if path == "" {
+		return nil, nil, nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil, nil
+		}
+		return nil, nil, fmt.Errorf("read %s: %w", path, err)
+	}
+	set, protected, err := ParseUser(data)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return set, protected, nil
+}
+
+// ParseUser compiles the contents of the user rule file. It returns the rules
+// and the protected-path globs the file adds; the two are separate because a
+// glob is not a rule and must never be counted as one.
+func ParseUser(data []byte) (*Set, []string, error) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	var f UserFile
+	if err := dec.Decode(&f); err != nil {
+		return nil, nil, jsonError(err, data)
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, nil, errors.New("trailing data after the rule object")
+	}
+	if f.Version != 0 && f.Version != Version {
+		return nil, nil, fmt.Errorf("version %d is not supported; this build reads version %d", f.Version, Version)
+	}
+	set := &Set{}
+	for i, r := range f.Rules {
+		c, err := compile(r, i, SourceUser)
+		if err != nil {
+			return nil, nil, err
+		}
+		set.rules = append(set.rules, c)
+	}
+	protected := make([]string, 0, len(f.Protected))
+	for _, g := range f.Protected {
+		g = strings.TrimSpace(g)
+		if g != "" {
+			protected = append(protected, g)
+		}
+	}
+	return set, protected, nil
+}
+
 // New compiles rules a program supplied. They are validated exactly as a file's
 // rules are, so a caller cannot install one that a file would have been refused
 // for. No rules at all compiles to nil, which means "no opinion".
+//
+// A rule that carries Source and Index — as one read from a file does — keeps
+// them; a rule that does not is a rule of this program's own list, sourced to
+// SourceCode with its position in that list.
 func New(rules []Rule) (*Set, error) {
 	if len(rules) == 0 {
 		return nil, nil
 	}
 	set := &Set{rules: make([]rule, 0, len(rules))}
 	for i, r := range rules {
-		c, err := compile(r, i+1)
+		c, err := compile(r, i, SourceCode)
 		if err != nil {
 			return nil, err
 		}
@@ -89,7 +187,7 @@ func New(rules []Rule) (*Set, error) {
 	return set, nil
 }
 
-// Parse compiles the contents of a rule file.
+// Parse compiles the contents of a workspace rule file.
 func Parse(data []byte) (*Set, error) {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	// A misspelled key is a rule the user believes is in force and is not.
@@ -112,7 +210,7 @@ func Parse(data []byte) (*Set, error) {
 		set.defaultMode = *f.DefaultMode
 	}
 	for i, r := range f.Rules {
-		c, err := compile(r, i+1)
+		c, err := compile(r, i, SourceWorkspace)
 		if err != nil {
 			return nil, err
 		}
@@ -138,17 +236,26 @@ func defaultModeError(value string, data []byte) error {
 	return &Error{Line: line, Column: col, Message: msg}
 }
 
-// compile validates one rule. pos is the rule's position as a reader counts it,
-// from one.
-func compile(r Rule, pos int) (rule, error) {
+// compile validates one rule. pos is the rule's position in the list it came
+// from, counted from zero; source names that list. A rule that already carries
+// its own source and position — one read from a file and then passed back
+// through New — keeps them, so a citation does not move when lists are merged.
+func compile(r Rule, pos int, source string) (rule, error) {
 	effect, ok := ParseEffect(r.Effect)
 	if !ok {
-		return rule{}, fmt.Errorf("rule %d: effect %q is not one of allow, ask, deny", pos, r.Effect)
+		return rule{}, fmt.Errorf("rule %d: effect %q is not one of allow, ask, deny", pos+1, r.Effect)
 	}
 	if r.Tool == "" {
-		return rule{}, fmt.Errorf("rule %d: tool is required; write %q to mean every tool", pos, "*")
+		return rule{}, fmt.Errorf("rule %d: tool is required; write %q to mean every tool", pos+1, "*")
 	}
-	return rule{effect: effect, tool: r.Tool, pattern: r.Pattern, reason: r.Reason}, nil
+	if r.Source != "" {
+		source = r.Source
+	}
+	index := pos
+	if r.Index > 0 {
+		index = r.Index - 1
+	}
+	return rule{effect: effect, tool: r.Tool, pattern: r.Pattern, reason: r.Reason, source: source, index: index}, nil
 }
 
 // jsonError names the line and column of a syntax or type error, because the

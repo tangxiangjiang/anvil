@@ -5,6 +5,24 @@ package permissions
 
 import "testing"
 
+// sameDecision compares decisions field by field: Decision carries a []string
+// now (the protected paths), so it is no longer comparable as a value.
+func sameDecision(a, b Decision) bool {
+	if a.Matched != b.Matched || a.Effect != b.Effect || a.Source != b.Source ||
+		a.Index != b.Index || a.Tool != b.Tool || a.Pattern != b.Pattern || a.Reason != b.Reason {
+		return false
+	}
+	if len(a.Protected) != len(b.Protected) {
+		return false
+	}
+	for i := range a.Protected {
+		if a.Protected[i] != b.Protected[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func mustParse(t *testing.T, text string) *Set {
 	t.Helper()
 	set, err := Parse([]byte(text))
@@ -201,12 +219,15 @@ func TestChapterExampleCompiles(t *testing.T) {
 // exact: a dropped reason or a reordered pair would change which rule decides
 // without changing a line of the file the user reads.
 func TestRulesRoundTripIsExact(t *testing.T) {
+	// Rules() now also hands back where each rule came from: these were compiled
+	// by New, so they are the caller's own list, and their positions are counted
+	// in it — zero-based here, reported one-based to a reader.
 	want := []Rule{
-		{Effect: "allow", Tool: "shell", Pattern: "readonly", Reason: "read-only commands"},
-		{Effect: "allow", Tool: "shell", Pattern: "git status:*"},
-		{Effect: "deny", Tool: "shell", Pattern: "rm -rf:*", Reason: "destructive"},
-		{Effect: "ask", Tool: "apply_patch", Pattern: "**/*.md"},
-		{Effect: "deny", Tool: "mcp_*"},
+		{Effect: "allow", Tool: "shell", Pattern: "readonly", Reason: "read-only commands", Source: SourceCode, Index: 1},
+		{Effect: "allow", Tool: "shell", Pattern: "git status:*", Source: SourceCode, Index: 2},
+		{Effect: "deny", Tool: "shell", Pattern: "rm -rf:*", Reason: "destructive", Source: SourceCode, Index: 3},
+		{Effect: "ask", Tool: "apply_patch", Pattern: "**/*.md", Source: SourceCode, Index: 4},
+		{Effect: "deny", Tool: "mcp_*", Source: SourceCode, Index: 5},
 	}
 	set, err := New(want)
 	if err != nil {
@@ -236,8 +257,8 @@ func TestRulesRoundTripIsExact(t *testing.T) {
 		{Tool: "mcp_fetch"},
 		{Tool: "write_file", Paths: []string{"a.go"}},
 	} {
-		if a, b := set.Evaluate(f, "linux"), again.Evaluate(f, "linux"); a != b {
-			t.Errorf("Evaluate(%+v) = %s, but %s after a Rules() round trip", f, a, b)
+		if a, b := set.Evaluate(f, "linux"), again.Evaluate(f, "linux"); !sameDecision(a, b) {
+			t.Errorf("Evaluate(%+v) = %+v, but %+v after a Rules() round trip", f, a, b)
 		}
 	}
 

@@ -27,16 +27,33 @@ import (
 //   - Reason is free text, shown when the rule decides a call.
 //
 // The same rules can be written in .anvil/permissions.json, which a workspace
-// commits alongside its code; see LocalOptions.LoadPermissions. Rules given here
-// are appended after the file's, so the file keeps the order a reader sees.
+// commits alongside its code, and in ~/.anvil/permissions.json, which belongs to
+// the person; see LocalOptions.LoadPermissions. Rules given here are appended
+// after both, so the files keep the order a reader sees.
 //
-// See doc/design/v1.0/36-tool-permissions.md.
+// Source and Index are read-only: a reader fills them with the file the rule came
+// from and its one-based position there. A rule given in code leaves them empty.
+//
+// See doc/design/v1.0/36-tool-permissions.md and, for the second scope,
+// doc/design/v1.0/37-permission-modes.md.
 type PermissionRule struct {
 	Effect  string
 	Tool    string
 	Pattern string
 	Reason  string
+	// Source is "user", "workspace" or "code" on a rule that was read; empty for
+	// a rule being written.
+	Source string
+	// Index is the rule's one-based position in its source.
+	Index int
 }
+
+// Permission rule scopes (0.47+). They name which file a rule belongs to: the
+// person's ~/.anvil/permissions.json or the workspace's .anvil/permissions.json.
+const (
+	PermissionScopeUser      = "user"
+	PermissionScopeWorkspace = "workspace"
+)
 
 // Permission rule effects (0.36+). These are the three words a rule file may
 // write in its "effect" field, and the three a client has to render.
@@ -59,11 +76,17 @@ const (
 // Describe renders it the way a denial does, which is the wording to show when a
 // person needs to find the rule and change it.
 type PermissionRuleMatch struct {
-	Effect  string
+	Effect string
+	// Source is where the rule was written: "user", "workspace" or "code".
+	Source string
+	// Index is its position among that source's rules, counted from zero.
 	Index   int
 	Tool    string
 	Pattern string
 	Reason  string
+	// Protected lists the paths this call touches that an allow rule may not
+	// cover. It is set whether or not a rule matched.
+	Protected []string
 }
 
 // Describe names the rule the way a reader of the file finds it, e.g.
@@ -108,12 +131,14 @@ func decisionOf(m *PermissionRuleMatch) permissions.Decision {
 		effect = permissions.Allow
 	}
 	return permissions.Decision{
-		Matched: true,
-		Effect:  effect,
-		Index:   m.Index,
-		Tool:    m.Tool,
-		Pattern: m.Pattern,
-		Reason:  m.Reason,
+		Matched:   true,
+		Effect:    effect,
+		Source:    m.Source,
+		Index:     m.Index,
+		Tool:      m.Tool,
+		Pattern:   m.Pattern,
+		Reason:    m.Reason,
+		Protected: m.Protected,
 	}
 }
 
@@ -123,10 +148,12 @@ func permissionRuleMatch(d *permissions.Decision) *PermissionRuleMatch {
 		return nil
 	}
 	return &PermissionRuleMatch{
-		Effect:  d.Effect.String(),
-		Index:   d.Index,
-		Tool:    d.Tool,
-		Pattern: d.Pattern,
-		Reason:  d.Reason,
+		Effect:    d.Effect.String(),
+		Source:    d.Source,
+		Index:     d.Index,
+		Tool:      d.Tool,
+		Pattern:   d.Pattern,
+		Reason:    d.Reason,
+		Protected: d.Protected,
 	}
 }

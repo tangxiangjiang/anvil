@@ -432,6 +432,12 @@ type PermissionRequest struct {
 	// (0.36+). It is nil when the mode gate alone is the reason the client is
 	// being asked, so a prompt can always say why it appeared.
 	Rule *PermissionRuleMatch
+	// Protected are the paths this call touches that an allow rule may not cover
+	// (0.47+): any `.git` segment, the workspace's `.anvil/checkpoints/`, the
+	// Anvil home, and any glob the user file adds. A callback should treat this
+	// as a reason to ask even when it would otherwise remember an allow, because
+	// no allow rule can cover these paths anyway.
+	Protected []string
 	// AgentID and RunID name the agent whose call is being decided and the run it
 	// belongs to (0.42+). For a child agent, AgentID is the child — which is what
 	// lets an approval card say that a subagent is asking. Empty only for a

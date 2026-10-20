@@ -56,6 +56,11 @@ type Result struct {
 	// and puts it on the tool_result, so a card can say which rule allowed a call
 	// that never asked.
 	Rule *permissions.Decision
+	// Protected are the paths this call touched that an allow rule may not cover
+	// (0.47+). It is a fact about the call, so it is set whether or not a rule
+	// decided — including for a call the mode let through — and a client shows it
+	// after the fact so the record says why no allow covered it.
+	Protected []string
 	// Todos is the list a todo_write call left behind. It is read only from a
 	// successful call named that: an empty slice is a list that was cleared,
 	// which is a different statement from a call that wrote none.
@@ -356,6 +361,10 @@ type GatedCall struct {
 	// is nil when the mode gate alone asked, so a client can say why it is being
 	// asked instead of only that it is.
 	Rule *permissions.Decision
+	// Protected are the paths this call touches that an allow rule may not cover.
+	// Set whether or not a rule asked, because "this path is protected" is why an
+	// allow could not have covered the call (0.47+).
+	Protected []string
 }
 
 var mutatingTools = map[string]bool{
@@ -432,7 +441,7 @@ func (r *Registry) Execute(ctx context.Context, name string, args json.RawMessag
 		decidedBy = &decision
 	}
 	if decision.Matched && decision.Effect == permissions.Deny {
-		return Result{Content: ruleDenyMessage(name, decision), IsError: true, Rule: decidedBy}
+		return Result{Content: ruleDenyMessage(name, decision), IsError: true, Rule: decidedBy, Protected: decision.Protected}
 	}
 	// A rule that asks insists on a prompt even for a tool the gate would not
 	// have covered; a rule that allows runs the call without one; and no rule at
@@ -453,13 +462,14 @@ func (r *Registry) Execute(ctx context.Context, name string, args json.RawMessag
 			// A denied call is reported to the model as a tool error rather than
 			// aborting the run, so the model can adapt instead of dying.
 			next, err := r.permission(ctx, GatedCall{
-				Name:    name,
-				Args:    args,
-				Preview: r.PreviewFor(name, args),
-				Rule:    askedBy,
+				Name:      name,
+				Args:      args,
+				Preview:   r.PreviewFor(name, args),
+				Rule:      askedBy,
+				Protected: decision.Protected,
 			})
 			if err != nil {
-				return Result{Content: err.Error(), IsError: true, Rule: decidedBy}
+				return Result{Content: err.Error(), IsError: true, Rule: decidedBy, Protected: decision.Protected}
 			}
 			if next != nil {
 				execArgs = next
@@ -467,7 +477,7 @@ func (r *Registry) Execute(ctx context.Context, name string, args json.RawMessag
 		case decision.Matched:
 			// Nobody to ask, and a rule that says "ask" must never quietly become
 			// "run it".
-			return Result{Content: ruleNoChannelMessage(name, decision), IsError: true, Rule: decidedBy}
+			return Result{Content: ruleNoChannelMessage(name, decision), IsError: true, Rule: decidedBy, Protected: decision.Protected}
 		}
 	}
 	// The pre-image is taken from the arguments the call will actually run
@@ -481,6 +491,7 @@ func (r *Registry) Execute(ctx context.Context, name string, args json.RawMessag
 		res.Content = truncate(res.Content, r.maxOutput)
 	}
 	res.Rule = decidedBy
+	res.Protected = decision.Protected
 	return res
 }
 

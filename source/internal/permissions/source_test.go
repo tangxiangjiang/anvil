@@ -18,7 +18,7 @@ func TestSourceReadsTheFileAndAppendsCodeRules(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	src := NewSource(dir, []Rule{{Effect: "deny", Tool: "shell", Pattern: "rm -rf:*"}}, initial)
+	src := NewSource(dir, "", "", "", []Rule{{Effect: "deny", Tool: "shell", Pattern: "rm -rf:*"}}, initial)
 
 	set, err := src.Read()
 	if err != nil {
@@ -27,11 +27,14 @@ func TestSourceReadsTheFileAndAppendsCodeRules(t *testing.T) {
 	if set.Len() != 2 {
 		t.Fatalf("Len() = %d, want 2", set.Len())
 	}
-	if d := set.Evaluate(CallFacts{Tool: "shell", Command: "git status"}, "linux"); d.Index != 0 || d.Effect != Allow {
-		t.Errorf("the file's rule is rule 1: %+v", d)
+	if d := set.Evaluate(CallFacts{Tool: "shell", Command: "git status"}, "linux"); d.Source != SourceWorkspace || d.Index != 0 || d.Effect != Allow {
+		t.Errorf("the file's rule is rule 1 of the workspace file: %+v", d)
 	}
-	if d := set.Evaluate(CallFacts{Tool: "shell", Command: "rm -rf /"}, "linux"); d.Index != 1 || d.Effect != Deny {
-		t.Errorf("the code rule is rule 2: %+v", d)
+	// The code rule is cited inside its own list, not at its position in the
+	// merged set: "session rules rule 1" names a rule a caller can count, while
+	// "rule 2" would name a line in a file this rule is not in.
+	if d := set.Evaluate(CallFacts{Tool: "shell", Command: "rm -rf /"}, "linux"); d.Source != SourceCode || d.Index != 0 || d.Effect != Deny {
+		t.Errorf("the code rule is rule 1 of the session's own list: %+v", d)
 	}
 }
 
@@ -39,7 +42,7 @@ func TestSourceReadsTheFileAndAppendsCodeRules(t *testing.T) {
 // next call, not at the next session.
 func TestSourceSeesAnEditWithoutRebuilding(t *testing.T) {
 	dir := t.TempDir()
-	src := NewSource(dir, nil, nil)
+	src := NewSource(dir, "", "", "", nil, nil)
 	if set, err := src.Read(); err != nil || set.Len() != 0 {
 		t.Fatalf("Read = %v, %v, want no rules", set, err)
 	}
@@ -63,7 +66,7 @@ func TestSourceFallsBackToTheLastGoodRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	src := NewSource(dir, nil, initial)
+	src := NewSource(dir, "", "", "", nil, initial)
 
 	write(t, dir, `{"version":1,"rules":[{`)
 	set, err := src.Read()

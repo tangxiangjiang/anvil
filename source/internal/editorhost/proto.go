@@ -393,9 +393,10 @@ const (
 // permissions.get / permissions.add
 // ---------------------------------------------------------------------------
 
-// RuleSpec is one rule as the workspace file spells it. It is the same shape in
-// both directions: what a client reads out of the file, and what it asks the
-// host to append.
+// RuleSpec is one rule as a rule file spells it. It is the same shape in both
+// directions: what a client reads out of a file, and what it asks the host to
+// append. The file it belongs to is not part of the rule — see RuleInfo.Source
+// and PermissionsAddParams.Source.
 type RuleSpec struct {
 	// Effect is "allow", "ask", or "deny". Empty means allow when a client is
 	// asking for a rule to be written.
@@ -410,13 +411,27 @@ type RuleSpec struct {
 	Reason string `json:"reason,omitempty"`
 }
 
+// Rule sources on the wire (0.47+). They name the file a rule was read from or
+// written to; the manager groups by them and the operations take one.
+const (
+	// RuleSourceUser is ~/.anvil/permissions.json, or $ANVIL_HOME/permissions.json.
+	RuleSourceUser = "user"
+	// RuleSourceWorkspace is .anvil/permissions.json. It is the default when a
+	// request names no source, which is what a client that predates scopes means.
+	RuleSourceWorkspace = "workspace"
+)
+
 // RuleInfo is one rule of a set as a client sees it: the rule, where it sits,
-// and how to describe it.
+// where it came from, and how to describe it.
 type RuleInfo struct {
-	// Index is the rule's position as the SDK counts it — one-based, the number a
-	// denial quotes ("permissions.json rule 2"), and so the same number Describe
-	// mentions. It is not an array offset.
+	// Index is the rule's position in its own source, one-based — the number a
+	// denial quotes ("user permissions.json rule 2"), and the same number Describe
+	// mentions. It is not an array offset and not a position in the merged list:
+	// with two files, a merged position names no line a reader can open.
 	Index int `json:"index"`
+	// Source is "user" or "workspace" (0.47+). Empty on a rule built by hand —
+	// a rule being written has no source yet.
+	Source string `json:"source,omitempty"`
 	RuleSpec
 	// Describe is the SDK's own sentence for this rule, the one a denial quotes.
 	// A client shows it rather than composing its own, so the explanation of a
@@ -450,18 +465,37 @@ type PermissionsResult struct {
 	// DefaultModeRefused is what the file declared and the host would not honour,
 	// in words, empty when there is nothing to report.
 	DefaultModeRefused string `json:"default_mode_refused,omitempty"`
-	// Rules is the file's rules, in the order that decides.
+	// Rules is every readable layer's rules in the order they decide: the user
+	// file's first, then the workspace's, each entry carrying its own Source and
+	// its own one-based Index (0.47+). A layer that cannot be read contributes
+	// none — its Problem says why.
 	Rules []RuleInfo `json:"rules"`
 	// Problem is set when the file exists but cannot be read as rules. It is a
 	// result rather than an error because a client asked to see the state of the
 	// file, and a file somebody is halfway through editing is one of its states —
 	// reported with the place, so it can be fixed where it is edited.
 	Problem *RuleProblem `json:"problem,omitempty"`
+	// UserPath is the person's rule file (0.47+), absolute. Empty only when the
+	// home directory could not be resolved, in which case there is no user layer
+	// to show.
+	UserPath string `json:"user_path,omitempty"`
+	// UserExists reports that the user file is on disk. False with no
+	// UserProblem is a person who has written no preferences.
+	UserExists bool `json:"user_exists"`
+	// UserProblem is the user file's parse problem, reported the same way as the
+	// workspace's — with the place — and shown read-only by the manager.
+	UserProblem *RuleProblem `json:"user_problem,omitempty"`
+	// Protected are the globs the user file adds to the fixed protected list
+	// (0.47+). They are not rules: they are paths an allow rule may not cover.
+	Protected []string `json:"protected,omitempty"`
 }
 
-// PermissionsAddParams appends one rule to the workspace rule file.
+// PermissionsAddParams appends one rule to a rule file.
 type PermissionsAddParams struct {
 	Rule RuleSpec `json:"rule"`
+	// Source is the file to append to: "user" or "workspace" (0.47+). Empty
+	// means "workspace", which is what every client that predates scopes means.
+	Source string `json:"source,omitempty"`
 	// RequestID, when set, names the pending approval this rule is being written
 	// for. The host then answers that approval itself if the file now decides it,
 	// so "always allow" takes effect on the call in front of the user instead of
@@ -472,7 +506,10 @@ type PermissionsAddParams struct {
 // PermissionsAddResult reports what the file became and what that did to the
 // call the rule was written for.
 type PermissionsAddResult struct {
-	Path  string     `json:"path"`
+	Path string `json:"path"`
+	// Source is the file Path names: "user" or "workspace" (0.47+).
+	Source string `json:"source,omitempty"`
+	// Index is the appended rule's one-based position in that file.
 	Index int        `json:"index"`
 	Rules []RuleInfo `json:"rules"`
 	// DecidedBy is the rule that decides the pending call now, which is not
@@ -496,8 +533,20 @@ type PermissionsSetParams struct {
 	Rules []RuleSpec `json:"rules"`
 	// DefaultMode is a ladder word, or empty to remove the declaration. The host
 	// refuses a word the ladder does not have and refuses bypass, in the same
-	// words get and the session result use.
+	// words get and the session result use. It belongs to the workspace file
+	// only: sending it for the user layer is refused.
 	DefaultMode string `json:"default_mode,omitempty"`
+	// Source is the layer this save replaces: "user" or "workspace" (0.47+).
+	// Empty means "workspace".
+	Source string `json:"source,omitempty"`
+	// Protected replaces the user file's protected-path globs. It belongs to the
+	// user file only: sending it for the workspace layer is refused.
+	Protected []string `json:"protected,omitempty"`
+	// Create allows a save of the user layer to make the file when it does not
+	// exist (0.47+). Without it the host refuses, because the manager shows a
+	// missing user file read-only and a save that was not meant to create must
+	// not quietly create one. The workspace layer keeps create-on-save.
+	Create bool `json:"create,omitempty"`
 }
 
 // RememberOption is one "always allow" a client may offer on an approval card.
@@ -625,6 +674,11 @@ type ApprovalRequestParams struct {
 	// would decide this call — a compound shell line, say — so the card offers
 	// none rather than offering one that would not work.
 	Remember []RememberOption `json:"remember,omitempty"`
+	// Protected are the paths this call touches that an allow rule may not cover
+	// (0.47+): any `.git` segment, the workspace's `.anvil/checkpoints/`, the
+	// Anvil home, and the user file's globs. It is set whether or not a rule
+	// asked, because it is why no remembered allow can settle this call.
+	Protected []string `json:"protected,omitempty"`
 	// TimeoutMS is how long the host will wait, for a UI countdown.
 	TimeoutMS int `json:"timeout_ms,omitempty"`
 	// AgentID and Depth name the agent whose call is being decided, so a card can
@@ -1317,10 +1371,15 @@ type EventParams struct {
 	// elsewhere, so a client that predates the field reads exactly what it did.
 	// The authoritative end-of-run usage is still the `done` notification.
 	Usage *Usage `json:"usage,omitempty"`
-	// Rule is the workspace rule that decided this tool result, when one did. It
-	// is how a call that ran without a prompt says why it did not need one: nil
-	// means no rule decided it, which is not the same as "some rule allowed it".
+	// Rule is the rule that decided this tool result, when one did. It is how a
+	// call that ran without a prompt says why it did not need one: nil means no
+	// rule decided it, which is not the same as "some rule allowed it".
 	Rule *RuleInfo `json:"rule,omitempty"`
+	// Protected are the paths this call touched that an allow rule may not cover
+	// (0.47+), set on a tool_result whether or not a rule decided it. It is how
+	// the record says after the fact why a remembered allow did not cover the
+	// call — including where bypass ran it all the same.
+	Protected []string `json:"protected,omitempty"`
 	// Items is the complete task list on a `todo` event (0.40.9). It is a
 	// pointer so that an empty list reaches the client as [] — clearing the
 	// panel — while every other event omits the field entirely.

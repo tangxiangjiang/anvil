@@ -1306,6 +1306,15 @@
       line.appendChild(el('code', null, ruleText(event.rule)));
       card.insertBefore(line, card.querySelector('.pane'));
     }
+    // The paths no allow rule could cover, in the form the call spelled them.
+    // Present even when the mode approved the call, which is how a result that
+    // ran without a prompt says no remembered rule decided it.
+    if (Array.isArray(event.protected) && event.protected.length > 0) {
+      const line = el('div', 'rule-ref protected');
+      line.appendChild(el('span', null, 'protected path: '));
+      line.appendChild(el('code', null, event.protected.join(', ')));
+      card.insertBefore(line, card.querySelector('.pane'));
+    }
 
     const content = event.content || '';
     const limit = 4000;
@@ -1541,6 +1550,15 @@
       asked.appendChild(el('span', null, 'Asked for by '));
       asked.appendChild(el('code', null, ruleText(request.rule)));
       card.appendChild(asked);
+    }
+    // A protected path is why no "always allow" can settle this card: the rule
+    // file may say allow, and it is skipped. Saying so is the difference between
+    // a card that looks like it ignored its own rules and one that explains why.
+    if (Array.isArray(request.protected) && request.protected.length > 0) {
+      const line = el('div', 'why protected');
+      line.appendChild(el('span', null, 'Protected path — no always-allow rule can cover it: '));
+      line.appendChild(el('code', null, request.protected.join(', ')));
+      card.appendChild(line);
     }
     card.appendChild(describePreview(request));
 

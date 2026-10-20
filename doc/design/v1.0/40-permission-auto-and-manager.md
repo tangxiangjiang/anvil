@@ -139,6 +139,12 @@ The alternative — the extension using `workspace.fs` to write JSON — would n
 implementation of the schema and of every refusal, and the two would drift. The host already owns
 `permissions.get` and `permissions.add`; this is the third verb of the same table.
 
+**0.47 names the file the verb writes.** `permissions.set` and `permissions.add` take an optional
+`source` — `workspace`, which is the only meaning an older client has, or `user` — and one save
+carries the fields of one file's shape only. The manager still edits through this one door, now
+twice; [37](37-permission-modes.md) §*Scopes and protected paths* is the design and the panel's
+two sections are described there.
+
 ### `defaultMode` is edited through the same door
 
 The panel edits the declaration with a select of the ladder. The host refuses `bypass` and any
@@ -157,6 +163,11 @@ writing `""` — absence is a state the file already distinguishes from a declar
 
 A missing file is different: the panel renders an empty list and creates the file on the first
 save, the same way `permissions.add` does.
+
+Since 0.47 each layer holds this state on its own. A malformed user file disables the user
+section and says so, while the workspace section stays editable; a missing user file is
+read-only until a **Create user file** step, because a save that silently brought a machine-wide
+policy into existence is not something a person should discover afterwards.
 
 ### What the panel shows
 
@@ -187,15 +198,18 @@ existing changes shape.
 
 ## Non-goals
 
-- A user-level or global rule file. Anvil's rule file is a workspace's committed policy; a second
-  scope would need a second precedence table and is not implied by this one.
+- ~~A user-level or global rule file.~~ **Superseded by 0.47.** Anvil's rule file is a
+  workspace's committed policy; a second scope does need a second precedence table, and
+  p_0.47.6 wrote one — the user file, the severity-across-scopes merge and protected paths are
+  in [37](37-permission-modes.md) §*Scopes and protected paths*.
 - Reordering rules by drag. Order decides among equals; the panel can add and delete, and the
   *first rule wins within an effect* sentence stays true.
 - An LLM classifier, or any model call from the permission path.
 - Importing Claude Code's `settings.json` permission syntax. The shapes are not the same and a
   lossy translation would be worse than a sentence saying so.
-- Managing MCP server permissions, hooks, or `permission_groups` from this panel. It edits one
-  file: `.anvil/permissions.json`.
+- Managing MCP server permissions, hooks, or `permission_groups` from this panel. It edits
+  `.anvil/permissions.json` and, since p_0.47.6, the user file beside it — one layer per save,
+  never both at once.
 
 ## Acceptance
 

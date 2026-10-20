@@ -351,13 +351,28 @@ export interface RuleSpec {
 /** One rule of a set, with the position and the sentence a decision quotes. */
 export interface RuleInfo extends RuleSpec {
   /**
-   * The rule's position as the SDK counts it — one-based, the number a denial
-   * quotes. This is not an index into the `rules` array, which is zero-based.
+   * The rule's position in its own file — one-based, the number a denial quotes
+   * ("user permissions.json rule 2"). This is not an index into the `rules`
+   * array, which is zero-based, and not a position in the merged list: with two
+   * files a merged position names no line a reader can open (0.47+).
    */
   index: number;
+  /**
+   * The file the rule came from: `user` for `~/.anvil/permissions.json` and
+   * `workspace` for `.anvil/permissions.json` (0.47+). Absent from a host that
+   * predates scopes, whose every rule is the workspace's.
+   */
+  source?: RuleSource;
   /** The SDK's own sentence for this rule; show it rather than composing one. */
   describe?: string;
 }
+
+/**
+ * Which file a rule lives in. The user file is the person's own preference and
+ * travels between repositories; the workspace file is the repository's policy.
+ * Neither may take the other's fields (0.47).
+ */
+export type RuleSource = 'user' | 'workspace';
 
 /** A rule file that will not compile, as the parser sees it. */
 export interface RuleProblem {
@@ -390,10 +405,34 @@ export interface PermissionsResult {
    * and it is reported with its place so it can be fixed where it is edited.
    */
   problem?: RuleProblem;
+  /**
+   * The person's own rule file (0.47+), absolute. Empty only when the home
+   * directory could not be resolved, in which case there is no user layer.
+   */
+  user_path?: string;
+  /** False with no `user_problem` is a person who has written no preferences. */
+  user_exists?: boolean;
+  /**
+   * The user file's parse problem, reported the same way as the workspace's —
+   * with the place — and shown read-only by the manager. A malformed user file
+   * is never replaced by a save, exactly as the workspace's is not.
+   */
+  user_problem?: RuleProblem;
+  /**
+   * The globs the user file adds to the fixed protected list (0.47+). They are
+   * not rules: they are paths an `allow` rule may never cover, and `rules` does
+   * not count them.
+   */
+  protected?: string[];
 }
 
 export interface PermissionsAddParams {
   rule: RuleSpec;
+  /**
+   * The file to append to: `user` or `workspace` (0.47+). Absent means
+   * `workspace`, which is what every client that predates scopes means.
+   */
+  source?: RuleSource;
   /**
    * The pending approval this rule is being written for. The host then answers
    * that approval itself when the file decides the call, so "always allow" takes
@@ -404,6 +443,8 @@ export interface PermissionsAddParams {
 
 export interface PermissionsAddResult {
   path: string;
+  /** The file `path` names: `user` or `workspace` (0.47+). */
+  source?: RuleSource;
   /** The position the new rule landed at, counted as `RuleInfo.index` is. */
   index: number;
   rules: RuleInfo[];
@@ -432,6 +473,21 @@ export interface PermissionsAddResult {
 export interface PermissionsSetParams {
   rules: RuleSpec[];
   default_mode?: PermissionMode;
+  /**
+   * The layer this save replaces: `user` or `workspace` (0.47+). Absent means
+   * `workspace`. The two files have different shapes, and the host refuses each
+   * other's fields rather than silently dropping them.
+   */
+  source?: RuleSource;
+  /** Replaces the user file's protected-path globs; user layer only (0.47+). */
+  protected?: string[];
+  /**
+   * Allows a user-layer save to create the file when it does not exist
+   * (0.47+). The workspace layer keeps create-on-save; the user layer creates
+   * only when the client says so, because the manager shows a missing user
+   * file read-only and "save" beside it must not quietly write one.
+   */
+  create?: boolean;
 }
 
 /**
@@ -509,6 +565,13 @@ export interface ApprovalRequest {
    * none did.
    */
   rule?: RuleInfo;
+  /**
+   * Paths of this call that an `allow` rule may never cover (0.47+): `.git`,
+   * the checkpoints directory, the Anvil home, or a user-protected glob. When
+   * present the card is there because the call touches one, however the rules
+   * read — which is also why `remember` offers nothing.
+   */
+  protected?: string[];
   /**
    * The "always allow" choices this call can honestly be offered. Empty or
    * absent means no rule shape would decide this call — a compound shell line,
@@ -1168,6 +1231,12 @@ export interface HostEvent {
    * rule decided it, which is not the same as "some rule allowed it".
    */
   rule?: RuleInfo;
+  /**
+   * The paths of this result that an `allow` rule could not cover (0.47+), in
+   * the form the call spelled them. Present even when the mode approved the
+   * call, because it is how the record says no remembered rule decided it.
+   */
+  protected?: string[];
   /**
    * The complete task list on a `todo` event (0.40.9). Present as [] when a
    * call cleared it — which is different from the field being absent on every

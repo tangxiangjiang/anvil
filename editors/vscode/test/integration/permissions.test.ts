@@ -79,13 +79,22 @@ test('the rule file is asked about, and its state survives the wire', async (t) 
   assert.equal(empty.problem, undefined);
   // Absolute, so the client can open the file before it exists.
   assert.match(empty.path, /\.anvil[\\/]permissions\.json$/);
+  // The user layer is reported beside it (0.47): where it would be, whether it
+  // is there, and the globs it adds. A person with no preferences is a missing
+  // file, not a problem.
+  assert.match(empty.user_path ?? '', /\.anvil[\\/]permissions\.json$/);
+  assert.equal(empty.user_exists, false);
+  assert.equal(empty.user_problem, undefined);
+  assert.deepEqual(empty.protected, []);
 
   const rule: RuleSpec = { tool: 'shell', pattern: 'git status:*' };
   const added = await harness.client.request<PermissionsAddResult>(Method.PermissionsAdd, { rule });
   assert.equal(added.index, 1);
   // No request_id: a rule written from the rules file is not about a call, and
-  // nothing is settled by it.
+  // nothing is settled by it. A client that names no layer writes the
+  // workspace's, which is what every client before scopes meant.
   assert.equal(added.approved, false);
+  assert.equal(added.source, 'workspace');
 
   const after = await harness.client.request<PermissionsResult>(Method.PermissionsGet, {});
   assert.equal(after.exists, true);
@@ -94,6 +103,78 @@ test('the rule file is asked about, and its state survives the wire', async (t) 
   assert.equal(after.rules[0].pattern, 'git status:*');
   // One-based, and the number the rule's own sentence quotes.
   assert.equal(after.rules[0].index, 1);
+  assert.equal(after.rules[0].source, 'workspace');
+});
+
+test('the user layer is written by naming it, one layer per save', async (t) => {
+  const harness = await startFakeHost('permissions');
+  t.after(() => harness.stop());
+
+  // Appending to a file that does not exist creates it, and the answer names
+  // the file it wrote rather than the workspace's.
+  const added = await harness.client.request<PermissionsAddResult>(Method.PermissionsAdd, {
+    source: 'user',
+    rule: { effect: 'deny', tool: 'shell', pattern: 'rm -rf:*' },
+  });
+  assert.equal(added.source, 'user');
+  assert.match(added.path, /\.anvil[\\/]permissions\.json$/);
+  assert.match(added.rules[0].describe ?? '', /user permissions\.json rule 1/);
+
+  // A whole-layer save carries the user file's own field, and gets back a
+  // reading with both layers and their sources.
+  const saved = await harness.client.request<PermissionsResult>(Method.PermissionsSet, {
+    source: 'user',
+    create: true,
+    rules: [{ effect: 'allow', tool: 'write_file', pattern: 'src/**' }],
+    protected: ['secrets/**', ' *.pem ', ''],
+  });
+  assert.equal(saved.user_exists, true);
+  assert.deepEqual(saved.protected, ['secrets/**', '*.pem']);
+  assert.equal(saved.rules[0].source, 'user');
+  assert.equal(saved.rules[0].index, 1);
+
+  // The one field that belongs to the workspace is refused on the user layer,
+  // and the other way round — neither is silently dropped.
+  await assert.rejects(
+    harness.client.request(Method.PermissionsSet, {
+      source: 'user',
+      rules: [],
+      default_mode: 'accept_edits',
+    }),
+    /no starting mode/,
+  );
+  await assert.rejects(
+    harness.client.request(Method.PermissionsSet, {
+      rules: [],
+      protected: ['secrets/**'],
+    }),
+    /belong to the user file/,
+  );
+});
+
+test('a malformed user file is reported, read-only and never replaced', async (t) => {
+  const harness = await startFakeHost('permissions', {
+    env: { FAKE_HOST_USER_RULES: '1', FAKE_HOST_USER_RULES_BROKEN: '1' },
+  });
+  t.after(() => harness.stop());
+
+  const state = await harness.client.request<PermissionsResult>(Method.PermissionsGet, {});
+  // The layer is there and will not compile: the same report the workspace file
+  // gets, with the place, and no rules from it.
+  assert.equal(state.user_exists, true);
+  assert.equal(state.user_problem?.line, 3);
+  assert.equal(state.user_problem?.column, 9);
+  assert.match(state.user_problem?.message ?? '', /not one of allow, ask, deny/);
+
+  for (const method of [Method.PermissionsAdd, Method.PermissionsSet]) {
+    await assert.rejects(
+      harness.client.request(method, { source: 'user', rule: { tool: 'shell' } }),
+      (err: Error) => {
+        assert.match(err.message, /permissions\.json:3:9/);
+        return true;
+      },
+    );
+  }
 });
 
 test('a rule file that will not compile is reported with its place, not as a bare failure', async (t) => {

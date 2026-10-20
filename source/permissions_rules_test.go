@@ -56,7 +56,7 @@ func TestRuleDenyHoldsWithNoCallback(t *testing.T) {
 		t.Fatalf("a deny must hold with no callback installed, got %+v", res)
 	}
 	// The model has to be able to read why, and to find the rule.
-	for _, want := range []string{"write_file denied", "permissions.json rule 1", "文本文件不许写"} {
+	for _, want := range []string{"write_file denied", "session rules rule 1", "文本文件不许写"} {
 		if !strings.Contains(res.Content, want) {
 			t.Errorf("deny message %q does not mention %q", res.Content, want)
 		}

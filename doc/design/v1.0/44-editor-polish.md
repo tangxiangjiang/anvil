@@ -180,7 +180,12 @@ handlers), because the honest starting point is not known yet.
 
 Rules are read from `{cwd}/.anvil/permissions.json` and from `opts.PermissionRules`; there is
 no user-level file, so a preference like "never run `rm -rf`" has to be copied into every
-repository. 0.47 adds `~/.anvil/permissions.json`.
+repository. 0.47 adds `$ANVIL_HOME/permissions.json`, or `~/.anvil/permissions.json` when the
+variable is unset — the same `.anvil` directory the MCP token store uses, and the override the
+tests need so that `go test` never reads the developer's machine-wide policy. The two files do
+not share a shape: the user file may carry `protected`, the workspace file keeps `defaultMode`,
+and each parser refuses the other's key, so a repository cannot widen what a person must be
+asked about and a machine-wide file cannot pick the mode of every session.
 
 Merging follows severity, not file order: **deny > ask > allow**. A workspace rule cannot
 weaken a user-level deny — otherwise cloning a repository could re-enable something the person
@@ -190,9 +195,10 @@ turned off globally. Reports keep provenance (`user permissions.json rule 2` ver
 **Protected paths** are paths that an `allow` rule never matches, regardless of how specific
 it is: the repository's `.git/`, Anvil's own `~/.anvil/`, and the workspace's
 `.anvil/checkpoints/`. Writes there still follow the mode (ask, accept-edits, bypass); what
-changes is that a remembered "always allow" cannot silently include them. In `bypass` and
-`dontAsk`, the approval record marks the path as protected so the decision is visible after
-the fact.
+changes is that a remembered "always allow" cannot silently include them. The decision always
+carries the paths — on the approval card and on the tool result — so in `bypass` and `dontAsk`
+the record says after the fact why no allow could have covered the call. The user file may add
+globs of its own; they are anchored exactly as a rule's path pattern is.
 
 The permissions manager shows the two layers separately. Editing the user file is allowed
 only when it exists or when the person asks to create it; a malformed file remains read-only,

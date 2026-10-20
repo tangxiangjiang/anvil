@@ -27,6 +27,8 @@ import {
   PermissionsSetParams,
   PermissionMode,
   PermissionModes,
+  RuleInfo,
+  RuleSource,
   RuleSpec,
 } from './protocol';
 
@@ -34,12 +36,12 @@ export const PermissionsViewType = 'anvil.permissions';
 
 /** What the manager needs from the window it belongs to. */
 export interface PermissionsPanelHost {
-  /** The file as the host reads it. */
+  /** Both rule files as the host reads them, merged in the order they decide. */
   permissionRules(): Promise<PermissionsResult>;
-  /** Replaces the file with the list the document showed. */
+  /** Replaces one layer with the list the document showed. */
   savePermissionRules(params: PermissionsSetParams): Promise<PermissionsResult>;
-  /** Opens the JSON itself, creating it when this workspace has none. */
-  openPermissionRulesFile(): Promise<void>;
+  /** Opens one layer's JSON itself, creating it when that layer has none. */
+  openPermissionRulesFile(source?: RuleSource): Promise<void>;
   /** False when `anvil.permissions` is off, which makes every rule decide nothing. */
   loadPermissionsEnabled(): boolean;
 }
@@ -97,12 +99,16 @@ export class PermissionsPanels implements vscode.Disposable {
         await this.save(message);
         return;
       case 'openFile':
-        await this.host.openPermissionRulesFile();
+        // The document names the layer whose JSON it is asking for; an older
+        // document that names none wants the workspace file, as it always did.
+        await this.host.openPermissionRulesFile(
+          message.source === 'user' ? 'user' : 'workspace',
+        );
         return;
     }
   }
 
-  /** Reads the file and posts it, in the envelope the document asked for. */
+  /** Reads both files and posts them, in the envelope the document asked for. */
   private async sendState(type: 'state' | 'saved'): Promise<void> {
     let state: PermissionsResult;
     try {
@@ -115,14 +121,31 @@ export class PermissionsPanels implements vscode.Disposable {
         path: '',
         exists: false,
         defaultMode: '',
-        rules: [],
+        userPath: '',
+        userExists: false,
+        protected: [],
+        userRules: [],
+        workspaceRules: [],
         modes: declarableModes(),
         loadPermissions: this.host.loadPermissionsEnabled(),
         error: (err as Error).message,
       });
       return;
     }
-    await this.post({
+    await this.post(this.stateMessage(type, state));
+  }
+
+  /**
+   * The document's state message.
+   *
+   * One `rules` array arrives in merge order with each rule's source, because
+   * that is how the host reads the two files together; the document draws two
+   * sections, so the array is split here where the grouping decision can be
+   * commented on. A rule with no source is a workspace rule: that is the only
+   * layer a host without scopes has.
+   */
+  private stateMessage(type: 'state' | 'saved', state: PermissionsResult): Record<string, unknown> {
+    return {
       type,
       path: state.path,
       exists: state.exists,
@@ -131,16 +154,16 @@ export class PermissionsPanels implements vscode.Disposable {
       // `permissions.get` makes.
       defaultMode: state.default_mode ?? '',
       defaultModeRefused: state.default_mode_refused,
-      rules: state.rules.map((rule) => ({
-        effect: effectOf(rule.effect),
-        tool: rule.tool,
-        pattern: rule.pattern ?? '',
-        reason: rule.reason ?? '',
-      })),
+      userPath: state.user_path ?? '',
+      userExists: state.user_exists === true,
+      userProblem: state.user_problem,
+      protected: state.protected ?? [],
+      userRules: rowsFor(state.rules, 'user'),
+      workspaceRules: rowsFor(state.rules, 'workspace'),
       modes: declarableModes(),
       problem: state.problem,
       loadPermissions: this.host.loadPermissionsEnabled(),
-    });
+    };
   }
 
   /**
@@ -153,6 +176,7 @@ export class PermissionsPanels implements vscode.Disposable {
    * one of them would be the one destructive thing this panel could do.
    */
   private async save(message: Record<string, unknown>): Promise<void> {
+    const source: RuleSource = message.source === 'user' ? 'user' : 'workspace';
     const rules = rulesOf(message.rules);
     if (!rules) {
       await this.post({
@@ -161,36 +185,45 @@ export class PermissionsPanels implements vscode.Disposable {
       });
       return;
     }
-    const declared = message.defaultMode;
-    if (declared !== undefined && typeof declared !== 'string') {
-      await this.post({ type: 'error', message: 'The default mode must be a mode word or empty.' });
-      return;
-    }
-    const mode = declared ?? '';
 
-    await this.post({ type: 'saving', saving: true });
-    try {
-      const result = await this.host.savePermissionRules({
+    // The two files have different shapes, and this is the client half of that
+    // rule: a workspace save sends its starting mode and no protected globs, a
+    // user save the reverse. The host refuses the wrong field either way, so a
+    // message that smuggled one is an error rather than a silent drop.
+    let params: PermissionsSetParams;
+    if (source === 'user') {
+      const protectedPaths = stringsOf(message.protected);
+      if (!protectedPaths) {
+        await this.post({ type: 'error', message: 'Protected paths must be a list of strings.' });
+        return;
+      }
+      params = {
+        source: 'user',
+        rules,
+        protected: protectedPaths,
+        // Only the document's "Create user file" step asks for this; ordinary
+        // Save on a file that exists never has to.
+        create: message.create === true,
+      };
+    } else {
+      const declared = message.defaultMode;
+      if (declared !== undefined && typeof declared !== 'string') {
+        await this.post({ type: 'error', message: 'The default mode must be a mode word or empty.' });
+        return;
+      }
+      const mode = declared ?? '';
+      params = {
+        source: 'workspace',
         rules,
         default_mode: mode === '' ? undefined : (mode as PermissionMode),
-      });
+      };
+    }
+
+    await this.post({ type: 'saving', saving: true, source });
+    try {
+      const result = await this.host.savePermissionRules(params);
       // The reply to a save is a full reading, so it is rendered like one.
-      await this.post({
-        type: 'saved',
-        path: result.path,
-        exists: result.exists,
-        defaultMode: result.default_mode ?? '',
-        defaultModeRefused: result.default_mode_refused,
-        rules: result.rules.map((rule) => ({
-          effect: effectOf(rule.effect),
-          tool: rule.tool,
-          pattern: rule.pattern ?? '',
-          reason: rule.reason ?? '',
-        })),
-        modes: declarableModes(),
-        problem: result.problem,
-        loadPermissions: this.host.loadPermissionsEnabled(),
-      });
+      await this.post(this.stateMessage('saved', result));
     } catch (err) {
       await this.post({ type: 'error', message: (err as Error).message });
     }
@@ -205,6 +238,48 @@ export class PermissionsPanels implements vscode.Disposable {
 /** The three effects; anything else a file might hold reads as its default. */
 function effectOf(effect: string | undefined): 'allow' | 'ask' | 'deny' {
   return effect === 'ask' || effect === 'deny' ? effect : 'allow';
+}
+
+/**
+ * The document's row for one rule: the four fields a form edits, and nothing a
+ * form cannot change. The rule's index and describe stay on the wire — the
+ * manager draws the form, and a citation belongs to the decision that quotes
+ * it.
+ */
+function rowOf(rule: RuleInfo): RuleSpec {
+  return {
+    effect: effectOf(rule.effect),
+    tool: rule.tool,
+    pattern: rule.pattern ?? '',
+    reason: rule.reason ?? '',
+  };
+}
+
+/**
+ * One layer's rows. A rule that names no source is the workspace's: that is the
+ * only layer a host that predates scopes reports.
+ */
+function rowsFor(rules: RuleInfo[], source: RuleSource): RuleSpec[] {
+  return rules
+    .filter((rule) => (source === 'user' ? rule.source === 'user' : rule.source !== 'user'))
+    .map(rowOf);
+}
+
+/**
+ * The protected globs a save message names, or undefined when it is not a list
+ * of strings. Blanks are dropped: an empty glob protects nothing, and writing
+ * one to the file would read as if it did something.
+ */
+function stringsOf(raw: unknown): string[] | undefined {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) return undefined;
+  const out: string[] = [];
+  for (const item of raw) {
+    if (typeof item !== 'string') return undefined;
+    const trimmed = item.trim();
+    if (trimmed !== '') out.push(trimmed);
+  }
+  return out;
 }
 
 /**

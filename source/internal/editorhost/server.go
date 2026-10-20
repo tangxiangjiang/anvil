@@ -1078,25 +1078,42 @@ func (s *Server) handlePermissionsGet(_ context.Context, _ json.RawMessage) (any
 	out := PermissionsResult{Path: path, Rules: []RuleInfo{}}
 
 	file, err := anvil.LoadPermissionRuleFile(cwd)
-	if err != nil {
+	switch {
+	case err != nil:
 		out.Exists = true
 		out.Problem = ruleProblem(err)
-		return out, nil
+	case file != nil:
+		out.Exists = true
+		out.Rules = ruleInfos(file.Rules)
+		// The declaration is reported as the host would read it, and a declaration
+		// it will not honour is reported beside it in words. Filling DefaultMode
+		// with "ask" for a file that declared bypass would read as if the file had
+		// said ask, which is the one thing it plainly did not.
+		if file.DefaultMode != "" {
+			if honoured := honouredMode(file.DefaultMode); honoured != "" {
+				out.DefaultMode = honoured
+			} else {
+				out.DefaultModeRefused = refusedMode(file.DefaultMode)
+			}
+		}
 	}
-	if file == nil {
-		return out, nil
-	}
-	out.Exists = true
-	out.Rules = ruleInfos(file.Rules)
-	// The declaration is reported as the host would read it, and a declaration it
-	// will not honour is reported beside it in words. Filling DefaultMode with
-	// "ask" for a file that declared bypass would read as if the file had said
-	// ask, which is the one thing it plainly did not.
-	if file.DefaultMode != "" {
-		if honoured := honouredMode(file.DefaultMode); honoured != "" {
-			out.DefaultMode = honoured
-		} else {
-			out.DefaultModeRefused = refusedMode(file.DefaultMode)
+
+	// The user layer is reported even when the workspace file is broken: the
+	// manager is how a person fixes either one, and it needs to see both. The
+	// layers are one list in merge order — user first — each rule carrying the
+	// file it came from, because a position in the merged list names no line a
+	// reader can open.
+	if userPath, err := anvil.UserPermissionRulesPath(); err == nil {
+		out.UserPath = userPath
+		if user, err := anvil.LoadUserPermissionRuleFile(); err != nil {
+			out.UserExists = true
+			out.UserProblem = ruleProblem(err)
+		} else if user != nil {
+			out.UserExists = true
+			out.Protected = user.Protected
+			if len(user.Rules) > 0 {
+				out.Rules = append(ruleInfos(user.Rules), out.Rules...)
+			}
 		}
 	}
 	return out, nil
@@ -1119,6 +1136,10 @@ func (s *Server) handlePermissionsAdd(_ context.Context, params json.RawMessage)
 	}
 	if strings.TrimSpace(p.Rule.Tool) == "" {
 		return nil, errInvalidParams("permissions.add: rule.tool is required")
+	}
+	source, rpcErr := permissionSource(p.Source, "permissions.add")
+	if rpcErr != nil {
+		return nil, rpcErr
 	}
 	// The card's buttons are all "always allow", so an omitted effect means
 	// allow. A client editing the file by hand sends the word it wants.
@@ -1144,13 +1165,31 @@ func (s *Server) handlePermissionsAdd(_ context.Context, params json.RawMessage)
 	}
 
 	cwd := s.cwdPath()
-	rules, err := anvil.AddPermissionRule(cwd, anvil.PermissionRule{
+	rule := anvil.PermissionRule{
 		Effect:  effect,
 		Tool:    p.Rule.Tool,
 		Pattern: p.Rule.Pattern,
 		Reason:  p.Rule.Reason,
-	})
-	if err != nil {
+	}
+	var (
+		rules []anvil.PermissionRule
+		path  string
+		add   = func() error {
+			var err error
+			if source == RuleSourceUser {
+				path, err = anvil.UserPermissionRulesPath()
+				if err != nil {
+					return err
+				}
+				rules, err = anvil.AddUserPermissionRule(rule)
+			} else {
+				path = anvil.PermissionRulesPath(cwd)
+				rules, err = anvil.AddPermissionRule(cwd, rule)
+			}
+			return err
+		}
+	)
+	if err := add(); err != nil {
 		var perr *anvil.PermissionRuleError
 		if errors.As(err, &perr) {
 			// Appending to a file that cannot be read is refused — that is the one
@@ -1161,16 +1200,20 @@ func (s *Server) handlePermissionsAdd(_ context.Context, params json.RawMessage)
 		return nil, errHost(err)
 	}
 
-	out := PermissionsAddResult{Path: anvil.PermissionRulesPath(cwd), Rules: ruleInfos(rules)}
-	// One-based, the number the appended rule is cited by.
+	out := PermissionsAddResult{Path: path, Source: source, Rules: ruleInfos(rules)}
+	// One-based, the number the appended rule is cited by in its own file.
 	out.Index = len(rules)
 
 	if p.RequestID == "" {
 		return out, nil
 	}
 	// Which rule decides the call now is not necessarily the one just written,
-	// so it is evaluated rather than assumed.
-	if m := anvil.EvaluatePermissionRules(rules, pending.call.tool, pending.call.args); m != nil {
+	// so both files are read as they now stand and evaluated together. That is
+	// the evaluation a session runs, protection included: a workspace allow does
+	// not settle a call the user's deny refuses, and no allow settles a call that
+	// touches a protected path.
+	user, workspace := s.rulesForPending()
+	if m := anvil.EvaluatePermissionRulesAcross(cwd, user, workspace, pending.call.tool, pending.call.args); m != nil {
 		out.DecidedBy = ruleInfo(m)
 		if m.Effect == anvil.PermissionEffectAllow {
 			if err := s.approvals.answer(ApprovalResponseParams{
@@ -1185,8 +1228,9 @@ func (s *Server) handlePermissionsAdd(_ context.Context, params json.RawMessage)
 	return out, nil
 }
 
-// handlePermissionsSet replaces the workspace rule file with the list a person
-// approved in the manager.
+// handlePermissionsSet replaces one rule file — the workspace's by default, the
+// user's when the request says so — with the list a person approved in the
+// manager.
 //
 // It is a replacement, not an append, so it makes the append's refusals again
 // and adds one: every rule must compile, the declared mode must be one a project
@@ -1195,10 +1239,25 @@ func (s *Server) handlePermissionsAdd(_ context.Context, params json.RawMessage)
 // fix. The write is whole-file and atomic, and the answer is the file read back
 // the way permissions.get reads it, so the panel shows what a new session will
 // open under rather than merely what it sent.
+//
+// The two shapes stay separate in both directions. The workspace layer owns
+// default_mode and may not carry protected globs; the user layer owns protected
+// globs and has no mode. A request that crosses them is refused rather than
+// silently dropping the field it names.
 func (s *Server) handlePermissionsSet(ctx context.Context, params json.RawMessage) (any, *RPCError) {
 	p, err := decode[PermissionsSetParams](params)
 	if err != nil {
 		return nil, errInvalidParams("permissions.set: " + err.Error())
+	}
+	source, rpcErr := permissionSource(p.Source, "permissions.set")
+	if rpcErr != nil {
+		return nil, rpcErr
+	}
+	if source == RuleSourceUser && strings.TrimSpace(p.DefaultMode) != "" {
+		return nil, errInvalidParams("permissions.set: default_mode belongs to the workspace file; the user file has no starting mode")
+	}
+	if source == RuleSourceWorkspace && len(p.Protected) > 0 {
+		return nil, errInvalidParams("permissions.set: protected belongs to the user file; a workspace may not declare protected paths")
 	}
 	rules := make([]anvil.PermissionRule, 0, len(p.Rules))
 	for i, r := range p.Rules {
@@ -1228,9 +1287,23 @@ func (s *Server) handlePermissionsSet(ctx context.Context, params json.RawMessag
 	}
 
 	cwd := s.cwdPath()
-	// Read before writing. The manager shows the problem and disables Save in this
-	// state, so reaching here means a client skipped that step — and the old file
-	// still gets the benefit of the doubt.
+	// Read before writing, both layers. The manager shows the problem and disables
+	// Save in this state, so reaching here means a client skipped that step — and
+	// the old file still gets the benefit of the doubt. A missing user file is the
+	// one exception: it is what "create" is for.
+	if source == RuleSourceUser {
+		if _, err := anvil.LoadUserPermissionRuleFile(); err != nil {
+			return nil, errCode(CodeInvalidRequest, "permissions.set: "+err.Error())
+		}
+		if err := anvil.SaveUserPermissionRuleFile(rules, p.Protected, p.Create); err != nil {
+			var perr *anvil.PermissionRuleError
+			if errors.As(err, &perr) {
+				return nil, errInvalidParams("permissions.set: " + perr.Error())
+			}
+			return nil, errHost(err)
+		}
+		return s.handlePermissionsGet(ctx, nil)
+	}
 	if _, err := anvil.LoadPermissionRuleFile(cwd); err != nil {
 		return nil, errCode(CodeInvalidRequest, "permissions.set: "+err.Error())
 	}
@@ -1244,13 +1317,58 @@ func (s *Server) handlePermissionsSet(ctx context.Context, params json.RawMessag
 	return s.handlePermissionsGet(ctx, nil)
 }
 
-// ruleInfos names the rules of a set for the wire: where each one sits and how
-// the SDK cites it, in the order the file lists them.
+// rulesForPending reads both rule layers as they now stand. A layer that will
+// not parse contributes nothing: the write just made it valid, so this only
+// happens if somebody is editing the file at the same moment, and the pending
+// card then stays for a person to answer.
+func (s *Server) rulesForPending() (user, workspace []anvil.PermissionRule) {
+	if file, err := anvil.LoadUserPermissionRuleFile(); err == nil && file != nil {
+		user = file.Rules
+	}
+	if file, err := anvil.LoadPermissionRuleFile(s.cwdPath()); err == nil && file != nil {
+		workspace = file.Rules
+	}
+	return user, workspace
+}
+
+// permissionSource resolves the layer a request names. Empty means the
+// workspace, which is what a client that predates scopes means; anything else
+// but the two names is refused rather than guessed.
+func permissionSource(source, method string) (string, *RPCError) {
+	switch strings.TrimSpace(source) {
+	case "":
+		return RuleSourceWorkspace, nil
+	case RuleSourceWorkspace:
+		return RuleSourceWorkspace, nil
+	case RuleSourceUser:
+		return RuleSourceUser, nil
+	default:
+		return "", errInvalidParams(method + ": source must be \"" + RuleSourceWorkspace + "\" or \"" + RuleSourceUser + "\"")
+	}
+}
+
+// ruleInfos names the rules of a set for the wire: where each one sits in its own
+// file, which file that is, and how the SDK cites it, in the order they decide.
 func ruleInfos(rules []anvil.PermissionRule) []RuleInfo {
 	out := make([]RuleInfo, 0, len(rules))
 	described := anvil.DescribePermissionRules(rules)
 	for i, r := range rules {
-		info := RuleInfo{Index: i + 1, RuleSpec: RuleSpec(r)}
+		// A rule read from a file carries its position there; one built by hand
+		// without a source falls back to its place in this list.
+		index := i + 1
+		if r.Index > 0 {
+			index = r.Index
+		}
+		info := RuleInfo{
+			Index:  index,
+			Source: r.Source,
+			RuleSpec: RuleSpec{
+				Effect:  r.Effect,
+				Tool:    r.Tool,
+				Pattern: r.Pattern,
+				Reason:  r.Reason,
+			},
+		}
 		if i < len(described) {
 			info.Describe = described[i]
 		}
@@ -1674,9 +1792,10 @@ func (s *Server) permissionHook(sess *session, timeout time.Duration) anvil.Perm
 			Preview:   approvalPreview(req.Preview),
 			Decisions: []string{DecisionAllow, DecisionAllowSession, DecisionDeny},
 			Rule:      ruleInfo(req.Rule),
+			Protected: req.Protected,
 			// Only offered when the session actually reads the rule file: a rule
 			// written into a file this session ignores would be a button that lies.
-			Remember:  rememberOptions(sess, call),
+			Remember:  s.rememberOptions(sess, call),
 			TimeoutMS: int(timeout / time.Millisecond),
 			// The child that asked, when one did. run_id stays the session's
 			// active run, so session.cancel still withdraws the prompts that
@@ -1794,15 +1913,15 @@ func approvalScope(p anvil.ToolPreview) string {
 // call.
 //
 // The choices come from the SDK, which proves each one against the call itself —
-// a rule that would not decide it is not offered. The host adds one condition of
-// its own: nothing is offered by a session that does not read the rule file,
-// because writing a rule there would change nothing about the call in front of
-// the user.
-func rememberOptions(sess *session, call pendingCall) []RememberOption {
+// a rule that would not decide it is not offered, including one covering a
+// protected path, which an allow may never do. The host adds one condition of its
+// own: nothing is offered by a session that does not read the rule files, because
+// writing a rule there would change nothing about the call in front of the user.
+func (s *Server) rememberOptions(sess *session, call pendingCall) []RememberOption {
 	if !sess.loadPermissions {
 		return nil
 	}
-	options := anvil.PermissionRuleOptions(call.tool, call.args)
+	options := anvil.PermissionRuleOptionsIn(s.cwdPath(), call.tool, call.args)
 	out := make([]RememberOption, 0, len(options))
 	for _, o := range options {
 		out = append(out, RememberOption{

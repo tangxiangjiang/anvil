@@ -26,8 +26,7 @@ body {
 #root {
   max-width: 86em;
   margin: 0 auto;
-  /* Room for the sticky footer, so the last row is not hidden behind it. */
-  padding-bottom: 72px;
+  padding-bottom: 24px;
 }
 
 .title {
@@ -72,9 +71,74 @@ body {
   border-color: var(--vscode-inputValidation-infoBorder, var(--vscode-panel-border));
 }
 
+.banner.info {
+  border-style: dashed;
+}
+
+.banner button {
+  flex: none;
+}
+
 .banner-text {
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* Each layer is one section: its own file, its own save, its own problem. */
+.scope {
+  margin: 16px 0;
+  padding: 12px 14px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: var(--perm-radius);
+}
+
+.scope-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--perm-gap);
+  flex-wrap: wrap;
+}
+
+.scope-head h3 {
+  margin: 0;
+  font-size: 1.05em;
+}
+
+.scope-head .path {
+  margin: 0;
+}
+
+.scope > button.ghost,
+.scope .rules + button.ghost {
+  margin-top: 10px;
+}
+
+.protected-row {
+  margin: 8px 0 14px;
+}
+
+.protected-row textarea {
+  display: block;
+  width: 100%;
+  min-height: 3.2em;
+  margin-top: 6px;
+  resize: vertical;
+  font-family: var(--perm-mono);
+  font-size: inherit;
+  color: var(--vscode-input-foreground);
+  background: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+  border-radius: 4px;
+  padding: 4px 6px;
+}
+
+.protected-row textarea:focus {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+.protected-row textarea:disabled {
+  opacity: 0.6;
 }
 
 .mode-row {
@@ -154,16 +218,18 @@ select:disabled {
   margin-top: 10px;
 }
 
+/* In flow rather than fixed: two sections have a save bar each, and a fixed bar
+ * would sit over the other section's last row. */
 .buttons {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 16px;
-  background: var(--vscode-editorWidget-background);
+  margin-top: 10px;
+}
+
+.buttons.footer {
+  margin-top: 24px;
+  padding-top: 12px;
   border-top: 1px solid var(--vscode-panel-border);
 }
 

@@ -107,7 +107,12 @@ func TestAddPermissionRuleWritesARuleTheLoaderAccepts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the file it just wrote must load: %v", err)
 	}
-	if len(loaded) != 1 || loaded[0] != (PermissionRule{Effect: "allow", Tool: "shell", Pattern: "git status:*"}) {
+	// A loaded rule now also says which file it came from and where it sits in
+	// it: with a user scope, "rule 1" without a file names no line.
+	if len(loaded) != 1 || loaded[0] != (PermissionRule{
+		Effect: "allow", Tool: "shell", Pattern: "git status:*",
+		Source: PermissionScopeWorkspace, Index: 1,
+	}) {
 		t.Fatalf("loaded = %+v from %s", loaded, data)
 	}
 	var f struct {
@@ -337,7 +342,7 @@ func TestEvaluatePermissionRulesNamesTheDecidingRule(t *testing.T) {
 	}
 	// The wording is the one a denial uses, so the card and the model's error
 	// agree on how to find the rule.
-	for _, want := range []string{"permissions.json rule 2", `deny shell "rm -rf:*"`, "危险删除"} {
+	for _, want := range []string{"session rules rule 2", `deny shell "rm -rf:*"`, "危险删除"} {
 		if !strings.Contains(m.Describe(), want) {
 			t.Errorf("Describe() = %q, missing %q", m.Describe(), want)
 		}
@@ -590,5 +595,189 @@ func TestPermissionRequestCarriesTheRuleThatAsked(t *testing.T) {
 	got, _ = rec.last()
 	if got.Rule != nil {
 		t.Fatalf("the gate asked, not a rule: %+v", got.Rule)
+	}
+}
+
+// --- the user's own file (0.47) ----------------------------------------------
+
+// The user file lives under $ANVIL_HOME when set, which is also how a test keeps
+// a machine-wide policy out of the run.
+func TestUserPermissionRulesPathFollowsTheHomeOverride(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("ANVIL_HOME", home)
+	got, err := UserPermissionRulesPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(home, "permissions.json"); got != want {
+		t.Fatalf("path = %q, want %q", got, want)
+	}
+}
+
+// A person who has written no preferences is not a person with a broken policy:
+// the missing file is (nil, nil), and the first append creates it.
+func TestUserRuleFileLoadingAndAppending(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("ANVIL_HOME", home)
+
+	file, err := LoadUserPermissionRuleFile()
+	if err != nil || file != nil {
+		t.Fatalf("missing user file: %+v, %v", file, err)
+	}
+
+	rules, err := AddUserPermissionRule(PermissionRule{Effect: "deny", Tool: "shell", Pattern: "rm -rf:*", Reason: "危险删除"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rules) != 1 || rules[0].Source != "user" || rules[0].Index != 1 {
+		t.Fatalf("added = %+v", rules)
+	}
+	rules, err = AddUserPermissionRule(PermissionRule{Effect: "ask", Tool: "shell", Pattern: "git push:*"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rules) != 2 || rules[1].Index != 2 {
+		t.Fatalf("the second rule is rule 2 of the user file: %+v", rules)
+	}
+
+	file, err = LoadUserPermissionRuleFile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if file == nil || len(file.Rules) != 2 {
+		t.Fatalf("file = %+v", file)
+	}
+	if file.Rules[0].Reason != "危险删除" || file.Rules[0].Source != "user" {
+		t.Errorf("the file must keep the reason and the source: %+v", file.Rules[0])
+	}
+	data, _ := os.ReadFile(file.Path)
+	if !strings.Contains(string(data), `"deny"`) {
+		t.Errorf("the file is not the rule file: %s", data)
+	}
+}
+
+// The user file is written whole, including its protected globs: dropping them on
+// an append would quietly change which paths a person may never auto-approve.
+func TestUserRuleFileSaveKeepsProtectedGlobs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("ANVIL_HOME", home)
+	path, err := UserPermissionRulesPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Without create, a missing file is refused: the manager asks a person to
+	// create it, and a save that was not meant to create must not quietly do so.
+	err = SaveUserPermissionRuleFile(nil, []string{"secrets/**"}, false)
+	var perr *PermissionRuleError
+	if !errors.As(err, &perr) || perr.Path != path {
+		t.Fatalf("save without create = %v, want a refusal naming %s", err, path)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal("a refused save must not create the file")
+	}
+
+	if err := SaveUserPermissionRuleFile([]PermissionRule{{Effect: "allow", Tool: "shell", Pattern: "readonly"}}, []string{" secrets/** ", ""}, true); err != nil {
+		t.Fatal(err)
+	}
+	file, err := LoadUserPermissionRuleFile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if file == nil || len(file.Protected) != 1 || file.Protected[0] != "secrets/**" {
+		t.Fatalf("protected = %v", file)
+	}
+	if len(file.Rules) != 1 {
+		t.Errorf("rules = %+v", file.Rules)
+	}
+
+	// Appending carries the globs through the rewrite.
+	rules, err := AddUserPermissionRule(PermissionRule{Effect: "deny", Tool: "shell", Pattern: "rm -rf:*"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rules) != 2 {
+		t.Fatalf("rules = %+v", rules)
+	}
+	if file, err = LoadUserPermissionRuleFile(); err != nil || len(file.Protected) != 1 {
+		t.Fatalf("the globs must survive an append: %+v, %v", file, err)
+	}
+
+	// A rule the reader would refuse is refused before it reaches the disk.
+	before, _ := os.ReadFile(path)
+	if err := SaveUserPermissionRuleFile([]PermissionRule{{Effect: "nope", Tool: "shell"}}, nil, true); err == nil {
+		t.Fatal("an invalid rule must not be written")
+	}
+	if after, _ := os.ReadFile(path); string(after) != string(before) {
+		t.Fatal("a refused save must not touch the file")
+	}
+}
+
+// A malformed user file is reported with its place and is not replaced by an
+// append. The manager shows it read-only; this is the SDK's half of that promise.
+func TestMalformedUserFileIsReportedNotReplaced(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("ANVIL_HOME", home)
+	path, _ := UserPermissionRulesPath()
+	body := "{\n  \"rules\": [\n    {\"effect\": }\n  ]\n}\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadUserPermissionRuleFile()
+	var perr *PermissionRuleError
+	if !errors.As(err, &perr) || perr.Path != path || perr.Line == 0 {
+		t.Fatalf("load = %v, want a problem with the place", err)
+	}
+	if _, err := AddUserPermissionRule(PermissionRule{Effect: "allow", Tool: "shell"}); err == nil {
+		t.Fatal("appending to a file that will not read must be refused")
+	}
+	if after, _ := os.ReadFile(path); string(after) != body {
+		t.Fatalf("a refused append must not touch the file:\n%s", after)
+	}
+}
+
+// A workspace allow does not settle a call the user's deny refuses, and no allow
+// settles one that touches a protected path. This is the question the host asks
+// before it claims a card's "always allow" worked.
+func TestEvaluateAcrossScopes(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("ANVIL_HOME", t.TempDir())
+	user := []PermissionRule{{Effect: "deny", Tool: "shell", Pattern: "rm -rf:*"}}
+	workspace := []PermissionRule{{Effect: "allow", Tool: "shell", Pattern: "readonly"}}
+
+	if m := EvaluatePermissionRulesAcross(dir, user, workspace, "shell", shellArgs("rm -rf build")); m == nil || m.Effect != "deny" || m.Source != "user" {
+		t.Fatalf("m = %+v, want the user's deny", m)
+	}
+	if m := EvaluatePermissionRulesAcross(dir, user, workspace, "shell", shellArgs("git status")); m == nil || m.Effect != "allow" || m.Source != "workspace" {
+		t.Fatalf("m = %+v, want the workspace's allow", m)
+	}
+	// The same call with the workspace allow in a user file: protected paths skip
+	// allow rules however the rule was written.
+	allowed := []PermissionRule{{Effect: "allow", Tool: "write_file", Pattern: "**"}}
+	if m := EvaluatePermissionRulesAcross(dir, nil, allowed, "write_file", json.RawMessage(`{"path":".git/config"}`)); m != nil {
+		t.Fatalf("an allow must not settle a protected path: %+v", m)
+	}
+	if m := EvaluatePermissionRulesAcross(dir, nil, allowed, "write_file", json.RawMessage(`{"path":"a.txt"}`)); m == nil {
+		t.Fatal("an ordinary path is still covered")
+	}
+}
+
+// The card's "always allow" choices follow the same rule: a path-shaped option
+// for a protected path is not offered, because the rule it would write could
+// never decide the call.
+func TestPermissionRuleOptionsInSkipsProtectedPaths(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("ANVIL_HOME", t.TempDir())
+	args := json.RawMessage(`{"path":".git/config"}`)
+
+	if got := PermissionRuleOptions("write_file", args); len(got) == 0 {
+		t.Fatal("without a workspace there is nothing to protect, and the path option is offered")
+	}
+	if got := PermissionRuleOptionsIn(dir, "write_file", args); len(got) != 0 {
+		t.Fatalf("protected path options = %+v, want none", got)
+	}
+	if got := PermissionRuleOptionsIn(dir, "write_file", json.RawMessage(`{"path":"src/a.go"}`)); len(got) != 1 {
+		t.Fatalf("an ordinary path is still offered: %+v", got)
 	}
 }

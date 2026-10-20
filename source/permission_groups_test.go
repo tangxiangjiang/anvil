@@ -83,7 +83,12 @@ func execTool(a *Agent, name string, args map[string]any) toolExecResult {
 		raw = b
 	}
 	res := a.registry.Execute(context.Background(), name, raw)
-	return toolExecResult{Content: res.Content, IsError: res.IsError, Rule: permissionRuleMatch(res.Rule)}
+	return toolExecResult{
+		Content:   res.Content,
+		IsError:   res.IsError,
+		Rule:      permissionRuleMatch(res.Rule),
+		Protected: res.Protected,
+	}
 }
 
 type toolExecResult struct {
@@ -92,6 +97,9 @@ type toolExecResult struct {
 	// Rule is the workspace rule that decided the call, when one did — the same
 	// thing the tool_result event carries.
 	Rule *PermissionRuleMatch
+	// Protected are the paths the call touched that an allow rule may not cover,
+	// also carried on the tool_result event (0.47+).
+	Protected []string
 }
 
 // --- baseline: no groups means today's behaviour, unchanged -----------------

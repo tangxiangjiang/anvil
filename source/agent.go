@@ -515,10 +515,15 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 	}
 	reg.SetPermissionRules(permRules)
 	if opts.Local.LoadPermissions {
-		// The file is re-read for each call when the workspace owns the policy:
-		// it can be edited, or appended to by an approval card, while a session is
+		// The files are re-read for each call when a file owns the policy: they
+		// can be edited, or appended to by an approval card, while a session is
 		// open. A file that stops parsing keeps the policy it last read cleanly.
-		reg.SetPermissionRulesSource(permissions.NewSource(cwd, permissionRules(opts.PermissionRules), permRules))
+		userPath, _ := permissions.UserPath()
+		anvilHome, _ := permissions.AnvilHome()
+		reg.SetPermissionRulesSource(permissions.NewSource(
+			cwd, userPath, permissions.HomeDir(), anvilHome,
+			permissionRules(opts.PermissionRules), permRules,
+		))
 	}
 	// What is left here is the caller's own callback: the file hooks are checked in
 	// preExec now, so that a rule that allows a call cannot skip them.
@@ -531,7 +536,8 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 				Preview:  toToolPreview(call.Preview),
 				// Which rule asked, when one did. A client shows it, so a prompt
 				// never appears without a reason the user can act on.
-				Rule: permissionRuleMatch(call.Rule),
+				Rule:      permissionRuleMatch(call.Rule),
+				Protected: call.Protected,
 				// Who is asking: a subagent's call is decided by the same callback
 				// as its parent's, and the card must be able to say whose it is.
 				AgentID: agentID,
@@ -880,11 +886,18 @@ func toToolPreview(p tools.Preview) ToolPreview {
 	return out
 }
 
-// buildPermissionRules compiles the workspace rule file and the rules given in
-// code into one set, the file's first.
+// buildPermissionRules compiles the user rule file, the workspace rule file and
+// the rules given in code into one set, in that order.
 //
 // The order is the point: within one effect the first matching rule decides, so
-// the file's rules have to be the ones a reader of the file sees at the top.
+// the user's rules are the ones a reader of the user file sees at the top, then
+// the workspace's, then the caller's. Severity still decides across all three, so
+// a workspace allow cannot weaken a user deny.
+//
+// The user file is read under the same switch as the workspace file: a session
+// created with LoadPermissions off has read no file policy, and a machine-wide
+// file is a file policy. A malformed file, in either scope, fails Create with the
+// path and the place rather than being silently ignored.
 func buildPermissionRules(cwd string, opts Options) (*permissions.Set, error) {
 	// Validated on its own first, so an error names a rule the caller can count
 	// rather than a position in the merged list.
@@ -892,18 +905,34 @@ func buildPermissionRules(cwd string, opts Options) (*permissions.Set, error) {
 	if err != nil {
 		return nil, newError("permission rules", false, err)
 	}
-	var rules []permissions.Rule
+	var workspace, user *permissions.Set
+	var extra []string
 	if opts.Local.LoadPermissions {
-		file, err := permissions.Load(cwd)
+		workspace, err = permissions.Load(cwd)
 		if err != nil {
 			return nil, newError("load permissions", false, err)
 		}
-		rules = append(rules, file.Rules()...)
+		// A home directory that cannot be resolved is not a policy to refuse: it
+		// means this machine has no user file to read.
+		userPath, pathErr := permissions.UserPath()
+		if pathErr == nil {
+			user, extra, err = permissions.LoadUser(userPath)
+			if err != nil {
+				return nil, newError("load user permissions", false, err)
+			}
+		}
 	}
-	rules = append(rules, code.Rules()...)
-	set, err := permissions.New(rules)
-	if err != nil {
-		return nil, newError("permission rules", false, err)
+	set := permissions.Merge(user, workspace, code)
+	if set != nil {
+		// Protected paths are a fact about where the session runs, not about which
+		// file supplied a rule, so they are installed on every set that has rules.
+		anvilHome, _ := permissions.AnvilHome()
+		set.Protect(permissions.Protection{
+			Root:      cwd,
+			Home:      permissions.HomeDir(),
+			AnvilHome: anvilHome,
+			Extra:     extra,
+		})
 	}
 	return set, nil
 }
@@ -914,7 +943,14 @@ func permissionRules(rules []PermissionRule) []permissions.Rule {
 	}
 	out := make([]permissions.Rule, 0, len(rules))
 	for _, r := range rules {
-		out = append(out, permissions.Rule{Effect: r.Effect, Tool: r.Tool, Pattern: r.Pattern, Reason: r.Reason})
+		out = append(out, permissions.Rule{
+			Effect:  r.Effect,
+			Tool:    r.Tool,
+			Pattern: r.Pattern,
+			Reason:  r.Reason,
+			Source:  r.Source,
+			Index:   r.Index,
+		})
 	}
 	return out
 }
@@ -1271,6 +1307,7 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 			MaxSteps:      ev.MaxSteps,
 			Code:          Code(ev.Code),
 			Rule:          permissionRuleMatch(ev.Rule),
+			Protected:     ev.Protected,
 			Usage:         usageInfo(ev.Usage),
 			Items:         todoItemsInfo(ev.Items),
 			Compact:       compactInfo(ev.Compact),

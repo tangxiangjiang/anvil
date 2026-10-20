@@ -197,6 +197,162 @@ func SavePermissionRuleFile(cwd string, rules []PermissionRule, defaultMode stri
 	return writeRuleFile(p, data)
 }
 
+// UserPermissionRulesPath is the user-level rule file: $ANVIL_HOME/permissions.json,
+// or ~/.anvil/permissions.json when ANVIL_HOME is unset (0.47+). It belongs to
+// the person rather than to the workspace, so it is shared by every repository
+// they open.
+//
+// It is an error, rather than an empty path, when the home directory cannot be
+// resolved: a manager that guessed would show a file that is not the one a
+// session reads.
+func UserPermissionRulesPath() (string, error) {
+	return permissions.UserPath()
+}
+
+// UserPermissionRuleFile is the user rule file read whole: the rules that decide
+// alongside the workspace's, and the protected-path globs it adds.
+//
+// Protected is a different statement from Rules: a glob is not a rule, it is a
+// path an allow rule may not cover (see the design's "Scopes and protected
+// paths"). It is reported separately for exactly that reason.
+type UserPermissionRuleFile struct {
+	// Path is absolute, the same path UserPermissionRulesPath returns.
+	Path string
+	// Rules are the file's rules, in the order they decide within it.
+	Rules []PermissionRule
+	// Protected are the globs the file adds to the fixed protected list.
+	Protected []string
+}
+
+// LoadUserPermissionRuleFile reads the user rule file whole.
+//
+// A missing file is (nil, nil), the same "this person has written nothing down"
+// an empty rule list means; it is not an error to have no preferences. A file
+// that exists but will not parse is a *PermissionRuleError with the place, never
+// a silent ignore — the same contract the workspace file has.
+func LoadUserPermissionRuleFile() (*UserPermissionRuleFile, error) {
+	p, err := permissions.UserPath()
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(p)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, &PermissionRuleError{Path: p, Message: err.Error()}
+	}
+	set, protected, err := permissions.ParseUser(data)
+	if err != nil {
+		return nil, ruleFileError(p, err)
+	}
+	return &UserPermissionRuleFile{
+		Path:      p,
+		Rules:     permissionRuleList(set.Rules()),
+		Protected: protected,
+	}, nil
+}
+
+// AddUserPermissionRule appends one rule to the user rule file, creating the
+// file — and its directory — when they do not exist, and returns the file's
+// rules as they now stand.
+//
+// It makes the same two promises AddPermissionRule makes: it will not write over
+// a file it cannot read, and it will not write a rule the reader would refuse.
+// The file's protected globs are carried through, because the write is whole:
+// dropping them would turn the first click on "always allow" into a change to
+// which paths a person may never auto-approve.
+func AddUserPermissionRule(rule PermissionRule) ([]PermissionRule, error) {
+	existing, err := LoadUserPermissionRuleFile()
+	if err != nil {
+		return nil, err
+	}
+	var rules []permissions.Rule
+	var protected []string
+	if existing != nil {
+		rules = append(rules, permissionRules(existing.Rules)...)
+		protected = existing.Protected
+	}
+	rules = append(rules, permissions.Rule{
+		Effect:  rule.Effect,
+		Tool:    rule.Tool,
+		Pattern: rule.Pattern,
+		Reason:  rule.Reason,
+	})
+	p, err := permissions.UserPath()
+	if err != nil {
+		return nil, err
+	}
+	data, err := marshalUserFile(protected, rules)
+	if err != nil {
+		return nil, err
+	}
+	set, _, err := permissions.ParseUser(data)
+	if err != nil {
+		return nil, ruleFileError(p, err)
+	}
+	if err := writeRuleFile(p, data); err != nil {
+		return nil, err
+	}
+	return permissionRuleList(set.Rules()), nil
+}
+
+// SaveUserPermissionRuleFile replaces the user rule file with exactly these
+// rules and these protected globs (0.47+).
+//
+// It is the writer behind the manager's user section, and its contract is
+// replacement, the same as SavePermissionRuleFile. create says whether a missing
+// file may be created: a manager shows a missing user file as read-only and asks
+// the person to create it, so a save that was not meant to create must not
+// quietly make one. The file's shape has no defaultMode — the mode of a
+// repository's sessions is the workspace's decision, not a machine-wide file's.
+func SaveUserPermissionRuleFile(rules []PermissionRule, protected []string, create bool) error {
+	p, err := permissions.UserPath()
+	if err != nil {
+		return err
+	}
+	if !create {
+		if _, err := os.Stat(p); err != nil {
+			return &PermissionRuleError{Path: p, Message: "the file does not exist; create it first"}
+		}
+	}
+	compiled := permissionRules(rules)
+	if compiled == nil {
+		compiled = []permissions.Rule{}
+	}
+	data, err := marshalUserFile(protected, compiled)
+	if err != nil {
+		return err
+	}
+	if _, _, err := permissions.ParseUser(data); err != nil {
+		return ruleFileError(p, err)
+	}
+	return writeRuleFile(p, data)
+}
+
+// marshalUserFile renders a user rule file the way a rewrite writes it: version,
+// protected globs, then the rules, with the trailing newline an editor expects.
+func marshalUserFile(protected []string, rules []permissions.Rule) ([]byte, error) {
+	clean := make([]string, 0, len(protected))
+	for _, g := range protected {
+		if g = strings.TrimSpace(g); g != "" {
+			clean = append(clean, g)
+		}
+	}
+	if len(clean) == 0 {
+		clean = nil
+	}
+	data, err := json.MarshalIndent(permissions.UserFile{
+		Version:   permissions.Version,
+		Protected: clean,
+		Rules:     rules,
+	}, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(data, '\n'), nil
+}
+
 // EvaluatePermissionRules reports which of these rules decides a call, or nil
 // when none does.
 //
@@ -214,6 +370,59 @@ func EvaluatePermissionRules(rules []PermissionRule, tool string, args json.RawM
 	}
 	decision := decisionFor(set, tools.CallFactsFor(tool, args))
 	return permissionRuleMatch(&decision)
+}
+
+// EvaluatePermissionRulesAcross reports which of the user's rules and the
+// workspace's decides a call together, or nil when none does (0.47+).
+//
+// It is the question a manager asks before it claims a freshly written rule
+// settled the call in front of the user: an allow appended to the workspace
+// file does not settle a call the user's deny refuses, and it does not settle
+// one that touches a protected path either. The evaluation is the one a session
+// in cwd runs, protection included, so the answer cannot disagree with the
+// decision the next call will get.
+func EvaluatePermissionRulesAcross(cwd string, user, workspace []PermissionRule, tool string, args json.RawMessage) *PermissionRuleMatch {
+	merged := append(rulesOfScope(user, permissions.SourceUser), rulesOfScope(workspace, permissions.SourceWorkspace)...)
+	set, err := permissions.New(merged)
+	if err != nil {
+		return nil
+	}
+	protection := permissionProtection(cwd)
+	set.Protect(protection)
+	decision := decisionFor(set, tools.CallFactsFor(tool, args))
+	return permissionRuleMatch(&decision)
+}
+
+// rulesOfScope stamps a list with the file it belongs to, so a citation counts
+// inside that file whether or not the caller filled Source and Index in. A list
+// read from a file already carries both, and they are kept as they are.
+func rulesOfScope(rules []PermissionRule, source string) []permissions.Rule {
+	out := permissionRules(rules)
+	for i := range out {
+		out[i].Source = source
+		if out[i].Index <= 0 {
+			out[i].Index = i + 1
+		}
+	}
+	return out
+}
+
+// permissionProtection is what an allow rule may not cover in this workspace:
+// the fixed list, plus whatever globs the user file adds. A user file that will
+// not parse adds nothing here — reading it is a session's business, and the
+// manager shows the problem where the file is edited.
+func permissionProtection(cwd string) permissions.Protection {
+	anvilHome, err := permissions.AnvilHome()
+	if err != nil {
+		anvilHome = ""
+	}
+	p := permissions.Protection{Root: cwd, Home: permissions.HomeDir(), AnvilHome: anvilHome}
+	if path, err := permissions.UserPath(); err == nil && path != "" {
+		if _, extra, err := permissions.LoadUser(path); err == nil {
+			p.Extra = extra
+		}
+	}
+	return p
 }
 
 // DescribePermissionRules names every rule the way a decision quotes it: the
@@ -281,13 +490,31 @@ type PermissionRuleOption struct {
 // single-command rule covers it, and the analyzer will not prove a line with two
 // commands read-only either.
 func PermissionRuleOptions(tool string, args json.RawMessage) []PermissionRuleOption {
-	facts := tools.CallFactsFor(tool, args)
+	return permissionRuleOptions(tools.CallFactsFor(tool, args), nil)
+}
+
+// PermissionRuleOptionsIn works out the same choices in the workspace at cwd,
+// with its protected paths taken into account (0.47+).
+//
+// It is the version an approval card uses. An allow rule for a protected path is
+// never matched, so offering one would write a rule that does nothing — and a
+// button that writes a dead rule teaches the user that rules do not work, which
+// is the one thing the "remember" ladder exists to avoid.
+func PermissionRuleOptionsIn(cwd string, tool string, args json.RawMessage) []PermissionRuleOption {
+	protection := permissionProtection(cwd)
+	return permissionRuleOptions(tools.CallFactsFor(tool, args), &protection)
+}
+
+func permissionRuleOptions(facts permissions.CallFacts, protection *permissions.Protection) []PermissionRuleOption {
 	var out []PermissionRuleOption
 	offer := func(kind string, r PermissionRule) {
 		if r.Effect == "" {
 			r.Effect = "allow"
 		}
 		set, err := permissions.New(permissionRules([]PermissionRule{r}))
+		if protection != nil {
+			set.Protect(*protection)
+		}
 		if err != nil || !decisionFor(set, facts).Matched {
 			return
 		}
@@ -296,16 +523,16 @@ func PermissionRuleOptions(tool string, args json.RawMessage) []PermissionRuleOp
 
 	switch {
 	case facts.Command != "":
-		offer(PermissionOptionExact, PermissionRule{Tool: tool, Pattern: facts.Command})
+		offer(PermissionOptionExact, PermissionRule{Tool: facts.Tool, Pattern: facts.Command})
 		if prefix := commandPrefix(facts.Command); prefix != "" {
-			offer(PermissionOptionPrefix, PermissionRule{Tool: tool, Pattern: prefix + ":*"})
+			offer(PermissionOptionPrefix, PermissionRule{Tool: facts.Tool, Pattern: prefix + ":*"})
 		}
-		offer(PermissionOptionReadonly, PermissionRule{Tool: tool, Pattern: permissions.ReadonlyPattern})
+		offer(PermissionOptionReadonly, PermissionRule{Tool: facts.Tool, Pattern: permissions.ReadonlyPattern})
 	case len(facts.Paths) == 1:
 		// One path, one rule. A call touching several files is offered nothing
 		// path-shaped: a single glob covering all of them would have to be
 		// broader than any of the files the user was shown.
-		offer(PermissionOptionPath, PermissionRule{Tool: tool, Pattern: facts.Paths[0]})
+		offer(PermissionOptionPath, PermissionRule{Tool: facts.Tool, Pattern: facts.Paths[0]})
 	case len(facts.Paths) == 0:
 		// A tool whose calls carry neither a command nor a path — an MCP server's,
 		// say — can only be allowed as a whole, and that is the one thing on
@@ -313,8 +540,8 @@ func PermissionRuleOptions(tool string, args json.RawMessage) []PermissionRuleOp
 		// call" is the all-or-nothing memory this rule table exists to replace,
 		// and a call of theirs that shows no command is one that could not be
 		// described in the first place.
-		if !tools.IsMutating(tool) {
-			offer(PermissionOptionTool, PermissionRule{Tool: tool})
+		if !tools.IsMutating(facts.Tool) {
+			offer(PermissionOptionTool, PermissionRule{Tool: facts.Tool})
 		}
 	}
 	return out
@@ -367,7 +594,14 @@ func permissionRuleList(rules []permissions.Rule) []PermissionRule {
 	}
 	out := make([]PermissionRule, 0, len(rules))
 	for _, r := range rules {
-		out = append(out, PermissionRule{Effect: r.Effect, Tool: r.Tool, Pattern: r.Pattern, Reason: r.Reason})
+		out = append(out, PermissionRule{
+			Effect:  r.Effect,
+			Tool:    r.Tool,
+			Pattern: r.Pattern,
+			Reason:  r.Reason,
+			Source:  r.Source,
+			Index:   r.Index,
+		})
 	}
 	return out
 }

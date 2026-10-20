@@ -126,7 +126,7 @@ names both sides and stops rather than failing later inside a tool call.
 | `anvil.vision` | Accept pasted images; off by default |
 | `anvil.rules` | Load `AGENTS.md` and `.anvil/rules/*.md`; on by default |
 | `anvil.cursorRules` | Also load `.cursor/rules/*.md|.mdc`; on by default |
-| `anvil.permissions` | Read the workspace's `.anvil/permissions.json`; on by default. Off means the session ignores the file — the rules **and** the `defaultMode` it may declare — and an approval card has nothing to offer under "always allow", because a rule written into a file this session does not read would not be in force |
+| `anvil.permissions` | Read the workspace's `.anvil/permissions.json` and your `~/.anvil/permissions.json`; on by default. Off means the session ignores both files — the rules **and** the `defaultMode` the workspace file may declare — and an approval card has nothing to offer under "always allow", because a rule written into a file this session does not read would not be in force |
 | `anvil.mcp.project` | Load `.cursor/mcp.json` from the workspace; on by default. The file can start processes, which is why it is read only from a folder you trust |
 | `anvil.mcp.user` | Also load `~/.cursor/mcp.json`; off by default. It is shared by every project, so reading it is opted into; project entries win over user entries with the same name |
 | `anvil.webSearch.enabled` | Give the session `web_search` and `fetch_url`; off by default. Off means the tools are not registered at all, so the model never sees one it cannot use. Calls stay behind the `web` permission group |
@@ -443,13 +443,16 @@ document in front of you or on the front tab's newest plan. The approval is a ne
 continuation of the plan turn, so it appears in the transcript like any other.
 
 **Anvil: Open Permission Rules** (also the **Permissions** button on the composer) opens the
-rules manager: this workspace's rules as a list of effect, tool, pattern and reason rows, plus
-the mode new sessions start in. Save sends the whole list to the host, which compiles it with
-the same parser a session uses and writes the file atomically; a file that will not parse is
-read-only in the manager rather than overwritten. **Open JSON** in the manager, and
-**Anvil: Open Permission Rules File** in the palette, open `.anvil/permissions.json` itself —
-creating it with an empty rule set if it is not there yet. That file is what decides whether a
-tool call runs, stops to ask you, or is refused outright — see *Permission modes and rules*.
+rules manager: your rules and this workspace's rules as two lists of effect, tool, pattern and
+reason rows, plus the mode new sessions start in and the protected paths no allow rule may
+cover. Each section saves its own file: Save sends that section's whole list to the host, which
+compiles it with the same parser a session uses and writes the file atomically; a file that will
+not parse turns its section read-only rather than being overwritten, and the other section keeps
+working. **Open JSON** in a section, and **Anvil: Open Permission Rules File** in the palette,
+open that layer's file — `.anvil/permissions.json` or `~/.anvil/permissions.json` — creating it
+when it is not there; a user file that is missing is read-only until **Create user file**. Those
+files are what decide whether a tool call runs, stops to ask you, or is refused outright — see
+*Permission modes and rules*.
 
 **Anvil: Open MCP Servers** (also `/mcp`) opens the MCP manager: every server of both layers
 with its state dot and word — `connected` with its tool list, `connecting`, `failed` with the
@@ -508,6 +511,38 @@ the host's own words. Anything else the ladder does not have is refused the same
 declaration that is not a bare lowercase word is a file error with a line number, like a
 misspelled effect. Turning `anvil.permissions` off ignores the declaration along with the
 rules.
+
+### Your rules and the workspace's
+
+Rules live in two files. `.anvil/permissions.json` is the repository's policy and travels with
+the checkout; `~/.anvil/permissions.json` (`$ANVIL_HOME/permissions.json` when the variable is
+set) is yours and follows you between repositories. Both are read by every session, with the
+user file's rules first:
+
+```json
+{
+  "version": 1,
+  "protected": ["secrets/**"],
+  "rules": [{ "effect": "deny", "tool": "shell", "pattern": "rm -rf:*" }]
+}
+```
+
+That is the user file's shape; the workspace file has `defaultMode` instead of `protected`.
+
+Severity decides across the two files, not the order they load in: `deny` beats `ask`, which
+beats `allow`. A workspace that allows a call your file denies still refuses it. When two rules
+of the same effect match, the user file's wins, and both are listed in the manager so you can
+see that the files disagree. Citations name the file and the rule's position in it — `user
+permissions.json rule 1`, `.anvil/permissions.json rule 3`, `session rules rule 2` — so a
+refusal tells you which file to open.
+
+The user file may also add **protected paths**: globs that no `allow` rule may cover, however
+specific the rule is. Three locations are always protected — anywhere in `.git/`, the
+workspace's `.anvil/checkpoints/`, and `~/.anvil/` — so "always allow this tool" never quietly
+covers the repository's history or your own Anvil files. A protected call falls through to the
+mode: **Ask** shows the card, **No asking** refuses it, **Bypass** runs it, and the card and the
+tool result both say `protected path`. A workspace file may not add to this list, and a user
+file may not declare a starting mode; each parser refuses the other's field.
 
 ## Tests
 
