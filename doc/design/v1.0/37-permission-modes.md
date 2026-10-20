@@ -281,6 +281,11 @@ model of itself.
   and a person relies on `bypass` meaning silence, that is the one behaviour change to expect.
 - `ProtocolVersion` stays **1**: every addition is a new optional field, and `dont_ask` is a
   new accepted value of an existing one.
+- **0.47 keeps that promise.** `permissions.get` gains `user_path`, `user_exists`,
+  `user_problem`, `protected` and a `source` per rule; `permissions.add`/`set` gain an optional
+  `source`, and the user layer's `protected`/`create` fields exist only where they mean
+  something. An older client sends nothing new and reads nothing it does not know, so the
+  revision does not move.
 
 ## Explicit non-goals
 
@@ -299,7 +304,8 @@ model of itself.
   effect in every mode.
 - **A precedence chain above the workspace file** — user-level defaults, managed settings,
   enterprise policy. The workspace file is the one a reader can find; more layers need their
-  own argument.
+  own argument. (0.47 added exactly one: the user file, whose merge order and severity rule
+  are in *Scopes and protected paths* above. Managed and organization policy remain out.)
 
 ## Roadmap mapping
 

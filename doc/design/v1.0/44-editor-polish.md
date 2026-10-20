@@ -229,10 +229,12 @@ out of scope; the honest limitation is stated in the README.
 
 ## 10. Version alignment
 
-The product line is 0.44, the VSIX is 0.41.2, and `anvil-host` reports 0.41.0-dev. The last
-phase aligns them, updates the cutoffs (`doc/design/README.md`, `doc/roadmaps/README.md`,
-the two v1.0 indexes) to 0.47, and adds "superseded by 0.47" notes to sentences this chapter
-overturns — history is annotated, never rewritten.
+When this chapter was written the product line was 0.44, the VSIX reported 0.41.2, and
+`anvil-host` reported 0.41.0-dev — three numbers for one product, and the two the extension
+compares were released by different milestones. The last phase raised the VSIX and the host's
+`initialize` version to 0.47.0, updated the cutoffs (`doc/design/README.md`,
+`doc/roadmaps/README.md`, the two v1.0 indexes) to 0.47, and added "superseded by 0.47" notes
+to sentences this chapter overturns — history is annotated, never rewritten.
 
 ## 11. Protocol changes
 

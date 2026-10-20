@@ -23,8 +23,11 @@ import (
 // protocol in doc/design/v1.0/11-worker-daemon.md).
 const ProtocolVersion = 1
 
-// Version is the host build version, overridable at link time.
-var Version = "0.41.0-dev"
+// Version is the host build version, overridable at link time. It carries the
+// product line, not the protocol revision (that is ProtocolVersion): the
+// extension compares the dotted minor it packaged with against this string and
+// warns on a mismatch, so the two have to be released together (0.47).
+var Version = "0.47.0"
 
 // Client to host request methods.
 const (

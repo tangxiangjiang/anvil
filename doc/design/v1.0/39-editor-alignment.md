@@ -41,6 +41,13 @@ and inventing one inside a client would be an architecture, not a feature. Think
 Anthropic-shaped; the chosen provider line has no equivalent, and the fixed output cap is a
 provider detail rather than an editor one.
 
+**Superseded by 0.47.** The *Partial acceptance* and *Checkpoints / rewind* rows describe the
+state before 0.40. Checkpoints arrived in 0.40.4 and 0.47.2 gives them the affordance this
+table's row was asking for: every user message offers *Rewind to here*, with fork and
+restore as separate actions at the one granularity a checkpoint has — the turn — as
+[44](44-editor-polish.md) §4 describes. Partial acceptance is unchanged since 0.40.3; 0.47
+does not touch it.
+
 ## Several conversations at once
 
 The protocol already supports it: a session is opened by `session.new` or `session.resume`, every
@@ -94,7 +101,7 @@ and that is worth keeping, so a rename is **one more `meta` record** carrying a 
   first-user-message rule only fills an empty title. Records are chronological, so a rename lands
   after the message that would have named the session and wins.
 - Nothing else reads `meta`. `historyFromRecords` skips every non-message record
-  ([agent.go:797](source/agent.go#L797)), so a rename cannot alter what the model is sent, and
+  ([agent.go:797](../../../source/agent.go#L797)), so a rename cannot alter what the model is sent, and
   `Resume` reads its options from the first meta record, which a later one does not replace.
 - A title a person wrote is a decision, so it is not re-derived: an empty title is rejected rather
   than stored, because "clear the title" and "nothing was ever typed" would otherwise be the same
@@ -114,12 +121,12 @@ no host method.
 
 The approval path can already carry a rewritten call: `approval.response.args` becomes
 `PermissionDecision.Args`, and the tool runs with that instead of what the model asked for
-([server.go:1085](source/internal/editorhost/server.go#L1085)). The client has never used it.
+([server.go:1085](../../../source/internal/editorhost/server.go#L1085)). The client has never used it.
 Partial acceptance is the first honest use.
 
 The reason it is possible at all is that the preview is not a rendering: for `edit_file` the host
 reads the file with `os.ReadFile` and sends the **whole file** as `before`, and computes `after`
-by replacing the first occurrence of `old_string` ([preview.go:69-100](source/internal/tools/preview.go#L69-L100)).
+by replacing the first occurrence of `old_string` ([preview.go:69-100](../../../source/internal/tools/preview.go#L69-L100)).
 `write_file` sends `after` as the whole new content. So the client holds both ends of the change
 as bytes, and the unified `diff` in the same preview is enough to describe the middle.
 
@@ -186,7 +193,7 @@ still carries the id.
 
 The SDK can already read `.cursor/mcp.json` and connect what it finds: `LocalOptions.SettingSources`
 with `SettingSourceProject` selects the project file, and the parser lives in
-[`internal/settings/mcpjson.go`](source/internal/settings/mcpjson.go). The host passes an empty
+[`internal/settings/mcpjson.go`](../../../source/internal/settings/mcpjson.go). The host passes an empty
 `SettingSources` because 0.35 chose inline-only, and that choice is now the gap.
 
 Two settings, deliberately different defaults:
@@ -356,7 +363,10 @@ Nothing in this milestone changes the trust boundary:
   The marketplace listing stays excluded.)*
 - Remote / SSH / dev-container targets, and cross-window session sync.
 - Automatic context compaction.
-- Notebook cell editing and multi-root in one panel — unchanged from 35.
+- Notebook cell editing and multi-root in one panel — unchanged from 35. *(0.47 does not
+  reopen this: it makes the one root a window works in explicit and chosen rather than
+  silently the first folder — [44](44-editor-polish.md) §9 — and a panel spanning several
+  roots stays out.)*
 
 ## Roadmap mapping
 

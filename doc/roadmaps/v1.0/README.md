@@ -52,7 +52,7 @@ Versioned delivery for Anvil through product **0.47**, with the **0.45** editor-
 | 0.44 | MCP management | done | [m_0.44_mcp_management.md](m_0.44_mcp_management.md) | [43](../../design/v1.0/43-mcp-management.md) |
 | 0.45 | Editor-host protocol smoke | done | [m_0.45_protocol_smoke.md](m_0.45_protocol_smoke.md) | [35](../../design/v1.0/35-vscode-extension.md) (CI tour; no new chapter) |
 | 0.46 | anvil-web Delivery polish + operable console | done | [m_0.46_web_polish.md](m_0.46_web_polish.md) | [33](../../design/v1.0/33-delivery-ui.md) / [25](../../design/v1.0/25-web-admin.md) |
-| 0.47 | Editor polish | in_progress | [m_0.47_editor_polish.md](m_0.47_editor_polish.md) | [44](../../design/v1.0/44-editor-polish.md) |
+| 0.47 | Editor polish | done | [m_0.47_editor_polish.md](m_0.47_editor_polish.md) | [44](../../design/v1.0/44-editor-polish.md) |
 
 ## Naming
 
