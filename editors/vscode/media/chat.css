@@ -194,8 +194,8 @@ body {
 .msg {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  margin-block: 8px;
+  gap: 4px;
+  margin-block: 4px;
 }
 
 /*
@@ -437,7 +437,7 @@ button.ghost[aria-pressed='true'] {
   display: flex;
   gap: 10px;
   align-items: baseline;
-  padding: 6px 6px;
+  padding: 4px 6px;
   border-radius: var(--ui-radius-sm);
   line-height: var(--ui-line-tight);
 }
@@ -457,11 +457,16 @@ button.ghost[aria-pressed='true'] {
   content: '';
   flex: 0 0 auto;
   align-self: center;
-  width: 6px;
-  height: 6px;
+  /* 8px drawn, 6px laid out: the negative margins keep the line at 9px and the
+   * name at 22px while the dot covers the rail instead of sitting under it. */
+  width: 8px;
+  height: 8px;
+  margin: -1px;
   border-radius: 50%;
   background: var(--dot);
   opacity: 0.7;
+  position: relative;
+  z-index: 1;
 }
 
 /*
@@ -485,7 +490,7 @@ button.ghost[aria-pressed='true'] {
 
 .msg .think[open] > summary::before {
   background: transparent;
-  box-shadow: inset 0 0 0 1.5px var(--dot);
+  box-shadow: inset 0 0 0 2px var(--dot);
 }
 
 .msg .think .body {
@@ -515,7 +520,7 @@ button.ghost[aria-pressed='true'] {
 
 .tool > summary {
   cursor: pointer;
-  padding: 6px 6px;
+  padding: 4px 6px;
   display: flex;
   gap: 10px;
   align-items: baseline;
@@ -546,11 +551,16 @@ button.ghost[aria-pressed='true'] {
   content: '';
   flex: 0 0 auto;
   align-self: center;
-  width: 6px;
-  height: 6px;
+  /* 8px drawn, 6px laid out, so the centre stays at 9px and the dot covers the
+   * rail rather than being painted under it. */
+  width: 8px;
+  height: 8px;
+  margin: -1px;
   border-radius: 50%;
   background: var(--dot);
   opacity: 1;
+  position: relative;
+  z-index: 1;
 }
 
 /*
@@ -569,12 +579,12 @@ button.ghost[aria-pressed='true'] {
 
 .tool.stopped > summary::before {
   background: transparent;
-  box-shadow: inset 0 0 0 1.5px var(--dot);
+  box-shadow: inset 0 0 0 2px var(--dot);
 }
 
 .tool[open] > summary::before {
   background: transparent;
-  box-shadow: inset 0 0 0 1.5px var(--dot);
+  box-shadow: inset 0 0 0 2px var(--dot);
 }
 
 /*
@@ -583,9 +593,10 @@ button.ghost[aria-pressed='true'] {
  * `syncRail` gives every block of a reply `rail`, and `rail-up` / `rail-down`
  * only where another block is on that side; a reply of one block still draws
  * its full-height line. The segment sits at 9px — the summary's 6px padding and
- * half the 6px dot. A row reaches 10px into the gap; a message reaches 14px,
- * because two messages are 28px apart (12px gap plus two 8px margins) while a
- * message and a row are 20px apart.
+ * half the 6px laid-out dot. Every block reaches 10px into the gap on a
+ * continuing side: two messages are 20px apart (12px gap plus two 4px margins)
+ * and a message and a row 16px, so 10 + 10 meets the first and over-covers the
+ * second.
  */
 .tool,
 .msg.assistant,
@@ -624,11 +635,11 @@ button.ghost[aria-pressed='true'] {
 }
 
 .msg.assistant.rail-up::after {
-  top: -14px;
+  top: -10px;
 }
 
 .msg.assistant.rail-down::after {
-  bottom: -14px;
+  bottom: -10px;
 }
 
 /*
@@ -641,6 +652,61 @@ button.ghost[aria-pressed='true'] {
   padding-left: 22px;
 }
 
+/* --- the end of a reply --------------------------------------------------- */
+
+/*
+ * The answer that ends a turn is the turn's summary: the dot that terminates
+ * the rail, the word, and the answer's own first line as its title. The body is
+ * the rest of the answer — the title line was taken out of it when the block
+ * was marked, so it is said once.
+ */
+.msg.assistant.summary > .who {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-left: 6px;
+  font-size: 0.85em;
+  font-weight: 600;
+}
+
+.msg.assistant.summary > .who .end-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  margin: -1px;
+  border-radius: 50%;
+  background: var(--vscode-charts-purple, #b180d7);
+  position: relative;
+  z-index: 1;
+}
+
+.msg.assistant.summary > .who .summary-label {
+  flex: 0 0 auto;
+  color: var(--ui-muted);
+  font-weight: 500;
+}
+
+.msg.assistant.summary > .who .summary-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--vscode-foreground);
+}
+
+/* The line ends inside the dot. The body is read after the turn, not as another
+ * step on the rail, so the summary's segment is its header's height — 20px when
+ * it also reaches up into the gap. */
+.msg.assistant.summary::after {
+  bottom: auto;
+  height: 10px;
+}
+
+.msg.assistant.summary.rail-up::after {
+  top: -10px;
+  height: 20px;
+}
+
 /*
  * A result's caption. It is a sibling of the folded row, so it stays readable
  * while the row is closed, and its text starts where the row's name does.
@@ -648,7 +714,9 @@ button.ghost[aria-pressed='true'] {
 .output-link {
   display: block;
   width: 100%;
-  margin: 0;
+  /* Pulled up under its row: the transcript's gap would otherwise put the
+   * caption a whole step away from the call it counts. */
+  margin: -8px 0 0;
   padding: 2px 6px 2px 22px;
   border: 0;
   background: transparent;
@@ -724,25 +792,47 @@ button.ghost[aria-pressed='true'] {
   color: var(--ui-muted);
 }
 
-/* A finished call is the normal case; only failure and "we do not know" speak. */
+/* A finished call is the normal case, and its word is the same green as the dot:
+ * the row says "this landed" rather than leaving the reader to infer it from
+ * the dot alone. Failure is the error colour; a stopped call is a warning, not
+ * an error — the run was interrupted, it did not go wrong. */
+.tool.done .state {
+  color: var(--vscode-testing-iconPassed, var(--vscode-charts-green, #3fb950));
+}
+
 .tool.failed .state,
 .tool.failed .name {
   color: var(--vscode-errorForeground);
 }
 
 /*
- * A call whose result never arrived. Grey rather than red, and no review button:
- * the transcript does not know whether this call landed, and a colour or an
- * affordance that claimed either way would be a guess about the file.
+ * A call whose result never arrived. The ring and the warning colour say that
+ * the transcript does not know whether it landed; no review button is offered,
+ * because a change that did not land is not a change.
  */
 .tool.stopped .state {
-  font-style: italic;
+  color: var(--vscode-editorWarning-foreground, #cca700);
 }
 
 .tool .pane {
   /* The dot (6px) and the summary's gap (10px) plus its left padding: the
-   * output starts under the name, not under the dot. */
-  padding: 0 0 10px 22px;
+   * frame, and the output inside it, start under the name rather than under
+   * the dot. The box is what says the arguments and the result belong to the
+   * row above; the rail is still the only vertical line outside it. */
+  margin: 2px 0 6px 22px;
+  padding: 8px 10px;
+  border: 1px solid var(--ui-hairline);
+  border-radius: var(--ui-radius-sm);
+}
+
+/* A spawn's pane holds a whole conversation, not one call's two halves: a frame
+ * around it would be a box around a transcript. It keeps the inset and its own
+ * nesting rule. */
+.tool.spawn .pane {
+  margin: 0;
+  padding: 0 0 6px 22px;
+  border: 0;
+  border-radius: 0;
 }
 
 /*
@@ -757,7 +847,9 @@ button.ghost[aria-pressed='true'] {
 }
 
 .tool .section + .section {
-  margin-top: 12px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--ui-hairline);
 }
 
 /*
@@ -789,8 +881,7 @@ button.ghost[aria-pressed='true'] {
 }
 
 .tool .section pre {
-  padding: 2px 0 2px 10px;
-  border-left: 1px solid var(--ui-hairline);
+  padding: 0;
   max-height: 260px;
   overflow: auto;
 }

@@ -307,7 +307,9 @@ same document chrome, and finally a row marker, a spacing and a text size that t
 named directly, and then the rail, operation colour and human names that the same reader
 recognised from another editor, and then the reply-wide rail, the folded Thought and the
 output tab that the same reader asked of the first rail, and then a stored conversation that
-opened on a result whose call the window had cut. The lesson is recorded here rather than in
+opened on a result whose call the window had cut, and finally a long conversation that read as
+too sparse, whose state words said nothing, whose dots sat under the line, whose opened call
+had no edge, and whose final answer had no ending. The lesson is recorded here rather than in
 a commit message — the manual passes the earlier phases wrote down as "still worth doing" are
 the ones that would have found all of these.
 
@@ -440,3 +442,43 @@ properties of a stored conversation met a reader at once.
 The shape that makes this work is the replay's own: it emits events, never markup, so a
 synthesized call and a stored one are drawn by one renderer, and a fix here is a fix for both
 paths.
+
+## 19. Density, an ending, and a framed pane
+
+p_0.47.16 is the first phase that changes the transcript's *rhythm* after the rail settled it,
+and the first that gives a reply a shape of its own. Five decisions hold it together.
+
+- **Density is bought with margins, not with the gap.** The 12px between transcript children
+  separates one step from the next and stays. The air came from 8px gaps and margins stacked
+  around every message, and from a caption that sat a full gap below the row it described.
+  `.msg` becomes `gap: 4px; margin-block: 4px`, the summaries lose 2px of vertical padding,
+  and the caption is pulled up 8px. A message and a row are 16px apart, two messages 20px, a
+  row and its caption 4px; the rail's extensions grow to 10px on every block kind, so the
+  line still meets itself across both distances.
+- **The dot is bigger than its box.** An 8px dot would move the name to 24px and the rail to
+  10px, and every inset already written would be wrong. One pixel of negative margin on each
+  side makes the outer box 6px again: the centre stays at 9px, the name at 22px, and only the
+  drawn size changes. The dot is `position: relative; z-index: 1`, so it paints above the
+  block's generated line inside the same stacking context. The line is not split around it —
+  that would need a second element and markup that knows where the dot is.
+- **A state word is coloured by what happened.** `done` takes the operation green, `stopped`
+  the warning colour; success and interruption are not the same grey. A stopped call keeps a
+  2px ring, so its state is legible without colour.
+- **The frame belongs to a call's own panes.** An opened call's IN and OUT sit in one hairline
+  box, and the two sections are divided by a hairline instead of 12px of space; the inner
+  `pre` loses the left rule the frame replaces. A spawn's pane holds the child's whole
+  conversation, so it opts out: framing it would put a box around a transcript.
+- **A finished answer ends in its own summary.** When the last block of a finished run is
+  prose, it becomes the turn's summary: an end dot in the ending colour
+  (`--vscode-charts-purple`, distinct from the operation green and the failure red), the word
+  `Summary`, and the answer's own first line as the title, with the rest of the answer below.
+  The title line is removed from the body so it is said once; the Copy action still carries
+  the whole answer. The rail stops at the dot — a line beside the body would make the
+  conclusion read as another step. A first line that is syntax (a fence, a rule, a table)
+  gets no summary at all, and a failed or stopped run keeps the ordinary ending, because its
+  last text is not a conclusion.
+
+The summary is built from what the model wrote rather than from the prompt or the session: a
+title taken from anywhere else would be a second opinion about the answer. That is also why
+the phase adds no protocol field, no host code and no wrapper element — the ending is a
+reading of the answer, not a record attached to it.

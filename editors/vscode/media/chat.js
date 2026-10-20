@@ -3319,12 +3319,17 @@
   }
 
   function finishRun(done, failure) {
+    const round = currentRound();
     endRound();
     setRunning(false);
     // The run is over, so nothing in it can still be in flight. A card left
     // reading "running…" is a call whose result never arrived, and leaving it
     // in flight forever reads as a stuck turn rather than as a lost event.
     stopRunningCards();
+    // The answer that ended the turn is its summary. A run that ended on a tool
+    // call has no concluding text, and a failed or stopped run's last words are
+    // not a conclusion, so both keep the ending they had.
+    if (!failure) markSummary(round);
     const parts = runSummary(done);
     recordUsage(done);
     statusLine.textContent = parts.join(' · ');
@@ -3351,16 +3356,97 @@
    * call that failed inside it, so there is nothing more to show.
    */
   function addRunEnd(done) {
+    const round = currentRound();
     endRound();
     stopRunningCards();
     recordUsage(done);
     const status = done && done.status;
     const word = status === 'error' ? 'Run failed' : status === 'cancelled' ? 'Run stopped' : 'Run finished';
+    // Before the run-end line is appended: the summary has to still be the last
+    // block the run drew, and the line is the replay's ending, not its content.
+    if (status !== 'error' && status !== 'cancelled') markSummary(round);
     const line = el('div', 'msg run-end');
     line.appendChild(el('div', 'body', [word].concat(runSummary(done)).join(' · ')));
     append(line);
     noteRun(done && done.run_id);
     showRunActions(done && done.run_id);
+  }
+
+  /**
+   * The first line of a final answer, as the summary's title.
+   *
+   * The model has already written its conclusion, so the title is that line
+   * with its Markdown taken off rather than a second sentence invented from the
+   * prompt. A line that is syntax — a fence, a rule, a table — has no title, and
+   * the answer keeps its ordinary ending.
+   */
+  function summaryTitle(line) {
+    const text = String(line || '').trim();
+    if (text === '') return '';
+    if (/^(`{3,}|~{3,})/.test(text)) return '';
+    if (/^[-*_]{3,}$/.test(text)) return '';
+    if (text.startsWith('|')) return '';
+    const title = text
+      .replace(/^#{1,6}\s*/, '')
+      .replace(/^>\s*/, '')
+      .replace(/^[-*+]\s+/, '')
+      .replace(/^\d+[.)]\s+/, '')
+      .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+      .replace(/[*_`~]/g, '')
+      .replace(/[：:]\s*$/, '')
+      .trim();
+    if (title === '') return '';
+    return title.length > 80 ? title.slice(0, 79) + '…' : title;
+  }
+
+  /** A final answer cut into the title its header carries and the body below it. */
+  function summaryParts(text) {
+    const lines = String(text || '').split(/\r?\n/);
+    let i = 0;
+    while (i < lines.length && lines[i].trim() === '') i += 1;
+    if (i >= lines.length) return null;
+    const title = summaryTitle(lines[i]);
+    if (title === '') return null;
+    const body = lines.slice(i + 1).join('\n').replace(/^(?:[ \t]*\r?\n)+/, '');
+    return { title, body };
+  }
+
+  /** Whether this block is the last thing its run put on screen. */
+  function isLastBlock(node) {
+    let next = node.nextElementSibling;
+    while (next && next.classList.contains('output-link')) next = next.nextElementSibling;
+    return next === null;
+  }
+
+  /**
+   * Marks the answer that ended a finished turn as its summary.
+   *
+   * Only a round that is still the last block qualifies: a run that ended on a
+   * tool call has no concluding text, and the prose before that call is not one.
+   * The header replaces the speaker's name with the end dot, the word and the
+   * answer's first line; the body is re-rendered without that line, so the
+   * title is said once. The Copy action already holds the whole answer, because
+   * `endRound` copied it before this ran.
+   */
+  function markSummary(round) {
+    if (!round || !round.wrap || !round.body) return false;
+    if (round.text.trim() === '') return false;
+    if (!isLastBlock(round.wrap)) return false;
+    const parts = summaryParts(round.text);
+    if (!parts) return false;
+    const who = round.wrap.querySelector('.who');
+    if (!who) return false;
+    who.textContent = '';
+    who.appendChild(el('span', 'end-dot'));
+    who.appendChild(el('span', 'summary-label', 'Summary'));
+    who.appendChild(el('span', 'summary-title', parts.title));
+    round.wrap.classList.add('summary');
+    round.text = parts.body;
+    round.md = { node: round.body, settled: [], offset: 0, rendered: 0 };
+    round.body.textContent = '';
+    paintMarkdown(round.md, round.text);
+    syncRail(round.wrap.parentElement);
+    return true;
   }
 
   /**

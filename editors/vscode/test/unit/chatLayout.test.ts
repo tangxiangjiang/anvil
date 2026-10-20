@@ -252,18 +252,28 @@ test('the diff takes its line colours from the editor theme', () => {
   assert.match(SOURCE, /var\(\s*--vscode-diffEditor-removedTextBackground/);
 });
 
-test('a tool is a row, not a card, and its output is inset', () => {
+test('a tool is a row, not a card, and its output is framed', () => {
   const tool = bodiesOf('.tool').join(';');
   assert.match(tool, /border:\s*0/);
   assert.match(tool, /background:\s*transparent/);
   assert.doesNotMatch(tool, /border-radius:\s*var\(--anvil-radius\)/);
 
-  assert.match(bodiesOf('.tool > summary').join(';'), /padding:\s*6px 6px/);
-  assert.match(bodiesOf('.tool .pane').join(';'), /padding:\s*0 0 10px 22px/);
+  assert.match(bodiesOf('.tool > summary').join(';'), /padding:\s*4px 6px/);
+  // The opened call's two halves sit in one hairline frame, aligned with the
+  // row's name, instead of floating under it.
+  const pane = bodiesOf('.tool .pane').join(';');
+  assert.match(pane, /margin:\s*2px 0 6px 22px/);
+  assert.match(pane, /padding:\s*8px 10px/);
+  assert.match(pane, /border:\s*1px solid var\(--ui-hairline\)/);
+  // A spawn's pane holds a whole conversation and is not boxed.
+  assert.match(bodiesOf('.tool.spawn .pane').join(';'), /border:\s*0/);
+  // IN and OUT are divided by a hairline; the frame replaces the pre's own rule.
   assert.match(
-    bodiesOf('.tool .section pre').join(';'),
-    /border-left:\s*1px solid var\(--ui-hairline\)/,
+    bodiesOf('.tool .section + .section').join(';'),
+    /border-top:\s*1px solid var\(--ui-hairline\)/,
   );
+  assert.match(bodiesOf('.tool .section pre').join(';'), /padding:\s*0/);
+  assert.doesNotMatch(bodiesOf('.tool .section pre').join(';'), /border-left/);
   // Thinking has one line — the rail — and no second bar beside its text.
   assert.match(bodiesOf('.msg .think .body').join(';'), /padding:\s*4px 0 4px 22px/);
   assert.doesNotMatch(bodiesOf('.msg .think .body').join(';'), /border-left/);
@@ -272,9 +282,17 @@ test('a tool is a row, not a card, and its output is inset', () => {
 test('a row is marked by a state dot, not a caret', () => {
   const dot = bodiesOf('.tool > summary::before').join(';');
   assert.match(dot, /content:\s*''/);
-  assert.match(dot, /width:\s*6px/);
-  assert.match(dot, /height:\s*6px/);
+  assert.match(dot, /width:\s*8px/);
+  assert.match(dot, /height:\s*8px/);
+  // 8px drawn, 6px laid out: the centre stays at 9px where the rail is, and the
+  // negative margins keep the name at 22px.
+  assert.match(dot, /margin:\s*-1px/);
   assert.match(dot, /border-radius:\s*50%/);
+  // The dot is painted after the block's generated rail unless it is ordered
+  // above it, which is what makes the dot cover the line rather than the line
+  // cross the dot.
+  assert.match(dot, /position:\s*relative/);
+  assert.match(dot, /z-index:\s*1/);
 
   // A call is an operation while and after it runs: the dot is the editor's
   // green, a little quieter when finished. Failure is the error colour, and a
@@ -289,16 +307,17 @@ test('a row is marked by a state dot, not a caret', () => {
     bodiesOf('.tool.failed > summary::before').join(';'),
     /--dot:\s*var\(--vscode-errorForeground\)/,
   );
-  assert.match(bodiesOf('.tool.stopped > summary::before').join(';'), /box-shadow:\s*inset/);
-  assert.match(bodiesOf('.tool[open] > summary::before').join(';'), /box-shadow:\s*inset/);
+  assert.match(bodiesOf('.tool.stopped > summary::before').join(';'), /box-shadow:\s*inset 0 0 0 2px/);
+  assert.match(bodiesOf('.tool[open] > summary::before').join(';'), /box-shadow:\s*inset 0 0 0 2px/);
 
   // The caret is gone from both grammars, so a search for it in the built
   // stylesheet finds nothing a user could still see.
   assert.doesNotMatch(SOURCE, /25B8|25BE/);
-  assert.match(
-    bodiesOf('.msg .think > summary::before').join(';'),
-    /border-radius:\s*50%/,
-  );
+  const think = bodiesOf('.msg .think > summary::before').join(';');
+  assert.match(think, /width:\s*8px/);
+  assert.match(think, /margin:\s*-1px/);
+  assert.match(think, /z-index:\s*1/);
+  assert.match(think, /border-radius:\s*50%/);
 });
 
 test('a reply is one rail, prose included', () => {
@@ -314,12 +333,13 @@ test('a reply is one rail, prose included', () => {
   assert.match(bodiesOf('.output-link::after').join(';'), /left:\s*9px/);
   assert.match(bodiesOf('.tool.rail::after').join(';'), /display:\s*block/);
   assert.match(bodiesOf('.msg.assistant.rail::after').join(';'), /display:\s*block/);
-  // A row reaches 10px into the gap; two messages are 28px apart, so they
-  // reach 14px each.
+  // Every block reaches 10px into the gap: two messages are 20px apart and a
+  // message and a row 16px, so the first is met exactly and the second is
+  // over-covered.
   assert.match(bodiesOf('.tool.rail-up::after').join(';'), /top:\s*-10px/);
   assert.match(bodiesOf('.tool.rail-down::after').join(';'), /bottom:\s*-10px/);
-  assert.match(bodiesOf('.msg.assistant.rail-up::after').join(';'), /top:\s*-14px/);
-  assert.match(bodiesOf('.msg.assistant.rail-down::after').join(';'), /bottom:\s*-14px/);
+  assert.match(bodiesOf('.msg.assistant.rail-up::after').join(';'), /top:\s*-10px/);
+  assert.match(bodiesOf('.msg.assistant.rail-down::after').join(';'), /bottom:\s*-10px/);
 
   // Prose sits right of the line, where a row's name starts; the copy action
   // belongs to the message and moves with it.
@@ -343,6 +363,22 @@ test('a reply is one rail, prose included', () => {
   assert.match(JS, /syncRail\(active\.container\)/);
   // Prose no longer ends the run, so the old think-only step walk is gone.
   assert.doesNotMatch(JS, /:scope > \.think/);
+});
+
+test('the transcript is a tight rhythm, and a state word says its state', () => {
+  // A message's name, Thought and answer sit close; the transcript's own 12px
+  // gap still separates one step from the next.
+  const msg = bodiesOf('.msg').join(';');
+  assert.match(msg, /gap:\s*4px/);
+  assert.match(msg, /margin-block:\s*4px/);
+  // The caption belongs to the row above it, not to the gap below it.
+  assert.match(bodiesOf('.output-link').join(';'), /margin:\s*-8px 0 0/);
+
+  // Finished is green, stopped is a warning, failed is an error: the word and
+  // the dot tell the same story, and no state relies on italics alone.
+  assert.match(bodiesOf('.tool.done .state').join(';'), /--vscode-testing-iconPassed/);
+  assert.match(bodiesOf('.tool.stopped .state').join(';'), /--vscode-editorWarning-foreground/);
+  assert.doesNotMatch(bodiesOf('.tool.stopped .state').join(';'), /font-style/);
 });
 
 test('a thought is folded behind a grey chevron', () => {
