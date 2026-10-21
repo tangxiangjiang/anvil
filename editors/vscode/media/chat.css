@@ -644,6 +644,27 @@ button.ghost[aria-pressed='true'] {
 }
 
 /*
+ * The last block of a reply draws no downward overlap.
+ *
+ * `rail-down` means "another block is below me", and the reply's body is a
+ * separate flex column: its own 12px gap sits between this block and the next
+ * one, so the segment has to reach 10px past its own box to meet the next
+ * segment. The reply's final block has no next segment — the thing 10px below
+ * it is the transcript's gap and then whatever entry comes next, including the
+ * footprint or the dock's reserved foot. Reaching down there painted a stub of
+ * rail past the end of the reply, and at the bottom of a scrolled conversation
+ * it showed as a line hanging under the last block (p_0.47.26).
+ *
+ * `syncRail` already knows this: it never marks the last block of a run
+ * `rail-down`. The rule is here as well because `rail-down` is also what an
+ * interrupted run and a replayed turn leave behind, and a rail that stops at its
+ * own box is correct in every one of those cases.
+ */
+.reply-body > :last-child.rail-down::after {
+  bottom: 0;
+}
+
+/*
  * Prose is part of the reply, not a break in it: it sits right of the rail,
  * where a row's name starts (6px padding + 6px dot + 10px gap).
  */
@@ -763,6 +784,21 @@ button.ghost[aria-pressed='true'] {
   bottom: -2px;
   width: 1px;
   background: var(--ui-hairline);
+}
+
+/*
+ * A reply whose body is still empty draws no segment below its header.
+ *
+ * The `-2px` above is the overlap that meets the first block's own line, and it
+ * needs a first block to meet. A turn that has opened its reply but has not put
+ * anything in it yet — the moment between the send and the first card — has no
+ * such line, so the overlap hung 2px in the air, and at the bottom of a scrolled
+ * conversation it read as a stub of rail floating above the composer
+ * (p_0.47.26). The same is true once a turn's content has been hoisted out of a
+ * fold and the body is empty again.
+ */
+.reply[open]:not(:has(> .reply-body > *)) > .reply-head::before {
+  bottom: 0;
 }
 
 /*
@@ -1634,6 +1670,17 @@ body.vscode-high-contrast-light .body.md .md-link:focus-visible {
   flex: 0 0 auto;
 }
 
+/*
+ * The step counter. An inline-block rather than an inline span: a transform is
+ * ignored on a non-replaced inline box, and this is the one node in the line
+ * that a step landing pulses (p_0.47.26). It does not truncate — the
+ * parenthetical around it does — and it never shrinks below its own text.
+ */
+.status .working-step {
+  display: inline-block;
+  flex: 0 0 auto;
+}
+
 .status .working-meta {
   flex: 0 1 auto;
   min-width: 0;
@@ -1693,6 +1740,20 @@ body.vscode-high-contrast-light .body.md .md-link:focus-visible {
   overflow: hidden;
   text-overflow: ellipsis;
   text-align: left;
+}
+
+/*
+ * One box per count, because one box per count is what can be animated: a
+ * transform on an inline box does not apply, and the whole line pulsing on a
+ * cache-clock tick would make the seconds look like spend (p_0.47.26).
+ */
+.composer .meter > span {
+  display: inline-block;
+}
+
+/* A count the provider did not report is absent, not zero. */
+.composer .meter > span[hidden] {
+  display: none;
 }
 
 /* --- the model's task list ------------------------------------------------ */

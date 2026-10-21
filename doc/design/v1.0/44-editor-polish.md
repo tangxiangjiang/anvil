@@ -307,8 +307,9 @@ which is how the extension already degrades (`runtime`, `permission_mode_source`
 | [p_0.47.23](../../roadmaps/v1.0/m_0.47/p_0.47.23.md) | The working line moved below the root and meter, which stay together |
 | [p_0.47.24](../../roadmaps/v1.0/m_0.47/p_0.47.24.md) | The root and run lines moved into the transcript as a footprint; the session total into the composer |
 | [p_0.47.25](../../roadmaps/v1.0/m_0.47/p_0.47.25.md) | A status line of one height, with a truncation box per half, and buttons that cannot shrink |
+| [p_0.47.26](../../roadmaps/v1.0/m_0.47/p_0.47.26.md) | Session counts that land and pulse, a first turn that says “not yet”, and a rail that stops at its own reply |
 
-0.47.9–0.47.25 were written after the milestone was accepted. Their findings came from the
+0.47.9–0.47.26 were written after the milestone was accepted. Their findings came from the
 first real use of the panel, not from a test: a capability that existed and was never turned
 on, an error that only reached the log, a block with no way out — and then a transcript that
 was tiring to read, followed by four manager panels that each declared their own copy of the
@@ -751,3 +752,98 @@ box of its own to ellipsise in, and a flex row lets every child shrink.
 - **The controls do not shrink.** The composer's select and buttons are `flex: 0 0 auto`; the
   meter remains the row's only flexible child, so a long session total truncates on the
   left of the buttons instead of squeezing their labels.
+
+## 29. A count that says it landed, and a line that says "not yet"
+
+The session total is three counts — what went in, what came out, and how much of the input the
+provider served from its cache — and they arrive one run at a time. The step counter is the one
+number on the line that moves during a run. Four things were wrong with the two lines that
+carry them, and three of the four were absences rather than errors.
+
+- **Reporting is not entitlement.** `in`, `out` and `cache` each render whenever the provider
+  reported them. `renderMeter` used to draw `in` and `out` behind `if (!context)`, so a
+  workspace that declared a context window showed a line saying `cache 742k` and nothing
+  else. The counts are one sentence about the session; whether that session also has a window
+  is a different question, and `meterMath.label` adds that window's share on top rather than
+  instead.
+- **An absence is information; say which absence.** A count is only known once a run has
+  ended, so for a conversation's whole first turn all three were unknown and the line hid
+  itself. That read as "this build has no meter", not as "nothing has been counted yet". While
+  nothing has been reported, each count draws an em dash — the one spelling that cannot be
+  mistaken for a count — so the line keeps its place, its height and its meaning.
+- **The placeholder expires.** It is drawn only while *nothing* has been reported. A
+  conversation that has finished one run shows real counts and no dashes, which is what keeps
+  the dash meaning "not yet" rather than "unknown".
+- **One box per count.** Each count is its own `inline-block`, because a transform does not
+  apply to a non-replaced inline box. The separators are nodes too, so a dot with no number on
+  one side of it can be hidden rather than printed — derived from the same nodes, so a count
+  hidden by one condition cannot appear in the line through another.
+- **A pulse means "this changed".** Numbers are written through `setNumber`, which compares
+  before it writes; an unchanged value is not written at all. `renderMeter` runs on every cache
+  tick and every root update, and almost none of those move a count — a pulse that fired on
+  redraw would be noise, not information.
+- **The step pulses on advance, not on restatement.** `workingStep` is set from the host's
+  `progress` event, which may restate the current step on any event inside it. Only a step that
+  differs from the one already on the line is a new fact, so only that one pulses. The step's
+  spelling moved into `stepLabel` so the counter could be a node of its own while the
+  parenthetical kept one truncation box around it.
+- **A count is not a clock.** The cache countdown is written into a fourth node, appended to
+  the cache count, so a per-second tick cannot re-write — and therefore cannot pulse — the
+  number it sits beside.
+- **The pulse is script.** `chat.css` may carry no at-rule (the layout tests parse it as text),
+  so the pulse is Web Animations: a 520ms scale to 1.18 and back with an opacity dip at the
+  trough. Nothing is left behind, so a second landing cancels the first rather than queueing
+  it, and `prefers-reduced-motion` removes the pulse entirely while keeping the number.
+- **A rail segment needs something to meet.** The vertical line through a reply is drawn one
+  segment per block, and the segments overlap: each reaches 10px past its own box, because the
+  reply body is a flex column with a 12px gap and a segment that stopped at its own edge would
+  leave the gap blank. Every block with another block under it needs that reach; the reply's
+  last block does not, and what sat 10px beneath it was the transcript's gap, then the next
+  entry, then the foot the dock reserves. At the bottom of a scrolled conversation that painted
+  a stub of line under the transcript.
+- **The rail's overlap is not the defect.** Removing the 10px reach entirely would put a
+  visible break in the rail at every block boundary inside a reply. Only the end of the reply
+  is wrong, so only the end is fixed — and the marker was already right: `syncRail` gives
+  `rail-down` only to a block with another block after it. The class reaches other producers —
+  an interrupted run, a replayed turn — and a segment that stops at its own box is the correct
+  drawing for all of them, so one selector covers every producer.
+
+The first draft of this section was written from the four reports and shipped three
+absences of its own. They are recorded here because each one is the same mistake in a
+different costume: a fact that is drawn is not the same as a fact that is *stated*, and a
+value is not the same as the text that happens to hold it.
+
+- **Compare the value, not the node's text.** `setNumber` first compared
+  `node.textContent`. The cache count owns the countdown node, so its text changes every
+  second while its number does not — and the comparison therefore pulsed the cache count on
+  every tick, which is exactly the noise the comparison existed to prevent. The value a node
+  was last told is kept beside the node (a `WeakMap`), so "the count changed" and "the node
+  was rewritten" stay two different questions.
+- **The window's share is a count too, and it is drawn.** `meterMath.label`'s share was
+  collected into the string behind `meter.title` and `aria-label` and never into a node, so
+  the line did not show it at all; it was also gated on the host's context estimate, which
+  dropped it in exactly the case where the composer line is the only place left to say it.
+  The share is a node of its own, drawn whenever there is a last run to measure.
+- **A dot belongs to the count before it.** Two separators between three counts cannot
+  express four counts: hiding `out` left `5k in cache 4k` with no dot between the two visible
+  numbers, because the middle count's dot was the one that mattered. Nor is "a visible count
+  on either side" enough — with the two middle counts hidden it draws two dots in a row. A
+  dot is shown only while its own count is visible and another count follows it, so each pair
+  of visible counts gets exactly one.
+- **The placeholder keeps its count's name.** `cache —` says which fact is not known yet;
+  three bare dashes say only that something is unknown.
+- **The pulse moves the counter, not its separator.** The step's `·` was inside the pulsing
+  node, so the punctuation scaled with the number. The separator is a text node beside it.
+- **A tick does not move the reader.** `renderMeter` pinned the transcript on every render,
+  including the one-second cache tick. Only the root line, which lives in the transcript,
+  needs the reader kept at the bottom — and only when its text actually changes, which the
+  renderer now compares first.
+- **The document order matches the drawn order.** The footprint is ordered last with
+  `order: 1`, but entries were appended after it in the DOM: a copy or a screen reader read
+  the root line and the run's summary before the conversation. Entries are inserted in
+  front of the footprint, so the two orders agree.
+- **An asset URL carries its content's digest.** `webview.asWebviewUri` is stable per path,
+  so a reinstall that changes a script without changing the version leaves the webview
+  fetching its cached copy — a shipped fix installs and appears to do nothing. All five
+  documents now build their links through one fingerprinted builder, and a reinstall cannot
+  be served from cache.

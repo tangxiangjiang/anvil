@@ -43,6 +43,32 @@
   const palette = document.getElementById('palette');
   const dock = document.getElementById('composerDock');
   const meter = document.getElementById('meter');
+  /**
+   * The session total, a node per fact rather than one string: each count can
+   * land on its own, and a landing count pulses (p_0.47.26). The clock tick is
+   * a node inside the cache count so its per-second write cannot pulse the
+   * number beside it, and the window's share is a node of its own because
+   * `meterMath.label` reports it beside the counts, not instead of them.
+   */
+  const meterIn = el('span', 'meter-in');
+  const meterOut = el('span', 'meter-out');
+  const meterShare = el('span', 'meter-share');
+  const meterCache = el('span', 'meter-cache');
+  const meterClock = el('span', 'meter-clock');
+  const meterDot1 = el('span', 'meter-dot', ' · ');
+  const meterDot2 = el('span', 'meter-dot', ' · ');
+  const meterDot3 = el('span', 'meter-dot', ' · ');
+  /** The counts in the order the line reads them; the dots sit between. */
+  const meterCounts = [meterIn, meterOut, meterShare, meterCache];
+  if (meter) {
+    meter.appendChild(meterIn);
+    meter.appendChild(meterDot1);
+    meter.appendChild(meterOut);
+    meter.appendChild(meterDot2);
+    meter.appendChild(meterShare);
+    meter.appendChild(meterDot3);
+    meter.appendChild(meterCache);
+  }
   const todoBlock = document.getElementById('todos');
   const todoList = document.getElementById('todoList');
   const todosClose = document.getElementById('todosClose');
@@ -335,6 +361,12 @@
   const workingLine = el('span', 'working');
   const workingWord = el('span', 'working-word', WORKING_WORDS[0]);
   const workingMeta = el('span', 'working-meta');
+  /**
+   * The step counter, in its own node so a landing step can pulse without
+   * moving the clock beside it. It is an inline-block, not an inline span:
+   * a transform on an inline box does not apply (p_0.47.26).
+   */
+  const workingStepNode = el('span', 'working-step');
   statusText.hidden = true;
   workingLine.hidden = true;
   workingLine.appendChild(hammerGlyph());
@@ -443,11 +475,76 @@
     }
     const spent =
       seconds < 60 ? seconds + 's' : Math.floor(seconds / 60) + 'm ' + (seconds % 60) + 's';
-    const parts = ['esc to interrupt', spent];
+    // The escape and the clock stay one run of text; the step is appended
+    // as a node, because a node is what the pulse has to move.
+    workingMeta.textContent = '(' + ['esc to interrupt', spent].join(' · ');
     if (workingStep > 0) {
-      parts.push(workingMax > 0 ? 'step ' + workingStep + '/' + workingMax : 'step ' + workingStep);
+      // The separator stays outside the pulsing node: the pulse moves the
+      // counter, not the punctuation in front of it.
+      workingMeta.appendChild(document.createTextNode('\u00a0· '));
+      workingStepNode.textContent = stepLabel();
+      workingMeta.appendChild(workingStepNode);
     }
-    workingMeta.textContent = '(' + parts.join(' · ') + ')';
+    workingMeta.appendChild(document.createTextNode(')'));
+  }
+
+  /** The step as the line spells it, with the ceiling only when one was set. */
+  function stepLabel() {
+    if (workingStep <= 0) return '';
+    return workingMax > 0 ? 'step ' + workingStep + '/' + workingMax : 'step ' + workingStep;
+  }
+
+  /**
+   * A number that has just become a new fact, saying so once.
+   *
+   * The Web Animations API rather than a keyframe block, for the same reason
+   * the hammer swings from script: `chat.css` may not carry an at-rule, and a
+   * test parses it as text. A short scale and an opacity dip — a change of
+   * state, not a celebration — and it leaves nothing behind, so a number
+   * rewritten with the same value cannot look stuck.
+   */
+  function pulseNumber(node) {
+    if (!node || reduceMotion) return;
+    if (typeof Element.prototype.animate !== 'function') return;
+    for (const animation of node.getAnimations()) animation.cancel();
+    node.animate(
+      [
+        { transform: 'scale(1)', opacity: 1, offset: 0 },
+        { transform: 'scale(1.18)', opacity: 1, offset: 0.35 },
+        { transform: 'scale(1)', opacity: 0.6, offset: 0.7 },
+        { transform: 'scale(1)', opacity: 1, offset: 1 },
+      ],
+      { duration: 520, easing: 'cubic-bezier(.2, 0, .3, 1)' },
+    );
+  }
+
+  /**
+   * What each number node was last told, by node.
+   *
+   * The node's own `textContent` cannot answer that: the cache count owns the
+   * clock node, so its text changes every second while the number does not,
+   * and comparing the assembled text would pulse the count once a second.
+   */
+  const numberText = new WeakMap();
+
+  /**
+   * Gives a node the number it now holds, and pulses it only when that number is
+   * a new one.
+   *
+   * An unchanged value is not written at all, so the pulse always means "this
+   * changed" rather than "this was redrawn" — `renderMeter` runs on every cache
+   * tick and every root update, and most of those do not move a count. A count
+   * that appears for the first time, or disappears with a reset, is drawn
+   * without a pulse: the pulse marks a number arriving, not the line opening.
+   */
+  function setNumber(node, text) {
+    if (!node) return;
+    const next = String(text);
+    const before = numberText.get(node) || '';
+    if (before === next) return;
+    numberText.set(node, next);
+    node.textContent = next;
+    if (before !== '' && next !== '') pulseNumber(node);
   }
 
   /** The other half: the run's summary, or a note the host sent. */
@@ -561,11 +658,28 @@
     remember({ focus: on });
   }
 
+  /**
+   * Adds a block at the end of the conversation.
+   *
+   * The footprint is the transcript's last entry — the conversation's foot,
+   * under every turn — so a block goes in front of it rather than after it.
+   * A plain append would leave the root line and the run's line reading out
+   * above the conversation in a copy or a screen reader, even though the flex
+   * `order` draws them last (p_0.47.26).
+   */
+  function addToEnd(target, node) {
+    if (target === transcript && footprint && footprint.parentNode === transcript) {
+      transcript.insertBefore(node, footprint);
+    } else {
+      target.appendChild(node);
+    }
+  }
+
   function append(node) {
     const pinned = atBottom();
     clearEmpty();
     const target = targetFor(node);
-    target.appendChild(node);
+    addToEnd(target, node);
     syncRail(target);
     scrollIfPinned(pinned);
   }
@@ -634,7 +748,7 @@
     head.addEventListener('click', () => {
       node.dataset.pinned = '1';
     });
-    transcript.appendChild(node);
+    addToEnd(transcript, node);
     reply = { node: node, body: body, head: head };
     return reply;
   }
@@ -2396,7 +2510,7 @@
     // calls above it, and inside one is where a reader who expanded the turn
     // will look for it.
     const target = active === mainScope && reply ? reply.body : transcript;
-    target.appendChild(card);
+    addToEnd(target, card);
     // An approval is not a step, so a run ends at it; the rows above may still
     // carry a `rail-down` from before the card existed.
     syncRail(target);
@@ -3591,7 +3705,6 @@
    */
   function renderMeter() {
     if (!meter) return;
-    const pinned = atBottom();
     // This conversation: its estimated use against the window it declared.
     const facts = [];
     const context = meterMath.remaining(usageTotals, contextInfo, autoCompactAt);
@@ -3607,31 +3720,82 @@
       facts.push(amount(context.left) + ' left');
       if (context.compactAt > 0) facts.push('compact at ' + amount(context.compactAt));
     }
-    if (rootFacts) rootFacts.textContent = facts.length > 0 ? ' · ' + facts.join(' · ') : '';
+    // The root line is inside the transcript, so a change to it has to keep a
+    // reader who was at the bottom at the bottom. Only a change: this function
+    // runs once a second while a cache is live, and pinning on every tick would
+    // drag a reader who had scrolled up within the 60px tolerance back down,
+    // once a second, for a countdown that did not move the conversation.
+    const factsText = facts.length > 0 ? ' · ' + facts.join(' · ') : '';
+    if (rootFacts && rootFacts.textContent !== factsText) {
+      const pinned = atBottom();
+      rootFacts.textContent = factsText;
+      scrollIfPinned(pinned);
+    }
     // This session: what it has spent, which survives every conversation the
-    // window ends. Without a declared window the last run's total is the
-    // label's fallback.
-    const parts = [];
-    if (!context) {
-      const spent = meterMath.label(usageTotals, contextWindow);
-      if (spent) parts.push(spent);
-    }
+    // window ends. All three counts are drawn whenever the provider reported
+    // them — in, out and cache are one sentence about the session, and
+    // dropping in/out because a context window happened to be declared left
+    // the line saying only 'cache' (p_0.47.26).
     const cache = meterMath.cache(usageTotals, cacheTtlSeconds, lastRequestAt, Date.now());
-    if (cache.cached > 0) {
-      let item = 'cache ' + amount(cache.cached);
-      if (cache.remaining !== null) {
-        item += cache.remaining > 0 ? ' · ' + meterMath.clock(cache.remaining) : ' · cold';
-      }
-      parts.push(item);
+    // A count is only known once a run has ended, so during a conversation's
+    // first turn all three are unknown. The line keeps its place rather than
+    // vanishing, because its absence read as "this build has no meter" rather
+    // than "nothing has been counted yet" (p_0.47.26). An em dash is the one
+    // spelling that cannot be mistaken for a count — and it keeps the count's
+    // name, so the line says which fact is not known yet.
+    const pending = usageTotals.input <= 0 && usageTotals.output <= 0;
+    const countText = (value, suffix, label) => {
+      const name = label ? label + ' ' : '';
+      if (value > 0) return name + amount(value) + suffix;
+      return pending ? name + '\u2014' : '';
+    };
+    setNumber(meterIn, countText(usageTotals.input, ' in', ''));
+    setNumber(meterOut, countText(usageTotals.output, ' out', ''));
+    setNumber(meterCache, countText(cache.cached, '', 'cache'));
+    // The window's share of the last run, which `meterMath.label` reports
+    // beside the three counts rather than instead of them. It is a node like
+    // them, so it can be hidden and can pulse on its own.
+    const spent = meterMath.label(usageTotals, contextWindow);
+    const share = spent
+      ? spent
+          .split(' · ')
+          .filter((part) => !/ (in|out)$/.test(part))
+          .join(' · ')
+      : '';
+    setNumber(meterShare, share);
+    // Visibility follows the value each node holds, so a count hidden here
+    // cannot reappear in the line through another path.
+    for (const node of meterCounts) node.hidden = (numberText.get(node) || '') === '';
+    // A dot belongs to the count in front of it, and is shown only while that
+    // count is visible and another count is still visible after it — so each
+    // visible count but the last is followed by exactly one dot, and hiding a
+    // count in the middle cannot leave two dots in a row or none at all.
+    const dots = [meterDot1, meterDot2, meterDot3];
+    const lastShown = meterCounts.map((node) => !node.hidden).lastIndexOf(true);
+    for (let i = 0; i < dots.length; i += 1) {
+      dots[i].hidden = meterCounts[i].hidden || i >= lastShown;
     }
+    // The cache clock is written into a node appended to the cache count
+    // rather than to the line, so its per-second tick does not pulse the count
+    // it sits beside.
+    meterClock.textContent = '';
+    if (cache.cached > 0 && cache.remaining !== null) {
+      meterClock.textContent =
+        ' · ' + (cache.remaining > 0 ? meterMath.clock(cache.remaining) : 'cold');
+      meterCache.appendChild(meterClock);
+    }
+    // The line is assembled from the nodes, not recomputed: a node that was
+    // hidden for lack of a count is absent here for the same reason, and the
+    // placeholder that stands in during a first turn is a count's absence, not
+    // a separate branch (p_0.47.26).
+    const parts = [];
+    for (const node of meterCounts) if (!node.hidden) parts.push(node.textContent);
     const text = parts.join(' · ');
-    meter.textContent = text;
     meter.hidden = text === '';
     // The row may have truncating width: the whole line stays reachable.
     meter.title = text;
     meter.setAttribute('aria-label', text);
     syncCacheClock(cache);
-    scrollIfPinned(pinned);
   }
 
   /**
@@ -4408,9 +4572,16 @@
       // A step belongs to the working line while a turn runs. The same event in
       // a replay has no run of its own, so its text lands on the line instead.
       if (typeof e.step === 'number' && e.step > 0) {
+        // A repeat of the step already on the line is not a new fact, so it
+        // must not pulse: the host may restate the current step on any event
+        // inside it (p_0.47.26).
+        const advanced = e.step !== workingStep;
         workingStep = e.step;
         workingMax = typeof e.maxSteps === 'number' && e.maxSteps > 0 ? e.maxSteps : 0;
-        if (!workingLine.hidden) renderWorkingMeta();
+        if (!workingLine.hidden) {
+          renderWorkingMeta();
+          if (advanced) pulseNumber(workingStepNode);
+        }
       }
       if (e.text) {
         // The host named the step: its word outranks the rotation and stays.

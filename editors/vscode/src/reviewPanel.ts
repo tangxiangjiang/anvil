@@ -15,6 +15,7 @@
 import { randomBytes } from 'node:crypto';
 import { basename } from 'node:path';
 import * as vscode from 'vscode';
+import { mediaAsset } from './webviewAsset';
 import { DiffHunk } from './hunks';
 
 /** One hunk as the webview draws it. The terminators are not shown. */
@@ -176,8 +177,7 @@ function makeNonce(): string {
 
 function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
   const nonce = makeNonce();
-  const asset = (name: string): vscode.Uri =>
-    webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', name));
+  const asset = mediaAsset(webview, extensionUri);
   return `<!DOCTYPE html>
 <html lang="en">
 <head>

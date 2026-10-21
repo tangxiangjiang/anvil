@@ -204,6 +204,55 @@ test('the assistant body reflows, and a code block does not', () => {
   assert.equal(valueOf('.body.md .md-code code', 'white-space'), 'pre');
 });
 
+test('no rail reaches past the end of the reply it belongs to', () => {
+  // `rail-down` means "another block is below me", and it draws its segment 10px
+  // past its own box to meet the next one across the reply body's 12px gap. The
+  // reply's last block has no next segment, and what sits 10px under it is the
+  // transcript's gap and then the next entry — which is how a stub of rail came
+  // to hang below the last block, and at the bottom of a scrolled conversation
+  // it read as a line floating under the transcript (p_0.47.26).
+  assert.match(
+    SOURCE,
+    /\.reply-body > :last-child\.rail-down::after \{\s*bottom: 0;/,
+    'the last block of a reply must not reach below itself',
+  );
+
+  // The marker is already correct at the source: the last block of a run is
+  // never given `rail-down`, so the rule above is a guard for the states the
+  // marker does not produce (an interrupted run, a replayed turn).
+  assert.match(JS, /block\.classList\.toggle\('rail-down', i < run\.length - 1\)/);
+});
+
+test('a reply with an empty body draws no segment below its header', () => {
+  // `reply-head::before` reaches 2px past the header to meet the first block's
+  // own line, and that overlap is right the moment a first block exists. It is
+  // a guard rather than a reported defect: `append` fills the body in the same
+  // JS turn that `targetFor` creates it, so the state is not painted in the
+  // normal path (p_0.47.26). A hoisted-ending reply body, and any future caller
+  // that opens a reply before it has content, are the cases it covers.
+  assert.match(
+    SOURCE,
+    /\.reply\[open\]:not\(:has\(> \.reply-body > \*\)\) > \.reply-head::before \{\s*bottom: 0;/,
+    'an empty reply body must not reach below its header',
+  );
+});
+
+test('the footprint stays the transcript’s last entry in the document too', () => {
+  // The stylesheet draws the footprint under every turn with `order: 1`, but a
+  // block appended after it in the DOM would still read out before the whole
+  // conversation in a copy or a screen reader. So the document order says the
+  // same thing the layout does: new entries go in front of the footprint
+  // (p_0.47.26).
+  assert.match(JS, /function addToEnd\(target, node\)/);
+  assert.match(JS, /transcript\.insertBefore\(node, footprint\)/);
+  assert.match(JS, /if \(target === transcript && footprint && footprint\.parentNode === transcript\)/);
+  // The two producers of a top-level entry go through it: the reply that opens
+  // a turn, and an approval card that arrives with no reply open.
+  assert.match(JS, /addToEnd\(transcript, node\)/);
+  assert.match(JS, /addToEnd\(target, card\)/);
+  assert.doesNotMatch(JS, /transcript\.appendChild\(node\)/);
+});
+
 test('the stylesheet has no at-rules, which is what lets it be parsed as text', () => {
   // `parseRules()` above splits the stylesheet on `}` and reads the text before
   // each `{` as a selector, so a `@media` block would silently turn into rules

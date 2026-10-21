@@ -72,6 +72,7 @@ import {
 import { RunFailure } from './errors';
 import { readSettings, readWebSearchKey } from './settings';
 import { webSearchNeedsKey } from './webSearch';
+import { mediaAsset } from './webviewAsset';
 
 /** A message from the webview. */
 type Inbound =
@@ -2842,8 +2843,7 @@ export class ChatPanel implements HostListener {
 /** Builds the webview document. Nothing here is fetched at runtime. */
 function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri, focus = false, fontSize = 15): string {
   const nonce = makeNonce();
-  const asset = (name: string): vscode.Uri =>
-    webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', name));
+  const asset = mediaAsset(webview, extensionUri);
   return `<!DOCTYPE html>
 <html lang="en">
 <head>

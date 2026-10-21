@@ -117,11 +117,19 @@ test('the parenthetical says escape, the clock and the step', () => {
   // Minutes only once they are earned.
   assert.match(meta, /seconds < 60/);
   assert.match(meta, /Math\.floor\(seconds \/ 60\)/);
-  // The step is the host's, and absent when it said nothing.
+  // The step is the host's, and absent when it said nothing. Its spelling
+  // lives in `stepLabel` so the counter can be its own node (p_0.47.26).
   assert.match(meta, /workingStep > 0/);
-  assert.match(meta, /'step ' \+ workingStep/);
-  assert.match(meta, /workingStep \+ '\/' \+ workingMax/);
-  assert.match(meta, /workingMeta\.textContent = '\(' \+ parts\.join\(' · '\) \+ '\)'/);
+  const label = bodyOf(CHAT_JS, 'stepLabel');
+  assert.match(label, /'step ' \+ workingStep/);
+  assert.match(label, /workingStep \+ '\/' \+ workingMax/);
+  // The step is appended as a node, so a landing step has something to
+  // pulse and the parenthetical keeps one truncation box around it. Its
+  // separator is a text node of its own, so the pulse moves the counter and
+  // not the punctuation in front of it.
+  assert.match(meta, /createTextNode\('\\u00a0· '\)/);
+  assert.match(meta, /workingMeta\.appendChild\(workingStepNode\)/);
+  assert.match(meta, /document\.createTextNode\('\)'\)/);
   // The tick skips a tab nobody is looking at, like the cache clock does; the
   // next tick after the tab returns brings the elapsed time up to date.
   assert.match(meta, /if \(document\.hidden\) return/);

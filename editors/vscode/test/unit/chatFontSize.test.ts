@@ -72,3 +72,20 @@ test('a live change reaches every open document', () => {
   assert.match(CHAT_JS, /case 'fontSize':/);
   assert.match(CHAT_JS, /px < 10 \|\| px > 24/);
 });
+
+test('an asset URL carries a content digest, so a reinstall cannot be served from cache', () => {
+  // `asWebviewUri` builds the same URL for the same path whatever the file now
+  // holds. A reinstall that changes `media/chat.js` without changing the version
+  // therefore left the webview fetching a cached copy, and a shipped fix
+  // installed and appeared to do nothing (p_0.47.26). One builder serves all
+  // five documents, so a panel cannot keep the stale-cache behaviour.
+  const ASSET = read('src', 'webviewAsset.ts');
+  for (const file of ['chatPanel.ts', 'mcpPanel.ts', 'permissionsPanel.ts', 'reviewPanel.ts', 'tasksPanel.ts']) {
+    assert.match(read('src', file), /const asset = mediaAsset\(webview, extensionUri\);/);
+  }
+  assert.match(ASSET, /createHash\('sha256'\)/);
+  assert.match(ASSET, /readFileSync\(file\.fsPath\)/);
+  assert.match(ASSET, /uri\.with\(\{ query: `v=\$\{digest\}` \}\)/);
+  // A file that cannot be read still yields a URL rather than failing the panel.
+  assert.match(ASSET, /return uri;/);
+});

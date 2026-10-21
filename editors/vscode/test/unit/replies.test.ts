@@ -47,7 +47,10 @@ test('a turn opens a reply with a start dot, its speaker and a fold', () => {
   assert.match(reply, /el\('span', 'reply-hint'\)/);
   // The body is the same column the transcript was, so the rhythm survives.
   assert.match(reply, /el\('div', 'reply-body'\)/);
-  assert.match(reply, /transcript\.appendChild\(node\)/);
+  // The turn goes in at the end of the conversation but in front of the
+  // transcript's footprint, so the document order matches the drawn order
+  // (p_0.47.26).
+  assert.match(reply, /addToEnd\(transcript, node\)/);
   // The reply is built from nodes, never from markup.
   assert.doesNotMatch(reply, /innerHTML|outerHTML|insertAdjacentHTML|document\.write/);
 });

@@ -356,16 +356,38 @@ test('the renderer keeps both clocks, and only the cache one ticks', () => {
 
   const render = bodyOf(CHAT_JS, 'renderMeter');
   assert.doesNotMatch(render, /\.innerHTML\s*(\+)?=(?!=)/);
-  assert.match(render, /meter\.textContent/);
+  // The line is no longer one string: each count has its own node so a landing
+  // count can pulse without moving the others (p_0.47.26).
+  assert.match(render, /setNumber\(meterIn, /);
+  assert.match(render, /meter\.title = text/);
   assert.match(render, /meterMath\.remaining\(/);
   assert.match(render, /meterMath\.cache\(/);
   // Two scopes, two places (p_0.47.24): the conversation's share of its window
   // is written on the root line, and the session's spent total and cache are
   // written in the composer.
   assert.match(render, /facts\.push\('compact at '/);
-  assert.match(render, /rootFacts\.textContent = facts\.length > 0 \? ' · ' \+ facts\.join\(' · '\) : ''/);
-  assert.match(render, /if \(!context\)/);
-  assert.match(render, /' · cold'/);
+  assert.match(render, /rootFacts\.textContent = factsText/);
+  // The root line lives in the transcript; only a change to it may pull a
+  // reader back to the bottom. This renderer runs once a second while a cache
+  // is live, and pinning on a countdown would undo a scroll the reader made.
+  assert.match(render, /rootFacts\.textContent !== factsText/);
+  assert.equal(
+    (render.match(/scrollIfPinned\(/g) ?? []).length,
+    1,
+    'only the root line change pins the transcript, not the per-second tick',
+  );
+  assert.match(render, /meterMath\.clock\(cache\.remaining\)/);
+  assert.match(render, /'cold'/);
+  // The per-second tick is written into its own node, so the cache count beside
+  // it is not re-written (and not pulsed) once a second (p_0.47.26).
+  assert.match(render, /meterClock\.textContent = ''/);
+  // All three session counts are drawn whenever the provider reported them.
+  // Gating in/out on a missing context window left the line saying only
+  // 'cache' (p_0.47.26).
+  assert.match(render, /setNumber\(meterIn, countText\(usageTotals\.input/);
+  assert.match(render, /setNumber\(meterOut, countText\(usageTotals\.output/);
+  assert.match(render, /setNumber\(meterCache, countText\(cache\.cached/);
+  assert.doesNotMatch(render, /if \(!context\)/);
   // The composer's row can truncate the total; the whole line stays reachable.
   assert.match(render, /meter\.title = text/);
   assert.match(render, /meter\.setAttribute\('aria-label', text\)/);
@@ -412,4 +434,75 @@ test('the protocol carries usage on an event', () => {
   const hostEvent = PROTOCOL.slice(PROTOCOL.indexOf('export interface HostEvent'));
   assert.match(hostEvent.slice(0, hostEvent.indexOf('\n}')), /usage\?: Usage/);
   assert.match(PROTOCOL, /export interface Usage \{/);
+});
+
+test('a count that lands pulses once, and a redraw does not', () => {
+  // A number is written through `setNumber`, which compares before it writes:
+  // `renderMeter` runs on every cache tick and every root update, and most of
+  // those do not move a count, so a pulse must mean "this changed" rather than
+  // "this was redrawn" (p_0.47.26).
+  const set = bodyOf(CHAT_JS, 'setNumber');
+  // The comparison is against the value the node was last told, not against
+  // its text: the cache count owns the clock node, so its text changes every
+  // second while the number does not. Comparing text pulsed it once a second.
+  assert.match(set, /const before = numberText\.get\(node\) \|\| ''/);
+  assert.match(set, /if \(before === next\) return/);
+  assert.match(set, /numberText\.set\(node, next\)/);
+  assert.doesNotMatch(set, /node\.textContent === next/);
+  assert.match(set, /node\.textContent = next/);
+  // The first value drawn, and a reset to nothing, are not landings.
+  assert.match(set, /if \(before !== '' && next !== ''\) pulseNumber\(node\)/);
+
+  // The pulse is script, not a stylesheet: `chat.css` may carry no at-rule.
+  const pulse = bodyOf(CHAT_JS, 'pulseNumber');
+  assert.match(pulse, /node\.animate\(/);
+  assert.match(pulse, /scale\(1\.18\)/);
+  assert.match(pulse, /duration: 520/);
+  // Motion is still a preference: a reader who asked for less gets no pulse.
+  assert.match(pulse, /if \(!node \|\| reduceMotion\) return/);
+  assert.match(pulse, /typeof Element\.prototype\.animate !== 'function'/);
+  // A second landing on the same node must not queue a second animation.
+  assert.match(pulse, /getAnimations\(\)/);
+
+  // The same test `chatLayout.test.ts` makes, stated here because this is the
+  // file that would be tempted to add one: no at-rule at all, so the stylesheet
+  // can be parsed as text. The pulse is the script's job for that reason.
+  assert.doesNotMatch(CHAT_CSS, /@[a-z-]+\s*[({]/, 'chat.css must stay free of at-rules');
+  // Each count needs its own box: a transform on an inline box does not apply.
+  assert.match(CHAT_CSS, /\.composer \.meter > span \{[^}]*display: inline-block/);
+  assert.match(CHAT_CSS, /\.status \.working-step \{[^}]*display: inline-block/);
+});
+
+test('a count with nothing to report keeps its place instead of vanishing', () => {
+  // A count is only known once a run has ended, so during a conversation's first
+  // turn all three are unknown. The line used to vanish entirely, which read as
+  // "this build has no meter" rather than "nothing has been counted yet"
+  // (p_0.47.26).
+  const render = bodyOf(CHAT_JS, 'renderMeter');
+  assert.match(render, /const pending = usageTotals\.input <= 0 && usageTotals\.output <= 0/);
+  // An em dash is the one spelling that cannot be mistaken for a count — and
+  // it keeps the count's name, so the first turn reads `— · — · cache —`
+  // rather than three bare dashes.
+  assert.match(render, /const name = label \? label \+ ' ' : ''/);
+  assert.match(render, /pending \? name \+ '\\u2014' : ''/);
+  // Once anything has been reported, an absent count is absent rather than a
+  // dash: the placeholders are for "not yet", not for "never".
+  assert.match(render, /value > 0/);
+});
+
+test('the meter line is assembled from its nodes, so a hidden count is not doubled', () => {
+  const render = bodyOf(CHAT_JS, 'renderMeter');
+  assert.match(render, /for \(const node of meterCounts\) if \(!node\.hidden\) parts\.push\(node\.textContent\)/);
+  assert.match(render, /for \(const node of meterCounts\) node\.hidden = \(numberText\.get\(node\) \|\| ''\) === ''/);
+  // The window share is a node like the counts, so `meterMath.label`'s share
+  // is drawn beside them rather than only in the tooltip — and it is drawn
+  // whether or not the host sent a context estimate.
+  assert.match(render, /setNumber\(meterShare, share\)/);
+  assert.doesNotMatch(render, /if \(spent && context\)/);
+  // A separator belongs to the count in front of it and is shown only while
+  // that count is visible and another count follows it — exactly one dot
+  // between each pair of visible counts, however many counts are hidden.
+  assert.match(render, /const dots = \[meterDot1, meterDot2, meterDot3\]/);
+  assert.match(render, /const lastShown = meterCounts\.map\(\(node\) => !node\.hidden\)\.lastIndexOf\(true\)/);
+  assert.match(render, /dots\[i\]\.hidden = meterCounts\[i\]\.hidden \|\| i >= lastShown/);
 });

@@ -22,6 +22,7 @@
 
 import { randomBytes } from 'node:crypto';
 import * as vscode from 'vscode';
+import { mediaAsset } from './webviewAsset';
 import {
   PermissionsResult,
   PermissionsSetParams,
@@ -323,8 +324,7 @@ function makeNonce(): string {
 
 function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
   const nonce = makeNonce();
-  const asset = (name: string): vscode.Uri =>
-    webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', name));
+  const asset = mediaAsset(webview, extensionUri);
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
