@@ -2875,6 +2875,20 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri, focus = f
       <p class="hint"><kbd>/</kbd> lists commands, <kbd>@</kbd> references a file.</p>
       <p class="hint">Past conversations are in the Anvil view in the activity bar.</p>
     </div>
+    <!--
+      The conversation's own ending: the folder it belongs to and the share of
+      its window it has used, with the run's line above them while a turn is in
+      flight (p_0.47.24). Inside the transcript rather than the dock, because a
+      floating line's reserved height is measured a frame late and the
+      conversation is painted over it; here it is part of what scrolls, so it
+      cannot be overlapped. It sorts last (order: 1) however turns are appended,
+      and its first line keeps its box when empty so a turn does not change the
+      block's height.
+    -->
+    <div id="footprint" class="footprint" hidden>
+      <div id="status" class="status"></div>
+      <div id="root" class="root" hidden></div>
+    </div>
   </div>
   <!--
     The composer is out of the flow, so the transcript scrolls underneath it and
@@ -2882,22 +2896,6 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri, focus = f
     --anvil-composer-h, which is what the transcript reserves at its bottom.
   -->
   <div id="composerDock" class="dock">
-    <!--
-      The folder this conversation belongs to (0.47). It is a line rather than a
-      control: one root per window means a conversation cannot switch folders,
-      and a select here would promise something the checkpoints and paths behind
-      it cannot keep. Hidden until a root exists — which, in a multi-root
-      window, is after the first conversation chose one.
-    -->
-    <div id="root" class="root" hidden></div>
-    <div id="meter" class="meter" hidden></div>
-    <!--
-      The run's line, below the session's two facts rather than between them
-      (p_0.47.23): the root and the meter describe the conversation, this one
-      describes the turn, and it turns into the run's summary when the turn
-      ends. Nearest the composer is where a summary is read.
-    -->
-    <div id="status" class="status" hidden></div>
     <div id="bypass" class="bypass" hidden>Bypass is on. Tool calls run without asking.</div>
     <div id="dontAsk" class="dont-ask" hidden>No asking. Only calls this workspace's rules allow will run.</div>
     <form id="composer" class="composer">
@@ -2928,6 +2926,14 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri, focus = f
           hides.
         -->
         <button id="focus" type="button" class="ghost" aria-pressed="${focus ? 'true' : 'false'}" title="Show only the conversation: hide tool cards and thinking (Ctrl+Alt+F)">Focus</button>
+        <!--
+          What this session has spent, inside the composer rather than floating
+          above the transcript (p_0.47.24): this is the one opaque surface in the
+          dock, so the conversation cannot be painted over it. It is the only
+          flexible child in the row, so a long total truncates here before a
+          button moves, and the whole string stays in the tooltip.
+        -->
+        <div id="meter" class="meter" hidden></div>
         <span class="spacer"></span>
         <button id="attach" type="button" class="secondary" aria-label="Reference a file or folder" title="Reference a file or folder">@</button>
         <!--

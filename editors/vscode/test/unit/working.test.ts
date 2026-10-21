@@ -75,11 +75,13 @@ test('the line is built once, and its two halves never show together', () => {
   assert.match(CHAT_JS, /statusLine\.appendChild\(workingLine\)/);
   assert.match(CHAT_JS, /statusLine\.appendChild\(statusText\)/);
 
-  // The summary and the progress note share the other half, and the line is
-  // hidden only when both halves are empty.
+  // The summary and the progress note share the other half, and the footprint
+  // is hidden only when both halves and the root line are empty.
   const status = bodyOf(CHAT_JS, 'setStatus');
   assert.match(status, /statusText\.textContent = text/);
-  assert.match(status, /statusLine\.hidden = workingLine\.hidden && text === ''/);
+  assert.match(status, /syncFootprint\(\)/);
+  const sync = bodyOf(CHAT_JS, 'syncFootprint');
+  assert.match(sync, /footprint\.hidden = rootLine\.hidden && workingLine\.hidden && statusText\.hidden/);
   // Nothing writes the status element's text directly any more: that would
   // wipe the animation's nodes on the next update.
   assert.doesNotMatch(CHAT_JS, /statusLine\.textContent/);
@@ -91,15 +93,18 @@ test('the clock starts with the turn and stops with it', () => {
   assert.match(start, /workingHostWord = ''/);
   assert.match(start, /workingWord\.textContent = WORKING_WORDS\[0\]/);
   assert.match(start, /workingLine\.hidden = false/);
-  assert.match(start, /statusLine\.hidden = false/);
+  assert.match(start, /syncFootprint\(\)/);
   assert.match(start, /setInterval\(renderWorkingMeta, 1000\)/);
   // Starting twice must not restart the clock a reopened tab is already on.
   assert.match(start, /if \(workingTimer !== null\) return/);
+  // The line is in the scroll content now, so the write puts the reader back.
+  assert.match(start, /scrollIfPinned\(pinned\)/);
 
   const stop = bodyOf(CHAT_JS, 'stopWorking');
   assert.match(stop, /clearInterval\(workingTimer\)/);
   assert.match(stop, /animation\.cancel\(\)/);
   assert.match(stop, /workingLine\.hidden = true/);
+  assert.match(stop, /syncFootprint\(\)/);
 
   const running = bodyOf(CHAT_JS, 'setRunning');
   assert.match(running, /if \(running\) startWorking\(\)/);
@@ -159,6 +164,10 @@ test('the summary takes the line when the run ends', () => {
   const clear = bodyOf(CHAT_JS, 'clearTranscript');
   assert.match(clear, /stopWorking\(\)/);
   assert.match(clear, /setStatus\(''\)/);
+  // Emptying the transcript detaches the block, which is chrome rather than a
+  // turn; it goes back before the next conversation starts.
+  assert.match(clear, /transcript\.appendChild\(footprint\)/);
+  assert.match(clear, /syncFootprint\(\)/);
 });
 
 test('a progress event feeds the line with what the host reported', () => {
@@ -201,21 +210,67 @@ test('the line is one row of mark and text, with a pivot in the stylesheet', () 
   assert.match(ruleBody('.status .working-meta'), /opacity:\s*0\.75/);
 });
 
-test('the session facts stay together, and the run’s line sits below them', () => {
-  const open = CHAT_PANEL.indexOf('id="composerDock"');
-  assert.ok(open > 0, 'the dock is in the panel template');
-  const dock = CHAT_PANEL.slice(open, CHAT_PANEL.indexOf('<form id="composer"', open));
-  const root = dock.indexOf('id="root"');
-  const meter = dock.indexOf('id="meter"');
-  const status = dock.indexOf('id="status"');
-  // A turn in flight must not insert its line between the two facts about the
-  // conversation; the run's line is nearest the composer instead.
-  assert.ok(root >= 0 && meter > root && status > meter, 'root, then meter, then status');
+test('the session’s lines scroll with the conversation, as one entry', () => {
+  // The block is in the transcript rather than the floating dock (p_0.47.24):
+  // in the flow, a floating line's reserved height is measured a frame late and
+  // the conversation is painted across it.
+  const transcript = CHAT_PANEL.indexOf('id="transcript"');
+  const block = CHAT_PANEL.indexOf('id="footprint"');
+  const dock = CHAT_PANEL.indexOf('id="composerDock"');
+  assert.ok(transcript > 0 && block > transcript, 'the footprint is in the transcript');
+  assert.ok(dock > block, 'the footprint is before the dock');
+
+  // The dock no longer owns either line.
+  const dockBody = CHAT_PANEL.slice(dock, CHAT_PANEL.indexOf('<form id="composer"', dock));
+  assert.doesNotMatch(dockBody, /id="status"|id="root"|id="meter"/);
+
+  // Inside the block the run’s line comes first: what the turn is doing, then
+  // what the conversation is.
+  const inner = CHAT_PANEL.slice(block, dock);
+  const status = inner.indexOf('id="status"');
+  const root = inner.indexOf('id="root"');
+  assert.ok(status >= 0 && root > status, 'status, then root');
+
+  // Moving an element means cutting it, not copying it.
+  for (const id of ['footprint', 'status', 'root', 'meter']) {
+    assert.equal(CHAT_PANEL.split(`id="${id}"`).length - 1, 1, `one #${id}`);
+  }
 });
 
-test('the dock holds the line clear of the composer', () => {
-  // The root's foot keeps it reading with the meter beneath it; the run's line
-  // gets the room above the input it was given.
-  assert.match(ruleBody('.root'), /padding: 0 calc\(var\(--anvil-gap\) \+ 1px\) 6px/);
-  assert.match(ruleBody('.status'), /padding: 0 calc\(var\(--anvil-gap\) \+ 1px\) 10px/);
+test('the session’s total sits in the composer, left of the buttons', () => {
+  const form = CHAT_PANEL.indexOf('<form id="composer"');
+  const actions = CHAT_PANEL.indexOf('<div class="actions">', form);
+  const meter = CHAT_PANEL.indexOf('id="meter"', actions);
+  const spacer = CHAT_PANEL.indexOf('<span class="spacer"></span>', actions);
+  assert.ok(actions > 0 && meter > actions, 'the meter is in the actions row');
+  assert.ok(spacer > meter, 'before the spacer, so it grows left of the buttons');
+
+  // It is the row's only flexible child, so it truncates before a button moves.
+  const css = ruleBody('.composer .meter');
+  assert.match(css, /flex: 1 1 auto/);
+  assert.match(css, /min-width: 0/);
+  assert.match(css, /text-overflow: ellipsis/);
+  assert.match(css, /text-align: left/);
+});
+
+test('the footprint keeps the panel’s own rhythm, and reserves its first line', () => {
+  const block = ruleBody('.footprint');
+  assert.match(block, /display:\s*flex/);
+  assert.match(block, /flex-direction:\s*column/);
+  // The label-to-value gap `.msg` uses, not the transcript's 12px entry gap.
+  assert.match(block, /gap:\s*4px/);
+  assert.match(block, /margin-block:\s*4px/);
+  // Sorts after every turn however one is appended.
+  assert.match(block, /order:\s*1/);
+  assert.match(ruleBody('.footprint[hidden]'), /display:\s*none/);
+
+  // Both lines take the transcript's own inset rather than the dock's 13px.
+  assert.match(ruleBody('.status'), /padding:\s*0;/);
+  assert.match(ruleBody('.root'), /padding:\s*0;/);
+  assert.match(ruleBody('.status'), /font-size:\s*0\.85em/);
+  assert.match(ruleBody('.root'), /font-size:\s*0\.85em/);
+
+  // Line one keeps its box when there is nothing to say, so a turn starting or
+  // ending changes the block's words, never its height.
+  assert.match(ruleBody('.status'), /min-height:\s*1\.5em/);
 });

@@ -1504,14 +1504,15 @@ body.vscode-high-contrast-light .body.md .md-link:focus-visible {
 /* --- the window's root ---------------------------------------------------- */
 
 /*
- * The first of the dock's two facts about the conversation, directly above the
- * meter and in the same muted weight: it is a fact, not a warning, and a
- * multi-root window is the only place it is not obvious. It carries no
- * affordance on purpose — a conversation cannot change folders (see the design
- * chapter). Its 6px foot keeps it reading with the meter beneath it.
+ * The conversation's folder and the share of its window it has used, as the
+ * second line of the transcript's footprint (p_0.47.24). It is a fact, not a
+ * warning, and a multi-root window is the only place the folder is not
+ * obvious. It carries no affordance on purpose — a conversation cannot change
+ * folders (see the design chapter). Its inset is the transcript's own, so it
+ * aligns with the prose around it without a padding of its own.
  */
 .root {
-  padding: 0 calc(var(--anvil-gap) + 1px) 6px;
+  padding: 0;
   font-size: 0.85em;
   line-height: var(--ui-line-tight);
   color: var(--ui-muted);
@@ -1535,20 +1536,55 @@ body.vscode-high-contrast-light .body.md .md-link:focus-visible {
   opacity: 0.8;
 }
 
+/*
+ * The conversation's share of its context window, from `renderMeter`. It is on
+ * this line because it describes this conversation; what the session has spent
+ * belongs to the session and rides in the composer instead.
+ */
+.root .root-facts {
+  opacity: 0.9;
+}
+
+/* --- the footprint -------------------------------------------------------- */
+
+/*
+ * One entry at the end of the transcript holding the run's line and the root's
+ * (p_0.47.24). It is in the flow rather than floating over it, because a
+ * reserved height measured from a `ResizeObserver` is always one frame behind
+ * the layout and the conversation showed through. 4px is the panel's
+ * label-to-value gap (the same one `.msg` uses between its name and its body);
+ * the entry itself takes the transcript's 12px rhythm.
+ */
+.footprint {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-block: 4px;
+  /* Sorts after every turn however one is appended. */
+  order: 1;
+}
+
+.footprint[hidden] {
+  display: none;
+}
+
 /* --- status --------------------------------------------------------------- */
 
 /*
- * The run's line: below the root and the meter, nearest the composer, because
- * it speaks about the turn rather than the conversation and becomes the run's
- * summary at the end (p_0.47.23). Aligned with the card's own text, not its
- * outer edge, and given room above the input as the one line that changes
- * while a reader waits.
+ * The run's line: above the root, because what the turn is doing is read first.
+ * It becomes the run's summary when the turn ends. Its first line keeps its box
+ * whether or not a run is in flight — that reserve is what stops the block (and
+ * everything below it) from moving when a turn starts or finishes.
  */
 .status {
-  padding: 0 calc(var(--anvil-gap) + 1px) 10px;
+  padding: 0;
+  min-height: 1.5em;
   font-size: 0.85em;
   line-height: var(--ui-line-tight);
   color: var(--ui-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /*
@@ -1604,17 +1640,26 @@ body.vscode-high-contrast-light .body.md .md-link:focus-visible {
 }
 
 /*
- * The session's token meter. It is separate from the status line because the
- * two answer different questions: status describes the run that just ended and
- * is cleared when the next one starts, the meter describes the whole session
- * and survives every run in it.
+ * What this session has spent, inside the composer's actions row (p_0.47.24).
+ * It moved here because the composer is the dock's one opaque surface: a total
+ * painted on it cannot be covered by the transcript, even during the frame in
+ * which the dock's reserve is still catching up. It is the row's only flexible
+ * child, so it ellipsises before a button moves; the full string stays in the
+ * tooltip and the accessible name. The conversation's own context share is not
+ * here — it rides on the root line in the transcript's footprint, because it
+ * describes that conversation rather than the session.
  */
-.meter {
-  padding: 0 calc(var(--anvil-gap) + 1px) 6px;
-  font-size: 0.85em;
+.composer .meter {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  font-size: 0.8em;
   line-height: var(--ui-line-tight);
   color: var(--ui-muted);
-  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
 }
 
 /* --- the model's task list ------------------------------------------------ */

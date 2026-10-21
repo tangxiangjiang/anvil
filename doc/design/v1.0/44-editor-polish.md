@@ -305,8 +305,9 @@ which is how the extension already degrades (`runtime`, `permission_mode_source`
 | [p_0.47.21](../../roadmaps/v1.0/m_0.47/p_0.47.21.md) | An 18px orange-hammered mark and a word that turns through the forge |
 | [p_0.47.22](../../roadmaps/v1.0/m_0.47/p_0.47.22.md) | An anvil and hammer drawn to fill the view box, with pixel-wide spark strokes |
 | [p_0.47.23](../../roadmaps/v1.0/m_0.47/p_0.47.23.md) | The working line moved below the root and meter, which stay together |
+| [p_0.47.24](../../roadmaps/v1.0/m_0.47/p_0.47.24.md) | The root and run lines moved into the transcript as a footprint; the session total into the composer |
 
-0.47.9–0.47.23 were written after the milestone was accepted. Their findings came from the
+0.47.9–0.47.24 were written after the milestone was accepted. Their findings came from the
 first real use of the panel, not from a test: a capability that existed and was never turned
 on, an error that only reached the log, a block with no way out — and then a transcript that
 was tiring to read, followed by four manager panels that each declared their own copy of the
@@ -322,7 +323,9 @@ beginning and no way to close the ones already read, then an edit comparison tha
 scrollbar under every line it contained, then a panel that said nothing at all while a turn
 was in flight, then a working mark too quiet to notice and too still to read, then that mark
 drawn into three quarters of its box with a spark under a pixel wide, and finally a working
-line inserted between the two facts about the session it did not belong to. The lesson is recorded here rather
+line inserted between the two facts about the session it did not belong to, and finally those
+lines floating over the conversation, where a measured reserve could not stop the transcript
+from being painted across them. The lesson is recorded here rather
 than in a commit message — the manual passes the earlier phases wrote down as "still worth
 doing" are the ones that would have found all of these.
 
@@ -680,3 +683,47 @@ belongs with, and the dock's growth during a turn moved both.
   working line was its neighbour; with the meter between them that foot would separate the
   pair, so it returns to 6px. The working line keeps the room it was given, now above the
   composer where it matters.
+
+## 27. The footprint
+
+p_0.47.21–p_0.47.23 kept the root line and the run's line above the composer, and kept
+reordering them so each fact sat beside the one it belonged with. Order was never the whole
+problem: the lines float over a scrolling surface, and the space reserved for them is
+measured by a `ResizeObserver` after layout. Between a turn growing and the observer's
+callback, the transcript is painted under the lines or the lines over it. The dock can be
+made taller, never timelier.
+
+The layout follows one rule instead: **a fact that must never be overlapped lives inside an
+opaque surface; a fact allowed to move with the conversation stays in the flow.**
+
+- **The session's and the run's lines are one entity in the flow.** `#status` and `#root`
+  move into `#footprint`, the last child of `#transcript`, with `order: 1` so later turns
+  cannot sort above it. They scroll with the conversation, so nothing can be painted over
+  them and no measurement is involved.
+- **One entry, 4px apart.** Two transcript entries would sit 12px apart and read as unrelated
+  facts; these are a label and its value, and 4px is the panel's label-to-value gap. The
+  entry itself takes the transcript's 12px rhythm through `margin-block: 4px`, and its lines
+  drop their horizontal padding because the transcript already insets its content.
+- **The first line is reserved.** `.footprint .status` keeps `min-height: 1.5em` whether or
+  not a run is in flight. A block that shrinks when a turn ends moves everything below it; an
+  empty line is cheaper than a jump. `#status` is therefore hidden by the footprint, not by
+  its own content.
+- **The block appears with the session and leaves with it.** The footprint is hidden until
+  either line has something to say, and `clearTranscript` re-appends it: emptying the
+  transcript's text detaches it.
+- **The meter splits by scope.** The conversation's context share — used, percentage, left,
+  and the compact threshold when one is set — belongs to the root it describes, so it becomes
+  a `.root-facts` span on that line. The session's in/out and cache belong to the session, and
+  move into `#meter` inside `.composer .actions`, before the spacer, where they are painted
+  on an opaque card rather than floated over the transcript. `renderMeter` still owns both
+  halves and is the only place the meter's arithmetic is read.
+- **The total cannot push the buttons.** It is `flex: 1 1 auto` with `min-width: 0` and
+  ellipsises left-aligned; the row's right end belongs to `@`, Image and Send. The whole
+  string stays reachable through `title` and `aria-label`.
+- **A write to the block keeps the reader where they were.** Each of `renderRoot`,
+  `setStatus`, `startWorking` and `stopWorking` records whether the reader was at the bottom
+  before it writes and restores that after — the same `atBottom`/`scrollIfPinned` pair every
+  appended turn uses.
+- **The transcript's live region is still off.** The per-second clock now lives inside
+  `#transcript`, which is `aria-live="off"`; nothing announces each tick, and the end of a
+  turn is still said once through `#srStatus`.

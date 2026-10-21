@@ -23,6 +23,12 @@
   const input = document.getElementById('input');
   const sendButton = document.getElementById('send');
   const statusLine = document.getElementById('status');
+  /**
+   * The entry inside the transcript that holds the run's line and the root's.
+   * In the flow rather than the dock, so it scrolls with the conversation and
+   * cannot be painted over (p_0.47.24).
+   */
+  const footprint = document.getElementById('footprint');
   const banner = document.getElementById('banner');
   const chipsBar = document.getElementById('chips');
   const attachButton = document.getElementById('attach');
@@ -208,6 +214,12 @@
    * the conversation it counted would be a number about nobody.
    */
   let usageTotals = meterMath.empty();
+  /**
+   * The span on the root line that carries this conversation's share of its
+   * context window, or null until a root exists. `renderMeter` owns both
+   * scopes; this is only where the conversation's half is written.
+   */
+  let rootFacts = null;
   /** The slash catalogue, once the extension has sent it. */
   let catalogue = null;
   /** Rule files the last session reported, kept so the card can be reopened. */
@@ -388,6 +400,9 @@
   /** The line a turn shows while it runs: the mark, the word and the facts. */
   function startWorking() {
     if (workingTimer !== null) return; // the clock is already running
+    // The line lives in the scroll content now, so a write to it moves the
+    // reader's position unless it is put back.
+    const pinned = atBottom();
     workingSince = Date.now();
     workingStep = 0;
     workingMax = 0;
@@ -395,8 +410,9 @@
     workingWord.textContent = WORKING_WORDS[0];
     statusText.hidden = true;
     workingLine.hidden = false;
-    statusLine.hidden = false;
     renderWorkingMeta();
+    syncFootprint();
+    scrollIfPinned(pinned);
     workingTimer = setInterval(renderWorkingMeta, 1000);
     if (!reduceMotion) workingAnimations = animateHammer();
   }
@@ -408,8 +424,10 @@
     }
     for (const animation of workingAnimations) animation.cancel();
     workingAnimations = [];
+    const pinned = atBottom();
     workingLine.hidden = true;
-    statusLine.hidden = statusText.hidden;
+    syncFootprint();
+    scrollIfPinned(pinned);
   }
 
   /**
@@ -434,9 +452,24 @@
 
   /** The other half: the run's summary, or a note the host sent. */
   function setStatus(text) {
+    const pinned = atBottom();
     statusText.textContent = text;
     statusText.hidden = text === '';
-    statusLine.hidden = workingLine.hidden && text === '';
+    syncFootprint();
+    scrollIfPinned(pinned);
+  }
+
+  /**
+   * Shows the footprint once either line has something to say, and hides it
+   * while both are empty.
+   *
+   * The block is hidden as a whole rather than by its children: the status
+   * line keeps its reserved box (see `.footprint .status`), so a turn starting
+   * or ending changes what the block says without changing its height.
+   */
+  function syncFootprint() {
+    if (!footprint) return;
+    footprint.hidden = rootLine.hidden && workingLine.hidden && statusText.hidden;
   }
 
   function clearEmpty() {
@@ -706,6 +739,11 @@
     // like a new one rather than like an empty one.
     started = false;
     if (empty) transcript.appendChild(empty);
+    // Emptying the transcript detached every child, this block included; it is
+    // part of the conversation's own chrome rather than a turn, so it goes back
+    // (p_0.47.24).
+    if (footprint) transcript.appendChild(footprint);
+    syncFootprint();
     growInput();
   }
 
@@ -3535,21 +3573,30 @@
   }
 
   /**
-   * Draws the one line under the composer.
+   * Draws the two scopes of the session's token facts.
    *
-   * Two numbers, two sources. Context comes from the host's estimate against the
-   * declared window; before the host has answered, the last run's total stands
-   * in, because it is measured rather than guessed. Cache comes from the last
-   * run's reported cached input and the TTL the client was told, counted from
-   * the run's own last request — so the line says "the cache is warm for this
-   * long", not "something is happening".
+   * They used to share one line under the composer. Two numbers, two sources,
+   * and since p_0.47.24 two places as well: this conversation's share of its
+   * window is written on the root line inside the transcript's footprint,
+   * where it belongs to that conversation; what the window as a whole has
+   * spent is written inside the composer, the dock's one opaque surface, so
+   * the conversation cannot be painted over it.
+   *
+   * Context comes from the host's estimate against the declared window; before
+   * the host has answered, the last run's total stands in, because it is
+   * measured rather than guessed. Cache comes from the last run's reported
+   * cached input and the TTL the client was told, counted from the run's own
+   * last request — so the line says "the cache is warm for this long", not
+   * "something is happening".
    */
   function renderMeter() {
     if (!meter) return;
-    const parts = [];
+    const pinned = atBottom();
+    // This conversation: its estimated use against the window it declared.
+    const facts = [];
     const context = meterMath.remaining(usageTotals, contextInfo, autoCompactAt);
     if (context) {
-      parts.push(
+      facts.push(
         amount(context.used) +
           ' of ' +
           amount(context.window) +
@@ -3557,9 +3604,15 @@
           meterMath.percent(context.used, context.window) +
           '%)',
       );
-      parts.push(amount(context.left) + ' left');
-      if (context.compactAt > 0) parts.push('compact at ' + amount(context.compactAt));
-    } else {
+      facts.push(amount(context.left) + ' left');
+      if (context.compactAt > 0) facts.push('compact at ' + amount(context.compactAt));
+    }
+    if (rootFacts) rootFacts.textContent = facts.length > 0 ? ' · ' + facts.join(' · ') : '';
+    // This session: what it has spent, which survives every conversation the
+    // window ends. Without a declared window the last run's total is the
+    // label's fallback.
+    const parts = [];
+    if (!context) {
       const spent = meterMath.label(usageTotals, contextWindow);
       if (spent) parts.push(spent);
     }
@@ -3574,7 +3627,11 @@
     const text = parts.join(' · ');
     meter.textContent = text;
     meter.hidden = text === '';
+    // The row may have truncating width: the whole line stays reachable.
+    meter.title = text;
+    meter.setAttribute('aria-label', text);
     syncCacheClock(cache);
+    scrollIfPinned(pinned);
   }
 
   /**
@@ -3880,13 +3937,22 @@
    * belongs to one folder for its whole life, so there is nothing to switch to.
    * The name is what the eye reads and the path is the tooltip, which is the
    * split the Explorer makes between where a folder is and what it is called.
+   *
+   * Since p_0.47.24 the line also carries this conversation's share of its
+   * context window: it describes the conversation, so it lives on the line that
+   * names it rather than on a meter floating under the composer.
    */
   function renderRoot(msg) {
     if (!rootLine) return;
+    const pinned = atBottom();
     rootLine.textContent = '';
+    rootFacts = null;
     const name = typeof msg.name === 'string' ? msg.name : '';
     if (name === '') {
+      // A conversation with no root has nothing to say its context belongs to.
       rootLine.hidden = true;
+      renderMeter();
+      syncFootprint();
       return;
     }
     const path = typeof msg.path === 'string' ? msg.path : '';
@@ -3897,11 +3963,18 @@
     if (msg.multi === true) {
       rootLine.appendChild(el('span', 'root-note', 'one folder per window'));
     }
+    // Where `renderMeter` writes the conversation's half; the span is created
+    // here so the facts always follow the folder.
+    rootFacts = el('span', 'root-facts');
+    rootLine.appendChild(rootFacts);
     rootLine.title =
       msg.multi === true
         ? `This conversation, its checkpoints and its host all belong to ${path}. The window's other folders are not part of it; open another window to work in them.`
         : `This conversation reads and writes in ${path}.`;
     rootLine.hidden = false;
+    renderMeter();
+    syncFootprint();
+    scrollIfPinned(pinned);
   }
 
   // --- composer height ------------------------------------------------------

@@ -359,8 +359,16 @@ test('the renderer keeps both clocks, and only the cache one ticks', () => {
   assert.match(render, /meter\.textContent/);
   assert.match(render, /meterMath\.remaining\(/);
   assert.match(render, /meterMath\.cache\(/);
-  assert.match(render, /parts\.push\('compact at '/);
+  // Two scopes, two places (p_0.47.24): the conversation's share of its window
+  // is written on the root line, and the session's spent total and cache are
+  // written in the composer.
+  assert.match(render, /facts\.push\('compact at '/);
+  assert.match(render, /rootFacts\.textContent = facts\.length > 0 \? ' · ' \+ facts\.join\(' · '\) : ''/);
+  assert.match(render, /if \(!context\)/);
   assert.match(render, /' · cold'/);
+  // The composer's row can truncate the total; the whole line stays reachable.
+  assert.match(render, /meter\.title = text/);
+  assert.match(render, /meter\.setAttribute\('aria-label', text\)/);
 
   // Two intervals, each one second and each with its own lifetime: the cache
   // clock only while there is a live cache on a tab somebody can see, and the
