@@ -2890,8 +2890,14 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri, focus = f
       window, is after the first conversation chose one.
     -->
     <div id="root" class="root" hidden></div>
-    <div id="status" class="status" hidden></div>
     <div id="meter" class="meter" hidden></div>
+    <!--
+      The run's line, below the session's two facts rather than between them
+      (p_0.47.23): the root and the meter describe the conversation, this one
+      describes the turn, and it turns into the run's summary when the turn
+      ends. Nearest the composer is where a summary is read.
+    -->
+    <div id="status" class="status" hidden></div>
     <div id="bypass" class="bypass" hidden>Bypass is on. Tool calls run without asking.</div>
     <div id="dontAsk" class="dont-ask" hidden>No asking. Only calls this workspace's rules allow will run.</div>
     <form id="composer" class="composer">

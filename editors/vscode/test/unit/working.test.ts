@@ -18,6 +18,7 @@ import { test } from 'node:test';
 const ROOT = join(__dirname, '..', '..', '..');
 const CHAT_JS = readFileSync(join(ROOT, 'media', 'chat.js'), 'utf8');
 const CHAT_CSS = readFileSync(join(ROOT, 'media', 'chat.css'), 'utf8');
+const CHAT_PANEL = readFileSync(join(ROOT, 'src', 'chatPanel.ts'), 'utf8');
 
 /** A top-level function of the renderer, from its declaration to the next one. */
 function bodyOf(source: string, name: string): string {
@@ -200,9 +201,21 @@ test('the line is one row of mark and text, with a pivot in the stylesheet', () 
   assert.match(ruleBody('.status .working-meta'), /opacity:\s*0\.75/);
 });
 
+test('the session facts stay together, and the run’s line sits below them', () => {
+  const open = CHAT_PANEL.indexOf('id="composerDock"');
+  assert.ok(open > 0, 'the dock is in the panel template');
+  const dock = CHAT_PANEL.slice(open, CHAT_PANEL.indexOf('<form id="composer"', open));
+  const root = dock.indexOf('id="root"');
+  const meter = dock.indexOf('id="meter"');
+  const status = dock.indexOf('id="status"');
+  // A turn in flight must not insert its line between the two facts about the
+  // conversation; the run's line is nearest the composer instead.
+  assert.ok(root >= 0 && meter > root && status > meter, 'root, then meter, then status');
+});
+
 test('the dock holds the line clear of the composer', () => {
-  // Room, not a frame: the two lines that describe the run sit 10px above what
-  // follows them, as the transcript's own rhythm does.
-  assert.match(ruleBody('.root'), /padding: 0 calc\(var\(--anvil-gap\) \+ 1px\) 10px/);
+  // The root's foot keeps it reading with the meter beneath it; the run's line
+  // gets the room above the input it was given.
+  assert.match(ruleBody('.root'), /padding: 0 calc\(var\(--anvil-gap\) \+ 1px\) 6px/);
   assert.match(ruleBody('.status'), /padding: 0 calc\(var\(--anvil-gap\) \+ 1px\) 10px/);
 });

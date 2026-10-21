@@ -1504,13 +1504,14 @@ body.vscode-high-contrast-light .body.md .md-link:focus-visible {
 /* --- the window's root ---------------------------------------------------- */
 
 /*
- * One line above the status line, in the same muted weight as the meter: it is
- * a fact about the conversation, not a warning, and a multi-root window is the
- * only place it is not obvious. It carries no affordance on purpose — a
- * conversation cannot change folders (see the design chapter).
+ * The first of the dock's two facts about the conversation, directly above the
+ * meter and in the same muted weight: it is a fact, not a warning, and a
+ * multi-root window is the only place it is not obvious. It carries no
+ * affordance on purpose — a conversation cannot change folders (see the design
+ * chapter). Its 6px foot keeps it reading with the meter beneath it.
  */
 .root {
-  padding: 0 calc(var(--anvil-gap) + 1px) 10px;
+  padding: 0 calc(var(--anvil-gap) + 1px) 6px;
   font-size: 0.85em;
   line-height: var(--ui-line-tight);
   color: var(--ui-muted);
@@ -1536,8 +1537,14 @@ body.vscode-high-contrast-light .body.md .md-link:focus-visible {
 
 /* --- status --------------------------------------------------------------- */
 
+/*
+ * The run's line: below the root and the meter, nearest the composer, because
+ * it speaks about the turn rather than the conversation and becomes the run's
+ * summary at the end (p_0.47.23). Aligned with the card's own text, not its
+ * outer edge, and given room above the input as the one line that changes
+ * while a reader waits.
+ */
 .status {
-  /* Aligned with the card's own text, not its outer edge. */
   padding: 0 calc(var(--anvil-gap) + 1px) 10px;
   font-size: 0.85em;
   line-height: var(--ui-line-tight);
