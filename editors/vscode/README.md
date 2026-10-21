@@ -588,9 +588,8 @@ session sidebar shows, what the rules file's skeleton and error positions are,
 what change a finished tool call carried and how it should be opened, what a
 stored conversation folds into, what a conversation exports as, and whether a
 reloaded window comes back to its session or starts fresh — and the
-`vscode`-bound modules above only carry those
-or starts fresh — and the `vscode`-bound modules above only carry those
-decisions out. `test/unit/chatLayout.test.ts` is the third kind of check: it reads
+`vscode`-bound modules above only carry those decisions out.
+`test/unit/chatLayout.test.ts` is the third kind of check: it reads
 `media/chat.css` and `media/chat.js` as text and asserts the layout invariants
 those two files have to agree on, since nothing here can render them.
 `test/unit/markdown.test.ts` loads `media/markdown.js` the same way — by
