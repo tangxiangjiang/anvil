@@ -1582,7 +1582,8 @@ body.vscode-high-contrast-light .body.md .md-link:focus-visible {
  */
 .status .working-glyph .hammer {
   transform-box: view-box;
-  transform-origin: 12px 9px;
+  /* The face's top-right corner: where the handle meets the anvil. */
+  transform-origin: 11.4px 9.8px;
   color: var(--vscode-charts-orange, #e8912d);
 }
 

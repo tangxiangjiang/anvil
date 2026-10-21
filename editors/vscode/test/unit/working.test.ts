@@ -54,6 +54,13 @@ test('the mark is an anvil, a hammer and a spark, built as nodes', () => {
   assert.match(glyph, /svgNode\('g', \{ class: 'spark' \}\)/);
   // The spark is keyed to the strike, so it starts painted out.
   assert.match(glyph, /class: 'spark'/);
+  // Every stroke is at least a pixel on screen: 1.4 units is about 1.6px at 18px.
+  assert.match(glyph, /'stroke-width': '1\.4'/);
+  // The ink reaches the box's edges rather than sitting in the middle of it.
+  assert.match(glyph, /M1\.2 9\.8h10\.2v2H1\.2z/);
+  assert.match(glyph, /M3\.8 13\.4h7\.2v1\.6H3\.8z/);
+  assert.match(glyph, /x: '8\.2',\s*y: '0\.8',\s*width: '6\.2'/);
+  assert.match(glyph, /x: '10\.6',\s*y: '2\.6',\s*width: '1\.6'/);
   // Nodes, never markup.
   assert.doesNotMatch(glyph, /innerHTML|outerHTML|insertAdjacentHTML|document\.write/);
   assert.match(bodyOf(CHAT_JS, 'svgNode'), /createElementNS\(SVG_NS/);
@@ -182,7 +189,8 @@ test('the line is one row of mark and text, with a pivot in the stylesheet', () 
   // be read as a state.
   const pivot = ruleBody('.status .working-glyph .hammer');
   assert.match(pivot, /transform-box:\s*view-box/);
-  assert.match(pivot, /transform-origin:\s*12px 9px/);
+  // The face's top-right corner, where the handle meets the anvil.
+  assert.match(pivot, /transform-origin:\s*11\.4px 9\.8px/);
   assert.match(pivot, /color:\s*var\(--vscode-charts-orange, #e8912d\)/);
 
   const spark = ruleBody('.status .working-glyph .spark');

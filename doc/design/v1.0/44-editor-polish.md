@@ -303,8 +303,9 @@ which is how the extension already degrades (`runtime`, `permission_mode_source`
 | [p_0.47.19](../../roadmaps/v1.0/m_0.47/p_0.47.19.md) | One scrollbar per side of an edit diff, revealed on hover and moving both sides together |
 | [p_0.47.20](../../roadmaps/v1.0/m_0.47/p_0.47.20.md) | An animated anvil-and-hammer working line on the status strip |
 | [p_0.47.21](../../roadmaps/v1.0/m_0.47/p_0.47.21.md) | An 18px orange-hammered mark and a word that turns through the forge |
+| [p_0.47.22](../../roadmaps/v1.0/m_0.47/p_0.47.22.md) | An anvil and hammer drawn to fill the view box, with pixel-wide spark strokes |
 
-0.47.9–0.47.21 were written after the milestone was accepted. Their findings came from the
+0.47.9–0.47.22 were written after the milestone was accepted. Their findings came from the
 first real use of the panel, not from a test: a capability that existed and was never turned
 on, an error that only reached the log, a block with no way out — and then a transcript that
 was tiring to read, followed by four manager panels that each declared their own copy of the
@@ -318,7 +319,8 @@ had no edge, and whose final answer had no ending — and then that ending missi
 turn because the live path asked for a failure that is never absent, then a turn with no
 beginning and no way to close the ones already read, then an edit comparison that drew a
 scrollbar under every line it contained, then a panel that said nothing at all while a turn
-was in flight, and finally a working mark too quiet to notice and too still to read. The lesson is recorded here rather
+was in flight, then a working mark too quiet to notice and too still to read, and finally
+that mark drawn into three quarters of its box with a spark under a pixel wide. The lesson is recorded here rather
 than in a commit message — the manual passes the earlier phases wrote down as "still worth
 doing" are the ones that would have found all of these.
 
@@ -635,3 +637,25 @@ it became scenery — the same failure the status line had before p_0.47.20, one
 - **Room, not a frame.** The root line and the working line gain a little space above the
   composer. Boxing them would make the dock a card, which the transcript stopped being in
   p_0.47.10.
+
+## 25. A mark that fills its box
+
+An icon's size is not its file's size. The 18px box of p_0.47.21 held a drawing that used
+about three quarters of the box across and left the corners empty; its spark was 0.8 view-box
+units, which is 0.90px on screen — a stroke the browser paints as a smudge. The mark looked
+smaller than its box and its brightest moment was the faintest thing in it.
+
+- **The drawing is the scale.** Enlarging the box again would scale the margins too. The
+  anvil and hammer are re-laid inside the same 16-unit view box so their ink spans about 89%
+  of both dimensions: a face, waist and base across the bottom, a horn to the left edge, a
+  wider handle and a larger head raised at the top right.
+- **Strokes are checked in screen pixels.** SVG strokes scale with the box, so "1px" is a
+  number in units multiplied by a ratio the stylesheet chooses. The spark's 1.4 units are
+  about 1.6px at 18px — the smallest thing in the mark sets the floor, not the largest.
+- **The pivot is a coordinate of the drawing.** `transform-origin` is in user units, so a
+  redrawn anvil moves it: `11.4px 9.8px`, the face's top-right corner, is where the hammer
+  rests and where it turns.
+- **The swing stays inside the box.** At `-72deg` every corner of the head remains within
+  the view box, so no frame of the animation clips.
+- **The silhouette does not change.** Filling the box is a change of proportions, not of
+  picture: anvil below, head above right, spark where they meet.

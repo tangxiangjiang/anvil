@@ -247,42 +247,52 @@
       'aria-hidden': 'true',
       focusable: 'false',
     });
+    // Drawn to the box, not inside it: face, horn, waist and base span x 0.2–11.4
+    // and y 9.8–15, so the mark's ink reaches the edges a 16-unit box gives it.
     svg.appendChild(
       svgNode('path', {
         class: 'anvil',
         fill: 'currentColor',
-        d: 'M3.6 8.4h8.2v1.2H3.6zM3.6 8.4 1.9 9.3l1.7.3zM7 9.6h2V12H7zM5.4 11.6h5.2v1.3H5.4z',
+        d:
+          'M1.2 9.8h10.2v2H1.2z' +
+          'M1.2 9.8 0.2 10.8l1 1z' +
+          'M6.4 11.8h2.2v1.6H6.4z' +
+          'M3.8 13.4h7.2v1.6H3.8z',
       }),
     );
     const spark = svgNode('g', { class: 'spark' });
+    // Three rays where the head lands. 1.4 units is about 1.6px at 18px; at 0.8
+    // the browser antialiased the strike into a smudge.
     spark.appendChild(
       svgNode('path', {
-        d: 'M5.9 6.1v1.1M5 7.1l.8.8M6.8 7.1l-.8.8',
+        d: 'M5.2 6.0v2.4M3.6 6.8 5.2 8.4M6.8 6.8 5.2 8.4',
         fill: 'none',
         stroke: 'currentColor',
-        'stroke-width': '0.8',
+        'stroke-width': '1.4',
         'stroke-linecap': 'round',
       }),
     );
     svg.appendChild(spark);
+    // The handle meets the face at (11.4, 9.8) — the pivot — and the head rests
+    // above it; both are wider than they were so the hammer has weight at 18px.
     const hammer = svgNode('g', { class: 'hammer' });
     hammer.appendChild(
       svgNode('rect', {
-        x: '11.2',
-        y: '3.2',
-        width: '1.4',
-        height: '6',
-        rx: '.7',
+        x: '10.6',
+        y: '2.6',
+        width: '1.6',
+        height: '7.2',
+        rx: '.8',
         fill: 'currentColor',
       }),
     );
     hammer.appendChild(
       svgNode('rect', {
-        x: '9.4',
-        y: '1.6',
-        width: '4.4',
-        height: '2.4',
-        rx: '.6',
+        x: '8.2',
+        y: '0.8',
+        width: '6.2',
+        height: '2.8',
+        rx: '.8',
         fill: 'currentColor',
       }),
     );
