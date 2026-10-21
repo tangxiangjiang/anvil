@@ -847,3 +847,25 @@ value is not the same as the text that happens to hold it.
   fetching its cached copy — a shipped fix installs and appears to do nothing. All five
   documents now build their links through one fingerprinted builder, and a reinstall cannot
   be served from cache.
+
+## 30. A dot that stays under the composer
+
+The transcript's dots carry `z-index: 1` for a reason of their own: a tool row's state dot,
+a reply's start dot and a summary's end dot all sit on the vertical rail, and the rail is
+drawn by the block around them, so each dot has to be painted after that line. The blocks are
+positioned but have no stacking context, which means that `z-index: 1` does not stay inside
+the block — it joins the root stacking context.
+
+The dock is positioned too, with `z-index: auto`, and a positioned element with no order is
+painted below anything with a positive one. So a row that scrolled under the composer was
+covered by the card everywhere except its dot: the dot floated on the card, above the input
+and the placeholder.
+
+The fix is on the surface that is supposed to be on top. The dock declares `z-index: 2`, so
+the whole card — not merely its opaque background — is painted above every transcript dot.
+The dots keep their `1`, because removing it would put each dot under its own rail, which is
+the reason it is there.
+
+A test reads the numbers rather than the intent: the dock's `z-index` must be greater than the
+`z-index` of all three dot rules. Pinning `2` on the dock alone would pass a later change that
+raised a dot to `5`.

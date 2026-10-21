@@ -1893,6 +1893,15 @@ body.drop-target {
   position: absolute;
   inset-inline: 0;
   bottom: 0;
+  /*
+   * The card paints above the transcript, not merely after it. A transcript
+   * dot carries `z-index: 1` so it covers the rail its own block draws, and
+   * that value belongs to the root stacking context — the block around it is
+   * positioned but creates none — so a positioned dock with no order of its
+   * own was painted below it, and a row scrolled under the composer showed its
+   * green dot floating on the card (p_0.47.27).
+   */
+  z-index: 2;
   padding: 0 var(--anvil-gap) var(--anvil-gap);
   padding-inline: max(var(--anvil-gap), calc((100% - var(--anvil-read-width)) / 2));
   pointer-events: none;

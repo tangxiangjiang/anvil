@@ -253,6 +253,25 @@ test('the footprint stays the transcript’s last entry in the document too', ()
   assert.doesNotMatch(JS, /transcript\.appendChild\(node\)/);
 });
 
+test('the dock paints above every dot in the transcript', () => {
+  // The dot carries `z-index: 1` so it covers the rail its own block draws, and
+  // that value lives in the root stacking context — the block around the dot is
+  // positioned but creates none. The dock had no order of its own, so a row
+  // scrolled under the composer left its green dot floating on the card
+  // (p_0.47.27).
+  const dock = Number(valueOf('.dock', 'z-index'));
+  assert.ok(Number.isFinite(dock), 'the dock declares a stacking order');
+  for (const selector of [
+    '.tool > summary::before',
+    '.reply > .reply-head .start-dot',
+    '.msg.assistant.summary > .who .end-dot',
+  ]) {
+    const dot = Number(valueOf(selector, 'z-index'));
+    assert.ok(dot > 0, `${selector} still covers its rail`);
+    assert.ok(dock > dot, `${selector} must paint under the dock`);
+  }
+});
+
 test('the stylesheet has no at-rules, which is what lets it be parsed as text', () => {
   // `parseRules()` above splits the stylesheet on `}` and reads the text before
   // each `{` as a selector, so a `@media` block would silently turn into rules
