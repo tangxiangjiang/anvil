@@ -223,6 +223,191 @@
     return node;
   }
 
+  // --- the working line -----------------------------------------------------
+
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+
+  /** An SVG node with its attributes. The working mark is the only SVG here. */
+  function svgNode(tag, attrs) {
+    const node = document.createElementNS(SVG_NS, tag);
+    for (const name of Object.keys(attrs)) node.setAttribute(name, attrs[name]);
+    return node;
+  }
+
+  /**
+   * The working mark: an anvil, a hammer whose head pivots at the anvil's edge,
+   * and a spark where the head lands. Built as nodes rather than markup: a
+   * character has no hammer that keeps its shape in every font, and one small
+   * picture is not worth an image file of its own.
+   */
+  function hammerGlyph() {
+    const svg = svgNode('svg', {
+      class: 'working-glyph',
+      viewBox: '0 0 16 16',
+      'aria-hidden': 'true',
+      focusable: 'false',
+    });
+    svg.appendChild(
+      svgNode('path', {
+        class: 'anvil',
+        fill: 'currentColor',
+        d: 'M3.6 8.4h8.2v1.2H3.6zM3.6 8.4 1.9 9.3l1.7.3zM7 9.6h2V12H7zM5.4 11.6h5.2v1.3H5.4z',
+      }),
+    );
+    const spark = svgNode('g', { class: 'spark' });
+    spark.appendChild(
+      svgNode('path', {
+        d: 'M5.9 6.1v1.1M5 7.1l.8.8M6.8 7.1l-.8.8',
+        fill: 'none',
+        stroke: 'currentColor',
+        'stroke-width': '0.8',
+        'stroke-linecap': 'round',
+      }),
+    );
+    svg.appendChild(spark);
+    const hammer = svgNode('g', { class: 'hammer' });
+    hammer.appendChild(
+      svgNode('rect', {
+        x: '11.2',
+        y: '3.2',
+        width: '1.4',
+        height: '6',
+        rx: '.7',
+        fill: 'currentColor',
+      }),
+    );
+    hammer.appendChild(
+      svgNode('rect', {
+        x: '9.4',
+        y: '1.6',
+        width: '4.4',
+        height: '2.4',
+        rx: '.6',
+        fill: 'currentColor',
+      }),
+    );
+    svg.appendChild(hammer);
+    return svg;
+  }
+
+  /*
+   * The status line is two halves that never show at once: the working mark
+   * while a turn is in flight, and the run's summary after it. They are built
+   * once so a second's re-render cannot restart the animation or the clock.
+   */
+  const statusText = el('span', 'status-text');
+  const workingLine = el('span', 'working');
+  const workingWord = el('span', 'working-word', 'Forging…');
+  const workingMeta = el('span', 'working-meta');
+  statusText.hidden = true;
+  workingLine.hidden = true;
+  workingLine.appendChild(hammerGlyph());
+  workingLine.appendChild(workingWord);
+  workingLine.appendChild(workingMeta);
+  statusLine.appendChild(workingLine);
+  statusLine.appendChild(statusText);
+
+  /** The swing is motion, so a reader who asked for less gets a still mark. */
+  const reduceMotion =
+    typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  let workingTimer = null;
+  let workingSince = 0;
+  let workingStep = 0;
+  let workingMax = 0;
+  let workingAnimations = [];
+
+  /**
+   * The head falls onto the anvil and the spark answers. The Web Animations API
+   * rather than a keyframe block: `chat.css` may not carry an at-rule, and the
+   * only geometry the stylesheet supplies is the pivot.
+   */
+  function animateHammer() {
+    const glyph = workingLine.querySelector('.working-glyph');
+    if (!glyph || typeof Element.prototype.animate !== 'function') return [];
+    const head = glyph.querySelector('.hammer');
+    const spark = glyph.querySelector('.spark');
+    const animations = [];
+    if (head) {
+      animations.push(
+        head.animate(
+          [
+            { transform: 'rotate(0deg)', offset: 0 },
+            { transform: 'rotate(0deg)', offset: 0.55 },
+            { transform: 'rotate(-72deg)', offset: 0.66 },
+            { transform: 'rotate(-70deg)', offset: 0.73 },
+            { transform: 'rotate(0deg)', offset: 1 },
+          ],
+          { duration: 900, iterations: Infinity, easing: 'cubic-bezier(.3, 0, .6, 1)' },
+        ),
+      );
+    }
+    if (spark) {
+      animations.push(
+        spark.animate(
+          [
+            { opacity: 0, offset: 0 },
+            { opacity: 0, offset: 0.62 },
+            { opacity: 1, offset: 0.67 },
+            { opacity: 0, offset: 0.82 },
+            { opacity: 0, offset: 1 },
+          ],
+          { duration: 900, iterations: Infinity },
+        ),
+      );
+    }
+    return animations;
+  }
+
+  /** The line a turn shows while it runs: the mark, the word and the facts. */
+  function startWorking() {
+    if (workingTimer !== null) return; // the clock is already running
+    workingSince = Date.now();
+    workingStep = 0;
+    workingMax = 0;
+    workingWord.textContent = 'Forging…';
+    statusText.hidden = true;
+    workingLine.hidden = false;
+    statusLine.hidden = false;
+    renderWorkingMeta();
+    workingTimer = setInterval(renderWorkingMeta, 1000);
+    if (!reduceMotion) workingAnimations = animateHammer();
+  }
+
+  function stopWorking() {
+    if (workingTimer !== null) {
+      clearInterval(workingTimer);
+      workingTimer = null;
+    }
+    for (const animation of workingAnimations) animation.cancel();
+    workingAnimations = [];
+    workingLine.hidden = true;
+    statusLine.hidden = statusText.hidden;
+  }
+
+  /**
+   * The parenthetical, in the order the CLI puts it: what stops the turn, how
+   * long it has run, and — only when the host said — which step it is on.
+   */
+  function renderWorkingMeta() {
+    if (document.hidden) return; // nobody is reading a hidden tab
+    const seconds = Math.max(0, Math.floor((Date.now() - workingSince) / 1000));
+    const spent =
+      seconds < 60 ? seconds + 's' : Math.floor(seconds / 60) + 'm ' + (seconds % 60) + 's';
+    const parts = ['esc to interrupt', spent];
+    if (workingStep > 0) {
+      parts.push(workingMax > 0 ? 'step ' + workingStep + '/' + workingMax : 'step ' + workingStep);
+    }
+    workingMeta.textContent = '(' + parts.join(' · ') + ')';
+  }
+
+  /** The other half: the run's summary, or a note the host sent. */
+  function setStatus(text) {
+    statusText.textContent = text;
+    statusText.hidden = text === '';
+    statusLine.hidden = workingLine.hidden && text === '';
+  }
+
   function clearEmpty() {
     if (!started) {
       started = true;
@@ -479,8 +664,9 @@
     // transcript gets its prompts back from the replay, not from memory.
     historyMath.clear(history);
     placed = null;
-    statusLine.textContent = '';
-    statusLine.hidden = true;
+    // The clock and the animation described the conversation that just left.
+    stopWorking();
+    setStatus('');
     resetUsage();
     setTodos([]);
     transcript.textContent = '';
@@ -3256,6 +3442,11 @@
     // stop button — so focus moves there instead of nowhere.
     const hadInputFocus = document.activeElement === input;
     running = next;
+    // The line says what is happening for exactly as long as something is:
+    // starting it here rather than on the first event also covers a turn that a
+    // reopened tab found already in flight.
+    if (running) startWorking();
+    else stopWorking();
     // One button: a paper plane sends, and the same control stops a turn that
     // is already running. It stays enabled either way — disabling it while a
     // turn runs would take the stop away.
@@ -3490,8 +3681,7 @@
     if (!failure || failure.kind === 'none') markSummary(round);
     const parts = runSummary(done);
     recordUsage(done);
-    statusLine.textContent = parts.join(' · ');
-    statusLine.hidden = parts.length === 0;
+    setStatus(parts.join(' · '));
     // "Stopped." is not a failure, but it is still something the user asked
     // for and should see once: a run that ends silently reads as a hang.
     if (failure && failure.message) addNotice(failure.message);
@@ -3818,7 +4008,7 @@
     // Optimistic: the host's `state` notification confirms it a moment later,
     // but the composer must lock immediately or a double Enter sends twice.
     setRunning(true);
-    statusLine.hidden = true;
+    setStatus('');
     // A new turn: a plan the reader closed last time is allowed to appear
     // again, even if the model repeats it word for word.
     todoEpoch += 1;
@@ -4110,13 +4300,22 @@
     else if (e.type === 'todo') setTodos(e.items);
     else if (e.type === 'compact') addCompact(e.compact);
     else if (e.type === 'error') addNotice(e.text || 'The run reported an error.');
-    else if (e.type === 'progress' && e.text) {
-      statusLine.textContent = e.text;
-      statusLine.hidden = false;
-      // The line is what the eye reads; the polite region is what the ear
-      // hears, and the throttle is what keeps a run of them from becoming
-      // noise.
-      if (active === mainScope) announceProgress(e.text);
+    else if (e.type === 'progress') {
+      // A step belongs to the working line while a turn runs. The same event in
+      // a replay has no run of its own, so its text lands on the line instead.
+      if (typeof e.step === 'number' && e.step > 0) {
+        workingStep = e.step;
+        workingMax = typeof e.maxSteps === 'number' && e.maxSteps > 0 ? e.maxSteps : 0;
+        if (!workingLine.hidden) renderWorkingMeta();
+      }
+      if (e.text) {
+        if (!workingLine.hidden) workingWord.textContent = e.text;
+        else setStatus(e.text);
+        // The line is what the eye reads; the polite region is what the ear
+        // hears, and the throttle is what keeps a run of them from becoming
+        // noise.
+        if (active === mainScope) announceProgress(e.text);
+      }
     }
   }
 

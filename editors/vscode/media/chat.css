@@ -1545,6 +1545,44 @@ body.vscode-high-contrast-light .body.md .md-link:focus-visible {
 }
 
 /*
+ * The working half of the line: the anvil-and-hammer mark, the word for the
+ * step, and the parenthetical of facts. The mark swings from script (see
+ * `animateHammer`), so the only geometry here is the pivot; a stylesheet that
+ * carried an `@keyframes` would stop being parseable as text by the layout
+ * tests.
+ */
+.status .working {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* An author display rule would otherwise out-rank the `hidden` attribute. */
+.status .working[hidden] {
+  display: none;
+}
+
+.status .working-glyph {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.status .working-glyph .hammer {
+  transform-box: view-box;
+  transform-origin: 12px 9px;
+}
+
+.status .working-glyph .spark {
+  opacity: 0;
+}
+
+.status .working-meta {
+  opacity: 0.75;
+}
+
+/*
  * The session's token meter. It is separate from the status line because the
  * two answer different questions: status describes the run that just ended and
  * is cleared when the next one starts, the meter describes the whole session

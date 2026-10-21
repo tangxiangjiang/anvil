@@ -362,13 +362,17 @@ test('the renderer keeps both clocks, and only the cache one ticks', () => {
   assert.match(render, /parts\.push\('compact at '/);
   assert.match(render, /' · cold'/);
 
-  // One interval, one second, and only while there is a live cache on a tab
-  // somebody can see; everything else redraws on an event.
+  // Two intervals, each one second and each with its own lifetime: the cache
+  // clock only while there is a live cache on a tab somebody can see, and the
+  // working clock only while a turn is in flight (p_0.47.20). Everything else
+  // redraws on an event.
   const clock = bodyOf(CHAT_JS, 'syncCacheClock');
   assert.match(clock, /setInterval\(renderMeter, 1000\)/);
   assert.match(clock, /document\.hidden/);
   assert.match(clock, /clearInterval\(cacheClock\)/);
-  assert.doesNotMatch(CHAT_JS, /setInterval\((?!renderMeter, 1000)/);
+  assert.doesNotMatch(CHAT_JS, /setInterval\((?!renderMeter, 1000|renderWorkingMeta, 1000)/);
+  assert.match(bodyOf(CHAT_JS, 'startWorking'), /setInterval\(renderWorkingMeta, 1000\)/);
+  assert.match(bodyOf(CHAT_JS, 'stopWorking'), /clearInterval\(workingTimer\)/);
   assert.match(CHAT_JS, /addEventListener\('visibilitychange'/);
 });
 

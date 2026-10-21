@@ -301,8 +301,9 @@ which is how the extension already degrades (`runtime`, `permission_mode_source`
 | [p_0.47.17](../../roadmaps/v1.0/m_0.47/p_0.47.17.md) | The summary endings marked by the live path as well as the replay |
 | [p_0.47.18](../../roadmaps/v1.0/m_0.47/p_0.47.18.md) | A reply's start marker, one fold per turn, history closed and the newest open |
 | [p_0.47.19](../../roadmaps/v1.0/m_0.47/p_0.47.19.md) | One scrollbar per side of an edit diff, revealed on hover and moving both sides together |
+| [p_0.47.20](../../roadmaps/v1.0/m_0.47/p_0.47.20.md) | An animated anvil-and-hammer working line on the status strip |
 
-0.47.9–0.47.19 were written after the milestone was accepted. Their findings came from the
+0.47.9–0.47.20 were written after the milestone was accepted. Their findings came from the
 first real use of the panel, not from a test: a capability that existed and was never turned
 on, an error that only reached the log, a block with no way out — and then a transcript that
 was tiring to read, followed by four manager panels that each declared their own copy of the
@@ -314,8 +315,9 @@ opened on a result whose call the window had cut, and finally a long conversatio
 too sparse, whose state words said nothing, whose dots sat under the line, whose opened call
 had no edge, and whose final answer had no ending — and then that ending missing from the live
 turn because the live path asked for a failure that is never absent, then a turn with no
-beginning and no way to close the ones already read, and finally an edit comparison that drew
-a scrollbar under every line it contained. The lesson is recorded here rather
+beginning and no way to close the ones already read, then an edit comparison that drew a
+scrollbar under every line it contained, and finally a panel that said nothing at all while a
+turn was in flight. The lesson is recorded here rather
 than in a commit message — the manual passes the earlier phases wrote down as "still worth
 doing" are the ones that would have found all of these.
 
@@ -584,3 +586,29 @@ itself. p_0.47.19 makes the side the scroll region instead.
   CSS. A pane is a whole side, so a unified column cannot be carved out of two of them; the
   comparison keeps its pairs and paints either shape from them when the body class flips.
   This is the one place where the diff's two shapes are different DOM.
+
+## 23. A working line that forges
+
+A run in flight had no face of its own: the composer locks, the send button becomes a stop
+button, and the status line — the one element that describes the run — was hidden from the
+prompt until the run ended. p_0.47.20 gives it a working state, in the shape Claude Code
+gives one: a mark, a word, and a dim parenthetical of facts.
+
+- **The mark is the product's.** An anvil and a hammer, drawn as an inline SVG with the
+  head pivoting at the anvil's edge and a spark on the strike. A character has no hammer
+  that renders the same in every font, and an image would be a file to ship for one glyph.
+- **The animation is script, the pivot is stylesheet.** `chat.css` may not carry an
+  `@keyframes` — the layout tests parse the file as text — so the head swings through the
+  Web Animations API. The stylesheet contributes the two things that are geometry: the pivot
+  and `transform-box: view-box`.
+- **The line replaces itself, it does not stack.** The working half and the summary share
+  `#status`: one describes the run while it lasts, the other after it ends. Building both
+  once means the clock and the animation survive every second's re-render; a single
+  `textContent` write would restart the swing.
+- **The text follows the CLI.** `Forging…` then `(esc to interrupt · 12s · step 2/40)`. The
+  escape comes first because it is the part a reader can act on; the step appears only when
+  the host reported one; tokens do not appear because a live run's usage arrives with the
+  terminal event, and a number that appears only at the end is not progress.
+- **Motion is a preference, not a feature.** `prefers-reduced-motion` leaves the hammer
+  still and the spark painted out. The line, the word and the clock remain: the information
+  is not the animation.
