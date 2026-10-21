@@ -1572,17 +1572,39 @@ body.vscode-high-contrast-light .body.md .md-link:focus-visible {
 
 /*
  * The run's line: above the root, because what the turn is doing is read first.
- * It becomes the run's summary when the turn ends. Its first line keeps its box
- * whether or not a run is in flight — that reserve is what stops the block (and
- * everything below it) from moving when a turn starts or finishes.
+ * It becomes the run's summary when the turn ends.
+ *
+ * A flex row rather than a block of inline boxes, and not only for alignment:
+ * the line's height has to be one number whatever it holds. Inline content's
+ * line box adds the strut's height to whatever an inline-flex child contributes
+ * at its baseline — an amount the stylesheet cannot state — whereas a flex row
+ * is exactly `max(min-height, tallest child)`. The minimum is the taller of the
+ * two children: the text line (`0.85em × 1.5`, which follows
+ * `anvil.chatFontSize`) and the 18px mark, which does not. That is what stops a
+ * turn from moving the end of the conversation by a pixel and a half
+ * (p_0.47.25).
  */
 .status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   padding: 0;
-  min-height: 1.5em;
+  min-height: max(1.5em, 18px);
   font-size: 0.85em;
   line-height: var(--ui-line-tight);
   color: var(--ui-muted);
   white-space: nowrap;
+  overflow: hidden;
+}
+
+/*
+ * The run's summary. A flex item with a zero minimum and its own ellipsis:
+ * `text-overflow` on the row would not reach text inside a flex item, and a
+ * summary that overflows would push the row wider than the transcript.
+ */
+.status-text {
+  flex: 0 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -1595,7 +1617,9 @@ body.vscode-high-contrast-light .body.md .md-link:focus-visible {
  * tests.
  */
 .status .working {
-  display: inline-flex;
+  display: flex;
+  flex: 0 1 auto;
+  min-width: 0;
   align-items: center;
   gap: 6px;
 }
@@ -1603,6 +1627,19 @@ body.vscode-high-contrast-light .body.md .md-link:focus-visible {
 /* An author display rule would otherwise out-rank the `hidden` attribute. */
 .status .working[hidden] {
   display: none;
+}
+
+/* The mark and the word keep their size; only the parenthetical truncates. */
+.status .working-word {
+  flex: 0 0 auto;
+}
+
+.status .working-meta {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.75;
 }
 
 /*
@@ -1633,10 +1670,6 @@ body.vscode-high-contrast-light .body.md .md-link:focus-visible {
 .status .working-glyph .spark {
   opacity: 0;
   color: var(--vscode-charts-orange, #e8912d);
-}
-
-.status .working-meta {
-  opacity: 0.75;
 }
 
 /*
@@ -1859,6 +1892,16 @@ body.drop-target {
 
 .composer .actions .spacer {
   flex: 1;
+}
+
+/*
+ * The controls keep their size (p_0.47.25). The meter is the row's only
+ * flexible child, so a long session total truncates there; without this a flex
+ * row's default `flex-shrink: 1` would squeeze a button's label first.
+ */
+.composer .actions > button,
+.composer .actions > select {
+  flex: 0 0 auto;
 }
 
 .composer button.icon {

@@ -181,12 +181,22 @@ test('a progress event feeds the line with what the host reported', () => {
 });
 
 test('the line is one row of mark and text, with a pivot in the stylesheet', () => {
-  const line = ruleBody('.status .working');
-  assert.match(line, /display:\s*inline-flex/);
+  const line = ruleBody('.status');
+  // A flex row, so the line's height is `max(min-height, tallest child)` and
+  // not the strut plus whatever an inline-flex baseline adds (p_0.47.25).
+  assert.match(line, /display:\s*flex/);
   assert.match(line, /align-items:\s*center/);
-  assert.match(line, /gap:\s*6px/);
+  const working = ruleBody('.status .working');
+  assert.match(working, /display:\s*flex/);
+  assert.match(working, /align-items:\s*center/);
+  assert.match(working, /gap:\s*6px/);
   // `hidden` has to beat the display rule above.
   assert.match(ruleBody('.status .working[hidden]'), /display:\s*none/);
+  // The mark and the word keep their size; the parenthetical is what truncates.
+  assert.match(ruleBody('.status .working-word'), /flex:\s*0 0 auto/);
+  const meta = ruleBody('.status .working-meta');
+  assert.match(meta, /min-width:\s*0/);
+  assert.match(meta, /text-overflow:\s*ellipsis/);
 
   // Larger than the 0.85em line it labels; the view box does not change.
   const glyph = ruleBody('.status .working-glyph');
@@ -270,7 +280,22 @@ test('the footprint keeps the panel’s own rhythm, and reserves its first line'
   assert.match(ruleBody('.status'), /font-size:\s*0\.85em/);
   assert.match(ruleBody('.root'), /font-size:\s*0\.85em/);
 
-  // Line one keeps its box when there is nothing to say, so a turn starting or
-  // ending changes the block's words, never its height.
-  assert.match(ruleBody('.status'), /min-height:\s*1\.5em/);
+  // Line one is exactly the taller of the text line and the mark, so a run
+  // starting or ending changes the block's words, never its height.
+  const status = ruleBody('.status');
+  assert.match(status, /min-height:\s*max\(1\.5em, 18px\)/);
+  assert.match(status, /overflow:\s*hidden/);
+  // The summary truncates in its own box; `text-overflow` on the row would not
+  // reach it across the flex-item boundary.
+  const summary = ruleBody('.status-text');
+  assert.match(summary, /min-width:\s*0/);
+  assert.match(summary, /text-overflow:\s*ellipsis/);
+});
+
+test('the composer’s controls cannot be squeezed by the total', () => {
+  // The meter is the row's only flexible child; a shrunk button loses its
+  // label before a truncated number loses its meaning (p_0.47.25).
+  assert.match(ruleBody('.composer .actions > button'), /flex:\s*0 0 auto/);
+  assert.match(ruleBody('.composer .actions > select'), /flex:\s*0 0 auto/);
+  assert.match(ruleBody('.composer .meter'), /flex:\s*1 1 auto/);
 });

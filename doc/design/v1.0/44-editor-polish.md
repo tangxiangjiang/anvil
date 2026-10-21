@@ -306,8 +306,9 @@ which is how the extension already degrades (`runtime`, `permission_mode_source`
 | [p_0.47.22](../../roadmaps/v1.0/m_0.47/p_0.47.22.md) | An anvil and hammer drawn to fill the view box, with pixel-wide spark strokes |
 | [p_0.47.23](../../roadmaps/v1.0/m_0.47/p_0.47.23.md) | The working line moved below the root and meter, which stay together |
 | [p_0.47.24](../../roadmaps/v1.0/m_0.47/p_0.47.24.md) | The root and run lines moved into the transcript as a footprint; the session total into the composer |
+| [p_0.47.25](../../roadmaps/v1.0/m_0.47/p_0.47.25.md) | A status line of one height, with a truncation box per half, and buttons that cannot shrink |
 
-0.47.9–0.47.24 were written after the milestone was accepted. Their findings came from the
+0.47.9–0.47.25 were written after the milestone was accepted. Their findings came from the
 first real use of the panel, not from a test: a capability that existed and was never turned
 on, an error that only reached the log, a block with no way out — and then a transcript that
 was tiring to read, followed by four manager panels that each declared their own copy of the
@@ -727,3 +728,26 @@ opaque surface; a fact allowed to move with the conversation stays in the flow.*
 - **The transcript's live region is still off.** The per-second clock now lives inside
   `#transcript`, which is `aria-live="off"`; nothing announces each tick, and the end of a
   turn is still said once through `#srStatus`.
+
+## 28. One height, three boxes
+
+p_0.47.24 reserved the footprint's first line with `1.5em` — the height of the text — and
+put an 18px mark in it. A run starting grew the line by about a pixel and a half and moved
+the end of the conversation; the reserve covered the empty-to-summary case and not the
+mark's. Two narrower failures shared the same cause: a line built from inline boxes has no
+box of its own to ellipsise in, and a flex row lets every child shrink.
+
+- **Reserve the taller child, not a round number.** `.status` takes
+  `min-height: max(1.5em, 18px)`. The text line is `0.85em × 1.5` and scales with
+  `anvil.chatFontSize`; the mark is a fixed 18px. The working line's natural height is the
+  same maximum, so the reserved box and the filled box agree at every size.
+- **A flex row has no baseline to add.** Inline content's line box is the strut's height plus
+  whatever an inline-flex box contributes at its baseline; that is a number the stylesheet
+  cannot state. `display: flex; align-items: center` makes the line's height purely
+  `max(min-height, tallest child)`.
+- **Each half truncates in its own box.** The summary is a flex item with `min-width: 0` and
+  an ellipsis; the working half keeps the mark and the word fixed and lets the parenthetical
+  ellipsise. A mark that clips reads as a broken icon, so only text truncates.
+- **The controls do not shrink.** The composer's select and buttons are `flex: 0 0 auto`; the
+  meter remains the row's only flexible child, so a long session total truncates on the
+  left of the buttons instead of squeezing their labels.
