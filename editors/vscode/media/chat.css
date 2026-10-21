@@ -1510,7 +1510,7 @@ body.vscode-high-contrast-light .body.md .md-link:focus-visible {
  * conversation cannot change folders (see the design chapter).
  */
 .root {
-  padding: 0 calc(var(--anvil-gap) + 1px) 6px;
+  padding: 0 calc(var(--anvil-gap) + 1px) 10px;
   font-size: 0.85em;
   line-height: var(--ui-line-tight);
   color: var(--ui-muted);
@@ -1538,7 +1538,7 @@ body.vscode-high-contrast-light .body.md .md-link:focus-visible {
 
 .status {
   /* Aligned with the card's own text, not its outer edge. */
-  padding: 0 calc(var(--anvil-gap) + 1px) 6px;
+  padding: 0 calc(var(--anvil-gap) + 1px) 10px;
   font-size: 0.85em;
   line-height: var(--ui-line-tight);
   color: var(--ui-muted);
@@ -1562,20 +1562,33 @@ body.vscode-high-contrast-light .body.md .md-link:focus-visible {
   display: none;
 }
 
+/*
+ * 18px beside 0.85em text: a mark is a mark only when it is larger than the
+ * line it labels. The view box and the pivot are unchanged, so the whole
+ * picture scales rather than being redrawn.
+ */
 .status .working-glyph {
   flex: 0 0 auto;
-  width: 14px;
-  height: 14px;
+  width: 18px;
+  height: 18px;
   color: var(--vscode-descriptionForeground);
 }
 
+/*
+ * The hammer and its spark take the one accent the transcript does not already
+ * spend on state: `done` is green and `stopped` the warning colour, so orange
+ * cannot be read as one. The anvil stays in the description colour — the swing
+ * is the thing to catch.
+ */
 .status .working-glyph .hammer {
   transform-box: view-box;
   transform-origin: 12px 9px;
+  color: var(--vscode-charts-orange, #e8912d);
 }
 
 .status .working-glyph .spark {
   opacity: 0;
+  color: var(--vscode-charts-orange, #e8912d);
 }
 
 .status .working-meta {

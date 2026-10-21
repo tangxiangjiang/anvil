@@ -62,7 +62,7 @@ test('the mark is an anvil, a hammer and a spark, built as nodes', () => {
 test('the line is built once, and its two halves never show together', () => {
   assert.match(CHAT_JS, /const statusText = el\('span', 'status-text'\)/);
   assert.match(CHAT_JS, /const workingLine = el\('span', 'working'\)/);
-  assert.match(CHAT_JS, /el\('span', 'working-word', 'Forging…'\)/);
+  assert.match(CHAT_JS, /el\('span', 'working-word', WORKING_WORDS\[0\]\)/);
   assert.match(CHAT_JS, /const workingMeta = el\('span', 'working-meta'\)/);
   assert.match(CHAT_JS, /statusLine\.appendChild\(workingLine\)/);
   assert.match(CHAT_JS, /statusLine\.appendChild\(statusText\)/);
@@ -80,7 +80,8 @@ test('the line is built once, and its two halves never show together', () => {
 test('the clock starts with the turn and stops with it', () => {
   const start = bodyOf(CHAT_JS, 'startWorking');
   assert.match(start, /workingSince = Date\.now\(\)/);
-  assert.match(start, /workingWord\.textContent = 'Forging…'/);
+  assert.match(start, /workingHostWord = ''/);
+  assert.match(start, /workingWord\.textContent = WORKING_WORDS\[0\]/);
   assert.match(start, /workingLine\.hidden = false/);
   assert.match(start, /statusLine\.hidden = false/);
   assert.match(start, /setInterval\(renderWorkingMeta, 1000\)/);
@@ -111,6 +112,24 @@ test('the parenthetical says escape, the clock and the step', () => {
   // The tick skips a tab nobody is looking at, like the cache clock does; the
   // next tick after the tab returns brings the elapsed time up to date.
   assert.match(meta, /if \(document\.hidden\) return/);
+});
+
+test('the word turns through the forge, and a host word stops it', () => {
+  const open = CHAT_JS.indexOf('const WORKING_WORDS = [');
+  assert.ok(open > 0, 'the verb list is in chat.js');
+  const list = CHAT_JS.slice(open, CHAT_JS.indexOf('];', open));
+  for (const word of ['Forging…', 'Hammering…', 'Tempering…', 'Striking…', 'Quenching…', 'Shaping…']) {
+    assert.match(list, new RegExp(`'${word}'`));
+  }
+  // Every three seconds, derived from the clock the line already runs: the
+  // renderer gained no second timer for this.
+  const meta = bodyOf(CHAT_JS, 'renderWorkingMeta');
+  assert.match(meta, /if \(workingHostWord === ''\)/);
+  assert.match(meta, /WORKING_WORDS\[Math\.floor\(seconds \/ 3\) % WORKING_WORDS\.length\]/);
+  // A step text from the host replaces the rotation, and the next tick no
+  // longer overwrites it.
+  const progress = CHAT_JS.slice(CHAT_JS.indexOf("e.type === 'progress'"));
+  assert.match(progress, /workingHostWord = e\.text/);
 });
 
 test('the head swings from script, and only when motion is welcome', () => {
@@ -152,14 +171,30 @@ test('the line is one row of mark and text, with a pivot in the stylesheet', () 
   // `hidden` has to beat the display rule above.
   assert.match(ruleBody('.status .working[hidden]'), /display:\s*none/);
 
+  // Larger than the 0.85em line it labels; the view box does not change.
   const glyph = ruleBody('.status .working-glyph');
-  assert.match(glyph, /width:\s*14px/);
-  assert.match(glyph, /height:\s*14px/);
+  assert.match(glyph, /width:\s*18px/);
+  assert.match(glyph, /height:\s*18px/);
+  assert.match(glyph, /color:\s*var\(--vscode-descriptionForeground\)/);
 
+  // The hammer and its spark are the one orange in the line; the anvil stays
+  // muted. `done` is green and `stopped` the warning colour, so orange cannot
+  // be read as a state.
   const pivot = ruleBody('.status .working-glyph .hammer');
   assert.match(pivot, /transform-box:\s*view-box/);
   assert.match(pivot, /transform-origin:\s*12px 9px/);
+  assert.match(pivot, /color:\s*var\(--vscode-charts-orange, #e8912d\)/);
 
-  assert.match(ruleBody('.status .working-glyph .spark'), /opacity:\s*0/);
+  const spark = ruleBody('.status .working-glyph .spark');
+  assert.match(spark, /opacity:\s*0/);
+  assert.match(spark, /color:\s*var\(--vscode-charts-orange, #e8912d\)/);
+
   assert.match(ruleBody('.status .working-meta'), /opacity:\s*0\.75/);
+});
+
+test('the dock holds the line clear of the composer', () => {
+  // Room, not a frame: the two lines that describe the run sit 10px above what
+  // follows them, as the transcript's own rhythm does.
+  assert.match(ruleBody('.root'), /padding: 0 calc\(var\(--anvil-gap\) \+ 1px\) 10px/);
+  assert.match(ruleBody('.status'), /padding: 0 calc\(var\(--anvil-gap\) \+ 1px\) 10px/);
 });

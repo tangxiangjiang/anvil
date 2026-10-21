@@ -302,8 +302,9 @@ which is how the extension already degrades (`runtime`, `permission_mode_source`
 | [p_0.47.18](../../roadmaps/v1.0/m_0.47/p_0.47.18.md) | A reply's start marker, one fold per turn, history closed and the newest open |
 | [p_0.47.19](../../roadmaps/v1.0/m_0.47/p_0.47.19.md) | One scrollbar per side of an edit diff, revealed on hover and moving both sides together |
 | [p_0.47.20](../../roadmaps/v1.0/m_0.47/p_0.47.20.md) | An animated anvil-and-hammer working line on the status strip |
+| [p_0.47.21](../../roadmaps/v1.0/m_0.47/p_0.47.21.md) | An 18px orange-hammered mark and a word that turns through the forge |
 
-0.47.9–0.47.20 were written after the milestone was accepted. Their findings came from the
+0.47.9–0.47.21 were written after the milestone was accepted. Their findings came from the
 first real use of the panel, not from a test: a capability that existed and was never turned
 on, an error that only reached the log, a block with no way out — and then a transcript that
 was tiring to read, followed by four manager panels that each declared their own copy of the
@@ -316,8 +317,8 @@ too sparse, whose state words said nothing, whose dots sat under the line, whose
 had no edge, and whose final answer had no ending — and then that ending missing from the live
 turn because the live path asked for a failure that is never absent, then a turn with no
 beginning and no way to close the ones already read, then an edit comparison that drew a
-scrollbar under every line it contained, and finally a panel that said nothing at all while a
-turn was in flight. The lesson is recorded here rather
+scrollbar under every line it contained, then a panel that said nothing at all while a turn
+was in flight, and finally a working mark too quiet to notice and too still to read. The lesson is recorded here rather
 than in a commit message — the manual passes the earlier phases wrote down as "still worth
 doing" are the ones that would have found all of these.
 
@@ -612,3 +613,25 @@ gives one: a mark, a word, and a dim parenthetical of facts.
 - **Motion is a preference, not a feature.** `prefers-reduced-motion` leaves the hammer
   still and the spark painted out. The line, the word and the clock remain: the information
   is not the animation.
+
+## 24. A mark you can see, and a word that turns
+
+The first working line was correct and quiet: 14px, in the description colour, with one
+word for the whole run. Beside 0.85em text it read as another muted fact, and on a long step
+it became scenery — the same failure the status line had before p_0.47.20, one layer down.
+
+- **Size before colour.** A mark smaller than the text it labels is decoration; at 18px it is
+  a glyph. The view box does not change, so the pivot and the arc need no new numbers.
+- **Orange is the one accent the transcript does not spend.** `done` is green and `stopped`
+  the warning colour, so an orange hammer cannot be read as a state. The anvil stays in the
+  description colour: the swing is the thing to catch, not the whole picture.
+- **The verb rides the clock that exists.** A second timer would be a second lifetime to own;
+  the renderer keeps one interval per fact. The verb is
+  `WORKING_WORDS[floor(seconds / 3) % length]`, derived from the elapsed time the line
+  already counts — deterministic, testable, and free.
+- **A host word outranks the rotation.** A step text is a fact about the run; the rotation
+  exists only for the absence of one. Once the host says what it is doing, it keeps saying it
+  until the run ends.
+- **Room, not a frame.** The root line and the working line gain a little space above the
+  composer. Boxing them would make the dock a card, which the transcript stopped being in
+  p_0.47.10.

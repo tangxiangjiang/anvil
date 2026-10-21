@@ -291,13 +291,27 @@
   }
 
   /*
+   * What the line says while the host is silent, one word every three seconds:
+   * the CLI's habit with this product's verbs. A step text from the host
+   * replaces them and stays.
+   */
+  const WORKING_WORDS = [
+    'Forging…',
+    'Hammering…',
+    'Tempering…',
+    'Striking…',
+    'Quenching…',
+    'Shaping…',
+  ];
+
+  /*
    * The status line is two halves that never show at once: the working mark
    * while a turn is in flight, and the run's summary after it. They are built
    * once so a second's re-render cannot restart the animation or the clock.
    */
   const statusText = el('span', 'status-text');
   const workingLine = el('span', 'working');
-  const workingWord = el('span', 'working-word', 'Forging…');
+  const workingWord = el('span', 'working-word', WORKING_WORDS[0]);
   const workingMeta = el('span', 'working-meta');
   statusText.hidden = true;
   workingLine.hidden = true;
@@ -315,6 +329,8 @@
   let workingSince = 0;
   let workingStep = 0;
   let workingMax = 0;
+  /** The word the host sent for this run, or '' while the line turns its own. */
+  let workingHostWord = '';
   let workingAnimations = [];
 
   /**
@@ -365,7 +381,8 @@
     workingSince = Date.now();
     workingStep = 0;
     workingMax = 0;
-    workingWord.textContent = 'Forging…';
+    workingHostWord = '';
+    workingWord.textContent = WORKING_WORDS[0];
     statusText.hidden = true;
     workingLine.hidden = false;
     statusLine.hidden = false;
@@ -387,11 +404,15 @@
 
   /**
    * The parenthetical, in the order the CLI puts it: what stops the turn, how
-   * long it has run, and — only when the host said — which step it is on.
+   * long it has run, and — only when the host said — which step it is on. The
+   * same tick turns the word while the host has not named the step itself.
    */
   function renderWorkingMeta() {
     if (document.hidden) return; // nobody is reading a hidden tab
     const seconds = Math.max(0, Math.floor((Date.now() - workingSince) / 1000));
+    if (workingHostWord === '') {
+      workingWord.textContent = WORKING_WORDS[Math.floor(seconds / 3) % WORKING_WORDS.length];
+    }
     const spent =
       seconds < 60 ? seconds + 's' : Math.floor(seconds / 60) + 'm ' + (seconds % 60) + 's';
     const parts = ['esc to interrupt', spent];
@@ -4309,8 +4330,11 @@
         if (!workingLine.hidden) renderWorkingMeta();
       }
       if (e.text) {
-        if (!workingLine.hidden) workingWord.textContent = e.text;
-        else setStatus(e.text);
+        // The host named the step: its word outranks the rotation and stays.
+        if (!workingLine.hidden) {
+          workingHostWord = e.text;
+          workingWord.textContent = e.text;
+        } else setStatus(e.text);
         // The line is what the eye reads; the polite region is what the ear
         // hears, and the throttle is what keeps a run of them from becoming
         // noise.
