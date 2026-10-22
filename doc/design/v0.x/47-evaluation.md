@@ -92,7 +92,7 @@ all on the path.
 Recordings carry no secrets: the recorder redacts the `Authorization` header before writing,
 and the request digest never includes it. A recording whose response contains reasoning text
 keeps it — it is the provider's output and the replay must reproduce it — but the scorer checks
-that none of it reaches a later request (chapter [46](48-llm-effort-and-retry.md) §2).
+that none of it reaches a later request (chapter [48](48-llm-effort-and-retry.md) §2).
 
 ### 4.3 Tier 3 — live (report only)
 
@@ -155,7 +155,7 @@ run by every later phase's gate and it must stay at 100%:
 | `inv_child_never_widens` | a child spawned with `tools: [read]` cannot write, whatever its prompt says |
 | `inv_child_result_only` | a child's messages never appear in the parent's history |
 
-0.50 adds the same list under each mode (chapter [48](50-agent-modes.md) §6).
+0.50 adds the same list under each mode (chapter [50](50-agent-modes.md) §6).
 
 ## 7. The audit
 
@@ -167,7 +167,7 @@ finding without a test is a suspicion and is listed in a separate section as suc
 
 Fixes for findings are not a phase of this milestone. A finding that is a bug is fixed in a
 plain commit with its test (the versioning rule: bug fixes do not open a phase). A finding that
-needs design is referred to the chapter that owns it, or becomes a "待定" entry in chapter 46,
+needs design is referred to the chapter that owns it, or becomes a "待定" entry in chapter 48,
 47 or 48 with the information it needs.
 
 What the audit is for in this line: it is the source of the tier-1 `Expect` predicates and the

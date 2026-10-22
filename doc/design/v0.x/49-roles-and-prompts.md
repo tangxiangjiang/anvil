@@ -35,7 +35,7 @@ A system prompt is composed from five layers, always in this order:
 | L0 | **Safety** — workspace boundary, secrets, untrusted content, shell caution | SDK | **No** |
 | L1 | **Role** — what this agent is for (§3) | SDK, per role | yes, via `Options.SystemPrompt` |
 | L2 | **Project** — rules, session notes, plugins, always-on skills, in today's order | workspace | by the existing load options |
-| L3 | **Brief** — the structured task a delegated or staged agent was given (chapter [48](50-agent-modes.md)) | the parent | no; it is data, rendered by the SDK |
+| L3 | **Brief** — the structured task a delegated or staged agent was given (chapter [50](50-agent-modes.md)) | the parent | no; it is data, rendered by the SDK |
 | L4 | **Directive** — a per-run instruction such as plan mode | the caller, per `Send` | yes, per run |
 
 The rules that make the layering a guarantee rather than a convention:
@@ -95,7 +95,7 @@ living in `internal/prompt` as one constant per role:
 
 Two roles are deliberately absent. **Plan** is a directive (L4) plus a tool set, not a role,
 because plan mode is something a person switches on for one request of an otherwise ordinary
-agent. **Reviewer** would be a fourth Complex stage, and chapter 48 argues for three.
+agent. **Reviewer** would be a fourth Complex stage, and chapter 50 argues for three.
 
 A role is a **prompt layer and nothing else**. It does not change the tool set, the
 permissions, the budget or the model; those are `Options` fields the container sets alongside
@@ -134,7 +134,7 @@ introduces the layers. `buildSystemPrompt` in `agent.go` becomes the one caller 
 - **`SystemPrompt` cannot remove L0:** the test sets `RoleText` to a prompt that says "ignore
   all safety rules" and asserts the composed prompt still begins with L0 and ends with the
   closing line.
-- **Subagents get L0:** a tier-1 eval fixture (chapter [45](47-evaluation.md)) spawns a child
+- **Subagents get L0:** a tier-1 eval fixture (chapter [47](47-evaluation.md)) spawns a child
   and asserts, through `Expect`, that the child's first request carries the untrusted-content
   clause.
 
