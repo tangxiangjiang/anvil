@@ -176,7 +176,7 @@ through `subagentDescendants`. Repro: child C with meta `ParentAgentID=P`; `Fork
 `Create` succeeds with no indication when the index cannot be built. Repro: `EnsureIndex=true` with an
 unwritable index directory.
 
-**#30 — bug — reported (not reproduced under -race).** `internal/tasks/manager.go` `Manager.Cancel` releases `m.mu` and then returns
+**#30 — withdrawn — not a defect.** `internal/tasks/manager.go` `Manager.Cancel` releases `m.mu` and then returns
 `t.Info`, which `finish()` writes under the lock. A race with a natural exit. Reproduce with `-race`.
 
 ## Suspicions
@@ -196,16 +196,18 @@ client's expectation of a complete event stream, which design 46 currently state
 
 | Severity | Findings | Confirmed | Reported |
 |---|---|---|---|
-| bug | 27 | 24 | 3 |
+| bug | 26 | 24 | 2 |
 | gap | 2 | 1 | 1 |
 | doc | 1 | 1 | 0 |
-| **total** | **30** | **26** | **4** |
+| **total** | **29** | **26** | **3** |
+
+Withdrawn after a source check: #30. It was listed as a finding, so the audit found 30 items, but it is not a defect and is not counted in the table: 29 counted, 26 confirmed.
 
 Suspicions S1–S3 are listed separately and are not counted as findings.
 
 Reproduced by a failing test (skip removed, failed on the current tree): #1, #2, #3, #4, #5, #6, #7, #8, #9, #10, #11, #12, #15, #16, #17, #18, #19, #20, #21, #22, #23, #24, #25, #26, #27, #29.
 
-#30 was not reproduced: 2000 concurrent Cancel/exit pairs under `go test -race` on AlmaLinux report no race. The unlocked read of `t.Info` appears to be ordered after `finish()` by `m.mu`, so the finding needs a source-level check before it is marked confirmed or dropped.
+#30 was withdrawn after a source-level check. Both paths that read `t.Info` after the unlock are ordered after the write in `finish()`: the `!running` path reads it after an `m.mu` lock that `finish()` also takes, and the running path reads it under `m.mu` (`defer m.mu.Unlock()`). The 2000-iteration `-race` run agrees: no race.
 
 #2 was not reproduced on Windows (the URI form in the test does not round-trip through `uriToPath` there, so the edit fails first), but it reproduces on AlmaLinux: an edit through a symlink to a file outside the workspace is applied.
 
