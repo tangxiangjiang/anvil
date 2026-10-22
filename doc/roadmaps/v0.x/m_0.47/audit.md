@@ -228,6 +228,16 @@ Searched design 33-49 for each open item. None of #13, #14 or #28 is settled in 
 - **#14 (not a defect).** Checkpoints do not keep file mode. The decision is that a restore writes the saved bytes only.
 - **#28 (decided: non-blocking).** `Run.emit` keeps dropping an event when its buffer is full. Blocking was considered and set aside, because a run with no consumer would stop. No code change.
 
+
+### Latest run (AlmaLinux 10.2, Go 1.26.10, gcc 14, `-race`)
+
+With every `audit: open` skip removed in a working copy: 15 audit tests ran.
+
+- **14 failed**, each with the defect the audit describes (the message is in the test). These are reproductions, not fixes: only #13 is fixed, so the other defects are still in the code.
+- **1 passed**: `TestAuditCancelRacesNaturalExit` (#30, withdrawn). It is the evidence for the withdrawal.
+- **0 data-race reports** across the run.
+- Three `TestAudit…` names outside this list are pre-existing 0.46 audit-log tests, not part of this audit.
+
 ## Tests
 
 Each finding with a test is in the package that owns the code it reaches, named
