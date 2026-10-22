@@ -104,3 +104,32 @@ func TestAuditMalformedRuleFileStillDenies(t *testing.T) {
 		t.Fatalf("write_file ran although a deny rule was in force; result: %+v", res)
 	}
 }
+
+// audit #6: captureBefore ignores the error of checkpoint.Capture, so a run whose
+// pre-image could not be saved still writes, and nothing says the file is not
+// restorable.
+func TestAuditFailedCaptureIsNotSilent(t *testing.T) {
+	t.Skip("audit: open, see audit.md #6")
+	cwd := t.TempDir()
+	cpDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cwd, "a.txt"), []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Make the run's directory unusable: a regular file where a directory must go.
+	if err := os.MkdirAll(filepath.Join(cpDir, "agent-1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cpDir, "agent-1", "run-1"), []byte("block"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reg := tools.NewRegistry(cwd, false)
+	reg.SetCheckpoints(cpDir)
+	reg.SetRunContext("agent-1", "run-1")
+	res := reg.Execute(context.Background(), "write_file", mustJSON(map[string]any{
+		"path": "a.txt", "content": "new",
+	}))
+	if b, _ := os.ReadFile(filepath.Join(cwd, "a.txt")); string(b) == "new" && !res.IsError {
+		// The write went through with no pre-image and no error: the caller is not told.
+		t.Fatalf("write_file succeeded without a saved pre-image and reported no problem: %q", res.Content)
+	}
+}

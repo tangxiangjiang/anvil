@@ -182,3 +182,26 @@ func (s *auditScript) Complete(ctx context.Context, req llm.Request) (*llm.Respo
 	s.n++
 	return &llm.Response{Message: m}, nil
 }
+
+// audit #29: buildRegistry discards the error from index.Build, so Create succeeds
+// when the project index cannot be built, and nothing says the index is missing.
+func TestAuditIndexBuildFailureIsReported(t *testing.T) {
+	t.Skip("audit: open, see audit.md #29")
+	cwd := t.TempDir()
+	// The agent store lives in .anvil/agents and must work; only the index
+	// directory .anvil/index is blocked, by a regular file where it must go.
+	if err := os.MkdirAll(filepath.Join(cwd, ".anvil"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cwd, ".anvil", "index"), []byte("block"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a, err := Create(context.Background(), Options{
+		APIKey: "k", Model: Model{ID: "m"},
+		Local: LocalOptions{CWD: cwd, EnsureIndex: true},
+	})
+	if err == nil {
+		a.Close()
+		t.Fatal("Create succeeded although the project index could not be built")
+	}
+}

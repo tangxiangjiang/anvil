@@ -45,7 +45,7 @@ begin with two dots: `strings.HasPrefix(rel, "..")` also matches `..env`. Their 
 captured. `checkpoint.go` checks `../` and would have allowed them. Repro: write `..env` in the
 root, call `write_file` on it, and check the manifest; the entry is missing.
 
-**#6 — bug — reported.** `internal/tools/tools.go` `captureBefore` ignores the error of
+**#6 — bug — confirmed.** `internal/tools/tools.go` `captureBefore` ignores the error of
 `checkpoint.Capture` (`_ = checkpoint.Capture(...)`). A failed capture leaves no manifest entry, the
 write still proceeds, and the run's restore reports success without naming the missing path. Repro:
 make the checkpoint `files` path a regular file so `MkdirAll` fails; `write_file`; restore; the path
@@ -172,7 +172,7 @@ through `subagentDescendants`. Repro: child C with meta `ParentAgentID=P`; `Fork
 **#28 — gap — reported.** `agent.go` `Run.emit` (`run.go` around 91–100) drops events silently when the
 64-slot buffer is full. Documented as a known limit in design 46 (`editor-polish`). Low severity.
 
-**#29 — bug — reported.** `agent.go` `buildRegistry` discards the error from `index.Build` (`_, _ =`), so
+**#29 — bug — confirmed.** `agent.go` `buildRegistry` discards the error from `index.Build` (`_, _ =`), so
 `Create` succeeds with no indication when the index cannot be built. Repro: `EnsureIndex=true` with an
 unwritable index directory.
 
@@ -196,14 +196,14 @@ client's expectation of a complete event stream, which design 46 currently state
 
 | Severity | Findings | Confirmed | Reported |
 |---|---|---|---|
-| bug | 27 | 14 | 13 |
+| bug | 27 | 16 | 11 |
 | gap | 2 | 0 | 2 |
 | doc | 1 | 0 | 1 |
-| **total** | **30** | **14** | **16** |
+| **total** | **30** | **16** | **14** |
 
 Suspicions S1–S3 are listed separately and are not counted as findings.
 
-Reproduced by a failing test (skip removed, failed on the current tree): #1, #3, #4, #5, #8, #9, #10, #11, #15, #16, #18, #19, #20, #21.
+Reproduced by a failing test (skip removed, failed on the current tree): #1, #3, #4, #5, #8, #9, #6, #10, #11, #15, #16, #18, #19, #20, #21, #29.
 
 Read at the stated line, but not reproduced: #2 (on Windows the URI form the test builds does not round-trip through `uriToPath`, so the edit fails before the symlink is reached).
 
@@ -217,10 +217,10 @@ Each one was run once with its skip removed to confirm the result above.
 
 | Package | File | Tests |
 |---|---|---|
-| `internal/tools` | `audit_test.go` | #1, #3, #4, #9 |
+| `internal/tools` | `audit_test.go` | #1, #3, #4, #6, #9 |
 | `internal/lsp` | `audit_test.go` | #2, #8 |
 | `internal/llm` | `audit_test.go` | #15, #16 |
-| `.` (agent) | `audit_test.go` | #5, #18, #19, #20, #21 |
+| `.` (agent) | `audit_test.go` | #5, #18, #19, #20, #21, #29 |
 | `internal/permissions` | `audit_test.go` | #10, #11 |
 
 Thirteen audit tests are skipped; none fails with its skip in place. The two that did not
