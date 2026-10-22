@@ -97,6 +97,10 @@ func (e *ClusterEdge) session(ctx context.Context, url string) error {
 
 	sendHB := func() error {
 		snap := e.server.WorkerSnapshot()
+		caps := e.cfg.PluginCapabilityLabels()
+		if e.server.SupportsApprovals() {
+			caps = append(caps, "job.approval")
+		}
 		hb, _ := MarshalBody(ClusterHeartbeatBody{
 			NodeID:       nodeID,
 			Idle:         snap.Idle,
@@ -104,7 +108,7 @@ func (e *ClusterEdge) session(ctx context.Context, url string) error {
 			Max:          snap.MaxWorkers,
 			Accepting:    e.server.Accepting(),
 			Workers:      snap.Workers,
-			Capabilities: e.cfg.PluginCapabilityLabels(),
+			Capabilities: caps,
 			Hostname:     hostname,
 			Name:         e.cfg.Name,
 			Description:  e.cfg.Description,
@@ -138,6 +142,12 @@ func (e *ClusterEdge) session(ctx context.Context, url string) error {
 				if body.JobID != "" {
 					_ = e.server.CancelActiveJob(body.JobID)
 				}
+			case KindJobApprovalResponse:
+				var body JobApprovalResponseBody
+				_ = DecodeBody(msg, &body)
+				res := e.server.AnswerApproval(body)
+				encoded, _ := MarshalBody(res)
+				_ = e.write(conn, Envelope{Kind: KindJobApprovalResult, ID: msg.ID, Body: encoded})
 			case KindClusterConfig:
 				var cfgBody ClusterConfigBody
 				_ = DecodeBody(msg, &cfgBody)

@@ -79,10 +79,11 @@ type Hub struct {
 	nodes   map[string]*nodeConn
 	rr      int
 
-	waitMu     sync.Mutex
-	waiters    map[string]chan daemon.JobDoneBody
-	eventHooks map[string]func(daemon.JobEventBody)
-	jobNode    map[string]string // jobID -> nodeID
+	waitMu       sync.Mutex
+	waiters      map[string]chan daemon.JobDoneBody
+	eventHooks   map[string]func(daemon.JobEventBody)
+	jobNode      map[string]string // jobID -> nodeID
+	approvalWait map[string]chan daemon.JobApprovalResultBody
 
 	workerWaitMu sync.Mutex
 	workerWait   map[string]chan daemon.ClusterWorkerResultBody // req id -> result
@@ -116,17 +117,18 @@ func NewHub(cfg Config, logger *log.Logger) *Hub {
 		logger = log.Default()
 	}
 	return &Hub{
-		cfg:         cfg,
-		log:         logger,
-		llm:         cfg.BootstrapLLM(),
-		nodes:       make(map[string]*nodeConn),
-		waiters:     make(map[string]chan daemon.JobDoneBody),
-		eventHooks:  make(map[string]func(daemon.JobEventBody)),
-		jobNode:     make(map[string]string),
-		usageN:      make(map[string]UsageTotals),
-		workspaces:  make(map[string]wsReg),
-		workerWait:  make(map[string]chan daemon.ClusterWorkerResultBody),
-		sandboxWait: make(map[string]chan daemon.ClusterSandboxResultBody),
+		cfg:          cfg,
+		log:          logger,
+		llm:          cfg.BootstrapLLM(),
+		nodes:        make(map[string]*nodeConn),
+		waiters:      make(map[string]chan daemon.JobDoneBody),
+		eventHooks:   make(map[string]func(daemon.JobEventBody)),
+		jobNode:      make(map[string]string),
+		approvalWait: make(map[string]chan daemon.JobApprovalResultBody),
+		usageN:       make(map[string]UsageTotals),
+		workspaces:   make(map[string]wsReg),
+		workerWait:   make(map[string]chan daemon.ClusterWorkerResultBody),
+		sandboxWait:  make(map[string]chan daemon.ClusterSandboxResultBody),
 	}
 }
 
@@ -613,6 +615,21 @@ func (h *Hub) deliverDone(done daemon.JobDoneBody) {
 	}
 }
 
+func (h *Hub) deliverApprovalResult(msg daemon.Envelope) {
+	var res daemon.JobApprovalResultBody
+	_ = daemon.DecodeBody(msg, &res)
+	h.waitMu.Lock()
+	ch := h.approvalWait[msg.ID]
+	delete(h.approvalWait, msg.ID)
+	h.waitMu.Unlock()
+	if ch != nil {
+		select {
+		case ch <- res:
+		default:
+		}
+	}
+}
+
 func (h *Hub) recordUsage(nodeID string, u *daemon.TokenUsage) {
 	if u == nil {
 		return
@@ -657,6 +674,48 @@ func (h *Hub) CancelJob(jobID string) error {
 		return fmt.Errorf("cancel on %s: %w", nodeID, err)
 	}
 	return nil
+}
+
+// AnswerJobApproval routes a response to the node currently owning jobID and
+// waits for the daemon to confirm that the request was still pending.
+func (h *Hub) AnswerJobApproval(ctx context.Context, resp daemon.JobApprovalResponseBody) (daemon.JobApprovalResultBody, error) {
+	if strings.TrimSpace(resp.JobID) == "" || strings.TrimSpace(resp.RequestID) == "" {
+		return daemon.JobApprovalResultBody{}, fmt.Errorf("job_id and request_id required")
+	}
+	h.waitMu.Lock()
+	nodeID := h.jobNode[resp.JobID]
+	h.waitMu.Unlock()
+	if nodeID == "" {
+		return daemon.JobApprovalResultBody{}, fmt.Errorf("job %q is not running", resp.JobID)
+	}
+	h.nodesMu.Lock()
+	n := h.nodes[nodeID]
+	h.nodesMu.Unlock()
+	if n == nil {
+		return daemon.JobApprovalResultBody{}, fmt.Errorf("node %q for job %q is offline", nodeID, resp.JobID)
+	}
+	reqID := id.New()
+	ch := make(chan daemon.JobApprovalResultBody, 1)
+	h.waitMu.Lock()
+	h.approvalWait[reqID] = ch
+	h.waitMu.Unlock()
+	defer func() {
+		h.waitMu.Lock()
+		delete(h.approvalWait, reqID)
+		h.waitMu.Unlock()
+	}()
+	body, _ := daemon.MarshalBody(resp)
+	if err := h.writeNode(n, daemon.Envelope{Kind: daemon.KindJobApprovalResponse, ID: reqID, Body: body}); err != nil {
+		return daemon.JobApprovalResultBody{}, err
+	}
+	select {
+	case <-ctx.Done():
+		return daemon.JobApprovalResultBody{}, ctx.Err()
+	case res := <-ch:
+		return res, nil
+	case <-time.After(10 * time.Second):
+		return daemon.JobApprovalResultBody{}, fmt.Errorf("approval response timed out")
+	}
 }
 
 // AssignJobTo runs a job on preferNode (empty = round-robin idle).

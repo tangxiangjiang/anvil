@@ -17,6 +17,19 @@ Work Platform chat should show assistant tokens and tool activity as they happen
 
 Non-streaming `POST /v1/jobs` remains JSON terminal response (compat).
 
+### Interactive approval extension (0.45.9)
+
+Workbench jobs opt in by setting `approval_session_id` on assignment. agentd then emits
+`job.event(type=approval_request)` with `approval.request_id`, arguments, preview, decisions and
+expiry; `approval_result` records answered, expired, or cancelled. The controller answers through
+`POST /v1/jobs/{job_id}/approval`.
+
+The scheduler routes the response only to the node in its live job ownership map and waits for a
+`job.approval_result` acknowledgement. agentd requires the job id, approval session id and request id
+to match one pending callback. A request is removed atomically on first answer or expiry, so
+duplicates and late answers return a conflict. Cancellation denies and releases all pending calls.
+Jobs without `approval_session_id` preserve the existing unattended behaviour.
+
 ## Non-goals
 
 - WebSocket hub / seq replay store

@@ -177,22 +177,24 @@ func (c *Client) RegisterWorkspace(ctx context.Context, id, token, name string) 
 
 // JobCreate is POST /v1/jobs body (app-facing).
 type JobCreate struct {
-	JobID       string   `json:"job_id,omitempty"`
-	RepoID      string   `json:"repo_id"`
-	Prompt      string   `json:"prompt"`
-	ResumeID    string   `json:"resume_id,omitempty"`
-	MaxSteps    int      `json:"max_steps,omitempty"`
-	Model       string   `json:"model,omitempty"`
-	Provider    string   `json:"provider,omitempty"`
-	Plugins     []string `json:"plugins,omitempty"`
-	NodeID      string   `json:"node_id,omitempty"`
-	ForceStub   bool     `json:"force_stub,omitempty"`
-	Stream      bool     `json:"stream,omitempty"`
-	MilestoneID string   `json:"milestone_id,omitempty"`
-	PhaseID     string   `json:"phase_id,omitempty"`
-	EngReqID    string   `json:"eng_req_id,omitempty"`
-	Major       int      `json:"major,omitempty"`
-	Minor       int      `json:"minor,omitempty"`
+	JobID             string   `json:"job_id,omitempty"`
+	RepoID            string   `json:"repo_id"`
+	Prompt            string   `json:"prompt"`
+	ResumeID          string   `json:"resume_id,omitempty"`
+	MaxSteps          int      `json:"max_steps,omitempty"`
+	Model             string   `json:"model,omitempty"`
+	Provider          string   `json:"provider,omitempty"`
+	Plugins           []string `json:"plugins,omitempty"`
+	NodeID            string   `json:"node_id,omitempty"`
+	ForceStub         bool     `json:"force_stub,omitempty"`
+	Stream            bool     `json:"stream,omitempty"`
+	MilestoneID       string   `json:"milestone_id,omitempty"`
+	PhaseID           string   `json:"phase_id,omitempty"`
+	EngReqID          string   `json:"eng_req_id,omitempty"`
+	Major             int      `json:"major,omitempty"`
+	Minor             int      `json:"minor,omitempty"`
+	ApprovalSessionID string   `json:"approval_session_id,omitempty"`
+	ApprovalTimeoutMS int      `json:"approval_timeout_ms,omitempty"`
 }
 
 // CancelJob POSTs /v1/jobs/{id}/cancel.
@@ -202,6 +204,16 @@ func (c *Client) CancelJob(ctx context.Context, jobID string) error {
 		return fmt.Errorf("job_id required")
 	}
 	return c.do(ctx, http.MethodPost, "/v1/jobs/"+jobID+"/cancel", map[string]any{}, nil)
+}
+
+// AnswerJobApproval answers one pending approval and returns only after agentd
+// confirms that it still belongs to the running job.
+func (c *Client) AnswerJobApproval(ctx context.Context, jobID string, body daemon.JobApprovalResponseBody) error {
+	jobID = strings.TrimSpace(jobID)
+	if jobID == "" {
+		return fmt.Errorf("job_id required")
+	}
+	return c.do(ctx, http.MethodPost, "/v1/jobs/"+jobID+"/approval", body, nil)
 }
 
 // CreateJob POSTs /v1/jobs and waits for JobDone (non-streaming).

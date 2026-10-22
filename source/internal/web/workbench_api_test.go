@@ -326,3 +326,106 @@ func TestWorkbenchStreamFramesAreWellFormed(t *testing.T) {
 	}
 	_ = fmt.Sprint()
 }
+
+func TestWorkbenchApprovalIsSessionBoundAndSingleUse(t *testing.T) {
+	s, tok := wbServer(t, newWBRunner())
+	sess := &workbenchSession{
+		ID: "wb-approval", JobID: "job-approval", WorkerID: "w1",
+		Started: time.Now(), Prompt: "x", subs: map[chan wbFrame]struct{}{},
+		approvals: map[string]string{"appr-1": "pending"},
+	}
+	s.workbench.add(sess)
+	var got daemon.JobApprovalResponseBody
+	s.approvalResponder = func(_ context.Context, jobID string, body daemon.JobApprovalResponseBody) error {
+		got = body
+		return nil
+	}
+
+	w := call(t, s, tok, http.MethodPost,
+		"/api/v1/workbench/sessions/wb-approval/approvals/appr-1",
+		`{"decision":"allow","args":{"path":"a"}}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("approval: %d %s", w.Code, w.Body.String())
+	}
+	if got.JobID != "job-approval" || got.SessionID != "wb-approval" || got.RequestID != "appr-1" {
+		t.Fatalf("response was not server-bound: %+v", got)
+	}
+	w = call(t, s, tok, http.MethodPost,
+		"/api/v1/workbench/sessions/wb-approval/approvals/appr-1",
+		`{"decision":"deny"}`)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("duplicate: want 409, got %d", w.Code)
+	}
+	w = call(t, s, tok, http.MethodPost,
+		"/api/v1/workbench/sessions/wb-approval/approvals/unknown",
+		`{"decision":"allow"}`)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("unknown: want 409, got %d", w.Code)
+	}
+}
+
+func TestWorkbenchApprovalRejectsBadInputAndAfterStop(t *testing.T) {
+	s, tok := wbServer(t, newWBRunner())
+	sess := &workbenchSession{
+		ID: "wb-input", JobID: "job-input", WorkerID: "w1",
+		Started: time.Now(), Prompt: "x", subs: map[chan wbFrame]struct{}{},
+		approvals: map[string]string{"appr-1": "pending"},
+	}
+	s.workbench.add(sess)
+	unauth := httptest.NewRecorder()
+	s.Handler().ServeHTTP(unauth, httptest.NewRequest(http.MethodPost,
+		"/api/v1/workbench/sessions/wb-input/approvals/appr-1", strings.NewReader(`{"decision":"allow"}`)))
+	if unauth.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized approval: want 401, got %d", unauth.Code)
+	}
+	w := call(t, s, tok, http.MethodPost,
+		"/api/v1/workbench/sessions/wb-input/approvals/appr-1",
+		`{"decision":"maybe"}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("unknown decision: want 400, got %d", w.Code)
+	}
+	w = call(t, s, tok, http.MethodPost,
+		"/api/v1/workbench/sessions/wb-input/approvals/appr-1",
+		`{"decision":"allow","message":"`+strings.Repeat("x", 70<<10)+`"}`)
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized response: want 413, got %d", w.Code)
+	}
+	sess.abortApprovals("stopped")
+	w = call(t, s, tok, http.MethodPost,
+		"/api/v1/workbench/sessions/wb-input/approvals/appr-1",
+		`{"decision":"allow"}`)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("after stop: want 409, got %d", w.Code)
+	}
+}
+
+func TestPhaseJobBridgeIsReadOnlyAndReplays(t *testing.T) {
+	s, tok := wbServer(t, newWBRunner())
+	if err := s.delivery.BeginJob(delivery.JobRecord{
+		JobID: "phase-1", Kind: "phase", PhaseID: "p_0.45.9", WorkerID: "w1", Status: "running",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.delivery.AppendJobEvent(delivery.JobEvent{
+		JobID: "phase-1", Type: "assistant", Text: "phase output",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.delivery.FinishJob("phase-1", "finished", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	w := call(t, s, tok, http.MethodGet, "/api/v1/workbench/sessions", "")
+	if !strings.Contains(w.Body.String(), "phasejob-phase-1") || !strings.Contains(w.Body.String(), `"read_only":true`) {
+		t.Fatalf("list missing phase bridge: %s", w.Body.String())
+	}
+	w = call(t, s, tok, http.MethodGet, "/api/v1/workbench/sessions/phasejob-phase-1/events", "")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "phase output") ||
+		!strings.Contains(w.Body.String(), "event: job.done") {
+		t.Fatalf("bridge replay: %d %s", w.Code, w.Body.String())
+	}
+	w = call(t, s, tok, http.MethodPost, "/api/v1/workbench/sessions/phasejob-phase-1/cancel", "")
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("phase bridge mutation: want 405, got %d", w.Code)
+	}
+}

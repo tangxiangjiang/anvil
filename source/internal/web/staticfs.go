@@ -8,7 +8,9 @@ import (
 	"io/fs"
 )
 
-//go:embed all:static
+// Embed only browser assets. The sibling package/test files and node_modules are
+// development inputs, not HTTP content and must not be shipped by FileServer.
+//go:embed static/index.html static/css static/js static/vendor
 var staticRoot embed.FS
 
 // StaticFS returns the embedded UI filesystem (rooted at static/).

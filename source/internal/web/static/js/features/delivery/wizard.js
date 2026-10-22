@@ -233,7 +233,7 @@ Object.assign(window.Features.delivery, {
         .join("");
       pane = `
         <p class="muted">Choose a worker project.</p>
-        <div class="del-nav-list">${items || `<p class="muted">No workers on this node.</p>`}</div>`;
+        <div class="del-nav-list">${items || `<p class="muted">No Workers on this Node.</p>`}</div>`;
     } else if (c.step === "folder") {
       pane = `
         <p class="muted">Browse under the worker project and select or create the requirements folder.</p>
@@ -415,18 +415,12 @@ Object.assign(window.Features.delivery, {
       // Real drafting for the create wizard: proposals fill the config fields, and
       // the wizard's own submit is what creates the milestone. A proposal for a
       // field the surface does not own is refused server-side.
-      onSend: async ({ composed, cites }, ch) => {
+      onSend: async ({ text }, ch) => {
         const modal = this.el?.querySelector("#del-create-modal");
         this.captureMilestoneConfig(modal, c);
         await window.AnvilUI.assist.ask({
           surface: "milestone",
-          instruction: composed,
-          cites,
-          current: {
-            title: (c.title || "").trim(),
-            goals: (c.goals || "").trim(),
-            completion: (c.completion || "").trim(),
-          },
+          instruction: text,
           host: modal?.querySelector("#ms-config-assist"),
           chat: ch,
           onApply: async (field, value) => {

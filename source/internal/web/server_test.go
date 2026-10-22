@@ -253,6 +253,40 @@ func TestDeliveryAPI(t *testing.T) {
 	}
 	_ = json.Unmarshal(res.Body.Bytes(), &eng)
 
+	caseBody, _ := json.Marshal(map[string]any{
+		"eng_req_id": eng.ID, "major": 0, "minor": 2,
+		"cases": []map[string]string{{"title": "API case", "body": "temporary data"}},
+	})
+	res = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/delivery/test-cases", bytes.NewReader(caseBody))
+	h.ServeHTTP(res, req)
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized test-case create %d %s", res.Code, res.Body.String())
+	}
+
+	tooMany := make([]map[string]string, delivery.MaxTestCasesPerCreate+1)
+	for i := range tooMany {
+		tooMany[i] = map[string]string{"title": "bounded"}
+	}
+	limitBody, _ := json.Marshal(map[string]any{
+		"eng_req_id": eng.ID, "major": 0, "minor": 2, "cases": tooMany,
+	})
+	res = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/delivery/test-cases", bytes.NewReader(limitBody))
+	req.Header.Set("Authorization", "Bearer "+out.Token)
+	h.ServeHTTP(res, req)
+	if res.Code != http.StatusBadRequest || !bytes.Contains(res.Body.Bytes(), []byte("at most")) {
+		t.Fatalf("test-case limit %d %s", res.Code, res.Body.String())
+	}
+
+	res = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/delivery/test-cases", bytes.NewReader(caseBody))
+	req.Header.Set("Authorization", "Bearer "+out.Token)
+	h.ServeHTTP(res, req)
+	if res.Code != http.StatusOK || !bytes.Contains(res.Body.Bytes(), []byte(`"API case"`)) {
+		t.Fatalf("test-case create %d %s", res.Code, res.Body.String())
+	}
+
 	verBody, _ := json.Marshal(map[string]any{"major": 0, "minor": 2, "patch": 1, "title": "M2"})
 	res = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/api/v1/delivery/eng-reqs/"+eng.ID+"/versions", bytes.NewReader(verBody))

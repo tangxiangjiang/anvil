@@ -4,6 +4,8 @@
 package delivery
 
 import (
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -98,4 +100,67 @@ func TestMergeMilestoneStub(t *testing.T) {
 	if !strings.Contains(m.MergeNote, "stub merge") {
 		t.Fatalf("merge note: %s", m.MergeNote)
 	}
+}
+
+func TestMergeMilestoneWithLocalGit(t *testing.T) {
+	s, msID, _, _, _ := setupFailAcceptFixture(t)
+	if _, err := s.PatchMilestone(msID, PatchMilestoneInput{PassTest: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.PatchMilestone(msID, PatchMilestoneInput{AcceptMilestone: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	root := t.TempDir()
+	repo := filepath.Join(root, "fa")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "init")
+	runGit(t, repo, "config", "user.name", "Anvil Test")
+	runGit(t, repo, "config", "user.email", "anvil@example.invalid")
+	runGit(t, repo, "checkout", "-B", "main")
+	if err := os.WriteFile(filepath.Join(repo, "base.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "add", "base.txt")
+	runGit(t, repo, "commit", "-m", "base")
+
+	branch := MilestoneBranchName(msID)
+	runGit(t, repo, "checkout", "-b", branch)
+	if err := os.WriteFile(filepath.Join(repo, "feature.txt"), []byte("feature\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "add", "feature.txt")
+	runGit(t, repo, "commit", "-m", "feature")
+
+	m, err := s.MergeMilestone(msID, MergeMilestoneInput{MergeRoot: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.MergeStatus != MergeMerged || m.MergedAt == "" {
+		t.Fatalf("want real merge recorded, got %+v", m)
+	}
+	if got := strings.TrimSpace(runGit(t, repo, "branch", "--show-current")); got != "main" {
+		t.Fatalf("current branch = %q, want main", got)
+	}
+	if _, err := os.Stat(filepath.Join(repo, "feature.txt")); err != nil {
+		t.Fatalf("merged feature missing: %v", err)
+	}
+	parents := strings.Fields(runGit(t, repo, "rev-list", "--parents", "-n", "1", "HEAD"))
+	if len(parents) != 3 {
+		t.Fatalf("merge commit has %d parents, want 2: %v", len(parents)-1, parents)
+	}
+}
+
+func runGit(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+	}
+	return string(out)
 }

@@ -28,18 +28,21 @@ const ROOT = path.resolve(__dirname, "..");
 const BASELINE = path.join(__dirname, "escaping.baseline.json");
 
 const FILES = [
-  "js/features/delivery/core.js",
+  "js/features/delivery/index.js",
   "js/features/delivery/helpers.js",
   "js/features/delivery/modals.js",
   "js/features/delivery/jobs.js",
+  "js/features/delivery/selection.js",
   "js/features/delivery/reqs.js",
   "js/features/delivery/versions.js",
   "js/features/delivery/designs.js",
   "js/features/delivery/roadmap.js",
   "js/features/delivery/canvas.js",
   "js/features/delivery/test.js",
+  "js/features/delivery/readiness.js",
   "js/features/delivery/wizard.js",
   "js/features/clusters.js",
+  "js/features/clusters/workers.js",
   "js/features/workbench.js",
   "js/features/jobhistory.js",
   "js/features/ops.js",

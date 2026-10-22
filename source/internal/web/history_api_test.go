@@ -6,6 +6,7 @@ package web
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -120,6 +121,53 @@ func TestAuditMiddlewareRecordsMutations(t *testing.T) {
 	}
 	if len(all) != 0 {
 		t.Fatalf("a GET was audited: %+v", all)
+	}
+
+	w = call(t, s, tok, http.MethodPost, "/api/v1/delivery/majors",
+		`{"major":0,"title":"Audited generation"}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("mutation: %d %s", w.Code, w.Body.String())
+	}
+	all, err = s.delivery.ListAudit("major", "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 1 || all[0].Actor != "admin" || all[0].RequestID == "" {
+		t.Fatalf("mutation should produce exactly one attributed row: %+v", all)
+	}
+}
+
+func TestAuditRequirementVersionIdentityMatchesDetailSurface(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPatch,
+		"/api/v1/delivery/eng-reqs/eng_7/versions/0/45/12", nil)
+	entry := auditFromRequest(req, `{}`, "alice")
+	if entry.EntityKind != "requirement_version" || entry.EntityID != "eng_7:0.45.12" {
+		t.Fatalf("audit identity = %q %q", entry.EntityKind, entry.EntityID)
+	}
+}
+
+func TestSearchHTTPBoundsAndTrashProvenance(t *testing.T) {
+	s, tok := wbServer(t, nil)
+	if err := s.delivery.EnsureSeed(); err != nil {
+		t.Fatal(err)
+	}
+	w := call(t, s, tok, http.MethodGet, "/api/v1/search?q="+strings.Repeat("x", 161), "")
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("long search = %d %s", w.Code, w.Body.String())
+	}
+	w = call(t, s, tok, http.MethodGet, `/api/v1/search?q=%22%28%29%3A%2A`, "")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"hits":[]`) {
+		t.Fatalf("special search = %d %s", w.Code, w.Body.String())
+	}
+
+	w = call(t, s, tok, http.MethodDelete, "/api/v1/delivery/majors/1", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("delete generation: %d %s", w.Code, w.Body.String())
+	}
+	w = call(t, s, tok, http.MethodGet, "/api/v1/delivery/trash", "")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"deleted_by":"admin"`) ||
+		!strings.Contains(w.Body.String(), `"summary":"`) {
+		t.Fatalf("trash provenance missing from API: %d %s", w.Code, w.Body.String())
 	}
 }
 

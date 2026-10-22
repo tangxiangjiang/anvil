@@ -75,6 +75,42 @@ test("parseRoute reads the generation scope from /m/{M}", () => {
   assert.strictEqual(r.msId, null);
 });
 
+test("parseRoute covers every documented detail shape", () => {
+  const cases = [
+    ["#/delivery/requirements/projects", { section: "requirements", projectsPicker: true }],
+    ["#/delivery/requirements/eng%201", { section: "requirements", engId: "eng%201" }],
+    ["#/delivery/requirements/eng-1/2/3", { engId: "eng-1", major: 2, minor: 3 }],
+    ["#/delivery/requirements/eng-1/2/3/4", { engId: "eng-1", major: 2, minor: 3, patch: 4 }],
+    ["#/delivery/designs/des-1", { section: "designs", desId: "des-1" }],
+    ["#/delivery/roadmap/m/2/ms_eng-1_2_3", { section: "roadmap", routeMajor: 2, msId: "ms_eng-1_2_3" }],
+    ["#/delivery/roadmap/ms_eng-1_2_3", { section: "roadmap", msId: "ms_eng-1_2_3" }],
+    ["#/delivery/test/m/2", { section: "test", routeMajor: 2 }],
+  ];
+  for (const [hash, expected] of cases) {
+    const sandbox = loadUI();
+    sandbox.location.hash = hash;
+    const route = sandbox.Features.delivery.parseRoute();
+    for (const [key, value] of Object.entries(expected)) {
+      assert.strictEqual(route[key], value, `${hash}: ${key}`);
+    }
+  }
+});
+
+test("parseRoute rewrites every legacy gates route to roadmap", () => {
+  for (const hash of [
+    "#/delivery/gates",
+    "#/delivery/gates/old",
+    "#/delivery/roadmap/gates",
+    "#/delivery/roadmap/gates/old",
+  ]) {
+    const sandbox = loadUI();
+    sandbox.location.hash = hash;
+    const route = sandbox.Features.delivery.parseRoute();
+    assert.strictEqual(sandbox.location.hash, "#/delivery/roadmap", hash);
+    assert.strictEqual(route.section, "roadmap", hash);
+  }
+});
+
 // ---------------------------------------------------------- parseRoadmapMsBind
 test("parseRoadmapMsBind splits the bootstrap milestone id", () => {
   const d = ui();
@@ -95,6 +131,63 @@ test("parseRoadmapMsBind rejects anything that is not a milestone id", () => {
   assert.strictEqual(d.parseRoadmapMsBind("ms_nounderscore"), null);
   assert.strictEqual(d.parseRoadmapMsBind(""), null);
   assert.strictEqual(d.parseRoadmapMsBind(null), null);
+});
+
+// ---------------------------------------------------- composeDesignMarkdown
+test("composeDesignMarkdown emits ADR sections then ordered design versions", () => {
+  const markdown = ui().composeDesignMarkdown({
+    title: "Scheduler design",
+    major: 0,
+    minor: 45,
+    status: "draft",
+    version: "0.45",
+    adr_context: "Context body",
+    adr_decision: "Decision body",
+    adr_consequences: "Consequences body",
+    versions: [
+      {
+        id: "v2",
+        sort_order: 2,
+        title: "Second",
+        depends_on: ["v1"],
+        gate: "- [ ] second gate",
+        sub_architecture: "Second architecture",
+        class_design: "Second classes",
+      },
+      {
+        id: "v1",
+        sort_order: 1,
+        title: "First",
+        depends_on: [],
+        gate: "- [x] first gate",
+        sub_architecture: "First architecture",
+        class_design: "First classes",
+      },
+    ],
+  });
+
+  assert.ok(markdown.startsWith("# Scheduler design\n\n> Bound `0.45`"));
+  assert.ok(markdown.includes("### Context\n\nContext body"));
+  assert.ok(markdown.includes("### Decision\n\nDecision body"));
+  assert.ok(markdown.includes("### Consequences\n\nConsequences body"));
+  assert.ok(markdown.indexOf("## ADR") < markdown.indexOf("## Versions"));
+  assert.ok(markdown.indexOf("### v2 — Second") < markdown.indexOf("### v1 — First"));
+  assert.ok(markdown.includes("**Depends on:** v1 — First"));
+  assert.ok(markdown.indexOf("### Gate") < markdown.indexOf("### Sub-architecture"));
+  assert.ok(markdown.indexOf("### Sub-architecture") < markdown.indexOf("### Class design"));
+});
+
+test("composeDesignMarkdown preserves empty sections and no-version state", () => {
+  const markdown = ui().composeDesignMarkdown({
+    title: "",
+    major: 1,
+    minor: 0,
+    status: "",
+    versions: [],
+  });
+  assert.ok(markdown.startsWith("# Untitled design"));
+  assert.ok(markdown.includes("### Context\n\n_(empty)_"));
+  assert.ok(markdown.includes("_(No Versions yet.)_"));
 });
 
 // ------------------------------------------------------- parseGateChecklist
@@ -141,6 +234,42 @@ test("patchChecklistItem leaves non-checkbox lines alone", () => {
   const d = ui();
   const before = "intro\n- [ ] a\nnote";
   assert.strictEqual(d.patchChecklistItem(before, 0, true), "intro\n- [x] a\nnote");
+});
+
+// ------------------------------------------------ authoritative assist cites
+test("assist sends only structured references and shows unavailable errors", async () => {
+  const sandbox = loadUI();
+  let sent;
+  sandbox.api = {
+    v1: {
+      deliveryAssist: async (body) => {
+        sent = body;
+        return { available: false, reason: "AI assist is not configured", proposals: [] };
+      },
+    },
+  };
+  const target = sandbox.AnvilUI.assist.requirementRef("eng_1", 0, 45, 1);
+  const refs = sandbox.AnvilUI.assist.requirementCites(
+    ["Goals", "0.45.2", "unknown"],
+    "eng_1",
+    target,
+  );
+  const host = { innerHTML: "" };
+  await sandbox.AnvilUI.assist.ask({
+    surface: "requirement_version",
+    field: "success",
+    instruction: "tighten it",
+    target,
+    citeRefs: refs,
+    host,
+  });
+
+  assert.strictEqual(sent.current, undefined);
+  assert.strictEqual(sent.cites.length, 2);
+  assert.strictEqual(sent.cites[0].field, "goals");
+  assert.strictEqual(sent.cites[1].field, "overview");
+  assert.ok(sent.cites.every((ref) => typeof ref === "object"));
+  assert.ok(host.innerHTML.includes("not configured"));
 });
 
 // ------------------------------------------------------- campaignPassReady
@@ -202,6 +331,7 @@ test("parseCasePaste ignores blank input and blank blocks", () => {
   assert.strictEqual(d.parseCasePaste("").length, 0);
   assert.strictEqual(d.parseCasePaste("   \n  \n").length, 0);
   assert.strictEqual(d.parseCasePaste("a\n---\n---\nb").length, 2);
+  assert.strictEqual(d.parseCasePaste("---\r\nbody only\r\n---").length, 1);
 });
 
 test("parseCasePaste titles an empty first line", () => {

@@ -28,12 +28,12 @@ window.AnvilUI = window.AnvilUI || {};
    * how to persist anything, which is what makes "the assistant cannot write" a
    * structural property rather than a promise.
    */
-  async function ask({ surface, field, instruction, cites, current, host, chat, onApply }) {
+  async function ask({ surface, field, instruction, target, citeRefs, host, chat, onApply }) {
     if (!host) return;
     const body = { surface, instruction: instruction || "" };
     if (field) body.field = field;
-    if (cites && cites.length) body.cites = cites;
-    if (current) body.current = current;
+    if (target) body.target = target;
+    if (citeRefs && citeRefs.length) body.cites = citeRefs;
 
     let res;
     try {
@@ -87,6 +87,7 @@ window.AnvilUI = window.AnvilUI || {};
       </div>`,
         )
         .join("") +
+      `${(res.citations || []).length ? `<div class="assist-foot muted">Context: ${(res.citations || []).map((c) => esc(c.label)).join(" · ")}</div>` : ""}` +
       `<div class="assist-foot muted">${esc(res.model || "")}${res.usage ? ` · ${res.usage.prompt_tokens || 0}+${res.usage.completion_tokens || 0} tokens` : ""} · nothing is saved until you apply</div>` +
       `</div>`;
 
@@ -111,5 +112,56 @@ window.AnvilUI = window.AnvilUI || {};
     });
   }
 
-  window.AnvilUI.assist = { ask };
+  function requirementRef(engId, major, minor, patch, field) {
+    return {
+      type: "requirement_version",
+      id: String(engId),
+      major: Number(major),
+      minor: Number(minor),
+      patch: Number(patch),
+      ...(field ? { field } : {}),
+    };
+  }
+
+  function requirementCites(keys, engId, target) {
+    const fields = {
+      Title: "title",
+      "Delivery note": "problem",
+      Goals: "goals",
+      "Completion criteria": "success",
+    };
+    return (keys || []).flatMap((key) => {
+      if (fields[key]) return [{ ...target, field: fields[key] }];
+      const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(key);
+      return match
+        ? [requirementRef(engId, Number(match[1]), Number(match[2]), Number(match[3]), "overview")]
+        : [];
+    });
+  }
+
+  function designRef(id, field) {
+    return { type: "design", id: String(id), ...(field ? { field } : {}) };
+  }
+
+  function designVersionRef(designId, id, field) {
+    return {
+      type: "design_version",
+      id: String(id),
+      parent_id: String(designId),
+      ...(field ? { field } : {}),
+    };
+  }
+
+  function majorRef(major, field) {
+    return { type: "major", id: String(major), ...(field ? { field } : {}) };
+  }
+
+  window.AnvilUI.assist = {
+    ask,
+    requirementRef,
+    requirementCites,
+    designRef,
+    designVersionRef,
+    majorRef,
+  };
 })();

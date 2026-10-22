@@ -257,7 +257,7 @@ Object.assign(window.Features.delivery, {
       <div class="del-major-plan">
         <div class="del-major-plan-head">
           <h3 style="margin:0">Generation plan</h3>
-          <span class="muted">major line · e.g. 0.x → 1.0</span>
+          <span class="muted">Generation · e.g. 0.x → 1.0</span>
           <button type="button" class="ghost" id="del-trash-open" style="margin-left:auto">
             Trash${trashN ? ` (${trashN})` : ""}
           </button>
@@ -337,10 +337,11 @@ Object.assign(window.Features.delivery, {
         </div>`;
           })
           .join("")
-      : `<div class="del-canvas-empty" style="min-height:10rem">
-           <strong>No milestones in ${this.esc(label)} yet</strong>
-           <p class="muted">Open a Project and add a milestone under this generation, or create Requirements from the project picker.</p>
-         </div>`;
+      : this.emptyStateHtml(
+          "No milestones in " + label + " — open a Project and create one.",
+          "Open Projects",
+          "#/delivery/requirements/projects",
+        );
 
     return `
       <p class="del-crumbs">
@@ -382,8 +383,8 @@ Object.assign(window.Features.delivery, {
            <span>Projects</span>
          </p>`;
     if (!this._clustersLoaded) {
-      return `${crumbs}<p class="muted">Loading projects…</p>
-        <div id="del-create-modal" class="modal" hidden></div>`;
+      return crumbs + this.skeletonHtml(3) +
+        `<div id="del-create-modal" class="modal" hidden></div>`;
     }
     if (this._clustersError) {
       return `${crumbs}<p class="err">${this.esc(this._clustersError)}</p>
@@ -398,13 +399,13 @@ Object.assign(window.Features.delivery, {
           value="${this.esc(this._projFilter || "")}" style="margin:0;max-width:28rem" />
       </div>`;
     if (!catalog.length) {
-      return `
-        ${crumbs}
-        ${filterBox}
-        <div class="card">
-          <p class="muted">No workspaces yet. Create a Workspace and Project under Clusters, then return here.</p>
-        </div>
-        <div id="del-create-modal" class="modal" hidden></div>`;
+      const empty = this.emptyStateHtml(
+          "No Projects are available — create a Workspace and Project under Clusters.",
+          "Open Clusters",
+          "#/clusters",
+        );
+      return crumbs + filterBox + empty +
+        `<div id="del-create-modal" class="modal" hidden></div>`;
     }
     const sections = catalog
       .map(({ fleet, workspace: ws, projects }) => {

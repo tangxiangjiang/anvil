@@ -94,3 +94,12 @@ test("a frame split across reads reassembles", () => {
   assert.strictEqual(collected.length, 1);
   assert.strictEqual(collected[0].data.text, "ok");
 });
+
+test("approval state machine settles once", () => {
+  const wb = loadWorkbench();
+  assert.strictEqual(wb.approvalNextState("pending", "respond"), "responding");
+  assert.strictEqual(wb.approvalNextState("responding", "answered"), "answered");
+  assert.strictEqual(wb.approvalNextState("answered", "expired"), "answered");
+  assert.strictEqual(wb.approvalNextState("pending", "expired"), "expired");
+  assert.strictEqual(wb.approvalNextState("pending", "cancelled"), "cancelled");
+});

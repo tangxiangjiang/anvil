@@ -17,6 +17,9 @@ window.Features.ops = {
 
   async mount(el) {
     this.el = el;
+    if (!this._snapshotCache) {
+      this._snapshotCache = window.AnvilUI.swr.createStore({ maxEntries: 2, maxAgeMs: 5 * 60 * 1000 });
+    }
     el.innerHTML = `
       <div class="del-head">
         <div>
@@ -33,6 +36,12 @@ window.Features.ops = {
       <div id="del-ui-modal" class="modal" hidden></div>`;
 
     el.querySelector("#ops-refresh").addEventListener("click", () => this.refresh());
+    const cached = this._snapshotCache.peek("ops:all");
+    if (cached) {
+      this._snapshot = cached.data;
+      this._snapshotState = { stale: true, refreshing: true, updatedAt: cached.updatedAt, error: "" };
+      this.paint();
+    }
     await this.refresh();
     // Poll only while visible: a phone left on this screen should stay current,
     // and a background tab should not keep a network loop alive.
@@ -54,21 +63,70 @@ window.Features.ops = {
   async refresh() {
     const body = this.el?.querySelector("#ops-body");
     if (!body) return;
-    const esc = window.AnvilUI.esc;
-    let health = { fleets: [], summary: "Health unknown", ok: false };
-    let jobs = [];
+    this._snapshotState = { ...(this._snapshotState || {}), refreshing: true, error: "" };
+    if (this._snapshot) this.paint();
     try {
-      health = await api.v1.health();
-    } catch (_) {
-      /* shown below */
+      const result = await this._snapshotCache.revalidate(
+        "ops:all",
+        async () => {
+          const [health, data, readiness] = await Promise.all([
+            api.v1.health(),
+            api.v1.jobs("?status=running"),
+            api.v1.deliveryReadiness({}),
+          ]);
+          return { health, jobs: data.jobs || [], readiness };
+        },
+        {
+          // Prompts can contain source or incident details. Ops only needs a
+          // stable job identity to stop it, so sensitive prompt text never
+          // enters this cache.
+          project: ({ health, jobs, readiness }) => ({
+            health,
+            jobs: jobs.map((job) => ({
+              job_id: job.job_id,
+              kind: job.kind,
+              status: job.status,
+            })),
+            readiness: {
+              rows: (readiness?.rows || []).map((row) => ({
+                id: row.id,
+                title: row.title,
+                lifecycle: row.lifecycle,
+                transition: row.transition,
+                ok: row.ok,
+                href: row.href,
+                blocker_count: (row.blockers || []).length,
+              })),
+            },
+          }),
+        },
+      );
+      if (!result.accepted || !this.el) return;
+      this._snapshot = result.snapshot;
+      this._snapshotState = {
+        stale: false,
+        refreshing: false,
+        updatedAt: result.updatedAt,
+        error: "",
+      };
+    } catch (error) {
+      this._snapshotState = {
+        ...(this._snapshotState || {}),
+        stale: Boolean(this._snapshot),
+        refreshing: false,
+        error: error?.message || String(error),
+      };
     }
-    try {
-      const data = await api.v1.jobs("?status=running");
-      jobs = data.jobs || [];
-    } catch (_) {
-      /* shown below */
-    }
+    this.paint();
+  },
 
+  paint() {
+    const body = this.el?.querySelector("#ops-body");
+    if (!body) return;
+    const esc = window.AnvilUI.esc;
+    const health = this._snapshot?.health || { fleets: [], summary: "Health unknown", ok: false };
+    const jobs = this._snapshot?.jobs || [];
+    const readiness = this._snapshot?.readiness?.rows || [];
     const fleets = health.fleets || [];
     const fleetRows = fleets.length
       ? fleets
@@ -86,14 +144,38 @@ window.Features.ops = {
       ? jobs
           .map(
             (j) => `<div class="ops-row">
-              <span class="ops-grow">${esc(j.kind || "job")} · ${esc((j.prompt || j.job_id || "").slice(0, 40))}</span>
+              <span class="ops-grow">${esc(j.kind || "job")} · ${esc(j.job_id || "")}</span>
               <button type="button" class="danger" data-ops-stop="${esc(j.job_id)}">Stop</button>
             </div>`,
           )
           .join("")
       : `<div class="muted">Nothing running.</div>`;
+    const readinessRows = readiness.length
+      ? readiness
+          .map(
+            (row) => `<div class="ops-row">
+              <span class="sh-dot ${row.ok ? "ok" : "warn"}"></span>
+              <span class="ops-grow">
+                <strong>${esc(row.title || row.id)}</strong>
+                <span class="muted">${esc(row.lifecycle || "")} → ${esc(row.transition || "")}</span>
+              </span>
+              <span class="${row.ok ? "ok" : "warning"}">${row.ok ? "Ready" : `${Number(row.blocker_count || 0)} blocked`}</span>
+              ${row.href ? `<a class="ghost ops-open" href="${esc(row.href)}">Open</a>` : ""}
+            </div>`,
+          )
+          .join("")
+      : `<div class="muted">No non-terminal records.</div>`;
 
-    body.innerHTML = `
+    const state = this._snapshotState || {};
+    const age = window.AnvilUI.swr.ageLabel(state.updatedAt);
+    const connection = state.error
+      ? `<div class="snapshot-state bad" role="status">Showing last successful snapshot · updated ${esc(age)} · disconnected <button type="button" class="ghost" data-ops-retry>Retry</button></div>`
+      : state.refreshing || state.stale
+        ? `<div class="snapshot-state warn" role="status">Showing last successful snapshot · updated ${esc(age)} · refreshing…</div>`
+        : state.updatedAt
+          ? `<div class="snapshot-state" role="status">Updated ${esc(age)}</div>`
+          : `<div class="snapshot-state bad" role="status">No snapshot available · disconnected <button type="button" class="ghost" data-ops-retry>Retry</button></div>`;
+    body.innerHTML = `${connection}
       <div class="ops-card">
         <h3>Health</h3>
         <div class="muted" style="margin-bottom:0.35rem">${esc(health.summary || "")}</div>
@@ -102,8 +184,13 @@ window.Features.ops = {
       <div class="ops-card">
         <h3>Running</h3>
         ${jobRows}
+      </div>
+      <div class="ops-card">
+        <h3>Readiness</h3>
+        ${readinessRows}
       </div>`;
 
+    body.querySelector("[data-ops-retry]")?.addEventListener("click", () => this.refresh());
     body.querySelectorAll("[data-ops-stop]").forEach((btn) => {
       btn.addEventListener("click", () =>
         window.AnvilUI.withAction(

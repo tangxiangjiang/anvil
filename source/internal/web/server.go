@@ -5,6 +5,8 @@ package web
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"io/fs"
 	"log"
@@ -14,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/anvil-dev/anvil/internal/daemon"
 	"github.com/anvil-dev/anvil/internal/web/auth"
 	"github.com/anvil-dev/anvil/internal/web/delivery"
 	"github.com/anvil-dev/anvil/internal/web/schedclient"
@@ -33,10 +36,11 @@ type Server struct {
 	// workbench holds interactive sessions (p_0.45.9). In memory by design:
 	// the durable record of a session is the worker's own transcript, keyed by
 	// the agent id in the terminal event.
-	workbench   *workbenchHub
-	wbCancelMu  sync.Mutex
-	wbCancel    map[string]context.CancelFunc
-	jobCanceler func(jobID string) error // test seam
+	workbench         *workbenchHub
+	wbCancelMu        sync.Mutex
+	wbCancel          map[string]context.CancelFunc
+	jobCanceler       func(jobID string) error                                            // test seam
+	approvalResponder func(context.Context, string, daemon.JobApprovalResponseBody) error // test seam
 
 	static fs.FS
 	log    *log.Logger
@@ -83,17 +87,43 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/jobs/", s.requireAuth(s.handleJobsOrCancel))
 	mux.HandleFunc("/api/v1/search", s.requireAuth(s.handleSearch))
 	mux.HandleFunc("/api/v1/delivery/preflight", s.requireAuth(s.handlePreflight))
+	mux.HandleFunc("/api/v1/delivery/readiness", s.requireAuth(s.handleReadiness))
 	mux.HandleFunc("/api/v1/delivery/assist", s.requireAuth(s.handleAssist))
 	mux.HandleFunc("/api/v1/workbench", s.requireAuth(s.handleWorkbench))
 	mux.HandleFunc("/api/v1/workbench/", s.requireAuth(s.handleWorkbench))
 	mux.HandleFunc("/api/v1/health", s.requireAuth(s.handleHealth))
+	mux.HandleFunc("/api/v1/diagnostics/first-run", s.requireAuth(s.handleFirstRun))
 	mux.HandleFunc("/api/v1/diagnostics/classify-error", s.requireAuth(s.handleClassifyError))
 
 	if s.static != nil {
 		fileServer := http.FileServer(http.FS(s.static))
 		mux.Handle("/", spaFallback(fileServer))
 	}
-	return mux
+	return withRequestID(mux)
+}
+
+type ctxRequestID struct{}
+
+func requestIDFrom(ctx context.Context) string {
+	id, _ := ctx.Value(ctxRequestID{}).(string)
+	return id
+}
+
+func withRequestID(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var raw [8]byte
+		if _, err := rand.Read(raw[:]); err != nil {
+			raw = [8]byte{}
+			binaryTime := time.Now().UnixNano()
+			for i := range raw {
+				raw[i] = byte(binaryTime >> (i * 8))
+			}
+		}
+		id := hex.EncodeToString(raw[:])
+		w.Header().Set("X-Request-ID", id)
+		ctx := context.WithValue(r.Context(), ctxRequestID{}, id)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
 
 func spaFallback(next http.Handler) http.Handler {

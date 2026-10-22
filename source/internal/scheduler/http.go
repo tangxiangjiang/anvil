@@ -374,22 +374,24 @@ func (h *Hub) handleModels(w http.ResponseWriter, r *http.Request) {
 }
 
 type jobRequest struct {
-	JobID       string   `json:"job_id"`
-	RepoID      string   `json:"repo_id"`
-	Prompt      string   `json:"prompt"`
-	ResumeID    string   `json:"resume_id"`
-	MaxSteps    int      `json:"max_steps"`
-	Model       string   `json:"model"`
-	Provider    string   `json:"provider"`
-	Plugins     []string `json:"plugins"`
-	NodeID      string   `json:"node_id"`
-	ForceStub   bool     `json:"force_stub"`
-	Stream      bool     `json:"stream"`
-	MilestoneID string   `json:"milestone_id"`
-	PhaseID     string   `json:"phase_id"`
-	EngReqID    string   `json:"eng_req_id"`
-	Major       int      `json:"major"`
-	Minor       int      `json:"minor"`
+	JobID             string   `json:"job_id"`
+	RepoID            string   `json:"repo_id"`
+	Prompt            string   `json:"prompt"`
+	ResumeID          string   `json:"resume_id"`
+	MaxSteps          int      `json:"max_steps"`
+	Model             string   `json:"model"`
+	Provider          string   `json:"provider"`
+	Plugins           []string `json:"plugins"`
+	NodeID            string   `json:"node_id"`
+	ForceStub         bool     `json:"force_stub"`
+	Stream            bool     `json:"stream"`
+	MilestoneID       string   `json:"milestone_id"`
+	PhaseID           string   `json:"phase_id"`
+	EngReqID          string   `json:"eng_req_id"`
+	Major             int      `json:"major"`
+	Minor             int      `json:"minor"`
+	ApprovalSessionID string   `json:"approval_session_id"`
+	ApprovalTimeoutMS int      `json:"approval_timeout_ms"`
 }
 
 func (h *Hub) handleJobRoutes(w http.ResponseWriter, r *http.Request) {
@@ -403,6 +405,34 @@ func (h *Hub) handleJobRoutes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "job_id": jobID})
+		return
+	}
+	if len(parts) == 2 && parts[1] == "approval" && r.Method == http.MethodPost {
+		r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+		var resp daemon.JobApprovalResponseBody
+		if err := json.NewDecoder(r.Body).Decode(&resp); err != nil {
+			http.Error(w, "bad approval response", http.StatusBadRequest)
+			return
+		}
+		if resp.JobID != "" && resp.JobID != parts[0] {
+			http.Error(w, "job_id does not match route", http.StatusBadRequest)
+			return
+		}
+		resp.JobID = parts[0]
+		res, err := h.AnswerJobApproval(r.Context(), resp)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		if !res.OK {
+			code := http.StatusConflict
+			if res.Code == "invalid" {
+				code = http.StatusBadRequest
+			}
+			writeJSON(w, code, res)
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
 		return
 	}
 	http.NotFound(w, r)
@@ -427,20 +457,22 @@ func (h *Hub) handleJobs(w http.ResponseWriter, r *http.Request) {
 		jobID = id.New()
 	}
 	job := daemon.JobAssignBody{
-		JobID:       jobID,
-		RepoID:      req.RepoID,
-		Prompt:      req.Prompt,
-		ResumeID:    req.ResumeID,
-		MaxSteps:    req.MaxSteps,
-		Model:       req.Model,
-		Provider:    req.Provider,
-		Plugins:     req.Plugins,
-		ForceStub:   req.ForceStub,
-		MilestoneID: req.MilestoneID,
-		PhaseID:     req.PhaseID,
-		EngReqID:    req.EngReqID,
-		Major:       req.Major,
-		Minor:       req.Minor,
+		JobID:             jobID,
+		RepoID:            req.RepoID,
+		Prompt:            req.Prompt,
+		ResumeID:          req.ResumeID,
+		MaxSteps:          req.MaxSteps,
+		Model:             req.Model,
+		Provider:          req.Provider,
+		Plugins:           req.Plugins,
+		ForceStub:         req.ForceStub,
+		MilestoneID:       req.MilestoneID,
+		PhaseID:           req.PhaseID,
+		EngReqID:          req.EngReqID,
+		Major:             req.Major,
+		Minor:             req.Minor,
+		ApprovalSessionID: req.ApprovalSessionID,
+		ApprovalTimeoutMS: req.ApprovalTimeoutMS,
 	}
 	if job.Model == "" || job.Provider == "" {
 		_ = h.EnsureDefaultModel(r.Context())

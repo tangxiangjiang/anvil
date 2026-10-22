@@ -4,6 +4,7 @@
 package delivery
 
 import (
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -107,6 +108,42 @@ func TestJobEventTailIsBounded(t *testing.T) {
 	}
 }
 
+func TestJobEventWorkspaceRetentionDropsOldTranscripts(t *testing.T) {
+	s := openTestStore(t)
+	total := jobEventKeepPerWorkspace + 1
+	for i := 0; i < total; i++ {
+		id := fmt.Sprintf("retention-%04d", i)
+		started := time.Date(2026, 1, 1, 0, 0, i, 0, time.UTC).Format(time.RFC3339)
+		if err := s.BeginJob(JobRecord{JobID: id, Kind: "phase", StartedAt: started}); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.AppendJobEvent(JobEvent{JobID: id, Type: "progress", Text: id}); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.FinishJob(id, "finished", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	oldest, err := s.JobEvents("retention-0000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	newest, err := s.JobEvents(fmt.Sprintf("retention-%04d", total-1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(oldest) != 0 || len(newest) != 1 {
+		t.Fatalf("workspace retention oldest=%d newest=%d", len(oldest), len(newest))
+	}
+	var headers int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM delivery_jobs`).Scan(&headers); err != nil {
+		t.Fatal(err)
+	}
+	if headers != total {
+		t.Fatalf("job headers must survive transcript pruning: %d", headers)
+	}
+}
+
 // TestJobFilterNarrows keeps the history list usable on a busy install.
 func TestJobFilterNarrows(t *testing.T) {
 	s := openTestStore(t)
@@ -190,12 +227,9 @@ func TestTrashProvenance(t *testing.T) {
 	if err := s.EnsureSeed(); err != nil {
 		t.Fatal(err)
 	}
-	item, err := s.DeleteMajorToTrash(1)
+	item, err := s.DeleteMajorToTrash(1, "alice")
 	if err != nil {
 		t.Fatalf("delete major: %v", err)
-	}
-	if err := s.SetTrashProvenance(item.ID, "alice", "1 milestone, 0 requirements"); err != nil {
-		t.Fatal(err)
 	}
 	rows, err := s.ListTrash()
 	if err != nil {
@@ -203,6 +237,9 @@ func TestTrashProvenance(t *testing.T) {
 	}
 	if len(rows) == 0 {
 		t.Fatal("expected a trash row")
+	}
+	if rows[0].DeletedBy != "alice" || rows[0].DeletedAt == "" || rows[0].Summary == "" {
+		t.Fatalf("list omitted provenance: %+v", rows[0])
 	}
 	by, at, summary, err := s.TrashProvenance(item.ID)
 	if err != nil {
@@ -212,5 +249,3 @@ func TestTrashProvenance(t *testing.T) {
 		t.Fatalf("provenance = %q %q %q", by, at, summary)
 	}
 }
-
-

@@ -2,8 +2,12 @@ window.api = {
   tokenKey: "anvil_web_token",
   getToken() { return localStorage.getItem(this.tokenKey) || ""; },
   setToken(t) {
+    const changed = (localStorage.getItem(this.tokenKey) || "") !== (t || "");
     if (t) localStorage.setItem(this.tokenKey, t);
     else localStorage.removeItem(this.tokenKey);
+    // Volatile snapshots are user-scoped. Never let a logout/login transition
+    // expose one authenticated user's last successful view to another.
+    if (changed) window.AnvilUI?.swr?.clearAll();
   },
   async req(method, path, body) {
     const headers = { Accept: "application/json" };
@@ -22,6 +26,7 @@ window.api = {
       const err = new Error((data && (data.error || data.message || data.Message)) || text || res.statusText);
       err.status = res.status;
       err.data = data;
+      err.requestId = res.headers.get("X-Request-ID") || "";
       throw err;
     }
     return data;
@@ -146,6 +151,7 @@ window.api = {
     usage() { return api.req("GET", "/api/v1/usage"); },
     search(q) { return api.req("GET", "/api/v1/search?q=" + encodeURIComponent(q)); },
     health() { return api.req("GET", "/api/v1/health"); },
+    firstRun() { return api.req("GET", "/api/v1/diagnostics/first-run"); },
     classifyError(body) { return api.req("POST", "/api/v1/diagnostics/classify-error", body); },
     jobs(suffix) { return api.req("GET", "/api/v1/jobs" + (suffix || "")); },
     jobEvents(id) { return api.req("GET", "/api/v1/jobs/" + encodeURIComponent(id) + "/events"); },
@@ -158,7 +164,15 @@ window.api = {
     deliveryPreflight(transition, target) {
       const q = new URLSearchParams({ transition, target }).toString();
       return api.req("GET", "/api/v1/delivery/preflight?" + q);
-    },    delivery() { return api.req("GET", "/api/v1/delivery"); },
+    },
+    deliveryReadiness(scope) {
+      const q = new URLSearchParams();
+      for (const [key, value] of Object.entries(scope || {})) {
+        if (value !== "") q.set(key, value);
+      }
+      return api.req("GET", "/api/v1/delivery/readiness?" + q.toString());
+    },
+    delivery() { return api.req("GET", "/api/v1/delivery"); },
 
     // Workbench (0.46.7): the console's interactive session surface.
     workbenchSessions() { return api.req("GET", "/api/v1/workbench/sessions"); },
@@ -168,6 +182,13 @@ window.api = {
     },
     workbenchCancel(id) {
       return api.req("POST", "/api/v1/workbench/sessions/" + encodeURIComponent(id) + "/cancel", {});
+    },
+    workbenchApproval(id, requestId, body) {
+      return api.req(
+        "POST",
+        "/api/v1/workbench/sessions/" + encodeURIComponent(id) + "/approvals/" + encodeURIComponent(requestId),
+        body,
+      );
     },
     workbenchEventsURL(id) {
       return "/api/v1/workbench/sessions/" + encodeURIComponent(id) + "/events";

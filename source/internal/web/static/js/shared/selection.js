@@ -133,8 +133,13 @@ window.AnvilUI = window.AnvilUI || {};
         return "open";
       case " ":
         return shift ? "selectRange" : "select";
+      case "x":
+      case "X":
+        return "select";
       case "Escape":
         return "clear";
+      case "/":
+        return "search";
       case "a":
         return meta ? "selectAll" : "none";
       default:

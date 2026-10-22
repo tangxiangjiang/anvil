@@ -55,16 +55,18 @@ Object.assign(window.Features.delivery, {
       // Real drafting: the proposals land in the Title / Summary fields the operator
       // is already editing. The modal's own Save is still what persists them, so a
       // suggestion is an edit suggestion and never a write.
-      onSend: async ({ composed, cites }, ch) => {
+      onSend: async ({ text, cites }, ch) => {
         const modal = this.uiModal();
+        const target = window.AnvilUI.assist.majorRef(major);
         await window.AnvilUI.assist.ask({
           surface: "major",
-          instruction: composed,
-          cites,
-          current: {
-            title: (modal?.querySelector("#del-edit-maj-title")?.value || "").trim(),
-            summary: (modal?.querySelector("#del-edit-maj-sum")?.value || "").trim(),
-          },
+          instruction: text,
+          target,
+          citeRefs: cites.flatMap((key) =>
+            key === "Title" || key === "Summary"
+              ? [{ ...target, field: key.toLowerCase() }]
+              : [],
+          ),
           host: modal?.querySelector("#maj-assist"),
           chat: ch,
           onApply: async (field, value) => {
@@ -221,16 +223,11 @@ Object.assign(window.Features.delivery, {
       // Real drafting: the proposals land in the Title / Summary fields the operator
       // is already editing. The modal's own Save is still what persists them, so a
       // suggestion is an edit suggestion and never a write.
-      onSend: async ({ composed, cites }, ch) => {
+      onSend: async ({ text }, ch) => {
         const modal = this.uiModal();
         await window.AnvilUI.assist.ask({
           surface: "major",
-          instruction: composed,
-          cites,
-          current: {
-            title: (modal?.querySelector("#del-add-maj-title")?.value || "").trim(),
-            summary: (modal?.querySelector("#del-add-maj-sum")?.value || "").trim(),
-          },
+          instruction: text,
           host: modal?.querySelector("#maj-assist"),
           chat: ch,
           onApply: async (field, value) => {

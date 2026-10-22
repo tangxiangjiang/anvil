@@ -6,6 +6,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -25,11 +26,8 @@ import (
 // phase Job started from the Roadmap is the same thing seen from the other end,
 // so the two share one event renderer on the client and one stream server-side.
 //
-// What this does NOT do, because the job path does not carry it: approvals. The
-// daemon's JobEventBody has no approval event and no channel to answer one, so a
-// gated tool call inside a Worker job is decided by the worker's own options
-// (default: allow) rather than by a person in this console. The client states
-// that limit instead of showing an approval card that could never be delivered.
+// Interactive jobs opt into the daemon approval channel. Ordinary phase jobs
+// retain their unattended policy and are read-only when bridged into this view.
 
 // workbenchSession is one interactive session, tracked in memory for the life of
 // the process. Persistence is the worker's session store (the agent id in the
@@ -41,11 +39,12 @@ type workbenchSession struct {
 	Started  time.Time
 	Prompt   string
 
-	mu      sync.Mutex
-	events  []daemon.JobEventBody
-	done    *daemon.JobDoneBody
-	errText string
-	subs    map[chan wbFrame]struct{}
+	mu        sync.Mutex
+	events    []daemon.JobEventBody
+	done      *daemon.JobDoneBody
+	errText   string
+	subs      map[chan wbFrame]struct{}
+	approvals map[string]string // request id -> pending|responding|answered|expired
 }
 
 type wbFrame struct {
@@ -66,6 +65,18 @@ const (
 
 func (s *workbenchSession) publish(ev daemon.JobEventBody) {
 	s.mu.Lock()
+	if ev.Type == "approval_request" && ev.Approval != nil && ev.Approval.SessionID == s.ID {
+		if s.approvals == nil {
+			s.approvals = map[string]string{}
+		}
+		s.approvals[ev.Approval.RequestID] = "pending"
+	}
+	if ev.Type == "approval_result" && ev.ApprovalResult != nil {
+		if s.approvals == nil {
+			s.approvals = map[string]string{}
+		}
+		s.approvals[ev.ApprovalResult.RequestID] = ev.ApprovalResult.Status
+	}
 	s.events = append(s.events, ev)
 	if len(s.events) > sessionEventRing {
 		s.events = s.events[len(s.events)-sessionEventRing:]
@@ -82,6 +93,7 @@ func (s *workbenchSession) publish(ev daemon.JobEventBody) {
 }
 
 func (s *workbenchSession) finish(done daemon.JobDoneBody, errText string) {
+	s.abortApprovals("session ended")
 	s.mu.Lock()
 	s.done = &done
 	if errText != "" {
@@ -114,6 +126,23 @@ func (s *workbenchSession) snapshot() ([]daemon.JobEventBody, *daemon.JobDoneBod
 	defer s.mu.Unlock()
 	evs := append([]daemon.JobEventBody(nil), s.events...)
 	return evs, s.done, s.errText
+}
+
+func (s *workbenchSession) abortApprovals(message string) {
+	s.mu.Lock()
+	var ids []string
+	for requestID, state := range s.approvals {
+		if state == "pending" || state == "responding" {
+			s.approvals[requestID] = "cancelled"
+			ids = append(ids, requestID)
+		}
+	}
+	s.mu.Unlock()
+	for _, requestID := range ids {
+		s.publish(daemon.JobEventBody{JobID: s.JobID, Type: "approval_result", ApprovalResult: &daemon.JobApprovalOutcomeBody{
+			RequestID: requestID, Status: "cancelled", Decision: daemon.ApprovalDeny, Message: message,
+		}})
+	}
 }
 
 type workbenchHub struct {
@@ -214,10 +243,9 @@ type WorkbenchSession struct {
 	Prompt    string `json:"prompt"`
 	StartedAt string `json:"started_at"`
 	// State is running | finished | error | cancelled.
-	State string `json:"state"`
-	// Approval is false because the job path carries no approval channel; the
-	// client says so rather than implying an approval it cannot deliver.
-	Approval bool `json:"approval_supported"`
+	State    string `json:"state"`
+	Approval bool   `json:"approval_supported"`
+	ReadOnly bool   `json:"read_only,omitempty"`
 }
 
 func sessionState(s *workbenchSession) string {
@@ -245,6 +273,7 @@ func sessionView(s *workbenchSession) WorkbenchSession {
 		Prompt:    s.Prompt,
 		StartedAt: s.Started.UTC().Format(time.RFC3339),
 		State:     sessionState(s),
+		Approval:  true,
 	}
 }
 
@@ -298,6 +327,26 @@ func (s *Server) handleWorkbench(w http.ResponseWriter, r *http.Request) {
 			out = append(out, sessionView(sess))
 		}
 		s.workbench.mu.Unlock()
+		// Phase/campaign jobs are the read-only side of the same stream. They
+		// use the persisted job table so they remain addressable after restart.
+		if s.delivery != nil {
+			if jobs, err := s.delivery.ListJobs(delivery.JobFilter{Limit: 200}); err == nil {
+				for _, job := range jobs {
+					if job.Kind == "workbench" {
+						continue
+					}
+					prompt := strings.TrimSpace(job.PhaseID)
+					if prompt == "" {
+						prompt = strings.TrimSpace(job.Kind)
+					}
+					out = append(out, WorkbenchSession{
+						ID: "phasejob-" + job.JobID, JobID: job.JobID, WorkerID: job.WorkerID,
+						Prompt: prompt, StartedAt: job.StartedAt, State: job.Status,
+						Approval: false, ReadOnly: true,
+					})
+				}
+			}
+		}
 		// Newest first: an operator opening the list wants the one they just ran.
 		for i := 1; i < len(out); i++ {
 			for j := i; j > 0 && out[j].StartedAt > out[j-1].StartedAt; j-- {
@@ -322,6 +371,10 @@ func (s *Server) handleWorkbench(w http.ResponseWriter, r *http.Request) {
 		id := parts[1]
 		sess, ok := s.workbench.get(id)
 		if !ok {
+			if strings.HasPrefix(id, "phasejob-") {
+				s.handlePhaseJobBridge(w, r, id)
+				return
+			}
 			http.Error(w, "unknown session: "+id, http.StatusNotFound)
 			return
 		}
@@ -337,6 +390,10 @@ func (s *Server) handleWorkbench(w http.ResponseWriter, r *http.Request) {
 			s.handleWorkbenchCancel(w, r, sess)
 			return
 		}
+		if len(parts) == 4 && parts[2] == "approvals" && r.Method == http.MethodPost {
+			s.handleWorkbenchApproval(w, r, sess, parts[3])
+			return
+		}
 	}
 
 	http.NotFound(w, r)
@@ -344,7 +401,15 @@ func (s *Server) handleWorkbench(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleWorkbenchStart(w http.ResponseWriter, r *http.Request) {
 	var in WorkbenchStartBody
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+	r.Body = http.MaxBytesReader(w, r.Body, 256<<10)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&in); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -355,6 +420,10 @@ func (s *Server) handleWorkbenchStart(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.TrimSpace(in.Prompt) == "" {
 		http.Error(w, "prompt is required", http.StatusBadRequest)
+		return
+	}
+	if len(in.Prompt) > 128<<10 {
+		http.Error(w, "prompt exceeds 128 KiB", http.StatusRequestEntityTooLarge)
 		return
 	}
 	// One agent per worker checkout. Two concurrent writers on one working tree is
@@ -371,6 +440,10 @@ func (s *Server) handleWorkbenchStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if !target.Approval {
+		http.Error(w, "selected worker's daemon does not advertise interactive approvals", http.StatusConflict)
+		return
+	}
 	repoID := strings.TrimSpace(in.RepoID)
 	if repoID == "" {
 		repoID = target.RepoID
@@ -381,12 +454,13 @@ func (s *Server) handleWorkbenchStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sess := &workbenchSession{
-		ID:       "wb-" + id.New(),
-		JobID:    "wbjob-" + id.New(),
-		WorkerID: workerID,
-		Started:  time.Now(),
-		Prompt:   in.Prompt,
-		subs:     map[chan wbFrame]struct{}{},
+		ID:        "wb-" + id.New(),
+		JobID:     "wbjob-" + id.New(),
+		WorkerID:  workerID,
+		Started:   time.Now(),
+		Prompt:    in.Prompt,
+		subs:      map[chan wbFrame]struct{}{},
+		approvals: map[string]string{},
 	}
 	s.workbench.add(sess)
 	s.log.Printf("workbench.session id=%s worker=%s job=%s", sess.ID, workerID, sess.JobID)
@@ -403,14 +477,16 @@ func (s *Server) handleWorkbenchStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	go s.runWorkbenchSession(sess, schedclient.JobCreate{
-		JobID:    sess.JobID,
-		RepoID:   repoID,
-		Prompt:   in.Prompt,
-		ResumeID: in.ResumeID,
-		Model:    in.Model,
-		MaxSteps: in.MaxSteps,
-		NodeID:   nodeID,
-		Stream:   true,
+		JobID:             sess.JobID,
+		RepoID:            repoID,
+		Prompt:            in.Prompt,
+		ResumeID:          in.ResumeID,
+		Model:             in.Model,
+		MaxSteps:          in.MaxSteps,
+		NodeID:            nodeID,
+		Stream:            true,
+		ApprovalSessionID: sess.ID,
+		ApprovalTimeoutMS: int((5 * time.Minute) / time.Millisecond),
 	})
 
 	writeJSON(w, http.StatusOK, sessionView(sess))
@@ -559,6 +635,110 @@ func (s *Server) handleWorkbenchEvents(w http.ResponseWriter, r *http.Request, s
 	}
 }
 
+func (s *Server) handlePhaseJobBridge(w http.ResponseWriter, r *http.Request, bridgeID string) {
+	if s.delivery == nil {
+		http.Error(w, "delivery store not configured", http.StatusServiceUnavailable)
+		return
+	}
+	jobID := strings.TrimPrefix(bridgeID, "phasejob-")
+	jobs, err := s.delivery.ListJobs(delivery.JobFilter{Limit: 500})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	var rec *delivery.JobRecord
+	for i := range jobs {
+		if jobs[i].JobID == jobID && jobs[i].Kind != "workbench" {
+			rec = &jobs[i]
+			break
+		}
+	}
+	if rec == nil {
+		http.Error(w, "unknown phase job", http.StatusNotFound)
+		return
+	}
+	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/workbench"), "/")
+	parts := strings.Split(path, "/")
+	if len(parts) == 2 && r.Method == http.MethodGet {
+		prompt := rec.PhaseID
+		if prompt == "" {
+			prompt = rec.Kind
+		}
+		writeJSON(w, http.StatusOK, WorkbenchSession{
+			ID: bridgeID, JobID: rec.JobID, WorkerID: rec.WorkerID, Prompt: prompt,
+			StartedAt: rec.StartedAt, State: rec.Status, ReadOnly: true,
+		})
+		return
+	}
+	if len(parts) != 3 || parts[2] != "events" || r.Method != http.MethodGet {
+		http.Error(w, "phase jobs are read-only", http.StatusMethodNotAllowed)
+		return
+	}
+	s.handlePhaseJobBridgeEvents(w, r, *rec)
+}
+
+func (s *Server) handlePhaseJobBridgeEvents(w http.ResponseWriter, r *http.Request, rec delivery.JobRecord) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	write := func(event string, data any) bool {
+		b, err := json.Marshal(data)
+		if err != nil {
+			return false
+		}
+		if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, b); err != nil {
+			return false
+		}
+		flusher.Flush()
+		return true
+	}
+
+	// When the phase is live, its fan already contains replay + future events.
+	if s.jobHub != nil {
+		if _, exists := s.jobHub.get(rec.JobID); exists {
+			ch, unsub, _ := s.jobHub.subscribe(rec.JobID)
+			defer unsub()
+			for {
+				select {
+				case <-r.Context().Done():
+					return
+				case frame, open := <-ch:
+					if !open || !write(frame.Event, frame.Data) || frame.Event == "job.done" || frame.Event == "error" {
+						return
+					}
+				}
+			}
+		}
+	}
+
+	events, err := s.delivery.JobEvents(rec.JobID)
+	if err != nil {
+		_ = write("error", map[string]string{"error": err.Error()})
+		return
+	}
+	for _, ev := range events {
+		args := json.RawMessage(nil)
+		if json.Valid([]byte(ev.Args)) {
+			args = json.RawMessage(ev.Args)
+		}
+		if !write("job.event", daemon.JobEventBody{
+			JobID: ev.JobID, Type: ev.Type, Text: ev.Text, Name: ev.Name,
+			Args: args, Content: ev.Content, IsError: ev.IsError, Step: ev.Step,
+		}) {
+			return
+		}
+	}
+	status := rec.Status
+	if status == "" || status == "done" {
+		status = "finished"
+	}
+	_ = write("job.done", daemon.JobDoneBody{JobID: rec.JobID, Status: status, Error: rec.Error})
+}
+
 func (s *Server) handleWorkbenchCancel(w http.ResponseWriter, r *http.Request, sess *workbenchSession) {
 	if _, done, _ := sess.snapshot(); done != nil {
 		http.Error(w, "session already finished", http.StatusConflict)
@@ -572,6 +752,70 @@ func (s *Server) handleWorkbenchCancel(w http.ResponseWriter, r *http.Request, s
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "session_id": sess.ID})
 }
 
+func (s *Server) handleWorkbenchApproval(w http.ResponseWriter, r *http.Request, sess *workbenchSession, requestID string) {
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		http.Error(w, "request_id is required", http.StatusBadRequest)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+	var in daemon.JobApprovalResponseBody
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&in); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			http.Error(w, "approval response too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		http.Error(w, "invalid approval response: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if len(in.Args) > 32<<10 {
+		http.Error(w, "approval args exceed 32 KiB", http.StatusRequestEntityTooLarge)
+		return
+	}
+	if len(in.Args) > 0 && !json.Valid(in.Args) {
+		http.Error(w, "approval args must be valid JSON", http.StatusBadRequest)
+		return
+	}
+	switch in.Decision {
+	case daemon.ApprovalAllow, daemon.ApprovalAllowSession, daemon.ApprovalDeny:
+	default:
+		http.Error(w, "unknown approval decision", http.StatusBadRequest)
+		return
+	}
+
+	sess.mu.Lock()
+	state := sess.approvals[requestID]
+	if state != "pending" {
+		sess.mu.Unlock()
+		http.Error(w, "approval is not pending (state "+state+")", http.StatusConflict)
+		return
+	}
+	sess.approvals[requestID] = "responding"
+	sess.mu.Unlock()
+
+	in.JobID, in.SessionID, in.RequestID = sess.JobID, sess.ID, requestID
+	var err error
+	if s.approvalResponder != nil {
+		err = s.approvalResponder(r.Context(), sess.JobID, in)
+	} else {
+		err = s.sched.AnswerJobApproval(r.Context(), sess.JobID, in)
+	}
+	if err != nil {
+		sess.mu.Lock()
+		sess.approvals[requestID] = "expired"
+		sess.mu.Unlock()
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	sess.mu.Lock()
+	sess.approvals[requestID] = "answered"
+	sess.mu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "request_id": requestID})
+}
+
 // jobsCancel is a seam so tests can observe the scheduler call.
 func (s *Server) jobsCancel(jobID string) error {
 	if s.jobCanceler != nil {
@@ -579,4 +823,3 @@ func (s *Server) jobsCancel(jobID string) error {
 	}
 	return nil
 }
-

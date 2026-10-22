@@ -54,10 +54,10 @@ table below is not available from the console.
 | Fail (`fail_test`) | `testing` | `awaiting_roadmap` | the milestone is bound and a title or body is given; a buglist item is added and bugfix phases follow |
 | Accept (`accept_milestone`) | `complete` | `complete`, `accept_status = accepted` | every Acceptance item is checked (§7) |
 
-Two details are easy to miss. Execute sets the status to `in_development` without requiring
-`awaiting_development` first, so the table is the set of allowed moves rather than a single path.
-And the phase list can be bootstrapped from the Design Versions only before Execute; a milestone with
-no phases cannot be executed.
+Two details are easy to miss. Execute accepts both `awaiting_development` (the initial start) and
+`in_development` (a restart), so it is not limited to one lifecycle edge. The phase list can be
+bootstrapped from the Design Versions only before Execute; a milestone with no phases cannot be
+executed.
 
 ## 4. Execute: bind, start, and roll back
 
@@ -89,9 +89,9 @@ When a phase Job finishes, the server decides what comes next from `run_state`:
 | `error` (or any other status) | `error` | `paused` | none |
 
 Pause and Stop ask the scheduler to cancel the running Job through
-`POST /api/v1/jobs/{id}/cancel`. The anvil-web route checks the workbench session first, then the
-job. A cancel on a job that is no longer running returns `409` (`job is not running`), so a stale
-click is reported rather than applied.
+`POST /api/v1/jobs/{id}/cancel`. The anvil-web route reads the durable Job kind and dispatches to
+the owning Workbench session or Delivery milestone. A cancel on a job that is no longer running
+returns `409` (`job is not running`), so a stale click is reported rather than applied.
 
 The Gate check is the one place a run can stop by itself. A Gate that is not satisfied does not fail
 the phase; it pauses the run, and the person decides whether to fix the Gate and press Start again.

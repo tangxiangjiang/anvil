@@ -22,7 +22,9 @@ type TrashItem struct {
 	ID        string          `json:"id"`
 	Kind      string          `json:"kind"`
 	Label     string          `json:"label"`
+	DeletedBy string          `json:"deleted_by,omitempty"`
 	DeletedAt string          `json:"deleted_at"`
+	Summary   string          `json:"summary,omitempty"`
 	Preview   TrashMajorMeta  `json:"preview,omitempty"`
 	Payload   json.RawMessage `json:"-"`
 }
@@ -70,7 +72,9 @@ SELECT COUNT(*) FROM (
 
 // DeleteMajorToTrash soft-deletes a Planning major that is the highest number.
 // Milestone/version/design rows under that major move into trash with it.
-func (s *Store) DeleteMajorToTrash(major int) (TrashItem, error) {
+// When actor is supplied, provenance is stamped in the same transaction as the
+// snapshot and deletes; callers cannot observe an un-attributed trash row.
+func (s *Store) DeleteMajorToTrash(major int, actor ...string) (TrashItem, error) {
 	m, err := s.getMajor(major)
 	if err != nil {
 		return TrashItem{}, err
@@ -147,6 +151,12 @@ FROM delivery_req_versions WHERE major=?`, major)
 	label := fmt.Sprintf("Major %s (%s) · %d milestone(s)",
 		majorLabel(major), m.Title, ms)
 	ts := nowRFC3339()
+	deletedBy := ""
+	if len(actor) > 0 {
+		deletedBy = strings.TrimSpace(actor[0])
+	}
+	summary := fmt.Sprintf("%d milestone(s), %d version(s), %d design(s)",
+		ms, vers, len(bundle.Designs))
 
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -154,8 +164,10 @@ FROM delivery_req_versions WHERE major=?`, major)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	_, err = tx.Exec(`INSERT INTO delivery_trash(id, kind, label, payload, deleted_at) VALUES(?,?,?,?,?)`,
-		id, "major", label, string(raw), ts)
+	_, err = tx.Exec(`
+INSERT INTO delivery_trash(id, kind, label, payload, deleted_by, deleted_at, summary)
+VALUES(?,?,?,?,?,?,?)`,
+		id, "major", label, string(raw), deletedBy, ts, summary)
 	if err != nil {
 		return TrashItem{}, err
 	}
@@ -196,7 +208,7 @@ FROM delivery_req_versions WHERE major=?`, major)
 	}
 
 	return TrashItem{
-		ID: id, Kind: "major", Label: label, DeletedAt: ts,
+		ID: id, Kind: "major", Label: label, DeletedBy: deletedBy, DeletedAt: ts, Summary: summary,
 		Preview: TrashMajorMeta{Major: major, MilestoneCount: ms, VersionCount: vers, DesignCount: len(bundle.Designs)},
 	}, nil
 }
@@ -210,7 +222,9 @@ func majorLabel(major int) string {
 
 // ListTrash returns trash items newest first.
 func (s *Store) ListTrash() ([]TrashItem, error) {
-	rows, err := s.db.Query(`SELECT id, kind, label, payload, deleted_at FROM delivery_trash ORDER BY deleted_at DESC`)
+	rows, err := s.db.Query(`
+SELECT id, kind, label, payload, COALESCE(deleted_by,''), deleted_at, COALESCE(summary,'')
+FROM delivery_trash ORDER BY deleted_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -219,7 +233,7 @@ func (s *Store) ListTrash() ([]TrashItem, error) {
 	for rows.Next() {
 		var it TrashItem
 		var payload string
-		if err := rows.Scan(&it.ID, &it.Kind, &it.Label, &payload, &it.DeletedAt); err != nil {
+		if err := rows.Scan(&it.ID, &it.Kind, &it.Label, &payload, &it.DeletedBy, &it.DeletedAt, &it.Summary); err != nil {
 			return nil, err
 		}
 		it.Payload = json.RawMessage(payload)

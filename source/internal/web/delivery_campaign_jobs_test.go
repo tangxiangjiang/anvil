@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/anvil-dev/anvil/internal/daemon"
 	"github.com/anvil-dev/anvil/internal/web/auth"
 	"github.com/anvil-dev/anvil/internal/web/delivery"
 )
@@ -176,6 +177,43 @@ func TestCampaignRunFixRegressJobs(t *testing.T) {
 	}
 	if b.Status != "closed" {
 		t.Fatalf("expected closed after regress, got %s", b.Status)
+	}
+}
+
+func TestRealCampaignWithoutTrailerDoesNotPass(t *testing.T) {
+	srv, ds, msID, engID, maj, min := setupCampaignFixture(t)
+	srv.jobs = nil // Exercise the real-Worker result path, not injected-runner fallback.
+	if err := ds.SetCampaignJob(msID, "campaign-real", delivery.JobRunning, delivery.CampaignKindRun, "running"); err != nil {
+		t.Fatal(err)
+	}
+
+	srv.applyCampaignFinished(
+		delivery.CampaignKindRun,
+		msID,
+		engID,
+		maj,
+		min,
+		"",
+		daemon.JobDoneBody{JobID: "campaign-real", Status: "finished", Result: "ordinary logs only"},
+		false,
+	)
+
+	snap, err := ds.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range snap.TestCases {
+		if tc.EngReqID == engID && tc.Major == maj && tc.Minor == min && tc.Status == "passed" {
+			t.Fatalf("case %s was incorrectly marked passed without trailer", tc.ID)
+		}
+	}
+	ms, err := ds.GetMilestone(msID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ms.CampaignJobStatus != delivery.JobError ||
+		ms.CampaignJobLastEvent != "campaign result trailer missing" {
+		t.Fatalf("missing trailer should be recorded as campaign error: %+v", ms)
 	}
 }
 

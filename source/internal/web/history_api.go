@@ -5,6 +5,7 @@ package web
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -57,6 +58,7 @@ func auditFromRequest(r *http.Request, body, actor string) delivery.AuditEntry {
 		EntityID:   id,
 		Summary:    action,
 		Detail:     detail,
+		RequestID:  requestIDFrom(r.Context()),
 	}
 }
 
@@ -78,8 +80,10 @@ func inferEntity(method string, parts []string) (kind, id, summary string) {
 	switch parts[0] {
 	case "eng-reqs":
 		if len(parts) >= 2 && parts[1] != "" {
-			if len(parts) >= 5 && parts[2] == "versions" {
-				return "requirement_version", strings.Join(parts[1:5], ":"), "version " + verb
+			if len(parts) >= 6 && parts[2] == "versions" {
+				return "requirement_version",
+					parts[1] + ":" + parts[3] + "." + parts[4] + "." + parts[5],
+					"version " + verb
 			}
 			return "requirement", parts[1], "requirement " + verb
 		}
@@ -291,6 +295,7 @@ func (s *Server) cancelWorkbenchSession(sess *workbenchSession) {
 	if sess == nil {
 		return
 	}
+	sess.abortApprovals("session stopped")
 	if s.jobs != nil {
 		_ = s.jobsCancel(sess.JobID)
 	}
@@ -302,24 +307,18 @@ func (s *Server) cancelWorkbenchSession(sess *workbenchSession) {
 	}
 }
 
-// SearchHit is one result from the cross-surface search.
-type SearchHit struct {
-	Kind    string `json:"kind"`
-	ID      string `json:"id"`
-	Title   string `json:"title"`
-	Excerpt string `json:"excerpt"`
-	Href    string `json:"href"`
-	Scope   string `json:"scope,omitempty"`
-}
+// SearchHit remains the API-facing name used by the HTTP tests.
+type SearchHit = delivery.SearchResult
 
 // handleSearch answers GET /api/v1/search?q=.
 //
-// It searches bodies, not only titles: a search of a planning document that only
-// matches titles is not a search. The matching is done in Go over the snapshot
-// rather than in SQL because the fields live in several tables and the snapshot
-// already joins them — one query over a projection that exists beats five LIKEs
-// over tables that do not carry a shared text column.
+// Matching is an indexed FTS5 query. The store owns query normalization,
+// ranking, snippets, scope filtering and hard resource bounds.
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	if s.delivery == nil {
 		http.Error(w, "delivery store not configured", http.StatusServiceUnavailable)
 		return
@@ -329,107 +328,16 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"q": "", "hits": []SearchHit{}})
 		return
 	}
-	snap, err := s.delivery.Snapshot()
+	hits, err := s.delivery.Search(q, r.URL.Query().Get("scope"), 50)
+	if errors.Is(err, delivery.ErrSearchQueryTooLong) {
+		http.Error(w, err.Error(), http.StatusRequestEntityTooLarge)
+		return
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	hits := searchSnapshot(snap, q, 60)
 	writeJSON(w, http.StatusOK, map[string]any{"q": q, "hits": hits})
-}
-
-// searchSnapshot is the matcher, kept separate so it is testable without HTTP.
-func searchSnapshot(snap delivery.Snapshot, q string, limit int) []SearchHit {
-	needle := strings.ToLower(q)
-	hits := []SearchHit{}
-	add := func(kind, id, title, body, href, scope string) bool {
-		hay := strings.ToLower(title + "\n" + body)
-		if !strings.Contains(hay, needle) {
-			return true
-		}
-		hits = append(hits, SearchHit{
-			Kind:    kind,
-			ID:      id,
-			Title:   title,
-			Excerpt: excerptAround(body, q, 120),
-			Href:    href,
-			Scope:   scope,
-		})
-		return len(hits) < limit
-	}
-
-	for _, eng := range snap.EngReqs {
-		for _, v := range eng.Versions {
-			href := "#/delivery/requirements/" + eng.ID + "/" +
-				itoa(v.Major) + "/" + itoa(v.Minor) + "/" + itoa(v.Patch)
-			body := v.Title + "\n" + v.Problem + "\n" + v.Goals + "\n" + v.Success
-			if !add("requirement_version", eng.ID+":"+itoa(v.Major)+"."+itoa(v.Minor)+"."+itoa(v.Patch),
-				v.Title, body, href, eng.Title) {
-				return hits
-			}
-		}
-	}
-	for _, d := range snap.Designs {
-		href := "#/delivery/designs/" + d.ID
-		body := d.Title + "\n" + d.ADR + "\n" + d.AdrContext + "\n" + d.AdrDecision + "\n" + d.AdrConsequences
-		for _, v := range d.Versions {
-			body += "\n" + v.Title + "\n" + v.Gate + "\n" + v.SubArchitecture + "\n" + v.ClassDesign
-		}
-		if !add("design", d.ID, d.Title, body, href, itoa(d.Major)+"."+itoa(d.Minor)) {
-			return hits
-		}
-	}
-	for _, m := range snap.Roadmap.Milestones {
-		href := "#/delivery/roadmap/m/" + itoa(majorOfMilestone(snap, m.ID))
-		body := m.Title + "\n" + m.Acceptance + "\n" + m.TestNote
-		if !add("milestone", m.ID, m.Title, body, href, "") {
-			return hits
-		}
-	}
-	for _, c := range snap.TestCases {
-		body := c.Title + "\n" + c.Body
-		if !add("test_case", c.ID, c.Title, body, "#/delivery/test", "") {
-			return hits
-		}
-	}
-	for _, b := range snap.BuglistItems {
-		body := b.Title + "\n" + b.Body
-		if !add("bug", b.ID, b.Title, body, "#/delivery/test", "") {
-			return hits
-		}
-	}
-	return hits
-}
-
-// excerptAround returns a window of body around the first match.
-func excerptAround(body, q string, width int) string {
-	if body == "" {
-		return ""
-	}
-	lower := strings.ToLower(body)
-	idx := strings.Index(lower, strings.ToLower(q))
-	if idx < 0 {
-		if len(body) <= width {
-			return strings.TrimSpace(body)
-		}
-		return strings.TrimSpace(body[:width]) + "…"
-	}
-	start := idx - width/3
-	if start < 0 {
-		start = 0
-	}
-	end := start + width
-	if end > len(body) {
-		end = len(body)
-	}
-	out := body[start:end]
-	if start > 0 {
-		out = "…" + out
-	}
-	if end < len(body) {
-		out = out + "…"
-	}
-	return strings.TrimSpace(strings.ReplaceAll(out, "\n", " "))
 }
 
 func itoa(n int) string {
@@ -452,12 +360,4 @@ func itoa(n int) string {
 		b[i] = '-'
 	}
 	return string(b[i:])
-}
-
-// majorOfMilestone finds the generation a milestone belongs to, via its bind id.
-func majorOfMilestone(snap delivery.Snapshot, msID string) int {
-	if bind := parseMsBind(msID); bind != nil {
-		return bind.major
-	}
-	return 0
 }

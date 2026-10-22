@@ -32,6 +32,9 @@ type Blocker struct {
 	Message string `json:"message"`
 	// Href is where to fix it, when there is a place to go.
 	Href string `json:"href,omitempty"`
+	// Severity is "warning" for advisory evidence; empty means blocking error
+	// for backward compatibility with existing clients.
+	Severity string `json:"severity,omitempty"`
 }
 
 // PreflightResult is what GET /api/v1/delivery/preflight answers.
@@ -74,6 +77,9 @@ func (s *Store) Preflight(t Transition, target string) (PreflightResult, error) 
 	add := func(code, msg, href string) {
 		out.Blockers = append(out.Blockers, Blocker{Code: code, Message: msg, Href: href})
 	}
+	warn := func(code, msg, href string) {
+		out.Blockers = append(out.Blockers, Blocker{Code: code, Message: msg, Href: href, Severity: "warning"})
+	}
 
 	switch t {
 	case TransitionStartPhase:
@@ -91,9 +97,18 @@ func (s *Store) Preflight(t Transition, target string) (PreflightResult, error) 
 		if err := s.AssertMajorWritable(bind.Major); err != nil {
 			add("major_sealed", err.Error(), "#/delivery/requirements")
 		}
+		if ms.Status != LifeAwaitingDevelopment && ms.Status != LifeInDevelopment {
+			add("wrong_state",
+				fmt.Sprintf("Only a milestone awaiting or in development can start (this one is %s).", ms.Status),
+				"#/delivery/roadmap")
+		}
 		if strings.TrimSpace(ms.ExecuteWorkerID) == "" {
 			add("no_worker", "Pick a Worker before starting: the phase job runs on that checkout.",
 				"#/delivery/roadmap/m/"+fmt.Sprintf("%d", bind.Major))
+		}
+		if len(ms.Phases) == 0 {
+			add("no_phases", "This milestone has no phases; bootstrap its Design Versions first.",
+				"#/delivery/designs")
 		}
 		if open := s.openGatesForMilestone(ms.ID); len(open) > 0 {
 			add("gate_open", gateBlockMessage(open), "#/delivery/designs")
@@ -173,7 +188,7 @@ func (s *Store) Preflight(t Transition, target string) (PreflightResult, error) 
 		// Sealing with open work is allowed but must be stated: it is the one
 		// irreversible move, and afterwards those milestones cannot be extended.
 		if n := s.countOpenMilestones(major); n > 0 {
-			add("open_work",
+			warn("open_work",
 				fmt.Sprintf("%d milestone(s) under this generation are not complete. Sealing locks them as they are.", n),
 				"#/delivery/roadmap/m/"+fmt.Sprintf("%d", major))
 		}
@@ -191,9 +206,9 @@ func (s *Store) Preflight(t Transition, target string) (PreflightResult, error) 
 		if vers := d.Versions; true {
 			if len(vers) == 0 {
 				add("no_versions", "The design has no versions, so there is nothing to publish.", "#/delivery/designs/"+d.ID)
-			} else if !versionsComplete(vers) {
+			} else if err := validateDesignVersionsForApprove(vers); err != nil {
 				add("versions_incomplete",
-					"Every design version needs a Gate, sub-architecture and class design before publishing.",
+					"Design Versions are not publishable: "+err.Error(),
 					"#/delivery/designs/"+d.ID)
 			}
 		}
@@ -202,8 +217,36 @@ func (s *Store) Preflight(t Transition, target string) (PreflightResult, error) 
 		return out, fmt.Errorf("unknown transition %q", t)
 	}
 
-	out.OK = len(out.Blockers) == 0
+	out.OK = len(blockingBlockers(out.Blockers)) == 0
 	return out, nil
+}
+
+func blockingBlockers(all []Blocker) []Blocker {
+	out := make([]Blocker, 0, len(all))
+	for _, b := range all {
+		if b.Severity != "warning" && b.Severity != "informational" {
+			out = append(out, b)
+		}
+	}
+	return out
+}
+
+// EnforcePreflight is the sole transition policy boundary. Readiness and the
+// preview call Preflight; every mutation calls this wrapper over that evaluator.
+func (s *Store) EnforcePreflight(t Transition, target string) error {
+	res, err := s.Preflight(t, target)
+	if err != nil {
+		return err
+	}
+	hard := blockingBlockers(res.Blockers)
+	if len(hard) == 0 {
+		return nil
+	}
+	msgs := make([]string, 0, len(hard))
+	for _, b := range hard {
+		msgs = append(msgs, b.Message)
+	}
+	return fmt.Errorf("%s", strings.Join(msgs, "; "))
 }
 
 // gateBlockMessage turns open checklist items into one sentence.
@@ -281,22 +324,6 @@ func (s *Store) countOpenMilestones(major int) int {
 		}
 	}
 	return n
-}
-
-// versionsComplete is the design-approval rule, reusable here so the preview and
-// the approval cannot disagree about what "complete" means.
-func versionsComplete(vers []DesignVersion) bool {
-	if len(vers) == 0 {
-		return false
-	}
-	for _, v := range vers {
-		if strings.TrimSpace(v.Gate) == "" ||
-			strings.TrimSpace(v.SubArchitecture) == "" ||
-			strings.TrimSpace(v.ClassDesign) == "" {
-			return false
-		}
-	}
-	return true
 }
 
 func atoiOK(s string) (int, bool) {

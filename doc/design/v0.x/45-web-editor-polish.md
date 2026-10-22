@@ -48,6 +48,22 @@ The design rules are:
    over the pure functions.
 7. **Every mutation is attributable.** Who changed a requirement, who approved a design, who sealed a
    generation, and when — recorded with the job's events and searchable.
+8. **First run is observable, not instructional theatre.** The checklist reads authenticated server
+   state for admin creation, Fleet configuration, Project binding and the first Requirement Version.
+   Demo rows do not satisfy real Project steps. Only its closed/open preference is browser-local;
+   it stores no ids, paths, Worker metadata or credentials.
+9. **One noun names one domain object.** User-facing UI and help use Fleet, Node, Worker, Project,
+   Generation, Milestone, Version, Phase, Job and Session consistently. This does not rename JSON,
+   HTTP, database or scheduler protocol identifiers.
+
+List operation follows one interaction contract across Roadmap milestones, test cases, and Design
+Versions: identity-backed selection survives rendering, range selection follows the filtered visible
+order, stale ids are pruned after refresh, and the keyboard mapping is arrows, Space / `x`,
+Shift+Space, Enter, Escape, Cmd/Ctrl-A, and `/`. Milestone batch transitions call the existing
+single-item endpoint in stable data order under one list-wide single-flight claim. Successful ids are
+removed from selection; failed ids remain selected and are reported with their server reason.
+Paste-cases is one bounded, transactional request, preserving the same server authentication and
+validation path as any other Delivery mutation.
 
 The mock assistants of the Delivery surfaces are part of this polish. Three surfaces used to save on
 Send; they now draft only, and the operator applies a draft through an explicit edit-and-save. The
@@ -60,6 +76,37 @@ incomplete gate; and the console assumed a wide, stable desktop. The fixes are a
 history, a pre-flight check that refuses a structurally incomplete transition and explains why before
 the click, and a layout that lets an operator see fleet state and stop a runaway job on a phone and
 survive a dropped connection.
+
+Slow-network snapshots follow one bounded stale-while-revalidate contract on Delivery, Ops and
+Workbench. The cache is volatile, cleared on authentication changes, LRU/age bounded, and keyed by
+the complete surface scope. A cached paint always says it is stale, gives the last-success age and
+refreshes in the background. Only the newest request for that exact key may atomically publish a
+replacement. Failure preserves the prior snapshot and shows disconnected + Retry. Ops and Workbench
+cache projections deliberately omit prompts, event content, credentials and provider/Worker
+configuration; this is route resilience, not offline data entry.
+
+The responsive contract is browser-measured, not inferred from CSS: Chrome at 375px must expose Ops
+state and Stop with a 44px target and no page overflow, 600/601px must switch overlay/rail, and
+900/901px must switch the roadmap canvas and ADR editor between their explanatory wide-only note and
+content. A local fake SSE stream supplies deterministic drop, backoff, replay overlap, seq dedupe and
+resume evidence without contacting a Fleet or provider.
+
+The pre-flight also has an independent `#/delivery/readiness` operator view. Project, Generation and
+Milestone filters are enforced by the server; each non-terminal record shows its next transition,
+the authoritative blocker codes/messages and repair links, plus explicit refresh state. The same
+view runs a deterministic, read-only whole-record consistency scan for orphaned planning records,
+Milestones without Design Versions, missing/cyclic Version dependencies, unfinished Milestones in
+sealed Generations and Gates with zero checkboxes. Findings are classified as blocking error,
+warning or informational, capped, stable-coded, and evaluated without modifying planning data.
+
+Planning-record search is SQLite FTS5, not an in-process scan of the Delivery snapshot. A versioned
+backfill builds `delivery_search` for existing databases; triggers then keep requirement/version,
+design, milestone, case, bug, job-event and audit rows synchronized through edits, retention deletes,
+trash and restore. `unicode61` tokenization supports Unicode text. The query boundary accepts bounded
+plain text only, converts it to quoted tokens, binds MATCH/scope/limit parameters, caps results, and
+uses title-weighted BM25 plus deterministic tie-breaks. Snippets mark matches with text delimiters
+that the UI escapes. Job arguments, audit attribution/request ids, Worker metadata and internal scope
+keys are neither indexed nor returned; an explicit workspace/project scope is an exact filter.
 
 ## 3. The web drafting assistant
 
@@ -91,8 +138,10 @@ that a person accepts or discards.
 { "surface": "requirement_version",
   "field": "success",
   "instruction": "make done testable",
-  "cites": ["@Goals: ..."],
-  "current": { "success": "old text" } }
+  "target": { "type": "requirement_version", "id": "eng_1",
+              "major": 0, "minor": 45, "patch": 1 },
+  "cites": [{ "type": "requirement_version", "id": "eng_1",
+              "major": 0, "minor": 45, "patch": 1, "field": "goals" }] }
 ```
 
 →
@@ -114,6 +163,19 @@ Three properties are enforced **server-side**:
 3. **Nothing is applied here.** The endpoint proposes; the operator accepts; the surface saves through
    its own `PATCH`. A suggestion becomes a record only through an explicit act.
 
+4. **Citations are references, never client-composed context.** The server resolves stable record and
+   field references from the Delivery store and also obtains `before` from `target`. The old
+   `cites:[]string` and client `current` shapes are rejected. Citeable fields are an explicit,
+   non-sensitive allowlist: requirement prose, ADR sections, design-version Gate/architecture/class,
+   and generation title/summary. Worker metadata, project/workspace identifiers, relative paths,
+   statuses, audit data and files are never prompt context.
+5. **Scope and budget are server-side.** A cite must share the target's project/engineering
+   requirement and generation (a generation target accepts only that generation). Resolution
+   preserves request order and allows at most 8 cites, 4 KiB each and 16 KiB total. A missing/deleted
+   reference is `404`, a malformed/unknown field is `400`, a cross-project/generation reference is
+   `403`, and an excessive request is `413`. Path-shaped ids are invalid; the resolver never opens a
+   path.
+
 ### Off is stated, not faked
 
 With no `assist` block configured, the endpoint answers `available:false, reason:"AI assist is not
@@ -132,6 +194,23 @@ assist:
 
 The key is read from the environment. It never appears in the config file, on the wire, or in a log.
 
+## 4. Workbench approval channel
+
+Workbench uses the existing scheduler job stream; it does not introduce a second agent transport.
+Only a job carrying `approval_session_id` is interactive. agentd installs the SDK permission callback
+for that job and emits `approval_request` as a `job.event`, with a stable request id, tool/arguments,
+preview, accepted decisions, and absolute expiry. The matching `approval_result` closes the card.
+
+The response path is `anvil-web → POST /v1/jobs/{job}/approval → scheduler → owning agentd`.
+Scheduler routes from its live job ownership map; agentd settles only an exact
+`job_id + approval_session_id + request_id` match and acknowledges the result. Unknown, duplicate,
+expired, cross-session, and post-cancel responses fail closed. Stop releases pending callbacks as
+denials. `allow_session` is scoped to the Workbench session plus tool and optional preview path.
+Edited arguments are accepted only as bounded valid JSON and replace the SDK call arguments.
+
+Phase/campaign jobs do not opt into this gate. They appear in Workbench read-only, using the same
+renderer: the live job fan while running and persisted events after completion.
+
 ### Non-goals (assistant)
 
 - Streaming the draft. A patch is small; a spinner is enough.
@@ -146,8 +225,8 @@ The key is read from the environment. It never appears in the config file, on th
 - Light theme, theming system, i18n.
 - Real-time multi-user collaboration or presence.
 - Replacing the canvas drag editor.
-- Any change to scheduler, agentd or the Delivery schema beyond the one web-side endpoint per
-  assistant surface.
+- Scheduler/agentd changes beyond the minimum Workbench approval response channel; no Delivery
+  schema change.
 - An IDE in the browser: no diff review, hunk acceptance, checkpoints or notebook editing. Those belong
   to the VS Code client.
 
@@ -171,3 +250,8 @@ The key is read from the environment. It never appears in the config file, on th
 11. At 375 px an operator can see fleet state and stop a running job, and a dropped connection is
     visible and resumes without losing or duplicating an event.
 12. `TestProtocolTour` runs on every push; `TestLiveProtocolSmoke` runs only under the `livesmoke` tag.
+13. The first-run checklist can be closed and reopened, restores that preference per browser, and
+    recomputes progress from server state after reload; clearing browser data reopens it without
+    losing server-derived completion.
+14. `#/delivery/readiness` uses the transition evaluator enforced by mutations and exposes the
+    bounded whole-record consistency scan with scope-safe filters and repair navigation.

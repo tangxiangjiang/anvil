@@ -79,7 +79,7 @@ func TestRuleAllowRunsWithoutAsking(t *testing.T) {
 		{Effect: "allow", Tool: "write_file", Pattern: "src/**"},
 	}, LocalOptions{})
 
-	if res := execTool(a, "shell", map[string]any{"command": "ls"}); res.IsError {
+	if res := execTool(a, "shell", map[string]any{"command": "echo ready"}); res.IsError {
 		t.Fatalf("an allowed readonly command must run: %+v", res)
 	}
 	// `git status` fails outside a repository, which is not what is under test

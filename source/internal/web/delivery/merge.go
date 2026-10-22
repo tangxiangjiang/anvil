@@ -96,10 +96,7 @@ func (m LocalGitMerger) MergeToMain(ctx context.Context, repoPath, branch string
 		return "", fmt.Errorf("not a git work tree: %s", abs)
 	}
 	if _, err := run("checkout", "main"); err != nil {
-		// try master
-		if _, err2 := run("checkout", "master"); err2 != nil {
-			return "", fmt.Errorf("checkout main/master: %v / %v", err, err2)
-		}
+		return "", fmt.Errorf("checkout main: %w", err)
 	}
 	msg := "delivery: merge " + branch
 	out, err := run("merge", "--no-ff", "-m", msg, branch)

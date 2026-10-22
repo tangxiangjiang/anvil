@@ -79,8 +79,30 @@ func TestRestoreMilestoneRun(t *testing.T) {
 	if mid.Status != LifeInDevelopment || mid.RunState != RunRunning {
 		t.Fatalf("after execute: %+v", mid)
 	}
-	if err := s.RestoreMilestoneRun(msID, prev.Status, prev.RunState); err != nil {
+	phaseID := mid.Phases[0].ID
+	if err := s.SetPhaseJob(phaseID, "job_new", JobQueued, "queued"); err != nil {
 		t.Fatal(err)
+	}
+	restored, err := s.RestoreExecuteStart(msID, phaseID, "job_old", ExecutePreviousState{
+		Status: prev.Status, RunState: prev.RunState,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored {
+		t.Fatal("stale job generation restored lifecycle")
+	}
+	if err := s.SetPhaseJob(phaseID, "job_old", JobError, "scheduler unavailable"); err != nil {
+		t.Fatal(err)
+	}
+	restored, err = s.RestoreExecuteStart(msID, phaseID, "job_old", ExecutePreviousState{
+		Status: prev.Status, RunState: prev.RunState,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !restored {
+		t.Fatal("current job generation did not restore lifecycle")
 	}
 	got, err := s.GetMilestone(msID)
 	if err != nil {

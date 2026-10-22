@@ -308,7 +308,8 @@ func (s *Server) applyCampaignFinished(kind, msID, engID string, major, minor in
 			// Stub / injected runner without trailer: deterministic odd-index fail.
 			_, _ = s.delivery.RunTestCases(engID, major, minor)
 		} else {
-			_, _ = s.delivery.RunTestCasesAllPass(engID, major, minor)
+			_ = s.delivery.ClearCampaignJob(msID, delivery.JobError, "campaign result trailer missing")
+			return
 		}
 		_ = s.delivery.ClearCampaignJob(msID, delivery.JobFinished, truncateEvent(done.Result))
 	case delivery.CampaignKindRegress:

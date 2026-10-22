@@ -62,6 +62,13 @@ func (h *jobHub) ensure(jobID string) *jobFan {
 	return f
 }
 
+func (h *jobHub) get(jobID string) (*jobFan, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	f, ok := h.jobs[jobID]
+	return f, ok
+}
+
 func (h *jobHub) publishEvent(jobID string, ev daemon.JobEventBody) {
 	f := h.ensure(jobID)
 	f.mu.Lock()
@@ -126,7 +133,6 @@ func (h *jobHub) subscribe(jobID string) (<-chan jobFrame, func(), *jobFan) {
 		f.mu.Lock()
 		delete(f.subs, ch)
 		f.mu.Unlock()
-		close(ch)
 	}
 	return ch, unsub, f
 }
@@ -140,9 +146,10 @@ func (s *Server) jobRunner() JobRunner {
 
 // WorkerTarget is node/repo resolved from inventory for a worker id.
 type WorkerTarget struct {
-	NodeID string
-	RepoID string
-	Fleet  string
+	NodeID   string
+	RepoID   string
+	Fleet    string
+	Approval bool
 }
 
 func (s *Server) resolveWorkerTarget(workerID string) (WorkerTarget, error) {
@@ -158,8 +165,9 @@ func (s *Server) resolveWorkerTarget(workerID string) (WorkerTarget, error) {
 			continue
 		}
 		type nodeRow struct {
-			ID      string `json:"id"`
-			Workers []struct {
+			ID           string   `json:"id"`
+			Capabilities []string `json:"capabilities"`
+			Workers      []struct {
 				ID         string `json:"id"`
 				RepoID     string `json:"repo_id"`
 				ProjectRel string `json:"project_rel"`
@@ -172,6 +180,13 @@ func (s *Server) resolveWorkerTarget(workerID string) (WorkerTarget, error) {
 			continue
 		}
 		for _, n := range wrap.Nodes {
+			approval := false
+			for _, cap := range n.Capabilities {
+				if cap == "job.approval" {
+					approval = true
+					break
+				}
+			}
 			for _, w := range n.Workers {
 				if w.ID != workerID {
 					continue
@@ -183,7 +198,7 @@ func (s *Server) resolveWorkerTarget(workerID string) (WorkerTarget, error) {
 				if repo == "" {
 					repo = workerID
 				}
-				return WorkerTarget{NodeID: n.ID, RepoID: repo, Fleet: f.ID}, nil
+				return WorkerTarget{NodeID: n.ID, RepoID: repo, Fleet: f.ID, Approval: approval}, nil
 			}
 		}
 	}
@@ -234,6 +249,14 @@ func (s *Server) preflightMilestonePhaseJob(msID string, forceStub bool) (delive
 
 // startMilestonePhaseJob enqueues the next runnable phase job asynchronously.
 func (s *Server) startMilestonePhaseJob(msID string, forceStub bool) (delivery.Phase, error) {
+	return s.startMilestonePhaseJobWithRollback(msID, forceStub, nil)
+}
+
+func (s *Server) startMilestonePhaseJobWithRollback(
+	msID string,
+	forceStub bool,
+	rollback *delivery.ExecutePreviousState,
+) (delivery.Phase, error) {
 	if s.delivery == nil {
 		return delivery.Phase{}, fmt.Errorf("delivery store not configured")
 	}
@@ -302,7 +325,7 @@ func (s *Server) startMilestonePhaseJob(msID string, forceStub bool) (delivery.P
 	if localStub {
 		go s.runPhaseJobLocalStub(msID, ph.ID, jobID, in.ForceStub)
 	} else {
-		go s.runPhaseJob(msID, ph.ID, jobID, in)
+		go s.runPhaseJobWithRollback(msID, ph.ID, jobID, in, rollback)
 	}
 	return ph, nil
 }
@@ -402,12 +425,25 @@ func parseMsBind(msID string) *msBind {
 	return &msBind{engID: engID, major: major, minor: minor}
 }
 
-func (s *Server) runPhaseJob(msID, phaseID, jobID string, in schedclient.JobCreate) {
+func (s *Server) runPhaseJob(
+	msID, phaseID, jobID string,
+	in schedclient.JobCreate,
+) {
+	s.runPhaseJobWithRollback(msID, phaseID, jobID, in, nil)
+}
+
+func (s *Server) runPhaseJobWithRollback(
+	msID, phaseID, jobID string,
+	in schedclient.JobCreate,
+	executeRollback *delivery.ExecutePreviousState,
+) {
 	hub := s.ensureJobHub()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
 	defer cancel()
 	runner := s.jobRunner()
+	started := false
 	done, err := runner.CreateJobStream(ctx, in, func(ev daemon.JobEventBody) {
+		started = true
 		hub.publishEvent(jobID, ev)
 		s.recordJobEvent(jobID, phaseID, ev)
 		snippet := ev.Text
@@ -424,6 +460,14 @@ func (s *Server) runPhaseJob(msID, phaseID, jobID string, in schedclient.JobCrea
 		_ = s.delivery.CompletePhaseJob(phaseID, delivery.JobError, "error", err.Error())
 		if s.delivery != nil {
 			_ = s.delivery.FinishJob(jobID, "error", err.Error())
+		}
+		if executeRollback != nil && !started {
+			restored, _ := s.delivery.RestoreExecuteStart(msID, phaseID, jobID, *executeRollback)
+			if restored {
+				return
+			}
+			// A newer Execute generation or an explicit run-state change won.
+			return
 		}
 		rs := delivery.RunPaused
 		_, _ = s.delivery.PatchMilestone(msID, delivery.PatchMilestoneInput{RunState: &rs})
@@ -467,6 +511,10 @@ func (s *Server) runPhaseJob(msID, phaseID, jobID string, in schedclient.JobCrea
 			msg = done.Status
 		}
 		_ = s.delivery.CompletePhaseJob(phaseID, delivery.JobError, "error", msg)
+		if executeRollback != nil && !started {
+			_, _ = s.delivery.RestoreExecuteStart(msID, phaseID, jobID, *executeRollback)
+			return
+		}
 		rs := delivery.RunPaused
 		_, _ = s.delivery.PatchMilestone(msID, delivery.PatchMilestoneInput{RunState: &rs})
 	}
