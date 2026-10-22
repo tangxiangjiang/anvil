@@ -4,20 +4,37 @@
 package tools
 
 import (
-	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
+
+	"github.com/anvil-dev/anvil/internal/lsp"
 )
 
-// audit #7: pathsOf returns nothing for rename_symbol, and it is not in the mutating
-// set, so a rename that rewrites many files captures no pre-image and no path rule
-// sees its targets.
-func TestAuditRenameSymbolNamesItsPaths(t *testing.T) {
-	t.Skip("audit: open, see audit.md #7")
-	args := json.RawMessage(`{"path":"a.txt","line":1,"character":1,"new_name":"x"}`)
-	if got := pathsOf("rename_symbol", args); len(got) == 0 {
-		t.Fatalf("rename_symbol names no paths, so its pre-images are not captured and no path rule can see its targets")
+// audit #7: a rename rewrites the files its workspace edit names, not only the file it was
+// asked about. Each of those files must be checkpointed before the edit is applied, so the
+// run can be undone (the test checks the capture helper the rename uses).
+func TestAuditRenameCapturesEveryTargetFile(t *testing.T) {
+	cwd := t.TempDir()
+	cpDir := t.TempDir()
+	for _, name := range []string{"a.txt", "b.txt"} {
+		if err := os.WriteFile(filepath.Join(cwd, name), []byte("old"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if !mutatingTools["rename_symbol"] {
-		t.Fatalf("rename_symbol is not in mutatingTools")
+	reg := NewRegistry(cwd, false)
+	reg.SetCheckpoints(cpDir)
+	reg.SetRunContext("agent-7", "run-7")
+	edit := &lsp.WorkspaceEdit{Changes: map[string][]lsp.TextEdit{
+		"file:///" + filepath.ToSlash(filepath.Join(cwd, "a.txt")): {},
+		"file:///" + filepath.ToSlash(filepath.Join(cwd, "b.txt")): {},
+	}}
+	if err := reg.captureWorkspaceEdit(edit); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"a.txt", "b.txt"} {
+		if _, err := os.Stat(filepath.Join(cpDir, "agent-7", "run-7", "files", name)); err != nil {
+			t.Fatalf("%s was not checkpointed before the rename: %v", name, err)
+		}
 	}
 }

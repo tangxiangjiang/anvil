@@ -552,6 +552,45 @@ func (r *Registry) captureBefore(name string, args json.RawMessage) error {
 	return nil
 }
 
+// captureAbs checkpoints one file, given by its absolute path, under the current
+// run. A path outside the workspace is skipped; the edit's own check refuses it.
+func (r *Registry) captureAbs(abs string) error {
+	rel, err := filepath.Rel(r.cwd, abs)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return nil
+	}
+	if err := checkpoint.Capture(r.cpDir, r.cpAgent, r.cpRun, filepath.ToSlash(rel), abs); err != nil {
+		return fmt.Errorf("cannot save a checkpoint for %s, so the rename is refused: %w", rel, err)
+	}
+	return nil
+}
+
+// captureWorkspaceEdit checkpoints every file a workspace edit will change, before
+// the edit is applied. A file the edit would write outside the workspace is
+// skipped here; lsp.ApplyWorkspaceEdit refuses it on its own check.
+func (r *Registry) captureWorkspaceEdit(we *lsp.WorkspaceEdit) error {
+	if we == nil || r.cpDir == "" || r.cpAgent == "" || r.cpRun == "" {
+		return nil
+	}
+	uris := make([]string, 0, len(we.Changes)+len(we.DocumentChanges))
+	for uri := range we.Changes {
+		uris = append(uris, uri)
+	}
+	for _, dc := range we.DocumentChanges {
+		uris = append(uris, dc.TextDocument.URI)
+	}
+	for _, uri := range uris {
+		abs, err := lsp.UriToPath(uri)
+		if err != nil {
+			continue
+		}
+		if err := r.captureAbs(abs); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // CallFactsFor is callFacts, exported for the SDK's public rule helpers.
 //
 // A client that explains a rule decision — which "always allow" may be written

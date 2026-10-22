@@ -20,7 +20,6 @@ import (
 // a context that is already done returns at once, and the new Send then fails
 // while the previous run is still active.
 func TestAuditForceSendWithCancelledContextStillStarts(t *testing.T) {
-	t.Skip("audit: open, see audit.md #21")
 	a, err := Create(context.Background(), Options{
 		APIKey: "k", Model: Model{ID: "m"}, Local: LocalOptions{CWD: t.TempDir()},
 	})
@@ -43,7 +42,6 @@ func TestAuditForceSendWithCancelledContextStillStarts(t *testing.T) {
 // audit #19: persist discards the Append error, so a failed write is reported to
 // no one and Wait returns finished.
 func TestAuditPersistFailureIsReported(t *testing.T) {
-	t.Skip("audit: open, see audit.md #19")
 	a, err := Create(context.Background(), Options{
 		APIKey: "k", Model: Model{ID: "m"}, Local: LocalOptions{CWD: t.TempDir()},
 	})
@@ -77,7 +75,6 @@ func (failingStore) Append(string, store.Record) error {
 // while the run is still writing, so a Resume of the same id succeeds and the
 // first run's run_end never reaches the file.
 func TestAuditCloseDoesNotLeaveRunWritingUnlocked(t *testing.T) {
-	t.Skip("audit: open, see audit.md #18")
 	dir := t.TempDir()
 	opts := Options{
 		APIKey: "k", Model: Model{ID: "m"}, Local: LocalOptions{CWD: dir},
@@ -86,18 +83,20 @@ func TestAuditCloseDoesNotLeaveRunWritingUnlocked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	id := a.AgentID()
 	a.complete = blockingCompleter{}
-	if _, err := a.Send(context.Background(), "hi"); err != nil {
+	run, err := a.Send(context.Background(), "hi")
+	if err != nil {
 		t.Fatal(err)
 	}
 	if err := a.Close(); err != nil {
 		t.Fatal(err)
 	}
-	// While the run is still active, another handle must not take the session.
-	if b, err := Resume(context.Background(), id, opts); err == nil {
-		b.Close()
-		t.Fatal("Resume succeeded while the first run was still active, so the lock was released early")
+	// Close must not return while the run can still write: once it returns, the
+	// run has ended, so nothing can append to the file after the claim is released.
+	select {
+	case <-run.done:
+	default:
+		t.Fatal("Close returned while the run was still active, so it could write after the store was released")
 	}
 }
 
@@ -128,7 +127,6 @@ func TestAuditSendAndCloseDoNotRace(t *testing.T) {
 // audit #5: captureBefore drops in-workspace names that begin with "..", so the
 // pre-image of "..env" never reaches the run's checkpoint.
 func TestAuditCheckpointCapturesDotDotNames(t *testing.T) {
-	t.Skip("audit: open, see audit.md #5")
 	cwd := t.TempDir()
 	cpDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(cwd, "..env"), []byte("old"), 0o644); err != nil {
@@ -155,7 +153,7 @@ func TestAuditCheckpointCapturesDotDotNames(t *testing.T) {
 	if _, err := run.Wait(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	runs, err := ListCheckpoints(cpDir, a.AgentID(), CheckpointOptions{})
+	runs, err := ListCheckpoints(cpDir, a.AgentID(), CheckpointOptions{Dir: cpDir})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +229,6 @@ func TestAuditFailedCreateLeavesNoSession(t *testing.T) {
 // keeps ParentAgentID and Kind="subagent". Deleting the original parent then removes
 // the fork too, through subagentDescendants.
 func TestAuditForkOfSubagentDoesNotBecomeAChild(t *testing.T) {
-	t.Skip("audit: open, see audit.md #27")
 	cwd := t.TempDir()
 	lo := LocalOptions{CWD: cwd}
 	st := store.New(cwd)

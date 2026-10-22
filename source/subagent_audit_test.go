@@ -4,9 +4,9 @@
 package anvil
 
 import (
-	"sync"
 	"context"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/anvil-dev/anvil/internal/llm"
@@ -16,7 +16,6 @@ import (
 // and does not return the slot when StartAgent refuses. A refused start therefore
 // uses up the budget with no child ever running.
 func TestAuditRefusedBackgroundSpawnReturnsItsBudget(t *testing.T) {
-	t.Skip("audit: open, see audit.md #22")
 	dir := t.TempDir()
 	opts := subagentTestOptions(dir)
 	opts.Subagents.MaxAgents = 1
@@ -77,7 +76,6 @@ func TestAuditRefusedBackgroundSpawnReturnsItsBudget(t *testing.T) {
 // report nothing after the session closed, even though the task list is meant to
 // show the background work as stopped.
 func TestAuditTasksAfterCloseShowStopped(t *testing.T) {
-	t.Skip("audit: open, see audit.md #24")
 	dir := t.TempDir()
 	opts := subagentTestOptions(dir)
 	parent, err := Create(context.Background(), opts)
@@ -113,7 +111,6 @@ func TestAuditTasksAfterCloseShowStopped(t *testing.T) {
 // skipped for the child's calls. The design says a deny refuses a child's call
 // exactly as it refuses the parent's.
 func TestAuditChildInheritsHookCommandPermission(t *testing.T) {
-	t.Skip("audit: open, see audit.md #25")
 	parent := &Agent{opts: Options{Subagents: SubagentOptions{Enabled: true}, AllowHookCommands: true}}
 	child := parent.childOptions(spawnParams{Prompt: "p", Description: "d"}, nil, 1)
 	if !child.AllowHookCommands {
@@ -124,7 +121,6 @@ func TestAuditChildInheritsHookCommandPermission(t *testing.T) {
 // audit #26: executeRun forwards every runtime event to OnEvent, including the
 // child's "done". Design 42 says a child's done is not forwarded as a stream event.
 func TestAuditChildDoneIsNotForwarded(t *testing.T) {
-	t.Skip("audit: open, see audit.md #26")
 	dir := t.TempDir()
 	var mu sync.Mutex
 	var types []string

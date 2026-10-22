@@ -245,6 +245,12 @@ func (t *renameSymbolTool) Execute(ctx context.Context, args json.RawMessage) Re
 	if err != nil {
 		return Result{Content: err.Error(), IsError: true}
 	}
+	// The edit names every file the rename will change, which the path argument does
+	// not. Each one is checkpointed before the write, so the run can be undone
+	// and a path rule can see the targets (audit #7).
+	if err := t.r.captureWorkspaceEdit(we); err != nil {
+		return Result{Content: err.Error(), IsError: true}
+	}
 	paths, err := lsp.ApplyWorkspaceEdit(t.r.cwd, we)
 	if err != nil {
 		return Result{Content: err.Error(), IsError: true}

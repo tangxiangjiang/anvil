@@ -22,6 +22,13 @@ func pathToURI(abs string) string {
 	return "file://" + abs
 }
 
+// UriToPath is uriToPath for callers outside the package. It is the one conversion
+// a workspace edit's file names go through, so a caller that checkpoints those files
+// and the edit itself agree on which path each URI means.
+func UriToPath(uri string) (string, error) {
+	return uriToPath(uri)
+}
+
 func uriToPath(uri string) (string, error) {
 	u, err := url.Parse(uri)
 	if err != nil {

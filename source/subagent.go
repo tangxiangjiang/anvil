@@ -63,6 +63,21 @@ func (b *subagentBudget) take() error {
 	return nil
 }
 
+// give returns one agent to the budget. A slot is only consumed by an agent that
+// actually starts: when the start is refused, or the child cannot be created, the
+// slot goes back, so the next spawn is not refused for an agent that never ran
+// (audit #22).
+func (b *subagentBudget) give() {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.used > 0 {
+		b.used--
+	}
+}
+
 // reset starts a new root run's tree budget.
 func (b *subagentBudget) reset() {
 	if b == nil {
@@ -269,6 +284,7 @@ func spawnBackground(ctx context.Context, reg *tools.Registry, parent *Agent, in
 			callCtx := withSubagentOrigin(taskCtx, ident.ParentAgentID, ident.ParentRunID, ident.ParentToolCallID)
 			child, err := createSubagent(callCtx, opts, ident)
 			if err != nil {
+				parent.budget.give()
 				return "error", "", fmt.Errorf("start subagent: %w", err)
 			}
 			defer child.Close()
@@ -297,6 +313,7 @@ func spawnBackground(ctx context.Context, reg *tools.Registry, parent *Agent, in
 		},
 	})
 	if err != nil {
+		parent.budget.give()
 		return "", err
 	}
 	return fmt.Sprintf("%s started in the background: subagent %s\nRead it with task_output, stop it with task_cancel.",
@@ -373,14 +390,17 @@ func (a *Agent) childOptions(in spawnParams, selectors []string, depth int) Opti
 		ParallelTools:    a.opts.ParallelTools,
 		ParallelToolsMax: a.opts.ParallelToolsMax,
 		Checkpoints:      a.opts.Checkpoints,
-		SystemPrompt:     subagentBrief,
-		BuiltinTools:     selectors,
-		DisallowedTools:  append([]string(nil), a.opts.DisallowedTools...),
-		Subagents:        a.opts.Subagents,
-		completer:        a.complete,
-		budget:           a.budget,
-		taskMgr:          a.taskMgr,
-		depth:            depth,
+		// A command hook that denies in the parent denies in the child too, so the child
+		// must carry the same switch that lets command hooks run (audit #25).
+		AllowHookCommands: a.opts.AllowHookCommands,
+		SystemPrompt:      subagentBrief,
+		BuiltinTools:      selectors,
+		DisallowedTools:   append([]string(nil), a.opts.DisallowedTools...),
+		Subagents:         a.opts.Subagents,
+		completer:         a.complete,
+		budget:            a.budget,
+		taskMgr:           a.taskMgr,
+		depth:             depth,
 		Local: LocalOptions{
 			CWD:             a.cwd,
 			AllowShell:      a.opts.Local.AllowShell,
