@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -30,7 +31,10 @@ func (c *Anthropic) CompleteStream(ctx context.Context, req Request, onDelta fun
 	if onDelta == nil {
 		onDelta = func(Delta) {}
 	}
-	system, messages := toAnthropicMessages(req.Messages, req.PromptCache)
+	system, messages, err := toAnthropicMessages(req.Messages, req.PromptCache)
+	if err != nil {
+		return nil, err
+	}
 	body := anthropicStreamRequest{
 		Model:     firstNonEmpty(req.Model, c.cfg.Model),
 		MaxTokens: 8192,
@@ -103,7 +107,10 @@ func (c *Anthropic) CompleteStream(ctx context.Context, req Request, onDelta fun
 			} `json:"error"`
 		}
 		if err := json.Unmarshal([]byte(data), &envelope); err != nil {
-			continue
+			// A chunk that does not parse may be a lost tool_use start or argument
+			// fragment. Skipping it would return a call with truncated arguments and
+			// no error (audit #16), so the stream fails instead.
+			return nil, fmt.Errorf("anthropic stream: malformed event: %w", err)
 		}
 		if envelope.Error != nil {
 			return nil, &HTTPError{Status: httpResp.StatusCode, Message: envelope.Error.Message, Retryable: false}
@@ -160,6 +167,12 @@ func (c *Anthropic) CompleteStream(ctx context.Context, req Request, onDelta fun
 	}
 	if err := sc.Err(); err != nil {
 		return nil, err
+	}
+	// A tool_use that started but never received its content_block_stop was cut
+	// off, so its arguments are incomplete. Returning success would drop the
+	// call without a word (audit #15); the stream fails instead.
+	if curTool != nil {
+		return nil, fmt.Errorf("anthropic stream: tool call %q was cut off before it finished", curTool.Name)
 	}
 	return &Response{
 		Message: Message{Role: RoleAssistant, Content: content.String(), ToolCalls: toolCalls},

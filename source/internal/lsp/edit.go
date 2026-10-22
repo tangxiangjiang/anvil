@@ -62,6 +62,14 @@ func ApplyWorkspaceEdit(cwd string, edit *WorkspaceEdit) (written []string, err 
 		return nil, fmt.Errorf("workspace edit had no applicable changes")
 	}
 
+	// Phase one: compute every file's new content in memory. A failure here writes
+	// nothing, so the edit is all-or-nothing for everything that can be checked
+	// ahead (audit #8).
+	type plannedFile struct {
+		abs     string
+		content string
+	}
+	planned := make([]plannedFile, 0, len(byPath))
 	for _, fe := range byPath {
 		data, err := os.ReadFile(fe.abs)
 		if err != nil {
@@ -71,10 +79,15 @@ func ApplyWorkspaceEdit(cwd string, edit *WorkspaceEdit) (written []string, err 
 		if err != nil {
 			return nil, err
 		}
-		if err := os.WriteFile(fe.abs, []byte(updated), 0o644); err != nil {
-			return nil, err
+		planned = append(planned, plannedFile{abs: fe.abs, content: updated})
+	}
+	// Phase two: write. A write can still fail after an earlier one succeeded, so
+	// the error reports which files already changed rather than hiding them.
+	for _, pf := range planned {
+		if err := os.WriteFile(pf.abs, []byte(pf.content), 0o644); err != nil {
+			return written, fmt.Errorf("write %s: %w (files already written: %v)", pf.abs, err, written)
 		}
-		written = append(written, fe.abs)
+		written = append(written, pf.abs)
 	}
 	return written, nil
 }

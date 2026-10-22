@@ -94,7 +94,10 @@ func (c *Anthropic) Complete(ctx context.Context, req Request) (*Response, error
 	if c.cfg.APIKey == "" {
 		return nil, &HTTPError{Status: 401, Message: "missing API key", Retryable: false}
 	}
-	system, messages := toAnthropicMessages(req.Messages, req.PromptCache)
+	system, messages, err := toAnthropicMessages(req.Messages, req.PromptCache)
+	if err != nil {
+		return nil, err
+	}
 	body := anthropicRequest{
 		Model:     firstNonEmpty(req.Model, c.cfg.Model),
 		MaxTokens: 8192,
@@ -150,7 +153,7 @@ func (c *Anthropic) Complete(ctx context.Context, req Request) (*Response, error
 // message. Two is deliberate — every breakpoint is a cache write the provider
 // may charge for, and the pair is what lets the next request read the system
 // prompt and the whole conversation up to that point from cache.
-func toAnthropicMessages(in []Message, promptCache bool) (system any, out []anthropicMessage) {
+func toAnthropicMessages(in []Message, promptCache bool) (system any, out []anthropicMessage, err error) {
 	// Anthropic requires alternating user/assistant; tool results are user content blocks.
 	var pendingToolResults []any
 	flushTools := func() {
@@ -184,7 +187,11 @@ func toAnthropicMessages(in []Message, promptCache bool) (system any, out []anth
 			for _, tc := range m.ToolCalls {
 				var input any
 				if len(tc.Args) > 0 {
-					_ = json.Unmarshal(tc.Args, &input)
+					// Arguments that do not parse are refused, not replaced with {}:
+					// the history must replay the call the model actually made (audit #17).
+					if jerr := json.Unmarshal(tc.Args, &input); jerr != nil {
+						return nil, nil, fmt.Errorf("tool call %q has arguments that are not valid JSON: %w", tc.Name, jerr)
+					}
 				}
 				if input == nil {
 					input = map[string]any{}
@@ -224,7 +231,7 @@ func toAnthropicMessages(in []Message, promptCache bool) (system any, out []anth
 	if promptCache && len(out) > 0 {
 		markAnthropicCache(out[len(out)-1].Content)
 	}
-	return system, out
+	return system, out, nil
 }
 
 // markAnthropicCache puts the ephemeral marker on the last block. Blocks are

@@ -4,7 +4,6 @@
 package llm
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -13,17 +12,15 @@ import (
 // input {} and the error is dropped, so the history records a different call from
 // the one the model emitted.
 func TestAuditMalformedToolArgsAreNotReplacedSilently(t *testing.T) {
-	t.Skip("audit: open, see audit.md #17")
 	msgs := []Message{{
-		Role: RoleAssistant,
+		Role:      RoleAssistant,
 		ToolCalls: []ToolCall{{ID: "t1", Name: "read_file", Args: []byte(`{"path":`)}},
 	}}
-	_, out := toAnthropicMessages(msgs, false)
-	raw, err := json.Marshal(out)
-	if err != nil {
-		t.Fatal(err)
+	_, _, convErr := toAnthropicMessages(msgs, false)
+	if convErr == nil {
+		t.Fatal("malformed arguments were converted without an error")
 	}
-	if strings.Contains(string(raw), `"input":{}`) {
-		t.Fatalf("malformed arguments were replaced by {} in the replayed history: %s", raw)
+	if !strings.Contains(convErr.Error(), "not valid JSON") {
+		t.Fatalf("the error does not say the arguments are invalid: %v", convErr)
 	}
 }

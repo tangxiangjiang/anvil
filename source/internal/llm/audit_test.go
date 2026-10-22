@@ -16,7 +16,6 @@ import (
 // audit #15: a tool_use block still open when the Anthropic stream ends is dropped
 // without an error, so the call returns success with the tool call missing.
 func TestAuditAnthropicStreamTruncatedToolUseIsAnError(t *testing.T) {
-	t.Skip("audit: open, see audit.md #15")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, "event: content_block_start\n"+
@@ -39,7 +38,6 @@ func TestAuditAnthropicStreamTruncatedToolUseIsAnError(t *testing.T) {
 // audit #16: a stream chunk whose JSON fails to decode is skipped silently, so a
 // lost tool_use start yields a call with truncated arguments and no error.
 func TestAuditAnthropicStreamBadChunkIsAnError(t *testing.T) {
-	t.Skip("audit: open, see audit.md #16")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, "event: content_block_start\n"+

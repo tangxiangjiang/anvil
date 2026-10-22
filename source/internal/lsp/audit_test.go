@@ -17,7 +17,6 @@ func TestAuditWorkspaceEditDoesNotWriteThroughSymlink(t *testing.T) {
 	// Reproduced on AlmaLinux (Linux file URIs round-trip through uriToPath). On
 	// Windows the test cannot reach the symlink: a "file://C:/" URI is parsed
 	// as a relative path, so the edit fails before the symlink is followed.
-	t.Skip("audit: open, see audit.md #2 (reproduce on Linux)")
 	parent := t.TempDir()
 	cwd := filepath.Join(parent, "ws")
 	if err := os.Mkdir(cwd, 0o755); err != nil {
@@ -50,7 +49,6 @@ func TestAuditWorkspaceEditDoesNotWriteThroughSymlink(t *testing.T) {
 // the files it already wrote and does not report them, so the caller cannot tell
 // which files changed.
 func TestAuditWorkspaceEditReportsPartialWrites(t *testing.T) {
-	t.Skip("audit: open, see audit.md #8")
 	cwd := t.TempDir()
 	first := filepath.Join(cwd, "a.txt")
 	second := filepath.Join(cwd, "b.txt")

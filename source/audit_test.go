@@ -187,7 +187,6 @@ func (s *auditScript) Complete(ctx context.Context, req llm.Request) (*llm.Respo
 // audit #29: buildRegistry discards the error from index.Build, so Create succeeds
 // when the project index cannot be built, and nothing says the index is missing.
 func TestAuditIndexBuildFailureIsReported(t *testing.T) {
-	t.Skip("audit: open, see audit.md #29")
 	cwd := t.TempDir()
 	// The agent store lives in .anvil/agents and must work; only the index
 	// directory .anvil/index is blocked, by a regular file where it must go.
@@ -210,7 +209,6 @@ func TestAuditIndexBuildFailureIsReported(t *testing.T) {
 // audit #23: createAgent appends the meta record before buildSystemPrompt runs, so a
 // failed prompt closes the store but leaves a meta-only file that lists as a session.
 func TestAuditFailedCreateLeavesNoSession(t *testing.T) {
-	t.Skip("audit: open, see audit.md #23")
 	cwd := t.TempDir()
 	// AGENTS.md as a directory: reading it fails, so buildSystemPrompt fails.
 	if err := os.Mkdir(filepath.Join(cwd, "AGENTS.md"), 0o755); err != nil {

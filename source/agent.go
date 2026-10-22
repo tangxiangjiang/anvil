@@ -66,6 +66,8 @@ type Agent struct {
 	running    bool
 	compacting bool
 	activeRun  *Run
+	// persistErr is the first failed write to the session file, if any.
+	persistErr error
 	history    []llm.Message
 	complete   llm.Completer
 	registry   *tools.Registry
@@ -161,6 +163,10 @@ func createAgent(ctx context.Context, opts Options, ident subagentIdentity) (*Ag
 	}
 	sysPrompt, err := buildSystemPrompt(cwd, opts)
 	if err != nil {
+		// The meta record is already on disk. A session that failed to start must
+		// not stay behind as a meta-only entry that lists as a session with no runs
+		// (audit #23), so the file is removed with the failed create.
+		_ = st.Delete(agentID)
 		_ = st.Close()
 		cleanupRegistry(sessions, plugMgr, lspSup)
 		return nil, newError("load project rules", false, err)
@@ -466,7 +472,11 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 		Model:   opts.EmbedModel,
 	})
 	if opts.Local.EnsureIndex && !index.Exists(cwd) {
-		_, _ = index.Build(ctx, cwd, index.BuildOptions{})
+		// A requested index that cannot be built is an error, not a silent
+		// absence: the caller asked for search and would otherwise get none (audit #29).
+		if _, err := index.Build(ctx, cwd, index.BuildOptions{}); err != nil {
+			return nil, nil, nil, nil, nil, fmt.Errorf("build the project index: %w", err)
+		}
 	}
 
 	reg.SetSkillsConfig(tools.SkillsConfig{
@@ -1423,11 +1433,30 @@ func (a *Agent) persistMessage(runID string, m llm.Message) {
 	a.persist(rec)
 }
 
+// persist writes one record to the session. The store is read under the lock,
+// because Close clears it under the same lock. A failed write is recorded on
+// the agent rather than dropped, so a run whose transcript did not reach the
+// file is not reported as complete (audit #19).
 func (a *Agent) persist(rec store.Record) {
-	if a.store == nil {
+	a.mu.Lock()
+	st := a.store
+	id := a.id
+	a.mu.Unlock()
+	if st == nil {
 		return
 	}
-	_ = a.store.Append(a.id, rec)
+	if err := st.Append(id, rec); err != nil {
+		a.recordPersistError(err)
+	}
+}
+
+// recordPersistError keeps the first write failure, so Wait can report it.
+func (a *Agent) recordPersistError(err error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.persistErr == nil {
+		a.persistErr = err
+	}
 }
 
 // Close releases agent resources including MCP servers and the store backend.
