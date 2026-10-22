@@ -104,7 +104,8 @@ func TestAuditCloseDoesNotLeaveRunWritingUnlocked(t *testing.T) {
 // lock. Only a race detector sees this, so the test runs the two concurrently and
 // relies on `go test -race` to report it.
 func TestAuditSendAndCloseDoNotRace(t *testing.T) {
-	// Needs a C compiler for -race (not present on this machine); run with
+	// Reproduced under -race on AlmaLinux 10.2 (cgo). Skipped here because this
+	// Windows machine has no C compiler. Run with
 	// CGO_ENABLED=1 and a gcc on PATH to reproduce.
 	t.Skip("audit: open, see audit.md #20 (requires -race and cgo)")
 	a, err := Create(context.Background(), Options{

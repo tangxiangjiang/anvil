@@ -130,7 +130,7 @@ A `Resume` of the same id then succeeds because the lock is free. Repro: a block
 under the lock) and discards the `Append` error with `_ =`. Repro: a store whose `Append` fails;
 `Send` with a stub completer; `Wait` returns finished with no error.
 
-**#20 — bug — reported (test written, needs -race and cgo).** `agent.go` `Send` reads `a.closed` without `a.mu`, while `Close` writes it
+**#20 — bug — confirmed.** `agent.go` `Send` reads `a.closed` without `a.mu`, while `Close` writes it
 under the lock. A data race; `go test -race` with `Close` concurrent with `Send` should report it.
 
 **#21 — bug — confirmed.** `agent.go` `Send` with `WithForce` waits on the previous run using the
@@ -196,16 +196,18 @@ client's expectation of a complete event stream, which design 46 currently state
 
 | Severity | Findings | Confirmed | Reported |
 |---|---|---|---|
-| bug | 27 | 13 | 14 |
+| bug | 27 | 12 | 15 |
 | gap | 2 | 0 | 2 |
 | doc | 1 | 0 | 1 |
-| **total** | **30** | **13** | **17** |
+| **total** | **30** | **12** | **18** |
 
 Suspicions S1–S3 are listed separately and are not counted as findings.
 
-Reproduced by a failing test (skip removed, failed on the current tree): #1, #3, #4, #5, #8, #9, #15, #16, #18, #19, #21.
+Reproduced by a failing test (skip removed, failed on the current tree): #1, #3, #4, #5, #8, #9, #15, #16, #18, #19, #20, #21.
 
-Read at the stated line, but not reproduced: #2 (on Windows the URI form the test builds does not round-trip through `uriToPath`, so the edit fails before the symlink is reached), #20 (a data race that `go test -race` must report; the machine has no C compiler, so `-race` cannot run).
+Read at the stated line, but not reproduced: #2 (on Windows the URI form the test builds does not round-trip through `uriToPath`, so the edit fails before the symlink is reached).
+
+#20 was reproduced under `go test -race` on AlmaLinux 10.2 (gcc 14, Go 1.26.10): the race detector reports a write in `Agent.Close` and a read in `Agent.Send` on `a.closed`.
 
 ## Tests
 
@@ -221,7 +223,7 @@ Each one was run once with its skip removed to confirm the result above.
 | `.` (agent) | `audit_test.go` | #5, #18, #19, #20, #21 |
 
 Thirteen audit tests are skipped; none fails with its skip in place. The two that did not
-reproduce (#2 and #20) say why in their skip comment.
+reproduce (#2 and #20) say why in their skip comment. #20 reproduces under `go test -race` on AlmaLinux (cgo), and is skipped on Windows only because the race detector is not available there.
 
 Still open: the 17 `reported` findings have no test yet. They need the same treatment: read the
 line, write the test, run it with the skip removed, and only then mark it `confirmed`.
