@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/anvil-dev/anvil/internal/llm"
 	"github.com/anvil-dev/anvil/internal/store"
@@ -203,5 +204,63 @@ func TestAuditIndexBuildFailureIsReported(t *testing.T) {
 	if err == nil {
 		a.Close()
 		t.Fatal("Create succeeded although the project index could not be built")
+	}
+}
+
+// audit #23: createAgent appends the meta record before buildSystemPrompt runs, so a
+// failed prompt closes the store but leaves a meta-only file that lists as a session.
+func TestAuditFailedCreateLeavesNoSession(t *testing.T) {
+	t.Skip("audit: open, see audit.md #23")
+	cwd := t.TempDir()
+	// AGENTS.md as a directory: reading it fails, so buildSystemPrompt fails.
+	if err := os.Mkdir(filepath.Join(cwd, "AGENTS.md"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	opts := Options{APIKey: "k", Model: Model{ID: "m"}, Local: LocalOptions{CWD: cwd, LoadRules: true}}
+	if _, err := Create(context.Background(), opts); err == nil {
+		t.Fatal("Create succeeded although the project rules could not be loaded")
+	}
+	infos, err := List(context.Background(), ListOptions{Local: LocalOptions{CWD: cwd}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(infos) != 0 {
+		t.Fatalf("a failed Create left %d session(s) behind: %+v", len(infos), infos)
+	}
+}
+
+// audit #27: ForkAgent rewrites only AgentID on meta records, so a forked subagent
+// keeps ParentAgentID and Kind="subagent". Deleting the original parent then removes
+// the fork too, through subagentDescendants.
+func TestAuditForkOfSubagentDoesNotBecomeAChild(t *testing.T) {
+	t.Skip("audit: open, see audit.md #27")
+	cwd := t.TempDir()
+	lo := LocalOptions{CWD: cwd}
+	st := store.New(cwd)
+	defer st.Close()
+	parent := "agent-parent-27"
+	child := "agent-child-27"
+	now := time.Now()
+	if err := st.Append(parent, store.Record{Type: store.TypeMeta, AgentID: parent, CWD: cwd, Time: now}); err != nil {
+		t.Fatal(err)
+	}
+	for _, rec := range []store.Record{
+		{Type: store.TypeMeta, AgentID: child, CWD: cwd, Time: now, ParentAgentID: parent, Kind: "subagent"},
+		{Type: store.TypeRunStart, AgentID: child, RunID: "run-1", Time: now},
+		{Type: store.TypeRunEnd, AgentID: child, RunID: "run-1", Status: "finished", Time: now},
+	} {
+		if err := st.Append(child, rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	newID, err := ForkAgent(context.Background(), child, "run-1", ListOptions{Local: lo})
+	if err != nil {
+		t.Fatalf("ForkAgent: %v", err)
+	}
+	if err := DeleteAgent(context.Background(), parent, ListOptions{Local: lo}); err != nil {
+		t.Fatalf("DeleteAgent: %v", err)
+	}
+	if _, err := Get(context.Background(), newID, ListOptions{Local: lo}); err != nil {
+		t.Fatalf("a fork of a subagent was deleted with the parent: %v", err)
 	}
 }

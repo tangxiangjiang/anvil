@@ -138,33 +138,33 @@ caller's context and discards the error. If the context is already done, `Wait` 
 the new `Send` fails with "another run is already in progress" while the previous run is still active.
 Repro: a blocking first run; `Send(canceled ctx, WithForce())` returns that error.
 
-**#22 — bug — reported.** `subagent.go` `spawnAgent` (around 194), `spawnBackground` (around 252) and
+**#22 — bug — confirmed.** `subagent.go` `spawnAgent` (around 194), `spawnBackground` (around 252) and
 `workflow.go` `runChild` (around 778) call `budget.take()` and do not refund it when a later step
 fails (`createSubagent`, `StartAgent`, `runChild`). The slot is consumed though no child ran. Repro:
 `MaxAgents=1`, `MaxBackground=1`; a failed background spawn; free the slot; the next spawn fails with
 "already created 1 agents".
 
-**#23 — bug — reported.** `agent.go` `createAgent` appends the meta record before
+**#23 — bug — confirmed.** `agent.go` `createAgent` appends the meta record before
 `buildSystemPrompt` (around 157 before 162–167). If the prompt fails, the store closes with an error,
 but the meta-only file stays and appears as a session with no runs. Repro: a malformed project rules
 file; `Create`; list sessions; the new id appears with no runs.
 
-**#24 — bug — reported.** `agent.go` `Close` does not stop task-manager output. `tasks.go` `taskManager`
+**#24 — bug — confirmed.** `agent.go` `Close` does not stop task-manager output. `tasks.go` `taskManager`
 returns nil after `Close` (`a.taskMgr = nil`), so `Tasks`, `Task`, `TaskOutput` and `CancelTask` report
 nothing. The comments in `tasks/manager.go` and design 42 say the task list shows "stopped" after close.
 Repro: `run_in_background` a sleep; `Close`; `Tasks()` is empty, expected one cancelled row.
 
-**#25 — bug — reported.** `subagent.go` `childOptions` does not copy `AllowHookCommands`, so a
+**#25 — bug — confirmed.** `subagent.go` `childOptions` does not copy `AllowHookCommands`, so a
 command-type hook deny in the parent is skipped in the child (`hooks.go` `continue` when
 `!AllowCommands`). Design 42 says a workspace deny refuses a child's call exactly as the parent's.
 Repro: parent with `AllowHookCommands=true` and a command deny rule; the child's write is not denied.
 
-**#26 — bug — reported.** `subagent.go` `childOptions` and events: `executeRun` forwards every runtime
+**#26 — bug — confirmed.** `subagent.go` `childOptions` and events: `executeRun` forwards every runtime
 event to `SubagentOptions.OnEvent`, including `Type "done"`, while design 42's Events section says the
 child's `done` is not forwarded. Repro: spawn a child with a stub completer; record `OnEvent`; one event
 has `Type "done"`.
 
-**#27 — bug — reported.** `fork.go` `ForkAgent` rewrites only the `AgentID` on meta records. A forked
+**#27 — bug — confirmed.** `fork.go` `ForkAgent` rewrites only the `AgentID` on meta records. A forked
 subagent keeps `ParentAgentID` and `Kind="subagent"`, and deleting the original parent removes the fork
 through `subagentDescendants`. Repro: child C with meta `ParentAgentID=P`; `ForkAgent(C, runID)`;
 `DeleteAgent(P)`; `Load(newID)` returns not found.
@@ -176,7 +176,7 @@ through `subagentDescendants`. Repro: child C with meta `ParentAgentID=P`; `Fork
 `Create` succeeds with no indication when the index cannot be built. Repro: `EnsureIndex=true` with an
 unwritable index directory.
 
-**#30 — bug — reported.** `internal/tasks/manager.go` `Manager.Cancel` releases `m.mu` and then returns
+**#30 — bug — reported (not reproduced under -race).** `internal/tasks/manager.go` `Manager.Cancel` releases `m.mu` and then returns
 `t.Info`, which `finish()` writes under the lock. A race with a natural exit. Reproduce with `-race`.
 
 ## Suspicions
@@ -196,14 +196,16 @@ client's expectation of a complete event stream, which design 46 currently state
 
 | Severity | Findings | Confirmed | Reported |
 |---|---|---|---|
-| bug | 27 | 16 | 11 |
+| bug | 27 | 22 | 5 |
 | gap | 2 | 0 | 2 |
 | doc | 1 | 0 | 1 |
-| **total** | **30** | **16** | **14** |
+| **total** | **30** | **22** | **8** |
 
 Suspicions S1–S3 are listed separately and are not counted as findings.
 
-Reproduced by a failing test (skip removed, failed on the current tree): #1, #3, #4, #5, #8, #9, #6, #10, #11, #15, #16, #18, #19, #20, #21, #29.
+Reproduced by a failing test (skip removed, failed on the current tree): #1, #3, #4, #5, #8, #9, #6, #10, #11, #15, #16, #18, #19, #20, #21, #22, #23, #24, #25, #26, #27, #29.
+
+#30 was not reproduced: 2000 concurrent Cancel/exit pairs under `go test -race` on AlmaLinux report no race. The unlocked read of `t.Info` appears to be ordered after `finish()` by `m.mu`, so the finding needs a source-level check before it is marked confirmed or dropped.
 
 Read at the stated line, but not reproduced: #2 (on Windows the URI form the test builds does not round-trip through `uriToPath`, so the edit fails before the symlink is reached).
 
@@ -220,8 +222,10 @@ Each one was run once with its skip removed to confirm the result above.
 | `internal/tools` | `audit_test.go` | #1, #3, #4, #6, #9 |
 | `internal/lsp` | `audit_test.go` | #2, #8 |
 | `internal/llm` | `audit_test.go` | #15, #16 |
-| `.` (agent) | `audit_test.go` | #5, #18, #19, #20, #21, #29 |
+| `.` (agent) | `audit_test.go` | #5, #18, #19, #20, #21, #23, #27, #29 |
+| `.` (agent) | `subagent_audit_test.go` | #22, #24, #25, #26 |
 | `internal/permissions` | `audit_test.go` | #10, #11 |
+| `internal/tasks` | `audit_test.go` | #30 (not reproduced under -race) |
 
 Thirteen audit tests are skipped; none fails with its skip in place. The two that did not
 reproduce (#2 and #20) say why in their skip comment. #20 reproduces under `go test -race` on AlmaLinux (cgo), and is skipped on Windows only because the race detector is not available there.
