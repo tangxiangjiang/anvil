@@ -17,7 +17,6 @@ import (
 // audit #1: the grep fallback (used when rg is not on PATH) follows a symlink
 // whose target is outside cwd and returns its matching lines.
 func TestAuditGrepFallbackDoesNotFollowEscapingSymlink(t *testing.T) {
-	t.Skip("audit: open, see audit.md #1")
 	parent := t.TempDir()
 	cwd := filepath.Join(parent, "ws")
 	if err := os.Mkdir(cwd, 0o755); err != nil {
@@ -45,7 +44,6 @@ func TestAuditGrepFallbackDoesNotFollowEscapingSymlink(t *testing.T) {
 // audit #3: a dangling in-root symlink whose target is outside cwd resolves
 // without error, so a write creates the outside file.
 func TestAuditDanglingSymlinkEscapeIsRefused(t *testing.T) {
-	t.Skip("audit: open, see audit.md #3")
 	parent := t.TempDir()
 	cwd := filepath.Join(parent, "ws")
 	if err := os.Mkdir(cwd, 0o755); err != nil {
@@ -67,7 +65,6 @@ func TestAuditDanglingSymlinkEscapeIsRefused(t *testing.T) {
 
 // audit #4: a failed patch leaves earlier operations on disk and reports none.
 func TestAuditPatchIsAllOrNothing(t *testing.T) {
-	t.Skip("audit: open, see audit.md #4")
 	cwd := t.TempDir()
 	reg := tools.NewRegistry(cwd, false)
 	patch := "*** Begin Patch\n*** Add File: a.txt\n+one\n*** Update File: missing.txt\n@@\n-x\n+y\n*** End Patch"
@@ -77,13 +74,11 @@ func TestAuditPatchIsAllOrNothing(t *testing.T) {
 	}
 }
 
-
 // audit #9: when the first read of the rule file fails, the session has no last
 // good policy, and Execute discards the read error, so a deny rule disappears and
 // the call runs. write_file is used because shell is not registered on every
 // platform; the rule must be what decides this call.
 func TestAuditMalformedRuleFileStillDenies(t *testing.T) {
-	t.Skip("audit: open, see audit.md #9")
 	cwd := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(cwd, ".anvil"), 0o755); err != nil {
 		t.Fatal(err)
@@ -109,7 +104,6 @@ func TestAuditMalformedRuleFileStillDenies(t *testing.T) {
 // pre-image could not be saved still writes, and nothing says the file is not
 // restorable.
 func TestAuditFailedCaptureIsNotSilent(t *testing.T) {
-	t.Skip("audit: open, see audit.md #6")
 	cwd := t.TempDir()
 	cpDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(cwd, "a.txt"), []byte("old"), 0o644); err != nil {

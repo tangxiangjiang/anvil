@@ -238,6 +238,18 @@ With every `audit: open` skip removed in a working copy: 15 audit tests ran.
 - **0 data-race reports** across the run.
 - Three `TestAudit…` names outside this list are pre-existing 0.46 audit-log tests, not part of this audit.
 
+
+### Verification after the first fixes (AlmaLinux 10.2, Go 1.26.10, gcc 14, `-race`)
+
+With every audit skip removed in a working copy, 30 audit tests ran.
+
+- **Fixed and passing (7):** #1, #3, #4, #6, #9, #11, #12. Each was failing before its fix.
+- **Passing as evidence (4):** #13 (three tests), and #30, withdrawn.
+- **Still failing (19):** the defects not yet fixed. These are correct failures, not regressions.
+- **Data races (3):** all in `Agent.persist` and `Agent.Close`, which this round did not touch (`agent.go` has no change in the round). They belong to the open #18 and #19.
+
+A design conflict holds #10 open: `TestShellRulesAreNotPathProtected` records that a shell allow covers a command naming `.git`. The fix for #10 contradicts it, so it is not applied until that decision is made.
+
 ## Tests
 
 Each finding with a test is in the package that owns the code it reaches, named

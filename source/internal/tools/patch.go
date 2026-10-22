@@ -72,56 +72,78 @@ func (t *applyPatchTool) Execute(ctx context.Context, args json.RawMessage) Resu
 	if err != nil {
 		return Result{Content: err.Error(), IsError: true}
 	}
+	// Phase one: work out every operation's result in memory and touch no file.
+	// A patch that cannot apply in full is refused here, so nothing is written
+	// (audit #4: the patch is all-or-nothing).
+	planned, err := t.plan(ops)
+	if err != nil {
+		return Result{Content: err.Error(), IsError: true}
+	}
+	// Phase two: write. The checks above catch every failure this function can
+	// predict, so a write error here is a real I/O failure.
 	var notes []string
+	for _, p := range planned {
+		if err := p.apply(ctx, t); err != nil {
+			return Result{Content: err.Error(), IsError: true}
+		}
+		notes = append(notes, p.note)
+	}
+	return Result{Content: strings.Join(notes, "\n")}
+}
+
+// plannedOp is one operation with its result already computed.
+type plannedOp struct {
+	abs     string
+	delete  bool
+	content string
+	note    string
+}
+
+// plan checks every operation and computes what each one will write.
+func (t *applyPatchTool) plan(ops []patchOp) ([]plannedOp, error) {
+	out := make([]plannedOp, 0, len(ops))
 	for _, op := range ops {
+		abs, err := t.r.resolvePath(op.Path)
+		if err != nil {
+			return nil, err
+		}
 		switch op.Kind {
 		case patchAdd:
-			abs, err := t.r.resolvePath(op.Path)
-			if err != nil {
-				return Result{Content: err.Error(), IsError: true}
-			}
-			if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
-				return Result{Content: err.Error(), IsError: true}
-			}
-			if err := os.WriteFile(abs, []byte(op.AddContent), 0o644); err != nil {
-				return Result{Content: err.Error(), IsError: true}
-			}
-			t.r.notifyFileWrite(ctx, abs)
-			notes = append(notes, "added "+op.Path)
+			out = append(out, plannedOp{abs: abs, content: op.AddContent, note: "added " + op.Path})
 		case patchDelete:
-			abs, err := t.r.resolvePath(op.Path)
-			if err != nil {
-				return Result{Content: err.Error(), IsError: true}
-			}
-			if err := os.Remove(abs); err != nil {
-				return Result{Content: err.Error(), IsError: true}
-			}
-			notes = append(notes, "deleted "+op.Path)
+			out = append(out, plannedOp{abs: abs, delete: true, note: "deleted " + op.Path})
 		case patchUpdate:
-			abs, err := t.r.resolvePath(op.Path)
-			if err != nil {
-				return Result{Content: err.Error(), IsError: true}
-			}
 			data, err := os.ReadFile(abs)
 			if err != nil {
-				return Result{Content: err.Error(), IsError: true}
+				return nil, err
 			}
 			text := string(data)
 			for i, h := range op.Hunks {
 				next, err := applyHunk(text, h)
 				if err != nil {
-					return Result{Content: fmt.Sprintf("%s hunk %d: %v", op.Path, i+1, err), IsError: true}
+					return nil, fmt.Errorf("%s hunk %d: %v", op.Path, i+1, err)
 				}
 				text = next
 			}
-			if err := os.WriteFile(abs, []byte(text), 0o644); err != nil {
-				return Result{Content: err.Error(), IsError: true}
-			}
-			t.r.notifyFileWrite(ctx, abs)
-			notes = append(notes, fmt.Sprintf("updated %s (%d hunks)", op.Path, len(op.Hunks)))
+			out = append(out, plannedOp{abs: abs, content: text, note: fmt.Sprintf("updated %s (%d hunks)", op.Path, len(op.Hunks))})
 		}
 	}
-	return Result{Content: strings.Join(notes, "\n")}
+	return out, nil
+}
+
+// apply performs one planned operation.
+func (p plannedOp) apply(ctx context.Context, t *applyPatchTool) error {
+	if p.delete {
+		return os.Remove(p.abs)
+	}
+	if err := os.MkdirAll(filepath.Dir(p.abs), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(p.abs, []byte(p.content), 0o644); err != nil {
+		return err
+	}
+	t.r.notifyFileWrite(ctx, p.abs)
+	return nil
 }
 
 type patchKind int

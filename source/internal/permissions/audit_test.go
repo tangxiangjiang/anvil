@@ -15,7 +15,6 @@ import (
 // byte-for-byte, so a differently cased path is not protected. NTFS is case
 // insensitive, so on Windows the same directory is reached under either case.
 func TestAuditProtectedPathIsCaseInsensitive(t *testing.T) {
-	t.Skip("audit: open, see audit.md #11")
 	p := Protection{Root: "/ws"}
 	for _, rel := range []string{".GIT/config", ".ANVIL/checkpoints/x"} {
 		if !p.protectedRelative(rel) {
@@ -27,7 +26,10 @@ func TestAuditProtectedPathIsCaseInsensitive(t *testing.T) {
 // audit #10: a shell call carries Command and no Paths, so protectedPaths returns
 // nothing and an allow rule for "rm" covers a command that deletes .git.
 func TestAuditShellAllowDoesNotCoverProtectedPaths(t *testing.T) {
-	t.Skip("audit: open, see audit.md #10")
+	// Open: the existing TestShellRulesAreNotPathProtected records the opposite
+	// design (a shell allow covers a command naming .git). The two conflict; the
+	// decision is with the user. See audit.md #10.
+	t.Skip("audit: open, see audit.md #10 (design conflict)")
 	dir := t.TempDir()
 	set, err := New([]Rule{{Effect: "allow", Tool: "shell", Pattern: "rm:*"}})
 	if err != nil {
@@ -44,7 +46,6 @@ func TestAuditShellAllowDoesNotCoverProtectedPaths(t *testing.T) {
 // resolved form does not Rel() against the root, so the protected-path test falls
 // back to comparing the whole absolute string and misses .anvil/checkpoints.
 func TestAuditProtectionFollowsSymlinkedRoot(t *testing.T) {
-	t.Skip("audit: open, see audit.md #12")
 	real := t.TempDir()
 	link := filepath.Join(t.TempDir(), "ws-link")
 	if err := os.Symlink(real, link); err != nil {
