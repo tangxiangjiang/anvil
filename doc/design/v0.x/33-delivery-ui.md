@@ -1,6 +1,6 @@
 # 33 — Delivery UI + schema (anvil-web)
 
-**Product version focus:** **0.33** ([m_0.33_delivery_ui.md](../../roadmaps/v1.0/m_0.33_delivery_ui.md))  
+**Product version focus:** **0.33** ([m_0.33_delivery_ui.md](../../roadmaps/v0.x/m_0.33_delivery_ui.md))  
 **Status:** done
 
 ## Intent

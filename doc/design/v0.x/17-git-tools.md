@@ -1,6 +1,6 @@
 # 17 — Git tools
 
-**Product version focus:** **0.17** ([m_0.17_git_tools.md](../../roadmaps/v1.0/m_0.17_git_tools.md))  
+**Product version focus:** **0.17** ([m_0.17_git_tools.md](../../roadmaps/v0.x/m_0.17_git_tools.md))  
 **Status:** done
 
 ## Intent
@@ -56,4 +56,4 @@ When added: require Permission + hooks `beforeShell`-style or dedicated `beforeG
 
 ## Roadmap mapping
 
-[m_0.17_git_tools.md](../../roadmaps/v1.0/m_0.17_git_tools.md) phases `p_0.17.1` … `p_0.17.3`.
+[m_0.17_git_tools.md](../../roadmaps/v0.x/m_0.17_git_tools.md) phases `p_0.17.1` … `p_0.17.3`.

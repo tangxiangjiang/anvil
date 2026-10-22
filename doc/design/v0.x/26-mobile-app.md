@@ -1,6 +1,6 @@
 # 26 — Mobile app (Flutter) + web session on scheduler
 
-**Product version focus:** **0.26** ([m_0.26_mobile_app.md](../../roadmaps/v1.0/m_0.26_mobile_app.md))  
+**Product version focus:** **0.26** ([m_0.26_mobile_app.md](../../roadmaps/v0.x/m_0.26_mobile_app.md))  
 **Status:** done
 
 ## Intent
@@ -53,4 +53,4 @@ Flutter ──POST /api/v1/auth/login──▶ anvil-web (SQLite users/sessions)
 
 ## Roadmap mapping
 
-[m_0.26_mobile_app.md](../../roadmaps/v1.0/m_0.26_mobile_app.md) phases `p_0.26.1` … `p_0.26.4`.
+[m_0.26_mobile_app.md](../../roadmaps/v0.x/m_0.26_mobile_app.md) phases `p_0.26.1` … `p_0.26.4`.

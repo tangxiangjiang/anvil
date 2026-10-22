@@ -1,6 +1,6 @@
 # 20 — Agent plugins (worker-side)
 
-**Product version focus:** **0.20** ([m_0.20_plugins.md](../../roadmaps/v1.0/m_0.20_plugins.md))  
+**Product version focus:** **0.20** ([m_0.20_plugins.md](../../roadmaps/v0.x/m_0.20_plugins.md))  
 **Status:** done
 
 ## Intent
@@ -158,4 +158,4 @@ Tool **names** stay stable whether a rare pack is later extracted; default agent
 
 ## Roadmap mapping
 
-[m_0.20_plugins.md](../../roadmaps/v1.0/m_0.20_plugins.md) phases `p_0.20.1` … `p_0.20.4`.
+[m_0.20_plugins.md](../../roadmaps/v0.x/m_0.20_plugins.md) phases `p_0.20.1` … `p_0.20.4`.

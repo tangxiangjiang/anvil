@@ -1,6 +1,6 @@
 # 10 — Cursor SDK local parity
 
-**Product version focus:** **0.10** ([m_0.10_sdk_parity.md](../../roadmaps/v1.0/m_0.10_sdk_parity.md))  
+**Product version focus:** **0.10** ([m_0.10_sdk_parity.md](../../roadmaps/v0.x/m_0.10_sdk_parity.md))  
 **Status:** done (surface parity through p_0.10.1–p_0.10.5)
 
 ## Intent
@@ -96,4 +96,4 @@ Deny → tool error to the model. Full Cursor hook catalog remains deferred.
 
 ## Roadmap mapping
 
-Implemented via [m_0.10_sdk_parity.md](../../roadmaps/v1.0/m_0.10_sdk_parity.md) phases `p_0.10.1` … `p_0.10.5`.
+Implemented via [m_0.10_sdk_parity.md](../../roadmaps/v0.x/m_0.10_sdk_parity.md) phases `p_0.10.1` … `p_0.10.5`.

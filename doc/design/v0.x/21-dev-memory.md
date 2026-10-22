@@ -1,6 +1,6 @@
 # 21 — Development memory (plugin)
 
-**Product version focus:** **0.21** ([m_0.21_dev_memory.md](../../roadmaps/v1.0/m_0.21_dev_memory.md))  
+**Product version focus:** **0.21** ([m_0.21_dev_memory.md](../../roadmaps/v0.x/m_0.21_dev_memory.md))  
 **Status:** done
 
 ## Intent
@@ -92,4 +92,4 @@ Size caps per entry and total store; redact secrets on write (align 0.8).
 
 ## Roadmap mapping
 
-[m_0.21_dev_memory.md](../../roadmaps/v1.0/m_0.21_dev_memory.md) phases `p_0.21.1` … `p_0.21.3`.
+[m_0.21_dev_memory.md](../../roadmaps/v0.x/m_0.21_dev_memory.md) phases `p_0.21.1` … `p_0.21.3`.

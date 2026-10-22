@@ -1,6 +1,6 @@
 # 27 — Mobile fleet picker + cluster ops
 
-**Product version focus:** **0.27** ([m_0.27_app_fleets.md](../../roadmaps/v1.0/m_0.27_app_fleets.md))  
+**Product version focus:** **0.27** ([m_0.27_app_fleets.md](../../roadmaps/v0.x/m_0.27_app_fleets.md))  
 **Status:** done
 
 ## Intent

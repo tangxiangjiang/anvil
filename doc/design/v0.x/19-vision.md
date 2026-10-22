@@ -1,6 +1,6 @@
 # 19 — Vision (image / screenshot)
 
-**Product version focus:** **0.19** ([m_0.19_vision.md](../../roadmaps/v1.0/m_0.19_vision.md))  
+**Product version focus:** **0.19** ([m_0.19_vision.md](../../roadmaps/v0.x/m_0.19_vision.md))  
 **Status:** done
 
 ## Intent
@@ -35,7 +35,7 @@ read_image
 
 ### Tool group
 
-`vision`. Default **off** unless `Options.Vision.Enabled` or model advertises vision via gateway catalog ([12](12-model-gateway.md)). The SDK default is unchanged: enabling it changes what the public package accepts for every caller. A *client* may still ask by default — the VS Code extension does, since p_0.47.9, and sends `vision: true` on `session.new` unless `anvil.vision` is false ([35](35-vscode-extension.md)).
+`vision`. Default **off** unless `Options.Vision.Enabled` or model advertises vision via gateway catalog ([12](12-model-gateway.md)). The SDK default is unchanged: enabling it changes what the public package accepts for every caller. A *client* may still ask by default — the VS Code extension does, since p_0.46.9, and sends `vision: true` on `session.new` unless `anvil.vision` is false ([35](35-vscode-extension.md)).
 
 ## Provider mapping
 
@@ -61,4 +61,4 @@ read_image
 
 ## Roadmap mapping
 
-[m_0.19_vision.md](../../roadmaps/v1.0/m_0.19_vision.md) phases `p_0.19.1` … `p_0.19.3`.
+[m_0.19_vision.md](../../roadmaps/v0.x/m_0.19_vision.md) phases `p_0.19.1` … `p_0.19.3`.

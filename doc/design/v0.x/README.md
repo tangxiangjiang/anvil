@@ -1,8 +1,8 @@
-# Design v1.0 (cutoff)
+# Design v0.x (cutoff)
 
-Anvil **local-only** Go Agent SDK design through product milestone **0.51**. The chapters end at **48** (agent modes): 0.39 is the Delivery **execute / test campaign loop**, and it is designed by [33](33-delivery-ui.md) together with [DELIVERY_PIPELINE_VISION.md](../../../DELIVERY_PIPELINE_VISION.md) rather than by a chapter of its own. Read chapters in order before implementing the matching roadmap phase.
+Anvil **local-only** Go Agent SDK design through product milestone **0.50**. The chapters end at **50** (agent modes). 0.39 is the Delivery **execute / test campaign loop**, designed by [39](39-execute.md) on top of the surfaces in [33](33-delivery-ui.md) and the vision in [DELIVERY_PIPELINE_VISION.md](../../../DELIVERY_PIPELINE_VISION.md). Read chapters in order before implementing the matching roadmap phase.
 
-This tree is the **design cutoff** for 0.1–0.51 delivery. Later product lines get a new `doc/design/v…/` directory.
+This tree is the **design cutoff** for 0.1–0.50 delivery. Later product lines get a new `doc/design/v…/` directory.
 
 ## Read order
 
@@ -47,21 +47,23 @@ This tree is the **design cutoff** for 0.1–0.51 delivery. Later product lines 
 | 36 | [36-tool-permissions.md](36-tool-permissions.md) | Rule set + shell analyzer, and the rule shapes the approval card remembers → **0.36** |
 | 37 | [37-permission-modes.md](37-permission-modes.md) | The complete mode ladder, and where a session's starting mode comes from → **0.37** |
 | 38 | [38-session-identity-and-replay.md](38-session-identity-and-replay.md) | A session's title, a reviewable change on every tool card, and a transcript that survives a reload → **0.38** |
-| 39 | [39-editor-alignment.md](39-editor-alignment.md) | Parallel tabs, session administration, partial acceptance, checkpoints, fork, and the SDK capabilities the client never turned on → **0.40** |
-| 40 | [40-permission-auto-and-manager.md](40-permission-auto-and-manager.md) | A deterministic `auto` rung, and a structured permissions manager → **0.41** |
-| 41 | [41-subagents-and-tasks.md](41-subagents-and-tasks.md) | Agent-in-agent, background tasks and `/tasks`, and declarative workflows → **0.42** |
-| 42 | [42-context-management.md](42-context-management.md) | A token budget, safe compaction at run start and mid-run, `/compact`, and the cache clock → **0.43** |
-| 43 | [43-mcp-management.md](43-mcp-management.md) | A host-owned MCP runtime with observable state, safe config edits, reconnect, Streamable HTTP and OAuth → **0.44** |
-| 44 | [44-editor-polish.md](44-editor-polish.md) | Wiring LSP and test/build, rewind, plan review, reading, accessibility, rule scopes, and one root per window → **0.47** |
-| 45 | [45-evaluation.md](45-evaluation.md) | A three-tier eval harness, a scorer, a baseline file, and the invariants suite that guards Anvil's own capabilities → **0.48** |
-| 46 | [46-llm-effort-and-retry.md](46-llm-effort-and-retry.md) | Reasoning effort on both wires, retry with backoff, stop reasons and error kinds; effort vs. reasoning content → **0.49** |
-| 47 | [47-roles-and-prompts.md](47-roles-and-prompts.md) | A layered system prompt with an unremovable safety layer, and five roles → **0.50** |
-| 48 | [48-agent-modes.md](48-agent-modes.md) | Single, Multi, Complex as a ladder; `delegate` and the brief; Complex as a workflow → **0.51** |
+| 39 | [39-execute.md](39-execute.md) | Execute from a ready roadmap to a tested milestone: the lifecycle state machine, phase Jobs, the test campaign loop, and accept and merge → **0.39** |
+| 40 | [40-editor-alignment.md](40-editor-alignment.md) | Parallel tabs, session administration, partial acceptance, checkpoints, fork, and the SDK capabilities the client never turned on → **0.40** |
+| 41 | [41-permission-auto-and-manager.md](41-permission-auto-and-manager.md) | A deterministic `auto` rung, and a structured permissions manager → **0.41** |
+| 42 | [42-subagents-and-tasks.md](42-subagents-and-tasks.md) | Agent-in-agent, background tasks and `/tasks`, and declarative workflows → **0.42** |
+| 43 | [43-context-management.md](43-context-management.md) | A token budget, safe compaction at run start and mid-run, `/compact`, and the cache clock → **0.43** |
+| 44 | [44-mcp-management.md](44-mcp-management.md) | A host-owned MCP runtime with observable state, safe config edits, reconnect, Streamable HTTP and OAuth → **0.44** |
+| 45 | [45-web-editor-polish.md](45-web-editor-polish.md) | anvil-web polish, the web drafting assistant, and the editor-host protocol smoke tests → **0.45** |
+| 46 | [46-editor-polish.md](46-editor-polish.md) | Wiring LSP and test/build, rewind, plan review, reading, accessibility, rule scopes, and one root per window → **0.46** |
+| 47 | [47-evaluation.md](47-evaluation.md) | A three-tier eval harness, a scorer, a baseline file, and the invariants suite that guards Anvil's own capabilities → **0.47** |
+| 48 | [48-llm-effort-and-retry.md](48-llm-effort-and-retry.md) | Reasoning effort on both wires, retry with backoff, stop reasons and error kinds; effort vs. reasoning content → **0.48** |
+| 49 | [49-roles-and-prompts.md](49-roles-and-prompts.md) | A layered system prompt with an unremovable safety layer, and five roles → **0.49** |
+| 50 | [50-agent-modes.md](50-agent-modes.md) | Single, Multi, Complex as a ladder; `delegate` and the brief; Complex as a workflow → **0.50** |
 
 Parent index: [`doc/design/README.md`](../README.md).
 
 ## Relation to roadmaps
 
 - Design describes **what** and **why** for this cutoff.
-- [`doc/roadmaps/v1.0/`](../../roadmaps/v1.0/) describes **when**.
-- Chapters 11–48 map to [m_0.11](../../roadmaps/v1.0/m_0.11_worker_daemon.md) … [m_0.51](../../roadmaps/v1.0/m_0.51_agent_modes.md). [m_0.39](../../roadmaps/v1.0/m_0.39_execute.md) maps back to chapter 33.
+- [`doc/roadmaps/v0.x/`](../../roadmaps/v0.x/) describes **when**.
+- Chapters 11–50 map to [m_0.11](../../roadmaps/v0.x/m_0.11_worker_daemon.md) … [m_0.50](../../roadmaps/v0.x/m_0.50_agent_modes.md). [m_0.39](../../roadmaps/v0.x/m_0.39_execute.md) maps to chapter 39; chapter 33 holds its surfaces and schema.

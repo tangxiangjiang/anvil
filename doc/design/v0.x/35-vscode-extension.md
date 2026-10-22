@@ -1,6 +1,6 @@
 # 35 — VS Code extension + editor host
 
-**Product version focus:** **0.35** ([m_0.35_vscode_extension.md](../../roadmaps/v1.0/m_0.35_vscode_extension.md))  
+**Product version focus:** **0.35** ([m_0.35_vscode_extension.md](../../roadmaps/v0.x/m_0.35_vscode_extension.md))  
 **Status:** done
 
 ## Intent
@@ -98,7 +98,7 @@ What the editor knows, the agent should know — but the client decides *what*, 
 - **Order: directive prefix, context block, user message.** The model reads the request last, immediately after the material it is about.
 - **Mentions are read by the host, under the workspace root.** A file mention carries its contents; a folder mention carries a listing, not a dump. Caps: **32 mentions**, **64 KiB per file**, **256 KiB total**, **200 listing entries**. A capped file is included up to the cap with an explicit truncation note — silently sending half a file would be worse than saying so.
 - **Diagnostics are the client's.** The editor already has them from the language server, so the host neither computes nor filters them; it renders a compact block. The cap (100 entries) exists to keep a broken file from filling the context.
-- **Attachments ride the vision path.** `attachments[]` becomes `anvil.ImageAttachment` and goes out on `anvil.WithAttachments`; in-memory bytes for a pasted image, a workspace-relative path for one picked from disk. The session param is opt-in and a client must ask (`vision: true` on `session.new`), because `Options.Vision.Enabled` is what makes the SDK accept an attachment at all — a client that sends one to a non-vision session gets `-32602` naming the setting, not a run that mysteriously ignores the image. **The editor asks for it unless `anvil.vision` is false** (p_0.47.9): a screenshot pasted into a chat is a request to send it, and the setting is the switch that turns the capability off rather than the one that turns it on.
+- **Attachments ride the vision path.** `attachments[]` becomes `anvil.ImageAttachment` and goes out on `anvil.WithAttachments`; in-memory bytes for a pasted image, a workspace-relative path for one picked from disk. The session param is opt-in and a client must ask (`vision: true` on `session.new`), because `Options.Vision.Enabled` is what makes the SDK accept an attachment at all — a client that sends one to a non-vision session gets `-32602` naming the setting, not a run that mysteriously ignores the image. **The editor asks for it unless `anvil.vision` is false** (p_0.46.9): a screenshot pasted into a chat is a request to send it, and the setting is the switch that turns the capability off rather than the one that turns it on.
 - **The host reads nothing outside the workspace.** A mention path is resolved against the session cwd, cleaned, and re-checked after symlinks; an absolute path outside the root, a `..` escape, and a symlink pointing out are all rejected as invalid params. The SDK's own sandbox still governs what *tools* may touch; this check governs what the host will read into a prompt on a client's word, which is a different and narrower promise.
 
 ## Approval and permission modes
@@ -158,7 +158,7 @@ The client sets these per session, on `session.new` / `session.resume`:
 | `permission_groups` | overrides the default gated set (`write, edit, shell, verify, web, mcp`); ignored in `bypass` |
 | `approval_timeout_ms` | per-session wait for an answer; `0` = default 5m, negative = until the run ends |
 | `test_command` / `build_command` | argv for `run_tests` / `build`. Without them the host registers neither tool, so those calls cannot reach an approval at all |
-| `vision` | opt in to image attachments; the editor asks with `true` unless `anvil.vision` is false (p_0.47.9), and a prompt carrying one without it is refused. The host's default stays off for every other client |
+| `vision` | opt in to image attachments; the editor asks with `true` unless `anvil.vision` is false (p_0.46.9), and a prompt carrying one without it is refused. The host's default stays off for every other client |
 | `load_permissions` / `load_hooks` | read `.anvil/permissions.json` / `.anvil/hooks.json` for this session. Absent means **on**: the workspace policy files a user wrote apply when their editor opens the workspace. One switch governs the rules file whole — `load_permissions: false` also ignores the `defaultMode` it declares, and also means the approval card has no rule to offer, so the host refuses (`-32600`) rather than writing a rule into a file the session does not read |
 
 - **Session allowlist**: the host remembers `(session, tool, scope)` approvals and short-circuits the callback. In-memory per session; not persisted. `scope` is opaque to the host — it compares it verbatim and takes it from `preview.path`, so a client can offer "always allow shell" (no scope) and "always allow edits to this file" (that path) through one field. A **rule set** above this layer (milestone **0.36**, [36](36-tool-permissions.md)) resolves before the callback, so a rule decides without consulting this list — and a rule `allow` is why the shell/write/edit hook denies moved to the unconditional `preExec` stage.
@@ -264,9 +264,9 @@ The transcript rendered assistant prose as escaped text in a `pre-wrap` box and 
 - **Tool cards label their sections.** `IN` is the arguments, `OUT` is the result, and the "show all" button targets the OUT pane specifically rather than the card's only pane. The IN section is still omitted when the call carried no arguments, because `undefined` would otherwise render as the string `undefined`.
 - **The thinking UI is honest about being provider-dependent.** A session whose provider sends no reasoning shows no block, not an empty one. Anthropic is the case that matters: its extended thinking is neither requested nor carried (see [05](05-llm-provider.md)), so a Claude-provider session will not show thinking in this release.
 
-> **Later, p_0.47.10.** The card became a compact row. This section's behaviour — the labelled
+> **Later, p_0.46.10.** The card became a compact row. This section's behaviour — the labelled
 > IN/OUT sections, the per-round thinking state, the omitted empty IN — is unchanged; only the
-> frame changed. See [44](44-editor-polish.md) §15.
+> frame changed. See [44](46-editor-polish.md) §15.
 
 ### Permission rules on the card as built (p_0.36.2)
 
@@ -496,8 +496,8 @@ quietly wrong.
 - Becoming a language server / DAP debugger; LSP stays **agent tools** ([16](16-lsp.md)).
 - Any scheduler / `agentd` / cluster path from the extension. This protocol deliberately has none; adding one would be a new, separately-decided capability rather than an extension of it.
 - Notebook cell editing, multi-root in one panel, sub-agent graph UI. **Checkpoints / rewind were on
-  this list as a 0.35 non-goal and are now planned as [0.40.4](../../roadmaps/v1.0/m_0.40/p_0.40.4.md)
-  ([39](39-editor-alignment.md));** the sub-agent graph is still out, because the SDK has no
+  this list as a 0.35 non-goal and are now planned as [0.40.4](../../roadmaps/v0.x/m_0.40/p_0.40.4.md)
+  ([39](40-editor-alignment.md));** the sub-agent graph is still out, because the SDK has no
   sub-agent concept to graph. Per-hunk *acceptance of one approval* arrives in 0.40.3; the
   **persisted per-hunk policy** below remains a non-goal.
 - Persisting per-hunk approval policy to disk, or a settings-sync story. (A *rule* the card
@@ -521,4 +521,4 @@ quietly wrong.
 
 ## Roadmap mapping
 
-[m_0.35_vscode_extension.md](../../roadmaps/v1.0/m_0.35_vscode_extension.md) phases `p_0.35.1` … `p_0.35.9`.
+[m_0.35_vscode_extension.md](../../roadmaps/v0.x/m_0.35_vscode_extension.md) phases `p_0.35.1` … `p_0.35.9`.

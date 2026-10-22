@@ -1,6 +1,6 @@
 # 23 — YAML ops config (agentd + gateway)
 
-**Product version focus:** **0.23** ([m_0.23_yaml_config.md](../../roadmaps/v1.0/m_0.23_yaml_config.md))  
+**Product version focus:** **0.23** ([m_0.23_yaml_config.md](../../roadmaps/v0.x/m_0.23_yaml_config.md))  
 **Status:** planned
 
 ## Intent
@@ -47,4 +47,4 @@ llm:
 
 ## Roadmap mapping
 
-[m_0.23_yaml_config.md](../../roadmaps/v1.0/m_0.23_yaml_config.md) phases `p_0.23.1` … `p_0.23.4`.
+[m_0.23_yaml_config.md](../../roadmaps/v0.x/m_0.23_yaml_config.md) phases `p_0.23.1` … `p_0.23.4`.

@@ -1,6 +1,6 @@
 # 30 — Loop guard (replace MaxSteps default)
 
-**Product version focus:** **0.30** ([m_0.30_loop_guard.md](../../roadmaps/v1.0/m_0.30_loop_guard.md))  
+**Product version focus:** **0.30** ([m_0.30_loop_guard.md](../../roadmaps/v0.x/m_0.30_loop_guard.md))  
 **Status:** done
 
 ## Intent

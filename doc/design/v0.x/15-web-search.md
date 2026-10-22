@@ -1,6 +1,6 @@
 # 15 — Web search
 
-**Product version focus:** **0.15** ([m_0.15_web_search.md](../../roadmaps/v1.0/m_0.15_web_search.md))  
+**Product version focus:** **0.15** ([m_0.15_web_search.md](../../roadmaps/v0.x/m_0.15_web_search.md))  
 **Status:** done
 
 ## HTTP JSON wire shape (builtin `http` provider)
@@ -131,4 +131,4 @@ Do not merge indexes; the model chooses the tool.
 
 ## Roadmap mapping
 
-[m_0.15_web_search.md](../../roadmaps/v1.0/m_0.15_web_search.md) phases `p_0.15.1` … `p_0.15.4`.
+[m_0.15_web_search.md](../../roadmaps/v0.x/m_0.15_web_search.md) phases `p_0.15.1` … `p_0.15.4`.

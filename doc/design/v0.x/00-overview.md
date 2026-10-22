@@ -1,6 +1,6 @@
 # 00 — Overview
 
-**Status:** done — v1.0 design cutoff (chapters 00–35 landed)  
+**Status:** done — v0.x design cutoff (chapters 00–35 landed)  
 **Product:** Anvil — independent local-only Go Agent SDK
 
 ## Goals
@@ -41,7 +41,7 @@ After local surface parity (0.10), only these tracks are in-scope (designs lande
 | 12 | Project search (SQLite+VDB) | [22](22-project-search.md) | **0.22** |
 | 13 | VS Code extension / editor host | [35](35-vscode-extension.md) | **0.35** |
 
-Tracks **0.23–0.34** (YAML ops config, scheduler, web console, mobile app, clusters, sandbox workers, loop guard, job stream, code review, delivery UI, workspace domain) landed after this lock and are indexed in [`doc/roadmaps/v1.0/README.md`](../../roadmaps/v1.0/README.md).
+Tracks **0.23–0.34** (YAML ops config, scheduler, web console, mobile app, clusters, sandbox workers, loop guard, job stream, code review, delivery UI, workspace domain) landed after this lock and are indexed in [`doc/roadmaps/v0.x/README.md`](../../roadmaps/v0.x/README.md).
 
 ## Glossary
 
@@ -61,10 +61,10 @@ Tracks **0.23–0.34** (YAML ops config, scheduler, web console, mobile app, clu
 ## Version strategy
 
 - Product versions use `0.x` while pre-release; **0.1 = MVP**; **0.10** = SDK local surface parity; **0.11+** = post-parity scope lock and platform track (still 0.x).
-- Design lives in versioned trees under `doc/design/` (this file is **`v1.0`** cutoff). Roadmaps live under `doc/roadmaps/v1.0/`.
+- Design lives in versioned trees under `doc/design/` (this file is **`v0.x`** cutoff). Roadmaps live under `doc/roadmaps/v0.x/`.
 - New capability requires a phase doc before code (see `.cursor/rules/doc-versioning.mdc`).
 - Chapters **00–09** core; **10**→0.10 … **35**→0.35.
-- Forward map: see [`doc/roadmaps/v1.0/README.md`](../../roadmaps/v1.0/README.md).
+- Forward map: see [`doc/roadmaps/v0.x/README.md`](../../roadmaps/v0.x/README.md).
 
 ## Locked product decisions
 

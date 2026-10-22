@@ -1,6 +1,6 @@
 # 11 — Worker daemon & agent-worker
 
-**Product version focus:** **0.11** ([m_0.11_worker_daemon.md](../../roadmaps/v1.0/m_0.11_worker_daemon.md))  
+**Product version focus:** **0.11** ([m_0.11_worker_daemon.md](../../roadmaps/v0.x/m_0.11_worker_daemon.md))  
 **Status:** done (implementation through p_0.11.1–p_0.11.5)
 
 ## Intent
@@ -163,4 +163,4 @@ That integration is **out of Anvil 0.11 acceptance** unless a phase explicitly l
 
 ## Roadmap mapping
 
-Delivered via [m_0.11_worker_daemon.md](../../roadmaps/v1.0/m_0.11_worker_daemon.md) phases `p_0.11.1` … `p_0.11.5`.
+Delivered via [m_0.11_worker_daemon.md](../../roadmaps/v0.x/m_0.11_worker_daemon.md) phases `p_0.11.1` … `p_0.11.5`.

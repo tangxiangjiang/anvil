@@ -1,6 +1,6 @@
 # 14 — Hooks & skills (deepen)
 
-**Product version focus:** **0.14** ([m_0.14_hooks_skills.md](../../roadmaps/v1.0/m_0.14_hooks_skills.md))  
+**Product version focus:** **0.14** ([m_0.14_hooks_skills.md](../../roadmaps/v0.x/m_0.14_hooks_skills.md))  
 **Status:** done
 
 ## Intent
@@ -133,4 +133,4 @@ description: Conventional commits and repo changelog rules
 
 ## Roadmap mapping
 
-[m_0.14_hooks_skills.md](../../roadmaps/v1.0/m_0.14_hooks_skills.md) phases `p_0.14.1` … `p_0.14.4`.
+[m_0.14_hooks_skills.md](../../roadmaps/v0.x/m_0.14_hooks_skills.md) phases `p_0.14.1` … `p_0.14.4`.

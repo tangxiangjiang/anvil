@@ -1,6 +1,6 @@
 # 12 — Model gateway (catalog + auth)
 
-**Product version focus:** **0.12** ([m_0.12_model_gateway.md](../../roadmaps/v1.0/m_0.12_model_gateway.md))  
+**Product version focus:** **0.12** ([m_0.12_model_gateway.md](../../roadmaps/v0.x/m_0.12_model_gateway.md))  
 **Status:** done (implementation through p_0.12.1–p_0.12.4; OpenAI-compat primary)
 
 ## Intent
@@ -101,4 +101,4 @@ Config maps `model id` → `{ upstream, upstream_model, provider }`. Unknown mod
 
 ## Roadmap mapping
 
-[m_0.12_model_gateway.md](../../roadmaps/v1.0/m_0.12_model_gateway.md) phases `p_0.12.1` … `p_0.12.4`.
+[m_0.12_model_gateway.md](../../roadmaps/v0.x/m_0.12_model_gateway.md) phases `p_0.12.1` … `p_0.12.4`.

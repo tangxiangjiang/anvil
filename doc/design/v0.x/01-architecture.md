@@ -30,8 +30,8 @@ internal/prompt  system prompt templates
 ```text
 anvil/
   doc/
-    design/v1.0/        # design cutoff (chapters)
-    roadmaps/v1.0/      # milestones / phases
+    design/v0.x/        # design cutoff (chapters)
+    roadmaps/v0.x/      # milestones / phases
   source/               # Go module root
     go.mod
     agent.go

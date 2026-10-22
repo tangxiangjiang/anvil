@@ -1,6 +1,6 @@
 # 29 — Sandbox workers + web FS browser
 
-**Product version focus:** **0.29** ([m_0.29_sandbox_workers.md](../../roadmaps/v1.0/m_0.29_sandbox_workers.md))  
+**Product version focus:** **0.29** ([m_0.29_sandbox_workers.md](../../roadmaps/v0.x/m_0.29_sandbox_workers.md))  
 **Status:** done
 
 ## Intent

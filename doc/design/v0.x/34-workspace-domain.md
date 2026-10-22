@@ -1,6 +1,6 @@
 # 34 — Workspace domain (Clusters: Scheduler → Workspace → Project → Workers)
 
-**Product version focus:** **0.34** ([m_0.34_workspace_domain.md](../../roadmaps/v1.0/m_0.34_workspace_domain.md))  
+**Product version focus:** **0.34** ([m_0.34_workspace_domain.md](../../roadmaps/v0.x/m_0.34_workspace_domain.md))  
 **Status:** done
 
 ## Intent

@@ -1,6 +1,6 @@
 # 07 — Streaming and errors
 
-**Milestone focus:** core events in 0.1–0.6; hardening in **[m_0.7_streaming_errors.md](../../roadmaps/v1.0/m_0.7_streaming_errors.md)** (**0.7 done**).
+**Milestone focus:** core events in 0.1–0.6; hardening in **[m_0.7_streaming_errors.md](../../roadmaps/v0.x/m_0.7_streaming_errors.md)** (**0.7 done**).
 
 ## Event model
 

@@ -1,6 +1,6 @@
 # 36 — Tool permissions
 
-**Milestone focus:** the rule set, the shell analyzer, and the decision order → **[m_0.36_tool_permissions.md](../../roadmaps/v1.0/m_0.36_tool_permissions.md)**.
+**Milestone focus:** the rule set, the shell analyzer, and the decision order → **[m_0.36_tool_permissions.md](../../roadmaps/v0.x/m_0.36_tool_permissions.md)**.
 
 Chapter [08](08-security.md) covers confinement: which paths and commands are *reachable*.
 This chapter covers **policy**: given a call that is reachable, who decides whether it runs,
@@ -347,12 +347,12 @@ the CLI does the same. A malformed file therefore fails session creation with th
   hidden place a decision is kept.
 - A rule editor beyond appending one well-formed entry — no graphical builder, no reordering,
   no sync, no user-level or managed rule sources. (0.41 adds a structured manager for the rows
-  this file already holds — [40](40-permission-auto-and-manager.md); reordering, search and sync
-  stay out of scope. A user-level scope was added by 0.47 — [37](37-permission-modes.md)
+  this file already holds — [40](41-permission-auto-and-manager.md); reordering, search and sync
+  stay out of scope. A user-level scope was added by 0.46 — [37](37-permission-modes.md)
   §*Scopes and protected paths*; managed/organization policy remains out of scope.)
 
 ## Roadmap mapping
 
-[m_0.36_tool_permissions.md](../../roadmaps/v1.0/m_0.36_tool_permissions.md) phases
+[m_0.36_tool_permissions.md](../../roadmaps/v0.x/m_0.36_tool_permissions.md) phases
 `p_0.36.1` (SDK rule engine, analyzer, loading) and `p_0.36.2` (protocol and extension
 surface).

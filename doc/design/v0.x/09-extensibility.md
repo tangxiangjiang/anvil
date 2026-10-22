@@ -1,6 +1,6 @@
 # 09 — Extensibility
 
-**Milestone focus:** 0.3 (stdio MCP / custom tools / Permission / compression **implemented**); 0.6 adds HTTP/SSE MCP; depth in **[m_0.9_extensibility.md](../../roadmaps/v1.0/m_0.9_extensibility.md)** (**0.9 done**). SDK config parity → **[10-sdk-parity.md](10-sdk-parity.md)** / **0.10**.
+**Milestone focus:** 0.3 (stdio MCP / custom tools / Permission / compression **implemented**); 0.6 adds HTTP/SSE MCP; depth in **[m_0.9_extensibility.md](../../roadmaps/v0.x/m_0.9_extensibility.md)** (**0.9 done**). SDK config parity → **[10-sdk-parity.md](10-sdk-parity.md)** / **0.10**.
 
 ## Custom tools
 
@@ -23,7 +23,7 @@ MCPServers: map[name] => {
 
 - On Resume: re-pass MCP configs (not persisted with secrets).
 - Static `Headers` (e.g. `Authorization`) are supported for remote MCP; OAuth / browser auth remains out of scope.
-  *(Superseded by 0.44: the host now owns the OAuth flow and the tokens, see [43-mcp-management.md](43-mcp-management.md) §6. Static headers still work.)*
+  *(Superseded by 0.44: the host now owns the OAuth flow and the tokens, see [44-mcp-management.md](44-mcp-management.md) §6. Static headers still work.)*
 
 ## Permission hooks
 

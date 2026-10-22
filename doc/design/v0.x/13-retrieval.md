@@ -1,6 +1,6 @@
 # 13 — Retrieval quality (index / semantic search)
 
-**Product version focus:** **0.13** ([m_0.13_retrieval.md](../../roadmaps/v1.0/m_0.13_retrieval.md))  
+**Product version focus:** **0.13** ([m_0.13_retrieval.md](../../roadmaps/v0.x/m_0.13_retrieval.md))  
 **Status:** done
 
 ## Intent
@@ -112,5 +112,5 @@ Register via `Options.MCPServers` / `.cursor/mcp.json`. Builtin `semantic_search
 
 ## Roadmap mapping
 
-- Tool / product slice: [m_0.13_retrieval.md](../../roadmaps/v1.0/m_0.13_retrieval.md)
-- Engine (SQLite + VDB): [m_0.22_project_search.md](../../roadmaps/v1.0/m_0.22_project_search.md) — implement storage here; wire `semantic_search` in 0.13 and/or p_0.22.4.
+- Tool / product slice: [m_0.13_retrieval.md](../../roadmaps/v0.x/m_0.13_retrieval.md)
+- Engine (SQLite + VDB): [m_0.22_project_search.md](../../roadmaps/v0.x/m_0.22_project_search.md) — implement storage here; wire `semantic_search` in 0.13 and/or p_0.22.4.

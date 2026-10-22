@@ -1,7 +1,7 @@
 # 37 — Permission modes
 
 **Milestone focus:** a complete mode ladder, and where a session's starting mode comes from →
-**[m_0.37_permission_modes.md](../../roadmaps/v1.0/m_0.37_permission_modes.md)**.
+**[m_0.37_permission_modes.md](../../roadmaps/v0.x/m_0.37_permission_modes.md)**.
 
 Chapter [36](36-tool-permissions.md) is the layer below: which calls may run, on what facts,
 decided by rules the user wrote down. This chapter is the layer above: **whether to ask at
@@ -40,7 +40,7 @@ answers no. Two of those answers live in one function each (`groupsForMode`,
 `auto` is the one row whose "who answers" is not the person: its callback approves a call only
 when `anvil.AutoApproveCall` can prove it harmless, and otherwise delegates to the ordinary
 card. The classifier is deterministic — it reads the facts a rule matches on and the same shell
-analyzer the `readonly` pattern uses — and chapter [40](40-permission-auto-and-manager.md) is
+analyzer the `readonly` pattern uses — and chapter [40](41-permission-auto-and-manager.md) is
 where that decision, and what it deliberately does not prove, is written down.
 
 What a mode does **not** do: it does not change the model, it does not change the rules, and
@@ -105,10 +105,10 @@ The cost is visible: a card can appear in a mode whose banner says calls run wit
 That is why the card carries the rule that asked (p_0.36.2) — it can say *why* it appeared in a
 mode that promised it would not.
 
-## Scopes and protected paths (0.47)
+## Scopes and protected paths (0.46)
 
 A rule written once for one repository is the wrong shape for a preference that is about the
-person: "never run `rm -rf`" was being copied into every `.anvil/permissions.json`. 0.47 gives
+person: "never run `rm -rf`" was being copied into every `.anvil/permissions.json`. 0.46 gives
 rules a second scope.
 
 **Where the rules come from.** The workspace file is unchanged. The user file is
@@ -281,7 +281,7 @@ model of itself.
   and a person relies on `bypass` meaning silence, that is the one behaviour change to expect.
 - `ProtocolVersion` stays **1**: every addition is a new optional field, and `dont_ask` is a
   new accepted value of an existing one.
-- **0.47 keeps that promise.** `permissions.get` gains `user_path`, `user_exists`,
+- **0.46 keeps that promise.** `permissions.get` gains `user_path`, `user_exists`,
   `user_problem`, `protected` and a `source` per rule; `permissions.add`/`set` gain an optional
   `source`, and the user layer's `protected`/`create` fields exist only where they mean
   something. An older client sends nothing new and reads nothing it does not know, so the
@@ -304,7 +304,7 @@ model of itself.
   effect in every mode.
 - **A precedence chain above the workspace file** — user-level defaults, managed settings,
   enterprise policy. The workspace file is the one a reader can find; more layers need their
-  own argument. (0.47 added exactly one: the user file, whose merge order and severity rule
+  own argument. (0.46 added exactly one: the user file, whose merge order and severity rule
   are in *Scopes and protected paths* above. Managed and organization policy remain out.)
 
 ## Roadmap mapping

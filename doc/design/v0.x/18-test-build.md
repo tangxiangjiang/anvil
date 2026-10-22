@@ -1,6 +1,6 @@
 # 18 — Test & build tools
 
-**Product version focus:** **0.18** ([m_0.18_test_build.md](../../roadmaps/v1.0/m_0.18_test_build.md))  
+**Product version focus:** **0.18** ([m_0.18_test_build.md](../../roadmaps/v0.x/m_0.18_test_build.md))  
 **Status:** done
 
 ## Intent
@@ -53,4 +53,4 @@ Do **not** invent unbounded `shell` under the hood with user-controlled full com
 
 ## Roadmap mapping
 
-[m_0.18_test_build.md](../../roadmaps/v1.0/m_0.18_test_build.md) phases `p_0.18.1` … `p_0.18.3`.
+[m_0.18_test_build.md](../../roadmaps/v0.x/m_0.18_test_build.md) phases `p_0.18.1` … `p_0.18.3`.

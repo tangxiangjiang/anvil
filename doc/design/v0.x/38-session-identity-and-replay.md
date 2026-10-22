@@ -1,7 +1,7 @@
 # 38 — Session identity and replay
 
 **Milestone focus:** a session a person can recognise, inspect and return to →
-**[m_0.38_session_identity.md](../../roadmaps/v1.0/m_0.38_session_identity.md)**.
+**[m_0.38_session_identity.md](../../roadmaps/v0.x/m_0.38_session_identity.md)**.
 
 [35](35-vscode-extension.md) built the chat tab and the session list;
 [06](06-session-store.md) is the store both of them stand on, and
@@ -243,7 +243,7 @@ continue.
 
 ## Roadmap mapping
 
-- **0.38** — [m_0.38](../../roadmaps/v1.0/m_0.38_session_identity.md): p_0.38.1 titles,
+- **0.38** — [m_0.38](../../roadmaps/v0.x/m_0.38_session_identity.md): p_0.38.1 titles,
   p_0.38.2 reviewable cards, p_0.38.3 the reader, the replay and the re-attach.
 - Reverses one non-goal of [35](35-vscode-extension.md): *"the SDK exposes no transcript reader,
   so the tab marks the resume instead of printing a history it does not have."* The reader now

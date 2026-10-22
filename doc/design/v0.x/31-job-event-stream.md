@@ -1,6 +1,6 @@
 # 31 — Job event stream (app chat)
 
-**Product version focus:** **0.31** ([m_0.31_job_stream.md](../../roadmaps/v1.0/m_0.31_job_stream.md))  
+**Product version focus:** **0.31** ([m_0.31_job_stream.md](../../roadmaps/v0.x/m_0.31_job_stream.md))  
 **Status:** done
 
 ## Intent

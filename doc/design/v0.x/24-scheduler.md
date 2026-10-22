@@ -1,6 +1,6 @@
 # 24 — Scheduler (cluster controller + gateway catalog)
 
-**Product version focus:** **0.24** ([m_0.24_scheduler.md](../../roadmaps/v1.0/m_0.24_scheduler.md))  
+**Product version focus:** **0.24** ([m_0.24_scheduler.md](../../roadmaps/v0.x/m_0.24_scheduler.md))  
 **Status:** done
 
 ## Intent
@@ -57,4 +57,4 @@ Round-robin among nodes with `idle > 0`. No HA, no fairness queues, no event str
 
 ## Roadmap mapping
 
-[m_0.24_scheduler.md](../../roadmaps/v1.0/m_0.24_scheduler.md) phases `p_0.24.1` … `p_0.24.4`.
+[m_0.24_scheduler.md](../../roadmaps/v0.x/m_0.24_scheduler.md) phases `p_0.24.1` … `p_0.24.4`.

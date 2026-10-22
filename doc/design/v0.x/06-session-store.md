@@ -25,7 +25,7 @@
 | `summary` | compression marker (0.9+); Resume keeps this + later messages only |
 | `run_start` / `run_end` | run_id, status, steps, usage |
 
-Exact JSON schema is finalized in [m_0.2/p_0.2.1.md](../../roadmaps/v1.0/m_0.2/p_0.2.1.md). Design requires append-only writes and crash-safe "last valid line" reads.
+Exact JSON schema is finalized in [m_0.2/p_0.2.1.md](../../roadmaps/v0.x/m_0.2/p_0.2.1.md). Design requires append-only writes and crash-safe "last valid line" reads.
 
 Agent ID format in code: `agent-<hex>` (random), file name `{agentID}.jsonl`.
 

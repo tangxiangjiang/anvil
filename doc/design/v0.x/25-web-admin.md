@@ -1,6 +1,6 @@
 # 25 — Web fleet ops console (anvil-web)
 
-**Product version focus:** **0.25** ([m_0.25_web_admin.md](../../roadmaps/v1.0/m_0.25_web_admin.md))  
+**Product version focus:** **0.25** ([m_0.25_web_admin.md](../../roadmaps/v0.x/m_0.25_web_admin.md))  
 **Status:** done
 
 ## Intent
@@ -42,4 +42,4 @@ Browser ──Bearer session (7d)──▶ anvil-web ──Bearer scheduler─�
 
 ## Roadmap mapping
 
-[m_0.25_web_admin.md](../../roadmaps/v1.0/m_0.25_web_admin.md) phases `p_0.25.1` … `p_0.25.4`.
+[m_0.25_web_admin.md](../../roadmaps/v0.x/m_0.25_web_admin.md) phases `p_0.25.1` … `p_0.25.4`.

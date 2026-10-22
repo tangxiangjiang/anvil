@@ -33,5 +33,5 @@ Only these strings:
 
 1. Do not invent parallel trees (`docs/`, `roadmap/` singular, etc.).
 2. No code for a capability until its phase doc exists.
-3. Keep `VERSIONING.md` limited to naming/process; put feature design in `doc/design/v1.0/` (current cutoff).
-4. This file lives under a cutoff tree (`doc/roadmaps/v1.0/`); do not keep a parallel flat `doc/roadmaps/m_*.md` set.
+3. Keep `VERSIONING.md` limited to naming/process; put feature design in `doc/design/v0.x/` (current cutoff).
+4. This file lives under a cutoff tree (`doc/roadmaps/v0.x/`); do not keep a parallel flat `doc/roadmaps/m_*.md` set.

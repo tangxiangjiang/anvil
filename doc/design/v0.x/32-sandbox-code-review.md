@@ -1,6 +1,6 @@
 # 32 — Sandbox code review + VS Code Server
 
-**Product version focus:** **0.32** ([m_0.32_sandbox_code_review.md](../../roadmaps/v1.0/m_0.32_sandbox_code_review.md))  
+**Product version focus:** **0.32** ([m_0.32_sandbox_code_review.md](../../roadmaps/v0.x/m_0.32_sandbox_code_review.md))  
 **Status:** planned
 
 ## Intent
@@ -241,4 +241,4 @@ Banner: “Read-only in Anvil · edit via VS Code Server on this node”.
 
 ## Phases
 
-See roadmap [m_0.32](../../roadmaps/v1.0/m_0.32_sandbox_code_review.md).
+See roadmap [m_0.32](../../roadmaps/v0.x/m_0.32_sandbox_code_review.md).

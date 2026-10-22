@@ -1,6 +1,6 @@
 # 08 — Security
 
-**Milestone focus:** MVP sandbox in 0.1; permission hooks in 0.3; hardening in **[m_0.8_security.md](../../roadmaps/v1.0/m_0.8_security.md)** (**0.8 done**). File-based Cursor hooks → **0.10**.
+**Milestone focus:** MVP sandbox in 0.1; permission hooks in 0.3; hardening in **[m_0.8_security.md](../../roadmaps/v0.x/m_0.8_security.md)** (**0.8 done**). File-based Cursor hooks → **0.10**.
 
 ## Threat model (local SDK)
 

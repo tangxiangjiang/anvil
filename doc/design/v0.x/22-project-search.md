@@ -1,6 +1,6 @@
 # 22 — Project search engine (MVP: SQLite + VDB)
 
-**Product version focus:** **0.22** ([m_0.22_project_search.md](../../roadmaps/v1.0/m_0.22_project_search.md))  
+**Product version focus:** **0.22** ([m_0.22_project_search.md](../../roadmaps/v0.x/m_0.22_project_search.md))  
 **Status:** done (BLOB + brute-force cosine MVP; sqlite-vec optional later)
 
 ## Verdict
@@ -96,4 +96,4 @@ chunk_vec(chunk_id, embedding)  -- sqlite-vec or BLOB
 
 ## Roadmap mapping
 
-[m_0.22_project_search.md](../../roadmaps/v1.0/m_0.22_project_search.md) phases `p_0.22.1` … `p_0.22.4`.
+[m_0.22_project_search.md](../../roadmaps/v0.x/m_0.22_project_search.md) phases `p_0.22.1` … `p_0.22.4`.
