@@ -70,13 +70,13 @@ the session started without rules, so on a first-load failure the deny rules dis
 runs. Repro: `NewSource(cwd, "", home, anvil, nil, nil)` with a malformed workspace file denying
 `shell`; `Execute("shell", ...)` should be denied.
 
-**#10 — bug — reported.** `internal/tools/preview.go`/`tools.go` shell calls carry `Command` and no
+**#10 — bug — confirmed.** `internal/tools/preview.go`/`tools.go` shell calls carry `Command` and no
 `Paths`, so protection never applies to them (`Set.protectedPaths` returns nil when `len(f.Paths)==0`).
 `allow shell "rm:*"` lets `rm -rf .git` run without a prompt. `protect.go` says a remembered allow must
 not cover these paths, and the existing test only covers reads. Repro: `Evaluate(CallFacts{Tool:
 "shell", Command: "rm -rf .git"}, "linux")` with rule `{allow, shell, "rm:*"}`; expect a prompt.
 
-**#11 — bug — reported.** `internal/permissions/protect.go` `protectedRelative`: the `.git` segment
+**#11 — bug — confirmed.** `internal/permissions/protect.go` `protectedRelative`: the `.git` segment
 and `.anvil/checkpoints` prefix tests are byte-case-sensitive. On Windows (NTFS, case-insensitive),
 `.GIT/config` is not protected and an allow rule covers it. Repro: `protectedRelative(".GIT/config")`
 should return true.
@@ -196,14 +196,14 @@ client's expectation of a complete event stream, which design 46 currently state
 
 | Severity | Findings | Confirmed | Reported |
 |---|---|---|---|
-| bug | 27 | 12 | 15 |
+| bug | 27 | 14 | 13 |
 | gap | 2 | 0 | 2 |
 | doc | 1 | 0 | 1 |
-| **total** | **30** | **12** | **18** |
+| **total** | **30** | **14** | **16** |
 
 Suspicions S1–S3 are listed separately and are not counted as findings.
 
-Reproduced by a failing test (skip removed, failed on the current tree): #1, #3, #4, #5, #8, #9, #15, #16, #18, #19, #20, #21.
+Reproduced by a failing test (skip removed, failed on the current tree): #1, #3, #4, #5, #8, #9, #10, #11, #15, #16, #18, #19, #20, #21.
 
 Read at the stated line, but not reproduced: #2 (on Windows the URI form the test builds does not round-trip through `uriToPath`, so the edit fails before the symlink is reached).
 
@@ -221,6 +221,7 @@ Each one was run once with its skip removed to confirm the result above.
 | `internal/lsp` | `audit_test.go` | #2, #8 |
 | `internal/llm` | `audit_test.go` | #15, #16 |
 | `.` (agent) | `audit_test.go` | #5, #18, #19, #20, #21 |
+| `internal/permissions` | `audit_test.go` | #10, #11 |
 
 Thirteen audit tests are skipped; none fails with its skip in place. The two that did not
 reproduce (#2 and #20) say why in their skip comment. #20 reproduces under `go test -race` on AlmaLinux (cgo), and is skipped on Windows only because the race detector is not available there.
