@@ -598,7 +598,7 @@ func TestPermissionRequestCarriesTheRuleThatAsked(t *testing.T) {
 	}
 }
 
-// --- the user's own file (0.47) ----------------------------------------------
+// --- the user's own file (0.46) ----------------------------------------------
 
 // The user file lives under $ANVIL_HOME when set, which is also how a test keeps
 // a machine-wide policy out of the run.

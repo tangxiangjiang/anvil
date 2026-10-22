@@ -17,7 +17,7 @@ import (
 const modulePrefix = "github.com/anvil-dev/anvil"
 
 // allowedModuleImports is the set of in-module packages this host may import.
-// The rule from doc/design/v1.0/35-vscode-extension.md is "the public anvil
+// The rule from doc/design/v0.x/35-vscode-extension.md is "the public anvil
 // package only": the editor host is a standalone capability and must never
 // reach into the automated coding tool-chain. Widening this list is a design
 // change, not a test change.
@@ -67,7 +67,7 @@ func TestNoToolChainImports(t *testing.T) {
 					"anvil-host must consume the public %s package only; importing the\n"+
 					"tool-chain (internal/daemon, internal/scheduler, internal/web, cmd/anvil-*,\n"+
 					"…) would couple this editor client to the platform. See\n"+
-					"doc/design/v1.0/35-vscode-extension.md, section \"Independence (locked)\".",
+					"doc/design/v0.x/35-vscode-extension.md, section \"Independence (locked)\".",
 					name, path, modulePrefix)
 			}
 		}

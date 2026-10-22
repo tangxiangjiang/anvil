@@ -198,7 +198,7 @@ func SavePermissionRuleFile(cwd string, rules []PermissionRule, defaultMode stri
 }
 
 // UserPermissionRulesPath is the user-level rule file: $ANVIL_HOME/permissions.json,
-// or ~/.anvil/permissions.json when ANVIL_HOME is unset (0.47+). It belongs to
+// or ~/.anvil/permissions.json when ANVIL_HOME is unset (0.46+). It belongs to
 // the person rather than to the workspace, so it is shared by every repository
 // they open.
 //
@@ -298,7 +298,7 @@ func AddUserPermissionRule(rule PermissionRule) ([]PermissionRule, error) {
 }
 
 // SaveUserPermissionRuleFile replaces the user rule file with exactly these
-// rules and these protected globs (0.47+).
+// rules and these protected globs (0.46+).
 //
 // It is the writer behind the manager's user section, and its contract is
 // replacement, the same as SavePermissionRuleFile. create says whether a missing
@@ -373,7 +373,7 @@ func EvaluatePermissionRules(rules []PermissionRule, tool string, args json.RawM
 }
 
 // EvaluatePermissionRulesAcross reports which of the user's rules and the
-// workspace's decides a call together, or nil when none does (0.47+).
+// workspace's decides a call together, or nil when none does (0.46+).
 //
 // It is the question a manager asks before it claims a freshly written rule
 // settled the call in front of the user: an allow appended to the workspace
@@ -494,7 +494,7 @@ func PermissionRuleOptions(tool string, args json.RawMessage) []PermissionRuleOp
 }
 
 // PermissionRuleOptionsIn works out the same choices in the workspace at cwd,
-// with its protected paths taken into account (0.47+).
+// with its protected paths taken into account (0.46+).
 //
 // It is the version an approval card uses. An allow rule for a protected path is
 // never matched, so offering one would write a rule that does nothing — and a

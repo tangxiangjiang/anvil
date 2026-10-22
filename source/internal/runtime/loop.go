@@ -42,7 +42,7 @@ type Event struct {
 	// ran ungated.
 	Rule *permissions.Decision
 	// Protected are the paths a tool call touched that an allow rule may not
-	// cover, on tool_result (0.47+). It is a fact about the call, so it is set
+	// cover, on tool_result (0.46+). It is a fact about the call, so it is set
 	// even when no rule decided it.
 	Protected []string
 	// Items is the model's complete task list, on the `todo` event that follows

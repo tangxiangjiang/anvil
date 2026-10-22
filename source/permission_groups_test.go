@@ -98,7 +98,7 @@ type toolExecResult struct {
 	// thing the tool_result event carries.
 	Rule *PermissionRuleMatch
 	// Protected are the paths the call touched that an allow rule may not cover,
-	// also carried on the tool_result event (0.47+).
+	// also carried on the tool_result event (0.46+).
 	Protected []string
 }
 

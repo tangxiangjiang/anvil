@@ -1,7 +1,7 @@
 /**
  * A diff scrolls by the side, not by the line.
  *
- * p_0.47.10 let every cell scroll its own long line, which put a horizontal
+ * p_0.46.10 let every cell scroll its own long line, which put a horizontal
  * scrollbar under every line of both sides. The overflow now belongs to a pane
  * per side: one bar at the foot of each, invisible until the comparison is
  * pointed at, and the two panes move together.

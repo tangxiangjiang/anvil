@@ -357,12 +357,12 @@ test('the renderer keeps both clocks, and only the cache one ticks', () => {
   const render = bodyOf(CHAT_JS, 'renderMeter');
   assert.doesNotMatch(render, /\.innerHTML\s*(\+)?=(?!=)/);
   // The line is no longer one string: each count has its own node so a landing
-  // count can pulse without moving the others (p_0.47.26).
+  // count can pulse without moving the others (p_0.46.26).
   assert.match(render, /setNumber\(meterIn, /);
   assert.match(render, /meter\.title = text/);
   assert.match(render, /meterMath\.remaining\(/);
   assert.match(render, /meterMath\.cache\(/);
-  // Two scopes, two places (p_0.47.24): the conversation's share of its window
+  // Two scopes, two places (p_0.46.24): the conversation's share of its window
   // is written on the root line, and the session's spent total and cache are
   // written in the composer.
   assert.match(render, /facts\.push\('compact at '/);
@@ -379,11 +379,11 @@ test('the renderer keeps both clocks, and only the cache one ticks', () => {
   assert.match(render, /meterMath\.clock\(cache\.remaining\)/);
   assert.match(render, /'cold'/);
   // The per-second tick is written into its own node, so the cache count beside
-  // it is not re-written (and not pulsed) once a second (p_0.47.26).
+  // it is not re-written (and not pulsed) once a second (p_0.46.26).
   assert.match(render, /meterClock\.textContent = ''/);
   // All three session counts are drawn whenever the provider reported them.
   // Gating in/out on a missing context window left the line saying only
-  // 'cache' (p_0.47.26).
+  // 'cache' (p_0.46.26).
   assert.match(render, /setNumber\(meterIn, countText\(usageTotals\.input/);
   assert.match(render, /setNumber\(meterOut, countText\(usageTotals\.output/);
   assert.match(render, /setNumber\(meterCache, countText\(cache\.cached/);
@@ -394,7 +394,7 @@ test('the renderer keeps both clocks, and only the cache one ticks', () => {
 
   // Two intervals, each one second and each with its own lifetime: the cache
   // clock only while there is a live cache on a tab somebody can see, and the
-  // working clock only while a turn is in flight (p_0.47.20). Everything else
+  // working clock only while a turn is in flight (p_0.46.20). Everything else
   // redraws on an event.
   const clock = bodyOf(CHAT_JS, 'syncCacheClock');
   assert.match(clock, /setInterval\(renderMeter, 1000\)/);
@@ -440,7 +440,7 @@ test('a count that lands pulses once, and a redraw does not', () => {
   // A number is written through `setNumber`, which compares before it writes:
   // `renderMeter` runs on every cache tick and every root update, and most of
   // those do not move a count, so a pulse must mean "this changed" rather than
-  // "this was redrawn" (p_0.47.26).
+  // "this was redrawn" (p_0.46.26).
   const set = bodyOf(CHAT_JS, 'setNumber');
   // The comparison is against the value the node was last told, not against
   // its text: the cache count owns the clock node, so its text changes every
@@ -477,7 +477,7 @@ test('a count with nothing to report keeps its place instead of vanishing', () =
   // A count is only known once a run has ended, so during a conversation's first
   // turn all three are unknown. The line used to vanish entirely, which read as
   // "this build has no meter" rather than "nothing has been counted yet"
-  // (p_0.47.26).
+  // (p_0.46.26).
   const render = bodyOf(CHAT_JS, 'renderMeter');
   assert.match(render, /const pending = usageTotals\.input <= 0 && usageTotals\.output <= 0/);
   // An em dash is the one spelling that cannot be mistaken for a count — and

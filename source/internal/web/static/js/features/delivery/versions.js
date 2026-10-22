@@ -400,7 +400,7 @@ Object.assign(window.Features.delivery, {
   },
 
   /**
-   * auditHtml renders one entity's history (p_0.46.10 data, p_0.46.9 surface).
+   * auditHtml renders one entity's history (p_0.45.12 data, p_0.45.11 surface).
    *
    * Left collapsed: the audit is a reference the operator opens when they ask
    * "who changed this", not something that should compete with the fields.
@@ -495,7 +495,7 @@ Object.assign(window.Features.delivery, {
           this.openCiteVersionPicker(engId, major, minor, c);
         }
       },
-      // Real drafting (p_0.46.6): the assistant proposes, this applies through
+      // Real drafting (p_0.45.8): the assistant proposes, this applies through
       // the surface's own save. It cannot write, which is the invariant the
       // previous mock could not keep.
       onSend: async ({ composed, cites }, c) => {

@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// Job event persistence (p_0.46.10).
+// Job event persistence (p_0.45.12).
 //
 // Before this, a job's events lived in a 200-frame in-memory ring and the
 // database kept exactly one string, job_last_event. A finished job's transcript

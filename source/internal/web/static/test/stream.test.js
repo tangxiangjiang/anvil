@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * Tests for stream resumption (p_0.46.12).
+ * Tests for stream resumption (p_0.45.14).
  *
  * The two behaviours a dropped connection needs and that a manual test cannot
  * reach reliably: capped backoff that stops, and dedupe across a replay. Without

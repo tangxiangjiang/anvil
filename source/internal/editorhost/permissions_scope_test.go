@@ -12,7 +12,7 @@ import (
 	"github.com/anvil-dev/anvil"
 )
 
-// --- the user's own file (0.47) ----------------------------------------------
+// --- the user's own file (0.46) ----------------------------------------------
 
 // writeUserRules plants the test's user rule file, creating its directory.
 func writeUserRules(t *testing.T, body string) string {

@@ -37,7 +37,7 @@ type Config struct {
 	// This is deliberately its own block rather than reusing the worker's model
 	// settings: anvil-web drafting *planning text* is a different act from a Worker
 	// executing a job, and design 23 says the worker owns cognition. See
-	// doc/design/v1.0/40-web-assist.md for the boundary this draws.
+	// doc/design/v0.x/40-web-assist.md for the boundary this draws.
 	Assist AssistConfig `json:"assist" yaml:"assist"`
 }
 

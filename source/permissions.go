@@ -34,8 +34,8 @@ import (
 // Source and Index are read-only: a reader fills them with the file the rule came
 // from and its one-based position there. A rule given in code leaves them empty.
 //
-// See doc/design/v1.0/36-tool-permissions.md and, for the second scope,
-// doc/design/v1.0/37-permission-modes.md.
+// See doc/design/v0.x/36-tool-permissions.md and, for the second scope,
+// doc/design/v0.x/37-permission-modes.md.
 type PermissionRule struct {
 	Effect  string
 	Tool    string
@@ -48,7 +48,7 @@ type PermissionRule struct {
 	Index int
 }
 
-// Permission rule scopes (0.47+). They name which file a rule belongs to: the
+// Permission rule scopes (0.46+). They name which file a rule belongs to: the
 // person's ~/.anvil/permissions.json or the workspace's .anvil/permissions.json.
 const (
 	PermissionScopeUser      = "user"

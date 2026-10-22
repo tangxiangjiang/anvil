@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * Job history (p_0.46.10).
+ * Job history (p_0.45.12).
  *
  * The console could not answer "why did this fail": events lived in a 200-frame
  * memory ring and the database kept one string, so a finished job's transcript was

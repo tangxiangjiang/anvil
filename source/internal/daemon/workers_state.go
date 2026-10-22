@@ -35,7 +35,7 @@ type PersistedWorker struct {
 	ProjectRel  string `json:"project_rel"`
 	GitURL      string `json:"git_url,omitempty"`
 	Enabled     bool   `json:"enabled"` // true → start (idle) after restore
-	// LLM is the worker's provider override (0.47). Absent means inherit agentd's.
+	// LLM is the worker's provider override (0.46). Absent means inherit agentd's.
 	//
 	// The key is not here on purpose: this file is plain JSON on disk under the
 	// sandbox, and a provider key does not belong in it. APIKeyEnv names the

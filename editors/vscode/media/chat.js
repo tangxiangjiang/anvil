@@ -26,7 +26,7 @@
   /**
    * The entry inside the transcript that holds the run's line and the root's.
    * In the flow rather than the dock, so it scrolls with the conversation and
-   * cannot be painted over (p_0.47.24).
+   * cannot be painted over (p_0.46.24).
    */
   const footprint = document.getElementById('footprint');
   const banner = document.getElementById('banner');
@@ -45,7 +45,7 @@
   const meter = document.getElementById('meter');
   /**
    * The session total, a node per fact rather than one string: each count can
-   * land on its own, and a landing count pulses (p_0.47.26). The clock tick is
+   * land on its own, and a landing count pulses (p_0.46.26). The clock tick is
    * a node inside the cache count so its per-second write cannot pulse the
    * number beside it, and the window's share is a node of its own because
    * `meterMath.label` reports it beside the counts, not instead of them.
@@ -364,7 +364,7 @@
   /**
    * The step counter, in its own node so a landing step can pulse without
    * moving the clock beside it. It is an inline-block, not an inline span:
-   * a transform on an inline box does not apply (p_0.47.26).
+   * a transform on an inline box does not apply (p_0.46.26).
    */
   const workingStepNode = el('span', 'working-step');
   statusText.hidden = true;
@@ -665,7 +665,7 @@
    * under every turn — so a block goes in front of it rather than after it.
    * A plain append would leave the root line and the run's line reading out
    * above the conversation in a copy or a screen reader, even though the flex
-   * `order` draws them last (p_0.47.26).
+   * `order` draws them last (p_0.46.26).
    */
   function addToEnd(target, node) {
     if (target === transcript && footprint && footprint.parentNode === transcript) {
@@ -855,7 +855,7 @@
     if (empty) transcript.appendChild(empty);
     // Emptying the transcript detached every child, this block included; it is
     // part of the conversation's own chrome rather than a turn, so it goes back
-    // (p_0.47.24).
+    // (p_0.46.24).
     if (footprint) transcript.appendChild(footprint);
     syncFootprint();
     growInput();
@@ -3690,7 +3690,7 @@
    * Draws the two scopes of the session's token facts.
    *
    * They used to share one line under the composer. Two numbers, two sources,
-   * and since p_0.47.24 two places as well: this conversation's share of its
+   * and since p_0.46.24 two places as well: this conversation's share of its
    * window is written on the root line inside the transcript's footprint,
    * where it belongs to that conversation; what the window as a whole has
    * spent is written inside the composer, the dock's one opaque surface, so
@@ -3735,12 +3735,12 @@
     // window ends. All three counts are drawn whenever the provider reported
     // them — in, out and cache are one sentence about the session, and
     // dropping in/out because a context window happened to be declared left
-    // the line saying only 'cache' (p_0.47.26).
+    // the line saying only 'cache' (p_0.46.26).
     const cache = meterMath.cache(usageTotals, cacheTtlSeconds, lastRequestAt, Date.now());
     // A count is only known once a run has ended, so during a conversation's
     // first turn all three are unknown. The line keeps its place rather than
     // vanishing, because its absence read as "this build has no meter" rather
-    // than "nothing has been counted yet" (p_0.47.26). An em dash is the one
+    // than "nothing has been counted yet" (p_0.46.26). An em dash is the one
     // spelling that cannot be mistaken for a count — and it keeps the count's
     // name, so the line says which fact is not known yet.
     const pending = usageTotals.input <= 0 && usageTotals.output <= 0;
@@ -3787,7 +3787,7 @@
     // The line is assembled from the nodes, not recomputed: a node that was
     // hidden for lack of a count is absent here for the same reason, and the
     // placeholder that stands in during a first turn is a count's absence, not
-    // a separate branch (p_0.47.26).
+    // a separate branch (p_0.46.26).
     const parts = [];
     for (const node of meterCounts) if (!node.hidden) parts.push(node.textContent);
     const text = parts.join(' · ');
@@ -4102,7 +4102,7 @@
    * The name is what the eye reads and the path is the tooltip, which is the
    * split the Explorer makes between where a folder is and what it is called.
    *
-   * Since p_0.47.24 the line also carries this conversation's share of its
+   * Since p_0.46.24 the line also carries this conversation's share of its
    * context window: it describes the conversation, so it lives on the line that
    * names it rather than on a meter floating under the composer.
    */
@@ -4574,7 +4574,7 @@
       if (typeof e.step === 'number' && e.step > 0) {
         // A repeat of the step already on the line is not a new fact, so it
         // must not pulse: the host may restate the current step on any event
-        // inside it (p_0.47.26).
+        // inside it (p_0.46.26).
         const advanced = e.step !== workingStep;
         workingStep = e.step;
         workingMax = typeof e.maxSteps === 'number' && e.maxSteps > 0 ? e.maxSteps : 0;

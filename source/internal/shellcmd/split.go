@@ -5,7 +5,7 @@
 // *proved* not to change anything? It never guesses, and it is not a shell —
 // nothing here evaluates, expands, or executes. What it cannot take apart
 // literally it reports as unknown, and an unknown command is one the user is
-// asked about. See doc/design/v1.0/36-tool-permissions.md.
+// asked about. See doc/design/v0.x/36-tool-permissions.md.
 package shellcmd
 
 import "strings"

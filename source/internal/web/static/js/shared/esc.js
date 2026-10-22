@@ -6,7 +6,7 @@
  *
  * Every value interpolated into a template literal goes through esc unless it is
  * provably not text: a number, a boolean, or an internal enum. That rule is
- * enforced by a test over the builders (p_0.46.5) rather than by discipline,
+ * enforced by a test over the builders (p_0.45.7) rather than by discipline,
  * because the failure mode — stored XSS via a filename, a project title, or a
  * tool result — is silent.
  *

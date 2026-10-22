@@ -3,7 +3,7 @@
 
 // Package permissions decides one thing about a tool call: is it allowed,
 // denied, or must somebody be asked? The rules are written by the user in
-// .anvil/permissions.json and, since 0.47, in ~/.anvil/permissions.json, and
+// .anvil/permissions.json and, since 0.46, in ~/.anvil/permissions.json, and
 // this package is the only thing that reads them.
 //
 // It knows nothing about tools beyond the facts a call carries — see CallFacts —
@@ -11,8 +11,8 @@
 // internal/tools, so no cycle; and a rule can only match facts the approval card
 // also shows, so nothing is ever allowed on evidence the user was not shown.
 //
-// See doc/design/v1.0/36-tool-permissions.md and, for scopes and protected
-// paths, doc/design/v1.0/37-permission-modes.md.
+// See doc/design/v0.x/36-tool-permissions.md and, for scopes and protected
+// paths, doc/design/v0.x/37-permission-modes.md.
 package permissions
 
 import "fmt"
@@ -118,7 +118,7 @@ type File struct {
 	// It is a pointer so that an absent key and an empty value stay different
 	// files: a mode name is a word, so `""` is a mistake to point at rather than a
 	// declaration that says nothing. Which words are *modes* is the host's
-	// vocabulary, not this package's — see doc/design/v1.0/37-permission-modes.md
+	// vocabulary, not this package's — see doc/design/v0.x/37-permission-modes.md
 	// — so only the shape is checked here.
 	DefaultMode *string `json:"defaultMode,omitempty"`
 	Rules       []Rule  `json:"rules"`

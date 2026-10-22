@@ -653,7 +653,7 @@ button.ghost[aria-pressed='true'] {
  * it is the transcript's gap and then whatever entry comes next, including the
  * footprint or the dock's reserved foot. Reaching down there painted a stub of
  * rail past the end of the reply, and at the bottom of a scrolled conversation
- * it showed as a line hanging under the last block (p_0.47.26).
+ * it showed as a line hanging under the last block (p_0.46.26).
  *
  * `syncRail` already knows this: it never marks the last block of a run
  * `rail-down`. The rule is here as well because `rail-down` is also what an
@@ -794,7 +794,7 @@ button.ghost[aria-pressed='true'] {
  * anything in it yet — the moment between the send and the first card — has no
  * such line, so the overlap hung 2px in the air, and at the bottom of a scrolled
  * conversation it read as a stub of rail floating above the composer
- * (p_0.47.26). The same is true once a turn's content has been hoisted out of a
+ * (p_0.46.26). The same is true once a turn's content has been hoisted out of a
  * fold and the body is empty again.
  */
 .reply[open]:not(:has(> .reply-body > *)) > .reply-head::before {
@@ -1541,7 +1541,7 @@ body.vscode-high-contrast-light .body.md .md-link:focus-visible {
 
 /*
  * The conversation's folder and the share of its window it has used, as the
- * second line of the transcript's footprint (p_0.47.24). It is a fact, not a
+ * second line of the transcript's footprint (p_0.46.24). It is a fact, not a
  * warning, and a multi-root window is the only place the folder is not
  * obvious. It carries no affordance on purpose — a conversation cannot change
  * folders (see the design chapter). Its inset is the transcript's own, so it
@@ -1585,7 +1585,7 @@ body.vscode-high-contrast-light .body.md .md-link:focus-visible {
 
 /*
  * One entry at the end of the transcript holding the run's line and the root's
- * (p_0.47.24). It is in the flow rather than floating over it, because a
+ * (p_0.46.24). It is in the flow rather than floating over it, because a
  * reserved height measured from a `ResizeObserver` is always one frame behind
  * the layout and the conversation showed through. 4px is the panel's
  * label-to-value gap (the same one `.msg` uses between its name and its body);
@@ -1618,7 +1618,7 @@ body.vscode-high-contrast-light .body.md .md-link:focus-visible {
  * two children: the text line (`0.85em × 1.5`, which follows
  * `anvil.chatFontSize`) and the 18px mark, which does not. That is what stops a
  * turn from moving the end of the conversation by a pixel and a half
- * (p_0.47.25).
+ * (p_0.46.25).
  */
 .status {
   display: flex;
@@ -1673,7 +1673,7 @@ body.vscode-high-contrast-light .body.md .md-link:focus-visible {
 /*
  * The step counter. An inline-block rather than an inline span: a transform is
  * ignored on a non-replaced inline box, and this is the one node in the line
- * that a step landing pulses (p_0.47.26). It does not truncate — the
+ * that a step landing pulses (p_0.46.26). It does not truncate — the
  * parenthetical around it does — and it never shrinks below its own text.
  */
 .status .working-step {
@@ -1720,7 +1720,7 @@ body.vscode-high-contrast-light .body.md .md-link:focus-visible {
 }
 
 /*
- * What this session has spent, inside the composer's actions row (p_0.47.24).
+ * What this session has spent, inside the composer's actions row (p_0.46.24).
  * It moved here because the composer is the dock's one opaque surface: a total
  * painted on it cannot be covered by the transcript, even during the frame in
  * which the dock's reserve is still catching up. It is the row's only flexible
@@ -1745,7 +1745,7 @@ body.vscode-high-contrast-light .body.md .md-link:focus-visible {
 /*
  * One box per count, because one box per count is what can be animated: a
  * transform on an inline box does not apply, and the whole line pulsing on a
- * cache-clock tick would make the seconds look like spend (p_0.47.26).
+ * cache-clock tick would make the seconds look like spend (p_0.46.26).
  */
 .composer .meter > span {
   display: inline-block;
@@ -1899,7 +1899,7 @@ body.drop-target {
    * that value belongs to the root stacking context — the block around it is
    * positioned but creates none — so a positioned dock with no order of its
    * own was painted below it, and a row scrolled under the composer showed its
-   * green dot floating on the card (p_0.47.27).
+   * green dot floating on the card (p_0.46.27).
    */
   z-index: 2;
   padding: 0 var(--anvil-gap) var(--anvil-gap);
@@ -1965,7 +1965,7 @@ body.drop-target {
 }
 
 /*
- * The controls keep their size (p_0.47.25). The meter is the row's only
+ * The controls keep their size (p_0.46.25). The meter is the row's only
  * flexible child, so a long session total truncates there; without this a flex
  * row's default `flex-shrink: 1` would squeeze a button's label first.
  */

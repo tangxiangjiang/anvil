@@ -6,7 +6,7 @@
  * with no announcement and nothing focused, an icon-only button whose only name
  * is a tooltip, or a focus ring drawn from a colour that disappears on a dark
  * theme. None of those throw; all of them make the panel unusable without a
- * mouse, which is the contract p_0.47.5 makes.
+ * mouse, which is the contract p_0.46.5 makes.
  *
  * The manual pass — a real screen reader on a dark and a high-contrast theme —
  * cannot be run here and is recorded in the phase document instead.

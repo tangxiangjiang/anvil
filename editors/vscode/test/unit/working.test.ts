@@ -118,7 +118,7 @@ test('the parenthetical says escape, the clock and the step', () => {
   assert.match(meta, /seconds < 60/);
   assert.match(meta, /Math\.floor\(seconds \/ 60\)/);
   // The step is the host's, and absent when it said nothing. Its spelling
-  // lives in `stepLabel` so the counter can be its own node (p_0.47.26).
+  // lives in `stepLabel` so the counter can be its own node (p_0.46.26).
   assert.match(meta, /workingStep > 0/);
   const label = bodyOf(CHAT_JS, 'stepLabel');
   assert.match(label, /'step ' \+ workingStep/);
@@ -191,7 +191,7 @@ test('a progress event feeds the line with what the host reported', () => {
 test('the line is one row of mark and text, with a pivot in the stylesheet', () => {
   const line = ruleBody('.status');
   // A flex row, so the line's height is `max(min-height, tallest child)` and
-  // not the strut plus whatever an inline-flex baseline adds (p_0.47.25).
+  // not the strut plus whatever an inline-flex baseline adds (p_0.46.25).
   assert.match(line, /display:\s*flex/);
   assert.match(line, /align-items:\s*center/);
   const working = ruleBody('.status .working');
@@ -229,7 +229,7 @@ test('the line is one row of mark and text, with a pivot in the stylesheet', () 
 });
 
 test('the session’s lines scroll with the conversation, as one entry', () => {
-  // The block is in the transcript rather than the floating dock (p_0.47.24):
+  // The block is in the transcript rather than the floating dock (p_0.46.24):
   // in the flow, a floating line's reserved height is measured a frame late and
   // the conversation is painted across it.
   const transcript = CHAT_PANEL.indexOf('id="transcript"');
@@ -302,7 +302,7 @@ test('the footprint keeps the panel’s own rhythm, and reserves its first line'
 
 test('the composer’s controls cannot be squeezed by the total', () => {
   // The meter is the row's only flexible child; a shrunk button loses its
-  // label before a truncated number loses its meaning (p_0.47.25).
+  // label before a truncated number loses its meaning (p_0.46.25).
   assert.match(ruleBody('.composer .actions > button'), /flex:\s*0 0 auto/);
   assert.match(ruleBody('.composer .actions > select'), /flex:\s*0 0 auto/);
   assert.match(ruleBody('.composer .meter'), /flex:\s*1 1 auto/);

@@ -69,7 +69,7 @@ test('a project file cannot be given bypass from the form', () => {
 test('a file that will not parse is read-only, Save included', () => {
   // A problem in the state message turns that layer's controls off; its Save is
   // then disabled by the same flag, so the form cannot overwrite the text it is
-  // showing. The two layers are refused independently (0.47): a broken user file
+  // showing. The two layers are refused independently (0.46): a broken user file
   // must not freeze the workspace's rules, and the other way round.
   assert.match(DOC, /editable\.workspace = !problem && !failure;/);
   assert.match(DOC, /editable\.user = hasUser && userExists && !userProblem && !failure;/);

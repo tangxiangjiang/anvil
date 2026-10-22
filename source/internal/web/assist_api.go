@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-// The drafting assistant (p_0.46.6).
+// The drafting assistant (p_0.45.8).
 //
 // One endpoint for every surface that asks a model for wording. The contract is
 // built so it cannot corrupt a record:
@@ -25,13 +25,13 @@ import (
 //     any other field is refused server-side, because the client cannot be trusted
 //     to limit where a patch lands.
 //   - Nothing is applied here. The endpoint proposes; the operator accepts; the
-//     surface saves through its own PATCH. That is what makes p_0.46.1's
+//     surface saves through its own PATCH. That is what makes p_0.45.3's
 //     no-silent-write invariant structural rather than a note in three files.
 //
 // The boundary this crosses, and how: design 23 says agentd is not an LLM reverse
 // proxy and the *worker* owns cognition. anvil-web calling a provider to draft
 // planning text is a different act — no tools, no execution, no conversation
-// state — and it is written down in doc/design/v1.0/40-web-assist.md rather than
+// state — and it is written down in doc/design/v0.x/40-web-assist.md rather than
 // assumed.
 
 // AssistField is one field a surface may ask about.

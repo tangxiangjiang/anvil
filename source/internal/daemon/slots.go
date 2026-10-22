@@ -35,7 +35,7 @@ type slot struct {
 	projectPath string
 	gitRemote   string
 	repoID      string
-	// llm overrides agentd's llm block for jobs on this slot (0.47). Nil means
+	// llm overrides agentd's llm block for jobs on this slot (0.46). Nil means
 	// inherit, which is what every worker did before the field existed.
 	llm *WorkerLLMBody
 }

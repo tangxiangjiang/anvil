@@ -1,7 +1,7 @@
 /**
  * A reply's beginning, and the fold around the turn.
  *
- * p_0.47.16 gave a turn an ending. A turn that can be read back also needs a
+ * p_0.46.16 gave a turn an ending. A turn that can be read back also needs a
  * beginning, and a long conversation needs a way to close the turns already
  * read: the reply is one `<details>` from its start marker to its summary.
  *
@@ -49,7 +49,7 @@ test('a turn opens a reply with a start dot, its speaker and a fold', () => {
   assert.match(reply, /el\('div', 'reply-body'\)/);
   // The turn goes in at the end of the conversation but in front of the
   // transcript's footprint, so the document order matches the drawn order
-  // (p_0.47.26).
+  // (p_0.46.26).
   assert.match(reply, /addToEnd\(transcript, node\)/);
   // The reply is built from nodes, never from markup.
   assert.doesNotMatch(reply, /innerHTML|outerHTML|insertAdjacentHTML|document\.write/);

@@ -10,7 +10,7 @@
 //
 // It is a standalone capability. It links the public anvil package only and has
 // no relationship to the scheduler / agentd / cluster plane; see
-// doc/design/v1.0/35-vscode-extension.md.
+// doc/design/v0.x/35-vscode-extension.md.
 //
 // Provider credentials are read from the environment (ANVIL_API_KEY and
 // friends), which the client populates from its secret store. The key is never

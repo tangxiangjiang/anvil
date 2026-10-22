@@ -55,7 +55,7 @@ type wbFrame struct {
 
 const (
 	// sessionEventRing bounds the in-memory replay for a live subscriber. It is
-	// a ring, not a log: p_0.46.10 adds the persisted event table, and until then
+	// a ring, not a log: p_0.45.12 adds the persisted event table, and until then
 	// a session's transcript exists only while it is running or recent.
 	sessionEventRing = 500
 	// sessionIdleRetention is how long a finished session stays readable in
@@ -392,7 +392,7 @@ func (s *Server) handleWorkbenchStart(w http.ResponseWriter, r *http.Request) {
 	s.log.Printf("workbench.session id=%s worker=%s job=%s", sess.ID, workerID, sess.JobID)
 
 	// Persist the job header up front, so its events have a row to belong to and
-	// the history list knows about a session that is still running (p_0.46.10).
+	// the history list knows about a session that is still running (p_0.45.12).
 	if s.delivery != nil {
 		_ = s.delivery.BeginJob(delivery.JobRecord{
 			JobID:    sess.JobID,

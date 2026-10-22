@@ -11,10 +11,10 @@ alwaysApply: false
 ```text
 doc/design/              # versioned design trees
   README.md              # which cutoff is current
-  v1.0/                  # cutoff through product 0.10
+  v0.x/                  # cutoff through product 0.10
 doc/roadmaps/            # versioned roadmap trees
   README.md              # which cutoff is current
-  v1.0/                  # milestones 0.1–0.10
+  v0.x/                  # milestones 0.1–0.10
     README.md            # version index
     VERSIONING.md
     LESSONS.md
@@ -24,20 +24,20 @@ doc/roadmaps/            # versioned roadmap trees
 
 ## design/
 
-- Top-level `README.md` lists version trees (`v1.0/`, …).
-- Active cutoff: `doc/design/v1.0/`.
+- Top-level `README.md` lists version trees (`v0.x/`, …).
+- Active cutoff: `doc/design/v0.x/`.
 - Do not keep a parallel flat `doc/design/00-*.md` set.
 
 ## roadmaps/
 
-- Top-level `README.md` lists version trees (`v1.0/`, …).
-- Active cutoff: `doc/roadmaps/v1.0/`.
+- Top-level `README.md` lists version trees (`v0.x/`, …).
+- Active cutoff: `doc/roadmaps/v0.x/`.
 - Inside a cutoff tree:
   - Milestone file: `m_<major.minor>_<slug>.md`
   - Milestone dir: `m_<major.minor>/`
   - Phase file: `m_<ver>/p_<ver>.<n>.md`
-- Links from `roadmaps/v1.0/m_*.md` to design: `../../design/v1.0/…`
-- Links from `roadmaps/v1.0/m_*/p_*.md` to design: `../../../design/v1.0/…`
+- Links from `roadmaps/v0.x/m_*.md` to design: `../../design/v0.x/…`
+- Links from `roadmaps/v0.x/m_*/p_*.md` to design: `../../../design/v0.x/…`
 
 ## Required sections
 

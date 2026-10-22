@@ -837,7 +837,7 @@ Object.assign(window.Features.delivery, {
           window.AiChat.flash(card);
         }
       },
-      // Real drafting (p_0.46.6). This surface used to append the operator's own
+      // Real drafting (p_0.45.8). This surface used to append the operator's own
       // text into the ADR Decision and, when a version was cited, into that
       // version's Gate - on Send, with no confirmation. The Gate it touched
       // gates real phase jobs. Now the assistant proposes and the operator

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * Tests for the selection reducer (p_0.46.8).
+ * Tests for the selection reducer (p_0.45.10).
  *
  * The corners that matter and that a UI test would take minutes to reach by hand:
  * a range across a filtered view, a toggle after a re-render, select-all under a

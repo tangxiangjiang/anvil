@@ -10,8 +10,8 @@ The repository also carries an **automated coding tool-chain** (scheduler, worke
 
 | Path | Purpose |
 |------|---------|
-| [`doc/design/`](doc/design/) | Versioned design (current: [`v1.0/`](doc/design/v1.0/)) |
-| [`doc/roadmaps/`](doc/roadmaps/) | Versioned milestones (current: [`v1.0/`](doc/roadmaps/v1.0/)) |
+| [`doc/design/`](doc/design/) | Versioned design (current: [`v0.x/`](doc/design/v0.x/)) |
+| [`doc/roadmaps/`](doc/roadmaps/) | Versioned milestones (current: [`v0.x/`](doc/roadmaps/v0.x/)) |
 | [`source/`](source/) | Go module (`github.com/anvil-dev/anvil`) |
 | [`editors/vscode/`](editors/vscode/) | VS Code extension + `anvil-host` sidecar (0.35) |
 | [`app/`](app/) | Flutter mobile client (login via web → scheduler jobs) |
@@ -61,23 +61,23 @@ func main() {
 
 ## Status
 
-Product is at **0.47 delivered** — the editor line is finished for this design cutoff. 0.47 is a polish line that adds no engine: a configured language server and test/build commands are wired through, every message can rewind, a plan opens as a read-only document, the transcript has a focus view, formula rendering and `/export`, a full ask → approve → finish cycle works from the keyboard with live regions, permission rules gain a user scope and protected paths, each window names the one root it works in, and the VSIX, the host and the docs agree on 0.47.0. 0.35–0.38 are the editor line (VS Code extension, tool permissions, permission modes, session identity); **0.39** is the Delivery execute/test campaign loop, **0.40** is the editor alignment, **0.41** is auto mode and the permissions manager, **0.42** is subagents, background tasks and workflows, **0.43** is context management, **0.44** is MCP management, and **0.47** is editor polish. Full per-milestone index: [`doc/roadmaps/v1.0/README.md`](doc/roadmaps/v1.0/README.md).
+Product is at **0.46 delivered** — the editor line is finished for this design cutoff. 0.46 is a polish line that adds no engine: a configured language server and test/build commands are wired through, every message can rewind, a plan opens as a read-only document, the transcript has a focus view, formula rendering and `/export`, a full ask → approve → finish cycle works from the keyboard with live regions, permission rules gain a user scope and protected paths, each window names the one root it works in, and the VSIX, the host and the docs agree on 0.47.0. 0.35–0.38 are the editor line (VS Code extension, tool permissions, permission modes, session identity); **0.39** is the Delivery execute/test campaign loop, **0.40** is the editor alignment, **0.41** is auto mode and the permissions manager, **0.42** is subagents, background tasks and workflows, **0.43** is context management, **0.44** is MCP management, and **0.46** is editor polish. Full per-milestone index: [`doc/roadmaps/v0.x/README.md`](doc/roadmaps/v0.x/README.md).
 
 | Era | Milestones | What |
 |-----|-----------|------|
 | Core SDK | 0.1 – 0.10 | Create / Prompt / Resume, streaming & stable error codes, security hardening, tools & sandbox, MCP, Cursor SDK **local** parity |
 | Agent capabilities | 0.11 – 0.22 | worker daemon, model gateway, retrieval, hooks & skills, web search, LSP, git tools, test & build, vision, plugins, dev memory, project search |
 | Automated coding tool-chain | 0.23 – 0.34 | YAML ops config, scheduler hub, web fleet console, mobile app, app fleets, clusters/workers, sandbox workers, loop guard, job event stream, sandbox code review, delivery UI, workspace domain |
-| Editor client | 0.35 | VS Code extension + `anvil-host` sidecar, packaged as per-platform VSIX — [design 35](doc/design/v1.0/35-vscode-extension.md) |
-| Tool permissions | 0.36 | `.anvil/permissions.json` rule set, a shell analyzer that proves read-only, the loading switch that makes `.anvil/hooks.json` real, and an approval card that remembers the pattern rather than the tool — [design 36](doc/design/v1.0/36-tool-permissions.md) |
-| Permission modes | 0.37 | A complete mode ladder — `dont_ask` runs only what the rules allow and `bypass` no longer overrules a written `ask` rule — plus `"defaultMode"` in the same workspace file, resolved by the host and reported to the composer — [design 37](doc/design/v1.0/37-permission-modes.md) |
-| Session identity & replay | 0.38 | A session named by its first message, a reviewable change on every tool card, and a transcript that survives a reload — [design 38](doc/design/v1.0/38-session-identity-and-replay.md) |
-| Editor alignment | 0.40 | Parallel tabs, rename/delete/search, per-hunk acceptance, checkpoints, fork, MCP and web tools switched on, live usage, a task list — [design 39](doc/design/v1.0/39-editor-alignment.md) |
-| Auto & rules manager | 0.41 | An `auto` rung that runs what the analyzer can prove and asks about the rest, and a structured manager for `.anvil/permissions.json` — [design 40](doc/design/v1.0/40-permission-auto-and-manager.md) |
-| Subagents & workflows | 0.42 | `spawn_agent` creates a child agent with inherited permissions, background shell and subagents share one task table, `/tasks` draws it in the editor, and `run_workflow` evaluates a declarative DAG — [design 41](doc/design/v1.0/41-subagents-and-tasks.md) |
-| Context management | 0.43 | A declared token budget with a safe cut, auto-compaction at run start and mid-run, `Agent.Compact` and the editor's `/compact`, cached-token accounting, and a meter that counts context left and the cache's remaining life — [design 42](doc/design/v1.0/42-context-management.md) |
-| MCP management | 0.44 | A host-owned MCP runtime with per-server state and failure isolation, atomic edits to `.cursor/mcp.json` that preserve unknown fields, reconnect, Streamable HTTP, host-owned OAuth tokens, a manager panel and `/mcp` — [design 43](doc/design/v1.0/43-mcp-management.md) |
-| Editor polish | 0.47 | LSP and test/build wiring, "rewind to here", a plan as a document, focus view with formulas and `/export`, keyboard and live-region accessibility, user-scope rules with protected paths, one root per window, and one version across the VSIX, the host and the docs — [design 44](doc/design/v1.0/44-editor-polish.md) |
+| Editor client | 0.35 | VS Code extension + `anvil-host` sidecar, packaged as per-platform VSIX — [design 35](doc/design/v0.x/35-vscode-extension.md) |
+| Tool permissions | 0.36 | `.anvil/permissions.json` rule set, a shell analyzer that proves read-only, the loading switch that makes `.anvil/hooks.json` real, and an approval card that remembers the pattern rather than the tool — [design 36](doc/design/v0.x/36-tool-permissions.md) |
+| Permission modes | 0.37 | A complete mode ladder — `dont_ask` runs only what the rules allow and `bypass` no longer overrules a written `ask` rule — plus `"defaultMode"` in the same workspace file, resolved by the host and reported to the composer — [design 37](doc/design/v0.x/37-permission-modes.md) |
+| Session identity & replay | 0.38 | A session named by its first message, a reviewable change on every tool card, and a transcript that survives a reload — [design 38](doc/design/v0.x/38-session-identity-and-replay.md) |
+| Editor alignment | 0.40 | Parallel tabs, rename/delete/search, per-hunk acceptance, checkpoints, fork, MCP and web tools switched on, live usage, a task list — [design 39](doc/design/v0.x/39-editor-alignment.md) |
+| Auto & rules manager | 0.41 | An `auto` rung that runs what the analyzer can prove and asks about the rest, and a structured manager for `.anvil/permissions.json` — [design 40](doc/design/v0.x/40-permission-auto-and-manager.md) |
+| Subagents & workflows | 0.42 | `spawn_agent` creates a child agent with inherited permissions, background shell and subagents share one task table, `/tasks` draws it in the editor, and `run_workflow` evaluates a declarative DAG — [design 41](doc/design/v0.x/41-subagents-and-tasks.md) |
+| Context management | 0.43 | A declared token budget with a safe cut, auto-compaction at run start and mid-run, `Agent.Compact` and the editor's `/compact`, cached-token accounting, and a meter that counts context left and the cache's remaining life — [design 42](doc/design/v0.x/42-context-management.md) |
+| MCP management | 0.44 | A host-owned MCP runtime with per-server state and failure isolation, atomic edits to `.cursor/mcp.json` that preserve unknown fields, reconnect, Streamable HTTP, host-owned OAuth tokens, a manager panel and `/mcp` — [design 43](doc/design/v0.x/43-mcp-management.md) |
+| Editor polish | 0.46 | LSP and test/build wiring, "rewind to here", a plan as a document, focus view with formulas and `/export`, keyboard and live-region accessibility, user-scope rules with protected paths, one root per window, and one version across the VSIX, the host and the docs — [design 44](doc/design/v0.x/44-editor-polish.md) |
 
 ### VS Code extension (0.35)
 
@@ -137,7 +137,7 @@ Local: anvil.LocalOptions{
 
 A workspace can write down what the agent may do, in `.anvil/permissions.json` — and the
 rules hold whether or not a client is there to ask, `bypass` included. See
-[design 36](doc/design/v1.0/36-tool-permissions.md).
+[design 36](doc/design/v0.x/36-tool-permissions.md).
 
 ```json
 {
@@ -190,7 +190,7 @@ Options.PermissionRules: []anvil.PermissionRule{
 
 A mode decides only **whether to ask** — never what the rules mean. Five of them:
 `ask`, `accept_edits`, `plan`, `dont_ask`, `bypass`. See
-[design 37](doc/design/v1.0/37-permission-modes.md).
+[design 37](doc/design/v0.x/37-permission-modes.md).
 
 - **`dont_ask`** is for a run with nobody watching: every gated call the workspace's rules do
   not already allow is refused, with the reason, and no prompt is ever raised. An `allow` rule
@@ -211,7 +211,7 @@ the approval card leaves the declaration alone.
 
 ### SDK local parity (0.10)
 
-Surface alignment with Cursor SDK *local* knobs (not Cursor runtime quality). See [`doc/design/v1.0/10-sdk-parity.md`](doc/design/v1.0/10-sdk-parity.md).
+Surface alignment with Cursor SDK *local* knobs (not Cursor runtime quality). See [`doc/design/v0.x/10-sdk-parity.md`](doc/design/v0.x/10-sdk-parity.md).
 
 ```go
 Local: anvil.LocalOptions{
@@ -243,7 +243,7 @@ set ANVIL_MODEL=private/demo
 ../bin/anvil.exe prompt /path/to/repo "hello"
 ```
 
-`anvil.ListModels` hits `GET {BaseURL}/models`. Config is JSON or YAML (0.23). See [`doc/design/v1.0/12-model-gateway.md`](doc/design/v1.0/12-model-gateway.md).
+`anvil.ListModels` hits `GET {BaseURL}/models`. Config is JSON or YAML (0.23). See [`doc/design/v0.x/12-model-gateway.md`](doc/design/v0.x/12-model-gateway.md).
 
 ### Plugins (0.20)
 
@@ -259,7 +259,7 @@ Plugins: []string{"sample"},
 // PluginPolicy: &anvil.PluginPolicy{Deny: []string{"untrusted"}},
 ```
 
-Crash of an exec plugin fails that tool call / job path; it does not take down agentd (worker/embedded runner reports the error). See [`doc/design/v1.0/20-plugins.md`](doc/design/v1.0/20-plugins.md).
+Crash of an exec plugin fails that tool call / job path; it does not take down agentd (worker/embedded runner reports the error). See [`doc/design/v0.x/20-plugins.md`](doc/design/v0.x/20-plugins.md).
 
 ### Development memory (0.21)
 
@@ -270,7 +270,7 @@ Plugins: []string{"memory"},
 // optional vector boost for memory_search when EmbedBaseURL + EmbedModel are set
 ```
 
-Tools: `memory_write` / `memory_read` / `memory_search` / `memory_list` / `memory_delete`. Writes redact secret-like strings (reject private keys). Without the plugin, memory tools are absent; Resume still works. See [`doc/design/v1.0/21-dev-memory.md`](doc/design/v1.0/21-dev-memory.md).
+Tools: `memory_write` / `memory_read` / `memory_search` / `memory_list` / `memory_delete`. Writes redact secret-like strings (reject private keys). Without the plugin, memory tools are absent; Resume still works. See [`doc/design/v0.x/21-dev-memory.md`](doc/design/v0.x/21-dev-memory.md).
 
 ### Vision / images (0.19)
 
@@ -283,7 +283,7 @@ Vision: anvil.VisionOptions{Enabled: true},
 // DisallowedTools: []string{"vision"},
 ```
 
-See [`doc/design/v1.0/19-vision.md`](doc/design/v1.0/19-vision.md).
+See [`doc/design/v0.x/19-vision.md`](doc/design/v0.x/19-vision.md).
 
 ### Test & build (0.18)
 
@@ -295,7 +295,7 @@ Build: anvil.BuildOptions{Command: []string{"go", "build", "./..."}},
 // example: source/examples/project.example.json → copy to .anvil/project.json
 ```
 
-See [`doc/design/v1.0/18-test-build.md`](doc/design/v1.0/18-test-build.md).
+See [`doc/design/v0.x/18-test-build.md`](doc/design/v0.x/18-test-build.md).
 
 ### Git tools (0.17)
 
@@ -305,7 +305,7 @@ Read-only builtins `git_status`, `git_diff`, `git_log` (tool group `git`). Invok
 // DisallowedTools: []string{"git"},
 ```
 
-See [`doc/design/v1.0/17-git-tools.md`](doc/design/v1.0/17-git-tools.md).
+See [`doc/design/v0.x/17-git-tools.md`](doc/design/v0.x/17-git-tools.md).
 
 ### LSP (0.16)
 
@@ -321,7 +321,7 @@ LSP: anvil.LSPOptions{
 // example: source/examples/lsp.example.json
 ```
 
-Writes via `write_file` / `edit_file` / `apply_patch` sync `didChange` to open LSP docs. See [`doc/design/v1.0/16-lsp.md`](doc/design/v1.0/16-lsp.md).
+Writes via `write_file` / `edit_file` / `apply_patch` sync `didChange` to open LSP docs. See [`doc/design/v0.x/16-lsp.md`](doc/design/v0.x/16-lsp.md).
 
 ### Web search (0.15)
 
@@ -337,7 +337,7 @@ WebSearch: anvil.WebSearchOptions{
 // DisallowedTools: []string{"web"},
 ```
 
-Request/response shape and MCP alternative: [`doc/design/v1.0/15-web-search.md`](doc/design/v1.0/15-web-search.md).
+Request/response shape and MCP alternative: [`doc/design/v0.x/15-web-search.md`](doc/design/v0.x/15-web-search.md).
 
 ### Hooks & skills (0.14)
 
@@ -354,7 +354,7 @@ Skills:             []string{"commit-style"},
 AllowHookCommands:  false, // set true only if you trust hooks.json command entries
 ```
 
-See [`doc/design/v1.0/14-hooks-skills.md`](doc/design/v1.0/14-hooks-skills.md).
+See [`doc/design/v0.x/14-hooks-skills.md`](doc/design/v0.x/14-hooks-skills.md).
 
 ### Project search engine (0.22) / semantic_search (0.13)
 
@@ -372,7 +372,7 @@ go build -o ../bin/anvil.exe ./cmd/anvil
 
 Incremental builds skip unchanged file hashes; embed-model changes clear vectors and re-embed. `Local.EnsureIndex` builds a lexical index on Create when `search.db` is missing.
 
-See [`doc/design/v1.0/22-project-search.md`](doc/design/v1.0/22-project-search.md) (engine) and [`doc/design/v1.0/13-retrieval.md`](doc/design/v1.0/13-retrieval.md) (tool).
+See [`doc/design/v0.x/22-project-search.md`](doc/design/v0.x/22-project-search.md) (engine) and [`doc/design/v0.x/13-retrieval.md`](doc/design/v0.x/13-retrieval.md) (tool).
 
 ### Worker daemon (0.11)
 
@@ -387,7 +387,7 @@ set ANVIL_API_KEY=gw-token
 ../bin/agentd.exe --config cmd/agentd/agentd.example.yaml
 ```
 
-Protocol: length-prefixed JSON (`hello`, `worker.list`, `job.assign` / `job.event` / `job.cancel` / `job.done`). See [`doc/design/v1.0/11-worker-daemon.md`](doc/design/v1.0/11-worker-daemon.md) and [`doc/design/v1.0/23-yaml-config.md`](doc/design/v1.0/23-yaml-config.md).
+Protocol: length-prefixed JSON (`hello`, `worker.list`, `job.assign` / `job.event` / `job.cancel` / `job.done`). See [`doc/design/v0.x/11-worker-daemon.md`](doc/design/v0.x/11-worker-daemon.md) and [`doc/design/v0.x/23-yaml-config.md`](doc/design/v0.x/23-yaml-config.md).
 
 ### Scheduler hub (0.24)
 
@@ -415,7 +415,7 @@ curl -s -H "Authorization: Bearer sched-token" -H "Content-Type: application/jso
   -X POST http://127.0.0.1:17800/v1/jobs -d "{\"repo_id\":\"demo\",\"prompt\":\"hello\"}"
 ```
 
-See [`doc/design/v1.0/24-scheduler.md`](doc/design/v1.0/24-scheduler.md).
+See [`doc/design/v0.x/24-scheduler.md`](doc/design/v0.x/24-scheduler.md).
 
 ### Web fleet console (0.25)
 
@@ -430,7 +430,7 @@ set ANVIL_SCHEDULER_TOKEN=sched-token
 # optional env bootstrap instead of wizard: ANVIL_WEB_ADMIN_USER / ANVIL_WEB_ADMIN_PASSWORD
 ```
 
-Scheduler also exposes `GET /v1/usage` and `PATCH /v1/nodes/{id}` (`max_workers`, `accepting`). See [`doc/design/v1.0/25-web-admin.md`](doc/design/v1.0/25-web-admin.md).
+Scheduler also exposes `GET /v1/usage` and `PATCH /v1/nodes/{id}` (`max_workers`, `accepting`). See [`doc/design/v0.x/25-web-admin.md`](doc/design/v0.x/25-web-admin.md).
 
 **Adding a web feature:** register a nav item in `internal/web/static/js/nav.js`, add `static/js/features/<name>.js` with `mount`/`unmount`, and wire `/api/v1/...` on [`internal/web/server.go`](source/internal/web/server.go) (+ schedclient if needed).
 
@@ -464,9 +464,9 @@ flutter run
 
 Logs: `.dev/*.log`. Ctrl+C in the script terminal stops the stack.
 
-See [`doc/design/v1.0/26-mobile-app.md`](doc/design/v1.0/26-mobile-app.md) and [`app/README.md`](app/README.md).
+See [`doc/design/v0.x/26-mobile-app.md`](doc/design/v0.x/26-mobile-app.md) and [`app/README.md`](app/README.md).
 
-Still deferred: Cursor Bridge, cloud agents, full hooks catalog, OIDC/RBAC, workflow/milestone DAG on mobile, and marketplace publication of the VS Code extension (0.35 ships a VSIX you install yourself — [design 35](doc/design/v1.0/35-vscode-extension.md)).
+Still deferred: Cursor Bridge, cloud agents, full hooks catalog, OIDC/RBAC, workflow/milestone DAG on mobile, and marketplace publication of the VS Code extension (0.35 ships a VSIX you install yourself — [design 35](doc/design/v0.x/35-vscode-extension.md)).
 
 ## License
 

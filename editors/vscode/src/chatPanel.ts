@@ -2878,7 +2878,7 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri, focus = f
     <!--
       The conversation's own ending: the folder it belongs to and the share of
       its window it has used, with the run's line above them while a turn is in
-      flight (p_0.47.24). Inside the transcript rather than the dock, because a
+      flight (p_0.46.24). Inside the transcript rather than the dock, because a
       floating line's reserved height is measured a frame late and the
       conversation is painted over it; here it is part of what scrolls, so it
       cannot be overlapped. It sorts last (order: 1) however turns are appended,
@@ -2928,7 +2928,7 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri, focus = f
         <button id="focus" type="button" class="ghost" aria-pressed="${focus ? 'true' : 'false'}" title="Show only the conversation: hide tool cards and thinking (Ctrl+Alt+F)">Focus</button>
         <!--
           What this session has spent, inside the composer rather than floating
-          above the transcript (p_0.47.24): this is the one opaque surface in the
+          above the transcript (p_0.46.24): this is the one opaque surface in the
           dock, so the conversation cannot be painted over it. It is the only
           flexible child in the row, so a long total truncates here before a
           button moves, and the whole string stays in the tooltip.

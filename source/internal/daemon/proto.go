@@ -221,7 +221,7 @@ type ClusterWorkerAddBody struct {
 	WorktreeBase string `json:"worktree_base,omitempty"` // existing checkout; project_path = new worktree
 	Branch       string `json:"branch,omitempty"`        // new branch for worktree add -b
 
-	// LLM is this worker's own provider settings (0.47). Empty fields fall back to
+	// LLM is this worker's own provider settings (0.46). Empty fields fall back to
 	// agentd's llm block, so a worker that says nothing behaves exactly as before.
 	//
 	// It exists because one fleet routinely points at more than one model: a cheap

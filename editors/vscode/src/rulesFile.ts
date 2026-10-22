@@ -31,7 +31,7 @@ export function emptyRulesFile(): string {
 }
 
 /**
- * The bytes of a user rule file that decides nothing (0.47).
+ * The bytes of a user rule file that decides nothing (0.46).
  *
  * A different shape from the workspace's, on purpose: the user file carries the
  * protected-path globs and no starting mode. `protected` is written out even

@@ -79,7 +79,7 @@ test('the rule file is asked about, and its state survives the wire', async (t) 
   assert.equal(empty.problem, undefined);
   // Absolute, so the client can open the file before it exists.
   assert.match(empty.path, /\.anvil[\\/]permissions\.json$/);
-  // The user layer is reported beside it (0.47): where it would be, whether it
+  // The user layer is reported beside it (0.46): where it would be, whether it
   // is there, and the globs it adds. A person with no preferences is a missing
   // file, not a problem.
   assert.match(empty.user_path ?? '', /\.anvil[\\/]permissions\.json$/);

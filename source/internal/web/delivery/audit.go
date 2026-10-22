@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// Audit trail (p_0.46.10).
+// Audit trail (p_0.45.12).
 //
 // Nothing recorded who approved a design, changed a requirement, sealed a
 // generation or deleted a milestone. For a planning record that a team hands to

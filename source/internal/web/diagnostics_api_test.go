@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// TestClassifyErrorCoversTheKnownClasses is the point of p_0.46.9's error work: a
+// TestClassifyErrorCoversTheKnownClasses is the point of p_0.45.11's error work: a
 // failure has to name a next step, not just a cause.
 func TestClassifyErrorCoversTheKnownClasses(t *testing.T) {
 	cases := []struct {

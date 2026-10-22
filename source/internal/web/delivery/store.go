@@ -259,7 +259,7 @@ CREATE TABLE IF NOT EXISTS delivery_trash (
 	if err := s.ensurePolishesTable(); err != nil {
 		return err
 	}
-	// p_0.46.10: keep the work.
+	// p_0.45.12: keep the work.
 	if err := s.ensureJobEventTables(); err != nil {
 		return err
 	}

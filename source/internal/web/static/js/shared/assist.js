@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * The drafting assistant's client side (p_0.46.6).
+ * The drafting assistant's client side (p_0.45.8).
  *
  * Replaces the seven per-surface `onSend` handlers that each returned a local
  * string template. One component, because the previous state had seven answers to

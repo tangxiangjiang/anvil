@@ -77,7 +77,7 @@ test('an asset URL carries a content digest, so a reinstall cannot be served fro
   // `asWebviewUri` builds the same URL for the same path whatever the file now
   // holds. A reinstall that changes `media/chat.js` without changing the version
   // therefore left the webview fetching a cached copy, and a shipped fix
-  // installed and appeared to do nothing (p_0.47.26). One builder serves all
+  // installed and appeared to do nothing (p_0.46.26). One builder serves all
   // five documents, so a panel cannot keep the stale-cache behaviour.
   const ASSET = read('src', 'webviewAsset.ts');
   for (const file of ['chatPanel.ts', 'mcpPanel.ts', 'permissionsPanel.ts', 'reviewPanel.ts', 'tasksPanel.ts']) {

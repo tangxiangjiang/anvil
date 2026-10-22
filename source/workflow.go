@@ -8,8 +8,8 @@ package anvil
 // same child agent spawn_agent creates; the only dynamic part is a literal
 // substitution of earlier answers into later prompts.
 //
-// See doc/design/v1.0/41-subagents-and-tasks.md — the chapter states the
-// boundary and doc/roadmaps/v1.0/m_0.42/p_0.42.4.md the phase contract.
+// See doc/design/v0.x/41-subagents-and-tasks.md — the chapter states the
+// boundary and doc/roadmaps/v0.x/m_0.42/p_0.42.4.md the phase contract.
 
 import (
 	"bytes"

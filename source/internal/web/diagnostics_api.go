@@ -12,7 +12,7 @@ import (
 	"github.com/anvil-dev/anvil/internal/web/schedclient"
 )
 
-// Actionable errors (p_0.46.9).
+// Actionable errors (p_0.45.11).
 //
 // Today a failed action surfaces the server's raw message. "gate checklist
 // incomplete (V1): x" tells an operator what is wrong but not what to do, and at

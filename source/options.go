@@ -433,7 +433,7 @@ type PermissionRequest struct {
 	// being asked, so a prompt can always say why it appeared.
 	Rule *PermissionRuleMatch
 	// Protected are the paths this call touches that an allow rule may not cover
-	// (0.47+): any `.git` segment, the workspace's `.anvil/checkpoints/`, the
+	// (0.46+): any `.git` segment, the workspace's `.anvil/checkpoints/`, the
 	// Anvil home, and any glob the user file adds. A callback should treat this
 	// as a reason to ask even when it would otherwise remember an allow, because
 	// no allow rule can cover these paths anyway.

@@ -12,7 +12,7 @@ import (
 
 // handlePreflight answers GET /api/v1/delivery/preflight?transition=…&target=….
 //
-// It is the preview half of p_0.46.11: the console asks before offering an action,
+// It is the preview half of p_0.45.13: the console asks before offering an action,
 // so a disabled button can say why instead of the operator discovering it after a
 // failed request. The enforcement half calls the same delivery.Preflight, so the
 // two cannot disagree.

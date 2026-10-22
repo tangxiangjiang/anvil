@@ -57,7 +57,7 @@ type Result struct {
 	// that never asked.
 	Rule *permissions.Decision
 	// Protected are the paths this call touched that an allow rule may not cover
-	// (0.47+). It is a fact about the call, so it is set whether or not a rule
+	// (0.46+). It is a fact about the call, so it is set whether or not a rule
 	// decided — including for a call the mode let through — and a client shows it
 	// after the fact so the record says why no allow covered it.
 	Protected []string
@@ -363,7 +363,7 @@ type GatedCall struct {
 	Rule *permissions.Decision
 	// Protected are the paths this call touches that an allow rule may not cover.
 	// Set whether or not a rule asked, because "this path is protected" is why an
-	// allow could not have covered the call (0.47+).
+	// allow could not have covered the call (0.46+).
 	Protected []string
 }
 

@@ -307,7 +307,7 @@ func (s *Server) startMilestonePhaseJob(msID string, forceStub bool) (delivery.P
 	return ph, nil
 }
 
-// recordJobEvent persists one phase-job event (p_0.46.10).
+// recordJobEvent persists one phase-job event (p_0.45.12).
 //
 // The in-memory hub is the fast path for a live subscriber; this table is what
 // makes a run readable after the process that ran it is gone. Before it existed,

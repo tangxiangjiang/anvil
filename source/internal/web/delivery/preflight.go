@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// Pre-flight (p_0.46.11).
+// Pre-flight (p_0.45.13).
 //
 // A lifecycle transition could be forced through an incomplete Gate: the store
 // warned, but the console let a determined click through, and the refusal that did

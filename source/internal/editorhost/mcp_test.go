@@ -24,7 +24,7 @@ func isolateHome(t *testing.T) string {
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	// The user rule file resolves through ANVIL_HOME first, so pointing only the
-	// home directory would leave every test sharing one policy file (0.47).
+	// home directory would leave every test sharing one policy file (0.46).
 	t.Setenv("ANVIL_HOME", filepath.Join(home, ".anvil"))
 	return home
 }

@@ -354,12 +354,12 @@ export interface RuleInfo extends RuleSpec {
    * The rule's position in its own file — one-based, the number a denial quotes
    * ("user permissions.json rule 2"). This is not an index into the `rules`
    * array, which is zero-based, and not a position in the merged list: with two
-   * files a merged position names no line a reader can open (0.47+).
+   * files a merged position names no line a reader can open (0.46+).
    */
   index: number;
   /**
    * The file the rule came from: `user` for `~/.anvil/permissions.json` and
-   * `workspace` for `.anvil/permissions.json` (0.47+). Absent from a host that
+   * `workspace` for `.anvil/permissions.json` (0.46+). Absent from a host that
    * predates scopes, whose every rule is the workspace's.
    */
   source?: RuleSource;
@@ -370,7 +370,7 @@ export interface RuleInfo extends RuleSpec {
 /**
  * Which file a rule lives in. The user file is the person's own preference and
  * travels between repositories; the workspace file is the repository's policy.
- * Neither may take the other's fields (0.47).
+ * Neither may take the other's fields (0.46).
  */
 export type RuleSource = 'user' | 'workspace';
 
@@ -406,7 +406,7 @@ export interface PermissionsResult {
    */
   problem?: RuleProblem;
   /**
-   * The person's own rule file (0.47+), absolute. Empty only when the home
+   * The person's own rule file (0.46+), absolute. Empty only when the home
    * directory could not be resolved, in which case there is no user layer.
    */
   user_path?: string;
@@ -419,7 +419,7 @@ export interface PermissionsResult {
    */
   user_problem?: RuleProblem;
   /**
-   * The globs the user file adds to the fixed protected list (0.47+). They are
+   * The globs the user file adds to the fixed protected list (0.46+). They are
    * not rules: they are paths an `allow` rule may never cover, and `rules` does
    * not count them.
    */
@@ -429,7 +429,7 @@ export interface PermissionsResult {
 export interface PermissionsAddParams {
   rule: RuleSpec;
   /**
-   * The file to append to: `user` or `workspace` (0.47+). Absent means
+   * The file to append to: `user` or `workspace` (0.46+). Absent means
    * `workspace`, which is what every client that predates scopes means.
    */
   source?: RuleSource;
@@ -443,7 +443,7 @@ export interface PermissionsAddParams {
 
 export interface PermissionsAddResult {
   path: string;
-  /** The file `path` names: `user` or `workspace` (0.47+). */
+  /** The file `path` names: `user` or `workspace` (0.46+). */
   source?: RuleSource;
   /** The position the new rule landed at, counted as `RuleInfo.index` is. */
   index: number;
@@ -474,16 +474,16 @@ export interface PermissionsSetParams {
   rules: RuleSpec[];
   default_mode?: PermissionMode;
   /**
-   * The layer this save replaces: `user` or `workspace` (0.47+). Absent means
+   * The layer this save replaces: `user` or `workspace` (0.46+). Absent means
    * `workspace`. The two files have different shapes, and the host refuses each
    * other's fields rather than silently dropping them.
    */
   source?: RuleSource;
-  /** Replaces the user file's protected-path globs; user layer only (0.47+). */
+  /** Replaces the user file's protected-path globs; user layer only (0.46+). */
   protected?: string[];
   /**
    * Allows a user-layer save to create the file when it does not exist
-   * (0.47+). The workspace layer keeps create-on-save; the user layer creates
+   * (0.46+). The workspace layer keeps create-on-save; the user layer creates
    * only when the client says so, because the manager shows a missing user
    * file read-only and "save" beside it must not quietly write one.
    */
@@ -566,7 +566,7 @@ export interface ApprovalRequest {
    */
   rule?: RuleInfo;
   /**
-   * Paths of this call that an `allow` rule may never cover (0.47+): `.git`,
+   * Paths of this call that an `allow` rule may never cover (0.46+): `.git`,
    * the checkpoints directory, the Anvil home, or a user-protected glob. When
    * present the card is there because the call touches one, however the rules
    * read — which is also why `remember` offers nothing.
@@ -1232,7 +1232,7 @@ export interface HostEvent {
    */
   rule?: RuleInfo;
   /**
-   * The paths of this result that an `allow` rule could not cover (0.47+), in
+   * The paths of this result that an `allow` rule could not cover (0.46+), in
    * the form the call spelled them. Present even when the mode approved the
    * call, because it is how the record says no remembered rule decided it.
    */

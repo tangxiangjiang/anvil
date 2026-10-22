@@ -144,7 +144,7 @@ const mcpBroken = process.env.FAKE_HOST_MCP_BROKEN === '1';
 const finishedRuns = new Map();
 /** Its rules, as a session that appended them would have them. */
 const rules = [];
-/** The person's own file (0.47), reported beside the workspace's. */
+/** The person's own file (0.46), reported beside the workspace's. */
 const userRulesPath = join(process.env.FAKE_HOST_HOME || homedir(), '.anvil', 'permissions.json');
 /** The user layer's rules, in the same shape as `rules`. */
 const userRules = [];

@@ -30,7 +30,7 @@ type Server struct {
 	jobs      JobRunner // optional; defaults to sched client
 	jobHub    *jobHub
 
-	// workbench holds interactive sessions (p_0.46.7). In memory by design:
+	// workbench holds interactive sessions (p_0.45.9). In memory by design:
 	// the durable record of a session is the worker's own transcript, keyed by
 	// the agent id in the terminal event.
 	workbench   *workbenchHub

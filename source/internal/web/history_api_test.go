@@ -12,7 +12,7 @@ import (
 	"github.com/anvil-dev/anvil/internal/web/delivery"
 )
 
-// TestSearchFindsBodyText is the acceptance that matters for p_0.46.10: a word
+// TestSearchFindsBodyText is the acceptance that matters for p_0.45.12: a word
 // inside a requirement's Completion criteria must find it. A search of a planning
 // document that only matches titles is not a search.
 func TestSearchFindsBodyText(t *testing.T) {

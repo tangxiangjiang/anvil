@@ -22,7 +22,7 @@ const PACKAGE_JSON = readFileSync(join(EXTENSION_ROOT, 'package.json'), 'utf8');
 const SETTINGS = readFileSync(join(EXTENSION_ROOT, 'src', 'settings.ts'), 'utf8');
 
 test('vision is on by default, and the setting is the switch that turns it off', () => {
-  // A screenshot pasted into a chat is a request to send it (p_0.47.9). The
+  // A screenshot pasted into a chat is a request to send it (p_0.46.9). The
   // declaration and the reader must agree: the declaration is what the settings
   // UI shows, the fallback is what a session gets before anyone opened it.
   const declaration = /"anvil\.vision": \{[\s\S]*?\n {8}\}/.exec(PACKAGE_JSON);
@@ -93,7 +93,7 @@ test('images are attached from a drop, everything else is resolved as a mention'
   assert.match(drop[0], /file\.type\.indexOf\('image\/'\) === 0[\s\S]*?readImage\(file\)/);
   assert.match(drop[0], /vscode\.postMessage\(\{ type: 'dropFiles', paths, uris \}\)/);
   // The host resolves the paths: only it knows the workspace root. A multi-root
-  // window without a root yet asks for one rather than taking a folder (0.47).
+  // window without a root yet asks for one rather than taking a folder (0.46).
   assert.match(CHAT_PANEL, /case 'dropFiles':\s*await this\.dropFiles\(msg\.paths, msg\.uris\);/);
   assert.match(CHAT_PANEL, /folder = await resolveWorkspaceRoot\(this\.context\)/);
   assert.match(CHAT_PANEL, /relativeMention\(folder\.uri\.fsPath, candidate\)/);

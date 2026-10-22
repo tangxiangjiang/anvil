@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * Stream resumption (p_0.46.12).
+ * Stream resumption (p_0.45.14).
  *
  * A dropped SSE connection used to be the end of the story: the consumer caught
  * the error, said "stream ended", and the operator had to press Refresh. On a
@@ -14,7 +14,7 @@
  *     over (retrying a finished job forever is a busy loop with extra steps).
  *   - Deduplicate frames on reconnect. The Workbench stream replays from the
  *     beginning, so a reconnect without dedupe redraws the whole conversation.
- *     p_0.46.10's persisted events carry `seq`, and that is the key.
+ *     p_0.45.12's persisted events carry `seq`, and that is the key.
  */
 window.AnvilUI = window.AnvilUI || {};
 

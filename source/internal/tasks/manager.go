@@ -7,7 +7,7 @@
 // One table holds both kinds because a client asks one question — "what is
 // running?" — and because ownership is the same: a task belongs to the agent
 // whose tool call started it, and to the root tree that agent lives in. See
-// doc/design/v1.0/41-subagents-and-tasks.md.
+// doc/design/v0.x/41-subagents-and-tasks.md.
 package tasks
 
 import (

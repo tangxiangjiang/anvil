@@ -12,7 +12,7 @@ import (
 	"github.com/anvil-dev/anvil/internal/web/delivery"
 )
 
-// auditMiddleware attributes every mutating delivery call (p_0.46.10).
+// auditMiddleware attributes every mutating delivery call (p_0.45.12).
 //
 // One middleware rather than a call in each handler: a handler that forgets is
 // exactly how an audit trail becomes a half-truth, and there are 15 mutating

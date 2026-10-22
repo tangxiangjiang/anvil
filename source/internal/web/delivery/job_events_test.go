@@ -26,7 +26,7 @@ func openTestStore(t *testing.T) *Store {
 	return s
 }
 
-// TestJobEventsPersistInOrder is the point of p_0.46.10: a finished job's
+// TestJobEventsPersistInOrder is the point of p_0.45.12: a finished job's
 // transcript must be readable, in order, after the fact.
 func TestJobEventsPersistInOrder(t *testing.T) {
 	s := openTestStore(t)

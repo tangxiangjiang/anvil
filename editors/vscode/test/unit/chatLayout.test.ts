@@ -210,7 +210,7 @@ test('no rail reaches past the end of the reply it belongs to', () => {
   // reply's last block has no next segment, and what sits 10px under it is the
   // transcript's gap and then the next entry — which is how a stub of rail came
   // to hang below the last block, and at the bottom of a scrolled conversation
-  // it read as a line floating under the transcript (p_0.47.26).
+  // it read as a line floating under the transcript (p_0.46.26).
   assert.match(
     SOURCE,
     /\.reply-body > :last-child\.rail-down::after \{\s*bottom: 0;/,
@@ -228,7 +228,7 @@ test('a reply with an empty body draws no segment below its header', () => {
   // own line, and that overlap is right the moment a first block exists. It is
   // a guard rather than a reported defect: `append` fills the body in the same
   // JS turn that `targetFor` creates it, so the state is not painted in the
-  // normal path (p_0.47.26). A hoisted-ending reply body, and any future caller
+  // normal path (p_0.46.26). A hoisted-ending reply body, and any future caller
   // that opens a reply before it has content, are the cases it covers.
   assert.match(
     SOURCE,
@@ -242,7 +242,7 @@ test('the footprint stays the transcript’s last entry in the document too', ()
   // block appended after it in the DOM would still read out before the whole
   // conversation in a copy or a screen reader. So the document order says the
   // same thing the layout does: new entries go in front of the footprint
-  // (p_0.47.26).
+  // (p_0.46.26).
   assert.match(JS, /function addToEnd\(target, node\)/);
   assert.match(JS, /transcript\.insertBefore\(node, footprint\)/);
   assert.match(JS, /if \(target === transcript && footprint && footprint\.parentNode === transcript\)/);
@@ -258,7 +258,7 @@ test('the dock paints above every dot in the transcript', () => {
   // that value lives in the root stacking context — the block around the dot is
   // positioned but creates none. The dock had no order of its own, so a row
   // scrolled under the composer left its green dot floating on the card
-  // (p_0.47.27).
+  // (p_0.46.27).
   const dock = Number(valueOf('.dock', 'z-index'));
   assert.ok(Number.isFinite(dock), 'the dock declares a stacking order');
   for (const selector of [

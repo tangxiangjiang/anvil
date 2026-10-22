@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * Ops — the one screen for a phone (p_0.46.12).
+ * Ops — the one screen for a phone (p_0.45.14).
  *
  * Not a mobile version of the console. It is the two things an operator does away
  * from a desk: see whether anything is wrong, and stop a job that is running away.

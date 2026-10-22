@@ -40,7 +40,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // The root is per window and is read from state this context owns, so it has
   // to be installed before a panel is restored or a command can run. It is the
-  // one place that knows which folder a conversation belongs to (0.47).
+  // one place that knows which folder a conversation belongs to (0.46).
   initWorkspaceRoot(context);
 
   // One content provider for the window, for the life of the extension: it is

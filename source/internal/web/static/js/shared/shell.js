@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * Shell chrome (p_0.46.9): the health strip, the help sheet, and the actionable
+ * Shell chrome (p_0.45.11): the health strip, the help sheet, and the actionable
  * error dialog.
  *
  * Three things an operator needs that are not about any one surface:

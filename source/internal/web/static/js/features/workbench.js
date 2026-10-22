@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * Workbench — the console's interactive surface (p_0.46.7).
+ * Workbench — the console's interactive surface (p_0.45.9).
  *
  * A person types a request, an agent runs it on a worker, and this renders what
  * happens: assistant text, a card per tool call, step progress, and a terminal
@@ -19,7 +19,7 @@
  *     way two writers damage a transcript; the server refuses and this renders
  *     the refusal.
  *
- * The event renderer here is the same one the job history (p_0.46.10) uses, so a
+ * The event renderer here is the same one the job history (p_0.45.12) uses, so a
  * phase Job started from the Roadmap will read identically.
  */
 window.Features = window.Features || {};

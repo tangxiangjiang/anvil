@@ -265,7 +265,7 @@ input { width: 100%; margin-bottom: 0.75rem; }
   .side { border-right: 0; border-bottom: 1px solid var(--border); }
 }
 
-/* Drafting assistant (p_0.46.6): proposals, never writes. */
+/* Drafting assistant (p_0.45.8): proposals, never writes. */
 .assist-host:empty { display: none; }
 .assist-host { margin-top: 0.6rem; }
 .assist-list { display: flex; flex-direction: column; gap: 0.5rem; }
@@ -290,7 +290,7 @@ input { width: 100%; margin-bottom: 0.75rem; }
 }
 .assist-note.bad { border-color: var(--danger); color: #f3c7c7; }
 
-/* Connection banner (p_0.46.12): a stale stream that looks live is worse than
+/* Connection banner (p_0.45.14): a stale stream that looks live is worse than
    a visible disconnection. */
 .wb-conn {
   padding: 0.35rem 0.6rem; border-radius: var(--radius);
@@ -301,7 +301,7 @@ input { width: 100%; margin-bottom: 0.75rem; }
 .wb-conn[hidden] { display: none !important; }
 
 /* ---------------------------------------------------------------- reachable
-   (p_0.46.12) The console assumed a wide, stable desktop. These rules make the
+   (p_0.45.14) The console assumed a wide, stable desktop. These rules make the
    two things an operator does away from a desk - see state, stop a runaway job -
    work on a phone, and they name the surfaces that genuinely do not work small
    instead of rendering them half-broken. */
@@ -376,7 +376,7 @@ input { width: 100%; margin-bottom: 0.75rem; }
 .ops-row:last-child { border-bottom: 0; }
 .ops-row .ops-grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ops-row button { padding: 0.25rem 0.6rem; font-size: 0.82rem; }
-/* Per-worker provider settings in the Add worker dialog (0.47). */
+/* Per-worker provider settings in the Add worker dialog (0.46). */
 .cl-llm-grid {
   display: grid; grid-template-columns: 1fr 1fr; gap: 0 0.6rem;
 }
@@ -385,7 +385,7 @@ input { width: 100%; margin-bottom: 0.75rem; }
   .cl-llm-grid { grid-template-columns: 1fr; }
 }
 
-/* Selection and batch actions (p_0.46.8). */.del-sel-row { position: relative; border-radius: var(--radius); }
+/* Selection and batch actions (p_0.45.10). */.del-sel-row { position: relative; border-radius: var(--radius); }
 .del-sel-row.sel-on {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
@@ -401,7 +401,7 @@ input { width: 100%; margin-bottom: 0.75rem; }
 .del-sel-bar[hidden] { display: none !important; }
 .del-sel-bar button { padding: 0.2rem 0.55rem; font-size: 0.8rem; }
 
-/* Shell chrome (p_0.46.9): health strip, help, actionable errors. */
+/* Shell chrome (p_0.45.11): health strip, help, actionable errors. */
 .help-btn {
   float: right; width: 1.4rem; height: 1.4rem; padding: 0;
   font-size: 0.8rem; line-height: 1; border-radius: 50%;
@@ -429,13 +429,13 @@ input { width: 100%; margin-bottom: 0.75rem; }
   white-space: pre-wrap; word-break: break-word; max-height: 30vh; overflow: auto;
   background: #0f1620; border-radius: var(--radius);
 }
-/* Audit trail on an entity (p_0.46.10 data, rendered here). */
+/* Audit trail on an entity (p_0.45.12 data, rendered here). */
 .audit-list { display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.82rem; }
 .audit-row { display: grid; grid-template-columns: 1fr auto; gap: 0.5rem; padding: 0.25rem 0; border-bottom: 1px solid var(--border); }
 .audit-what { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .audit-when { color: var(--muted); white-space: nowrap; font-size: 0.75rem; }
 
-/* Pre-flight blockers (p_0.46.11): why a button is disabled, next to it. */
+/* Pre-flight blockers (p_0.45.13): why a button is disabled, next to it. */
 .del-blockers {
   margin: 0.45rem 0 0; padding: 0.4rem 0.55rem;
   border-radius: var(--radius); font-size: 0.82rem;
@@ -450,7 +450,7 @@ input { width: 100%; margin-bottom: 0.75rem; }
 .del-blocker a { margin-left: 0.25rem; }
 button[disabled][aria-describedby] { opacity: 0.65; cursor: not-allowed; }
 
-/* Global search (p_0.46.10): one box for the whole planning record. */
+/* Global search (p_0.45.12): one box for the whole planning record. */
 .side-search { position: relative; }
 .side-search input { margin: 0; width: 100%; font-size: 0.85rem; padding: 0.35rem 0.55rem; }
 .gs-results {
@@ -469,7 +469,7 @@ button[disabled][aria-describedby] { opacity: 0.65; cursor: not-allowed; }
 .gs-excerpt { font-size: 0.78rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gs-none { padding: 0.5rem; margin: 0; font-size: 0.85rem; }
 
-/* Job history (p_0.46.10). */
+/* Job history (p_0.45.12). */
 .jh-list { display: flex; flex-direction: column; gap: 0.3rem; }
 .jh-row {
   display: grid; grid-template-columns: 0.6rem minmax(0,1fr) auto auto auto auto;

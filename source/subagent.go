@@ -357,7 +357,7 @@ func resolveSubagentSelectors(reg *tools.Registry, requested []string) ([]string
 }
 
 // childOptions builds the child's Options from a whitelist of the parent's. See
-// doc/design/v1.0/41-subagents-and-tasks.md — the exclusions are deliberate.
+// doc/design/v0.x/41-subagents-and-tasks.md — the exclusions are deliberate.
 func (a *Agent) childOptions(in spawnParams, selectors []string, depth int) Options {
 	sel := tools.ExpandToolSelectors(selectors)
 	opts := Options{

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * Selection for lists (p_0.46.8).
+ * Selection for lists (p_0.45.10).
  *
  * One implementation for every list that supports it, because selection has more
  * corner cases than it looks: range across a *filtered* view, a toggle after a
@@ -14,7 +14,7 @@
  * rather than by DOM position — the reload after a batch action must not clear what
  * was selected.
  *
- * Pure on purpose: the reducer has no DOM in it, so the p_0.46.5 harness can test
+ * Pure on purpose: the reducer has no DOM in it, so the p_0.45.7 harness can test
  * the corners.
  */
 window.AnvilUI = window.AnvilUI || {};

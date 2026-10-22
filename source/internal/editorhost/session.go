@@ -16,7 +16,7 @@ const closeRunTimeout = 5 * time.Second
 
 // session pairs a host-level session id with a live SDK agent and its single
 // active run. At most one run per session is allowed, matching the SDK rule in
-// doc/design/v1.0/01-architecture.md.
+// doc/design/v0.x/01-architecture.md.
 type session struct {
 	id  string
 	cwd string
