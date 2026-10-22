@@ -23,7 +23,7 @@ A workspace symlink to a file outside `cwd` is read: `d.Info()` does not follow 
 Repro: temp `cwd`, symlink to a file containing a marker outside `cwd`, grep for the marker with
 `rg` absent from `PATH`; expect no match.
 
-**#2 — bug — reported (test written, not reproduced).** `internal/lsp/path.go` `insideCWD` is lexical only, with no
+**#2 — bug — confirmed.** `internal/lsp/path.go` `insideCWD` is lexical only, with no
 `EvalSymlinks`. Used by `supervisor.go` (`openPath`) and `edit.go` (`ApplyWorkspaceEdit`), so an
 in-workspace symlink to an outside file is read and sent to the language server, and `rename_symbol`
 writes through it. Repro: `ApplyWorkspaceEdit(cwd, edit)` for `cwd/link.txt` where `link.txt` points
@@ -196,18 +196,18 @@ client's expectation of a complete event stream, which design 46 currently state
 
 | Severity | Findings | Confirmed | Reported |
 |---|---|---|---|
-| bug | 27 | 22 | 5 |
+| bug | 27 | 23 | 4 |
 | gap | 2 | 0 | 2 |
 | doc | 1 | 0 | 1 |
-| **total** | **30** | **22** | **8** |
+| **total** | **30** | **23** | **7** |
 
 Suspicions S1–S3 are listed separately and are not counted as findings.
 
-Reproduced by a failing test (skip removed, failed on the current tree): #1, #3, #4, #5, #8, #9, #6, #10, #11, #15, #16, #18, #19, #20, #21, #22, #23, #24, #25, #26, #27, #29.
+Reproduced by a failing test (skip removed, failed on the current tree): #1, #2, #3, #4, #5, #6, #8, #9, #10, #11, #15, #16, #18, #19, #20, #21, #22, #23, #24, #25, #26, #27, #29.
 
 #30 was not reproduced: 2000 concurrent Cancel/exit pairs under `go test -race` on AlmaLinux report no race. The unlocked read of `t.Info` appears to be ordered after `finish()` by `m.mu`, so the finding needs a source-level check before it is marked confirmed or dropped.
 
-Read at the stated line, but not reproduced: #2 (on Windows the URI form the test builds does not round-trip through `uriToPath`, so the edit fails before the symlink is reached).
+#2 was not reproduced on Windows (the URI form in the test does not round-trip through `uriToPath` there, so the edit fails first), but it reproduces on AlmaLinux: an edit through a symlink to a file outside the workspace is applied.
 
 #20 was reproduced under `go test -race` on AlmaLinux 10.2 (gcc 14, Go 1.26.10): the race detector reports a write in `Agent.Close` and a read in `Agent.Send` on `a.closed`.
 
@@ -220,7 +220,7 @@ Each one was run once with its skip removed to confirm the result above.
 | Package | File | Tests |
 |---|---|---|
 | `internal/tools` | `audit_test.go` | #1, #3, #4, #6, #9 |
-| `internal/lsp` | `audit_test.go` | #2, #8 |
+| `internal/lsp` | `audit_test.go` | #2 (reproduced on Linux), #8 |
 | `internal/llm` | `audit_test.go` | #15, #16 |
 | `.` (agent) | `audit_test.go` | #5, #18, #19, #20, #21, #23, #27, #29 |
 | `.` (agent) | `subagent_audit_test.go` | #22, #24, #25, #26 |

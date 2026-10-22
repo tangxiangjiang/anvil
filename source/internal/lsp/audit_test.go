@@ -14,10 +14,10 @@ import (
 // audit #2: insideCWD is lexical, so an in-workspace symlink to a file outside
 // the workspace is treated as inside and written through by a workspace edit.
 func TestAuditWorkspaceEditDoesNotWriteThroughSymlink(t *testing.T) {
-	// Not reproduced yet: on Windows uriToPath turns "file://C:/..." into a path that
-	// filepath.Join then places under cwd, so the edit fails to find the file before
-	// the symlink is reached. The symlink defect needs a URI that round-trips first.
-	t.Skip("audit: open, see audit.md #2")
+	// Reproduced on AlmaLinux (Linux file URIs round-trip through uriToPath). On
+	// Windows the test cannot reach the symlink: a "file://C:/" URI is parsed
+	// as a relative path, so the edit fails before the symlink is followed.
+	t.Skip("audit: open, see audit.md #2 (reproduce on Linux)")
 	parent := t.TempDir()
 	cwd := filepath.Join(parent, "ws")
 	if err := os.Mkdir(cwd, 0o755); err != nil {
