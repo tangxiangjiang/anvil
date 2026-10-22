@@ -51,7 +51,7 @@ write still proceeds, and the run's restore reports success without naming the m
 make the checkpoint `files` path a regular file so `MkdirAll` fails; `write_file`; restore; the path
 is absent from the result.
 
-**#7 — gap — reported.** `internal/tools/preview.go` `pathsOf` returns nil for `rename_symbol`, and
+**#7 — gap — confirmed.** `internal/tools/preview.go` `pathsOf` returns nil for `rename_symbol`, and
 `captureBefore` takes its paths from `pathsOf`. `renameSymbolTool.Execute` calls
 `lsp.ApplyWorkspaceEdit`, which writes many files, so no pre-image is captured and the rename is not
 in `mutatingTools`. A restore therefore cannot undo a rename, and no path rule sees its targets.
@@ -81,7 +81,7 @@ and `.anvil/checkpoints` prefix tests are byte-case-sensitive. On Windows (NTFS,
 `.GIT/config` is not protected and an allow rule covers it. Repro: `protectedRelative(".GIT/config")`
 should return true.
 
-**#12 — bug — reported.** `internal/permissions/protect.go` `Protection.isProtected` with
+**#12 — bug — confirmed.** `internal/permissions/protect.go` `Protection.isProtected` with
 `filepath.Rel`: when the workspace root is a symlink or junction, an absolute path in resolved form
 fails `Rel` and falls through to the string test, so `/real-ws/.anvil/checkpoints/x` is not
 protected. Repro: `Protection{Root:"/link-to-ws"}.isProtected("/real-ws/.anvil/checkpoints/x")`
@@ -90,13 +90,13 @@ once, which it is not.
 
 ### Checkpoints
 
-**#13 — bug — reported.** `internal/checkpoint/checkpoint.go` `Restore` (lines 288–302 per the
+**#13 — bug — reported (design undecided: see S1).** `internal/checkpoint/checkpoint.go` `Restore` (lines 288–302 per the
 report). A restore does not check that the current file still matches the run's post-state:
 `Existed=false` deletes whatever is now at the path, and saved bytes overwrite any later edit,
 including the user's own. The SHA256 is recorded but not checked. This may be intended; see
 *Suspicions* S1.
 
-**#14 — bug — reported.** `internal/checkpoint/checkpoint.go` hard-codes mode `0o644` on restore
+**#14 — bug — reported (design undecided: see S2).** `internal/checkpoint/checkpoint.go` hard-codes mode `0o644` on restore
 and records no mode on capture, so an executable bit is lost. Reproducible only on Linux; see
 *Suspicions* S2.
 
@@ -113,7 +113,7 @@ success with the tool call missing. No `stop_reason` is checked. Repro: SSE with
 `input_json_delta` or OpenAI `tool_calls` fragment yields truncated or missing arguments with no
 error. Repro: a tool_use start, then `data: {bad json`, then `content_block_stop`; expect an error.
 
-**#17 — doc — reported.** `internal/llm/anthropic.go` `toAnthropicMessages` (assistant branch):
+**#17 — doc — confirmed.** `internal/llm/anthropic.go` `toAnthropicMessages` (assistant branch):
 `_ = json.Unmarshal(tc.Args, &input)` replaces unparseable arguments with `{}`, so the replayed
 history records a different call from the one the model emitted, and the error is dropped. Low
 severity. Repro: a `ToolCall` with `Args` `{"path":` converted; expect the malformed input surfaced.
@@ -169,7 +169,7 @@ subagent keeps `ParentAgentID` and `Kind="subagent"`, and deleting the original 
 through `subagentDescendants`. Repro: child C with meta `ParentAgentID=P`; `ForkAgent(C, runID)`;
 `DeleteAgent(P)`; `Load(newID)` returns not found.
 
-**#28 — gap — reported.** `agent.go` `Run.emit` (`run.go` around 91–100) drops events silently when the
+**#28 — gap — reported (design undecided).** `agent.go` `Run.emit` (`run.go` around 91–100) drops events silently when the
 64-slot buffer is full. Documented as a known limit in design 46 (`editor-polish`). Low severity.
 
 **#29 — bug — confirmed.** `agent.go` `buildRegistry` discards the error from `index.Build` (`_, _ =`), so
@@ -196,20 +196,28 @@ client's expectation of a complete event stream, which design 46 currently state
 
 | Severity | Findings | Confirmed | Reported |
 |---|---|---|---|
-| bug | 27 | 23 | 4 |
-| gap | 2 | 0 | 2 |
-| doc | 1 | 0 | 1 |
-| **total** | **30** | **23** | **7** |
+| bug | 27 | 24 | 3 |
+| gap | 2 | 1 | 1 |
+| doc | 1 | 1 | 0 |
+| **total** | **30** | **26** | **4** |
 
 Suspicions S1–S3 are listed separately and are not counted as findings.
 
-Reproduced by a failing test (skip removed, failed on the current tree): #1, #2, #3, #4, #5, #6, #8, #9, #10, #11, #15, #16, #18, #19, #20, #21, #22, #23, #24, #25, #26, #27, #29.
+Reproduced by a failing test (skip removed, failed on the current tree): #1, #2, #3, #4, #5, #6, #7, #8, #9, #10, #11, #12, #15, #16, #17, #18, #19, #20, #21, #22, #23, #24, #25, #26, #27, #29.
 
 #30 was not reproduced: 2000 concurrent Cancel/exit pairs under `go test -race` on AlmaLinux report no race. The unlocked read of `t.Info` appears to be ordered after `finish()` by `m.mu`, so the finding needs a source-level check before it is marked confirmed or dropped.
 
 #2 was not reproduced on Windows (the URI form in the test does not round-trip through `uriToPath` there, so the edit fails first), but it reproduces on AlmaLinux: an edit through a symlink to a file outside the workspace is applied.
 
 #20 was reproduced under `go test -race` on AlmaLinux 10.2 (gcc 14, Go 1.26.10): the race detector reports a write in `Agent.Close` and a read in `Agent.Send` on `a.closed`.
+
+
+### Design status of the open items
+
+Searched design 33-49 for each open item. None of #13, #14 or #28 is settled in a design chapter, so none can be called a bug or intended behaviour yet:
+
+- #13 (restore overwrites a later edit) and #14 (executable bit not kept): no chapter says whether a checkpoint restore should refuse on mismatch, or whether checkpoints carry file mode. See S1 and S2.
+- #28 (events dropped when the 64-slot buffer is full): an earlier note in this audit said design 46 records this as a known limit. A search of design 46 and 35 found no such statement, so that note was wrong and is withdrawn here.
 
 ## Tests
 
@@ -220,11 +228,13 @@ Each one was run once with its skip removed to confirm the result above.
 | Package | File | Tests |
 |---|---|---|
 | `internal/tools` | `audit_test.go` | #1, #3, #4, #6, #9 |
+| `internal/tools` | `audit_internal_test.go` (package tools) | #7 (checks pathsOf and mutatingTools directly) |
 | `internal/lsp` | `audit_test.go` | #2 (reproduced on Linux), #8 |
 | `internal/llm` | `audit_test.go` | #15, #16 |
+| `internal/llm` | `audit_internal_test.go` (package llm) | #17 |
 | `.` (agent) | `audit_test.go` | #5, #18, #19, #20, #21, #23, #27, #29 |
 | `.` (agent) | `subagent_audit_test.go` | #22, #24, #25, #26 |
-| `internal/permissions` | `audit_test.go` | #10, #11 |
+| `internal/permissions` | `audit_test.go` | #10, #11, #12 |
 | `internal/tasks` | `audit_test.go` | #30 (not reproduced under -race) |
 
 Thirteen audit tests are skipped; none fails with its skip in place. The two that did not
