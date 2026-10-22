@@ -15,7 +15,7 @@ scrolls underneath it.
 This extension holds no agent logic. It spawns the `anvil-host` sidecar — a
 stdio program built from the Anvil Go SDK — and renders what that process
 reports. The protocol between the two is chapter 35 of the design docs
-(`doc/design/v0.x/35-vscode-extension.md`); the TypeScript mirror of it is
+(`doc/design/v0.x/35-vscode-extension.vscode.md`); the TypeScript mirror of it is
 `src/protocol.ts`.
 
 ## Installing a packaged build
@@ -349,7 +349,7 @@ spawned with.
   `bypass`, and the editor loads that file — and `.anvil/hooks.json`, which no
   client loaded before 0.36 — for every new session. A mode change is refused
   while a turn is running. See
-  [`doc/design/v0.x/37-permission-modes.md`](../../doc/design/v0.x/37-permission-modes.md).
+  [`doc/design/v0.x/37-permission-modes.vscode.md`](../../doc/design/v0.x/37-permission-modes.vscode.md).
 - **Keeps the conversation when you close the tab.** The tab is a view of a
   session, not the session itself: closing it leaves the agent and the host
   running, and reopening it re-announces the session, the mode and any approval
@@ -368,7 +368,7 @@ spawned with.
   instead of trying to resume something that is gone. An older host that does not
   answer `session.transcript` leaves the tab usable with no replay and no error.
   See
-  [`doc/design/v0.x/38-session-identity-and-replay.md`](../../doc/design/v0.x/38-session-identity-and-replay.md).
+  [`doc/design/v0.x/38-session-identity-and-replay.vscode.md`](../../doc/design/v0.x/38-session-identity-and-replay.vscode.md).
 - **Ships its own sidecar.** A platform VSIX carries the `anvil-host` binary it
   was built with, verified against the checksum recorded at build time before it
   is run. The API key is not in the package: it is in VS Code's SecretStorage,

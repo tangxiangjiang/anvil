@@ -122,7 +122,7 @@ description: Conventional commits and repo changelog rules
 ## Relation to Permission API
 
 - Existing `PermissionFunc` (0.3) remains the programmatic gate.
-- File hooks run **before** or **as part of** permission checks. Document order since 0.36: hooks deny → rule deny → rule allow → session allowlist → Permission → execute ([36](36-tool-permissions.md)).
+- File hooks run **before** or **as part of** permission checks. Document order since 0.36: hooks deny → rule deny → rule allow → session allowlist → Permission → execute ([36](36-tool-permissions.vscode.md)).
 - Since 0.36 the shell / write / edit denies are evaluated in `preExec`, not inside the composed permission callback, so a rule `allow` (which never reaches the callback) cannot skip them. Deny semantics are unchanged; the read / MCP denies were already at that stage.
 
 ## Explicit non-goals

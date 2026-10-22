@@ -43,18 +43,18 @@ This tree is the **design cutoff** for 0.1–0.50 delivery. Later product lines 
 | 32 | [32-sandbox-code-review.md](32-sandbox-code-review.md) | Sandbox read-only review + VS Code Server → **0.32** |
 | 33 | [33-delivery-ui.md](33-delivery-ui.md) | Delivery UI + SQLite schema → **0.33** |
 | 34 | [34-workspace-domain.md](34-workspace-domain.md) | Workspace → Project → Workers (Clusters) → **0.34** |
-| 35 | [35-vscode-extension.md](35-vscode-extension.md) | VS Code extension + editor host → **0.35** |
-| 36 | [36-tool-permissions.md](36-tool-permissions.md) | Rule set + shell analyzer, and the rule shapes the approval card remembers → **0.36** |
-| 37 | [37-permission-modes.md](37-permission-modes.md) | The complete mode ladder, and where a session's starting mode comes from → **0.37** |
-| 38 | [38-session-identity-and-replay.md](38-session-identity-and-replay.md) | A session's title, a reviewable change on every tool card, and a transcript that survives a reload → **0.38** |
+| 35 | [35-vscode-extension.vscode.md](35-vscode-extension.vscode.md) | VS Code extension + editor host → **0.35** |
+| 36 | [36-tool-permissions.vscode.md](36-tool-permissions.vscode.md) | Rule set + shell analyzer, and the rule shapes the approval card remembers → **0.36** |
+| 37 | [37-permission-modes.vscode.md](37-permission-modes.vscode.md) | The complete mode ladder, and where a session's starting mode comes from → **0.37** |
+| 38 | [38-session-identity-and-replay.vscode.md](38-session-identity-and-replay.vscode.md) | A session's title, a reviewable change on every tool card, and a transcript that survives a reload → **0.38** |
 | 39 | [39-execute.md](39-execute.md) | Execute from a ready roadmap to a tested milestone: the lifecycle state machine, phase Jobs, the test campaign loop, and accept and merge → **0.39** |
-| 40 | [40-editor-alignment.md](40-editor-alignment.md) | Parallel tabs, session administration, partial acceptance, checkpoints, fork, and the SDK capabilities the client never turned on → **0.40** |
-| 41 | [41-permission-auto-and-manager.md](41-permission-auto-and-manager.md) | A deterministic `auto` rung, and a structured permissions manager → **0.41** |
-| 42 | [42-subagents-and-tasks.md](42-subagents-and-tasks.md) | Agent-in-agent, background tasks and `/tasks`, and declarative workflows → **0.42** |
-| 43 | [43-context-management.md](43-context-management.md) | A token budget, safe compaction at run start and mid-run, `/compact`, and the cache clock → **0.43** |
-| 44 | [44-mcp-management.md](44-mcp-management.md) | A host-owned MCP runtime with observable state, safe config edits, reconnect, Streamable HTTP and OAuth → **0.44** |
+| 40 | [40-editor-alignment.vscode.md](40-editor-alignment.vscode.md) | Parallel tabs, session administration, partial acceptance, checkpoints, fork, and the SDK capabilities the client never turned on → **0.40** |
+| 41 | [41-permission-auto-and-manager.vscode.md](41-permission-auto-and-manager.vscode.md) | A deterministic `auto` rung, and a structured permissions manager → **0.41** |
+| 42 | [42-subagents-and-tasks.vscode.md](42-subagents-and-tasks.vscode.md) | Agent-in-agent, background tasks and `/tasks`, and declarative workflows → **0.42** |
+| 43 | [43-context-management.vscode.md](43-context-management.vscode.md) | A token budget, safe compaction at run start and mid-run, `/compact`, and the cache clock → **0.43** |
+| 44 | [44-mcp-management.vscode.md](44-mcp-management.vscode.md) | A host-owned MCP runtime with observable state, safe config edits, reconnect, Streamable HTTP and OAuth → **0.44** |
 | 45 | [45-web-editor-polish.md](45-web-editor-polish.md) | anvil-web polish, the web drafting assistant, and the editor-host protocol smoke tests → **0.45** |
-| 46 | [46-editor-polish.md](46-editor-polish.md) | Wiring LSP and test/build, rewind, plan review, reading, accessibility, rule scopes, and one root per window → **0.46** |
+| 46 | [46-editor-polish.vscode.md](46-editor-polish.vscode.md) | Wiring LSP and test/build, rewind, plan review, reading, accessibility, rule scopes, and one root per window → **0.46** |
 | 47 | [47-evaluation.md](47-evaluation.md) | A three-tier eval harness, a scorer, a baseline file, and the invariants suite that guards Anvil's own capabilities → **0.47** |
 | 48 | [48-llm-effort-and-retry.md](48-llm-effort-and-retry.md) | Reasoning effort on both wires, retry with backoff, stop reasons and error kinds; effort vs. reasoning content → **0.48** |
 | 49 | [49-roles-and-prompts.md](49-roles-and-prompts.md) | A layered system prompt with an unremovable safety layer, and five roles → **0.49** |

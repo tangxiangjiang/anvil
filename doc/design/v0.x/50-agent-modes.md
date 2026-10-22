@@ -8,7 +8,7 @@
 Everything a mode needs to stand on already exists, and none of it is a mode:
 
 - **Subagents** ([subagent.go](../../../source/subagent.go), chapter
-  [41](42-subagents-and-tasks.md)): `spawn_agent` creates a child with a tool subset, a step
+  [41](42-subagents-and-tasks.vscode.md)): `spawn_agent` creates a child with a tool subset, a step
   ceiling, a model override, a shared tree budget, a depth limit, and optional background
   execution. The child inherits the parent's permission callback, rules and checkpoints.
 - **Workflows** ([workflow.go](../../../source/workflow.go)): `run_workflow` takes a validated
@@ -63,7 +63,7 @@ It is not a `SendOption`, and it is not a field a tool can change mid-run:
 - Checkpoints, the loop guard and the agent budget are all per run. A run that changed mode
   halfway would have two sets of each, and a rewind would have to know which.
 - The role prompt (chapter [47](49-roles-and-prompts.md)) is part of the system prompt, which
-  the cache clock (chapter [42](43-context-management.md)) relies on being stable within a
+  the cache clock (chapter [42](43-context-management.vscode.md)) relies on being stable within a
   session.
 - A container that wants a different mode for the next request resumes the session with new
   `Options`, which is the path `SystemPrompt`, `MCPServers` and the other non-persisted options
@@ -124,7 +124,7 @@ the way `run_workflow` does.
   `apply_patch` on every path outside `files`, placed after the parent's own rules. The parent's
   rules still apply first, so a path the parent may not touch stays untouchable whatever the
   brief says. The rule is generated from `files`, not from the prompt, and chapter
-  [36](36-tool-permissions.md)'s engine is what enforces it.
+  [36](36-tool-permissions.vscode.md)'s engine is what enforces it.
 - **The parent's effort** unless the brief sets one.
 - Everything `spawn_agent`'s `childOptions` already copies, by the same whitelist.
 

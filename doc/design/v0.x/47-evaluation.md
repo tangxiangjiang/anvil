@@ -179,7 +179,7 @@ tier-2 recordings that the later phases guard. An audit that finds nothing still
   Anvil's own tasks; it has no fixtures for other products and no scoring that would make a
   cross-product number mean anything.
 - A tokenizer. `request_bytes` is a byte count, for the same reason chapter
-  [42](43-context-management.md) estimates rather than tokenizes.
+  [42](43-context-management.vscode.md) estimates rather than tokenizes.
 - Fixtures that need network, a real git remote, or a real MCP server.
 - Replaying a recording against a **different** model id and expecting the same digest: the
   model is a volatile field so that a config change does not invalidate recordings, not so that

@@ -40,17 +40,17 @@ Versioned delivery for Anvil through product **0.45**. Design cutoff: [`doc/desi
 | 0.32 | Sandbox code review + VS Code Server | planned | [m_0.32_sandbox_code_review.md](m_0.32_sandbox_code_review.md) | [32](../../design/v0.x/32-sandbox-code-review.md) |
 | 0.33 | Delivery UI + schema | done | [m_0.33_delivery_ui.md](m_0.33_delivery_ui.md) | [33](../../design/v0.x/33-delivery-ui.md) |
 | 0.34 | Workspace domain (Clusters hierarchy) | done | [m_0.34_workspace_domain.md](m_0.34_workspace_domain.md) | [34](../../design/v0.x/34-workspace-domain.md) |
-| 0.35 | VS Code extension + editor host | done | [m_0.35_vscode_extension.md](m_0.35_vscode_extension.md) | [35](../../design/v0.x/35-vscode-extension.md) |
-| 0.36 | Tool permissions (rules + analyzer) | done | [m_0.36_tool_permissions.md](m_0.36_tool_permissions.md) | [36](../../design/v0.x/36-tool-permissions.md) |
-| 0.37 | Permission modes (a complete ladder) | done | [m_0.37_permission_modes.md](m_0.37_permission_modes.md) | [37](../../design/v0.x/37-permission-modes.md) |
-| 0.38 | Session identity & transcript replay | done | [m_0.38_session_identity.md](m_0.38_session_identity.md) | [38](../../design/v0.x/38-session-identity-and-replay.md) |
+| 0.35 | VS Code extension + editor host | done | [m_0.35_vscode_extension.vscode.md](m_0.35_vscode_extension.vscode.md) | [35](../../design/v0.x/35-vscode-extension.vscode.md) |
+| 0.36 | Tool permissions (rules + analyzer) | done | [m_0.36_tool_permissions.vscode.md](m_0.36_tool_permissions.vscode.md) | [36](../../design/v0.x/36-tool-permissions.vscode.md) |
+| 0.37 | Permission modes (a complete ladder) | done | [m_0.37_permission_modes.vscode.md](m_0.37_permission_modes.vscode.md) | [37](../../design/v0.x/37-permission-modes.vscode.md) |
+| 0.38 | Session identity & transcript replay | done | [m_0.38_session_identity.vscode.md](m_0.38_session_identity.vscode.md) | [38](../../design/v0.x/38-session-identity-and-replay.vscode.md) |
 | 0.39 | Execute + Test campaign loop | done | [m_0.39_execute.md](m_0.39_execute.md) | [33](../../design/v0.x/33-delivery-ui.md) + vision §2 / §4.4 |
-| 0.40 | Editor alignment (Claude-class VS Code client) | done | [m_0.40_editor_alignment.md](m_0.40_editor_alignment.md) | [40](../../design/v0.x/40-editor-alignment.md) |
-| 0.41 | Auto mode + permissions manager | done | [m_0.41_permission_auto_and_manager.md](m_0.41_permission_auto_and_manager.md) | [41](../../design/v0.x/41-permission-auto-and-manager.md) |
-| 0.42 | Subagents, background tasks, and workflows | done | [m_0.42_subagents_and_tasks.md](m_0.42_subagents_and_tasks.md) | [42](../../design/v0.x/42-subagents-and-tasks.md) |
-| 0.43 | Context management | done | [m_0.43_context_management.md](m_0.43_context_management.md) | [43](../../design/v0.x/43-context-management.md) |
-| 0.44 | MCP management | done | [m_0.44_mcp_management.md](m_0.44_mcp_management.md) | [44](../../design/v0.x/44-mcp-management.md) |
-| 0.45 | Editor-host protocol smoke | done | [m_0.45_protocol_smoke.md](m_0.45_protocol_smoke.md) | [35](../../design/v0.x/35-vscode-extension.md) (CI tour; no new chapter) |
+| 0.40 | Editor alignment (Claude-class VS Code client) | done | [m_0.40_editor_alignment.vscode.md](m_0.40_editor_alignment.vscode.md) | [40](../../design/v0.x/40-editor-alignment.vscode.md) |
+| 0.41 | Auto mode + permissions manager | done | [m_0.41_permission_auto_and_manager.vscode.md](m_0.41_permission_auto_and_manager.vscode.md) | [41](../../design/v0.x/41-permission-auto-and-manager.vscode.md) |
+| 0.42 | Subagents, background tasks, and workflows | done | [m_0.42_subagents_and_tasks.vscode.md](m_0.42_subagents_and_tasks.vscode.md) | [42](../../design/v0.x/42-subagents-and-tasks.vscode.md) |
+| 0.43 | Context management | done | [m_0.43_context_management.vscode.md](m_0.43_context_management.vscode.md) | [43](../../design/v0.x/43-context-management.vscode.md) |
+| 0.44 | MCP management | done | [m_0.44_mcp_management.vscode.md](m_0.44_mcp_management.vscode.md) | [44](../../design/v0.x/44-mcp-management.vscode.md) |
+| 0.45 | Editor-host protocol smoke | done | [m_0.45_protocol_smoke.md](m_0.45_protocol_smoke.md) | [35](../../design/v0.x/35-vscode-extension.vscode.md) (CI tour; no new chapter) |
 
 ## Naming
 
@@ -87,6 +87,6 @@ Suggested implementation order: **0.11** ∥ **0.12** → **0.22** engine → **
 
 Explicitly **not** in this lock: Cursor Cloud/Bridge, in-process multi-agent graph, full Cursor hooks/plugins/team MDM, OS sandbox clone, notebook cell editor, DAP debugger, public plugin marketplace.
 
-**First-party IDE plugin UI** was previously on this exclusion list. It is now in scope as **0.35** — a VS Code extension over a new editor-host protocol ([35](../../design/v0.x/35-vscode-extension.md)), which supersedes that non-goal for the client only. Chapter [32](../../design/v0.x/32-sandbox-code-review.md) (hosted VS Code Server for sandbox review) is a separate, complementary line.
+**First-party IDE plugin UI** was previously on this exclusion list. It is now in scope as **0.35** — a VS Code extension over a new editor-host protocol ([35](../../design/v0.x/35-vscode-extension.vscode.md)), which supersedes that non-goal for the client only. Chapter [32](../../design/v0.x/32-sandbox-code-review.md) (hosted VS Code Server for sandbox review) is a separate, complementary line.
 
 Parent index: [`doc/roadmaps/README.md`](../README.md).

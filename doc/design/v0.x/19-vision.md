@@ -35,7 +35,7 @@ read_image
 
 ### Tool group
 
-`vision`. Default **off** unless `Options.Vision.Enabled` or model advertises vision via gateway catalog ([12](12-model-gateway.md)). The SDK default is unchanged: enabling it changes what the public package accepts for every caller. A *client* may still ask by default — the VS Code extension does, since p_0.46.9, and sends `vision: true` on `session.new` unless `anvil.vision` is false ([35](35-vscode-extension.md)).
+`vision`. Default **off** unless `Options.Vision.Enabled` or model advertises vision via gateway catalog ([12](12-model-gateway.md)). The SDK default is unchanged: enabling it changes what the public package accepts for every caller. A *client* may still ask by default — the VS Code extension does, since p_0.46.9, and sends `vision: true` on `session.new` unless `anvil.vision` is false ([35](35-vscode-extension.vscode.md)).
 
 ## Provider mapping
 

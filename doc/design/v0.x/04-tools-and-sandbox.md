@@ -54,6 +54,6 @@
 - `git_status` / `git_diff` / `git_log` → **[17-git-tools.md](17-git-tools.md)** / **0.17**.
 - `run_tests` / `build` → **[18-test-build.md](18-test-build.md)** / **0.18**.
 - Vision attachments / `read_image` → **[19-vision.md](19-vision.md)** / **0.19**.
-- `todo_write` → **[40-editor-alignment.md](40-editor-alignment.md)** / **0.40.9**. The model's own
+- `todo_write` → **[40-editor-alignment.vscode.md](40-editor-alignment.vscode.md)** / **0.40.9**. The model's own
   plan, published as a `todo` event and persisted as an ordinary tool message. It writes no file,
   runs no process, and is exempt from the permission gate: there is nothing in it to protect.

@@ -68,16 +68,16 @@ Product is at **0.46 delivered** — the editor line is finished for this design
 | Core SDK | 0.1 – 0.10 | Create / Prompt / Resume, streaming & stable error codes, security hardening, tools & sandbox, MCP, Cursor SDK **local** parity |
 | Agent capabilities | 0.11 – 0.22 | worker daemon, model gateway, retrieval, hooks & skills, web search, LSP, git tools, test & build, vision, plugins, dev memory, project search |
 | Automated coding tool-chain | 0.23 – 0.34 | YAML ops config, scheduler hub, web fleet console, mobile app, app fleets, clusters/workers, sandbox workers, loop guard, job event stream, sandbox code review, delivery UI, workspace domain |
-| Editor client | 0.35 | VS Code extension + `anvil-host` sidecar, packaged as per-platform VSIX — [design 35](doc/design/v0.x/35-vscode-extension.md) |
-| Tool permissions | 0.36 | `.anvil/permissions.json` rule set, a shell analyzer that proves read-only, the loading switch that makes `.anvil/hooks.json` real, and an approval card that remembers the pattern rather than the tool — [design 36](doc/design/v0.x/36-tool-permissions.md) |
-| Permission modes | 0.37 | A complete mode ladder — `dont_ask` runs only what the rules allow and `bypass` no longer overrules a written `ask` rule — plus `"defaultMode"` in the same workspace file, resolved by the host and reported to the composer — [design 37](doc/design/v0.x/37-permission-modes.md) |
-| Session identity & replay | 0.38 | A session named by its first message, a reviewable change on every tool card, and a transcript that survives a reload — [design 38](doc/design/v0.x/38-session-identity-and-replay.md) |
-| Editor alignment | 0.40 | Parallel tabs, rename/delete/search, per-hunk acceptance, checkpoints, fork, MCP and web tools switched on, live usage, a task list — [design 39](doc/design/v0.x/39-editor-alignment.md) |
-| Auto & rules manager | 0.41 | An `auto` rung that runs what the analyzer can prove and asks about the rest, and a structured manager for `.anvil/permissions.json` — [design 40](doc/design/v0.x/40-permission-auto-and-manager.md) |
-| Subagents & workflows | 0.42 | `spawn_agent` creates a child agent with inherited permissions, background shell and subagents share one task table, `/tasks` draws it in the editor, and `run_workflow` evaluates a declarative DAG — [design 41](doc/design/v0.x/41-subagents-and-tasks.md) |
-| Context management | 0.43 | A declared token budget with a safe cut, auto-compaction at run start and mid-run, `Agent.Compact` and the editor's `/compact`, cached-token accounting, and a meter that counts context left and the cache's remaining life — [design 42](doc/design/v0.x/42-context-management.md) |
-| MCP management | 0.44 | A host-owned MCP runtime with per-server state and failure isolation, atomic edits to `.cursor/mcp.json` that preserve unknown fields, reconnect, Streamable HTTP, host-owned OAuth tokens, a manager panel and `/mcp` — [design 43](doc/design/v0.x/43-mcp-management.md) |
-| Editor polish | 0.46 | LSP and test/build wiring, "rewind to here", a plan as a document, focus view with formulas and `/export`, keyboard and live-region accessibility, user-scope rules with protected paths, one root per window, and one version across the VSIX, the host and the docs — [design 44](doc/design/v0.x/44-editor-polish.md) |
+| Editor client | 0.35 | VS Code extension + `anvil-host` sidecar, packaged as per-platform VSIX — [design 35](doc/design/v0.x/35-vscode-extension.vscode.md) |
+| Tool permissions | 0.36 | `.anvil/permissions.json` rule set, a shell analyzer that proves read-only, the loading switch that makes `.anvil/hooks.json` real, and an approval card that remembers the pattern rather than the tool — [design 36](doc/design/v0.x/36-tool-permissions.vscode.md) |
+| Permission modes | 0.37 | A complete mode ladder — `dont_ask` runs only what the rules allow and `bypass` no longer overrules a written `ask` rule — plus `"defaultMode"` in the same workspace file, resolved by the host and reported to the composer — [design 37](doc/design/v0.x/37-permission-modes.vscode.md) |
+| Session identity & replay | 0.38 | A session named by its first message, a reviewable change on every tool card, and a transcript that survives a reload — [design 38](doc/design/v0.x/38-session-identity-and-replay.vscode.md) |
+| Editor alignment | 0.40 | Parallel tabs, rename/delete/search, per-hunk acceptance, checkpoints, fork, MCP and web tools switched on, live usage, a task list — [design 40](doc/design/v0.x/40-editor-alignment.vscode.md) |
+| Auto & rules manager | 0.41 | An `auto` rung that runs what the analyzer can prove and asks about the rest, and a structured manager for `.anvil/permissions.json` — [design 41](doc/design/v0.x/41-permission-auto-and-manager.vscode.md) |
+| Subagents & workflows | 0.42 | `spawn_agent` creates a child agent with inherited permissions, background shell and subagents share one task table, `/tasks` draws it in the editor, and `run_workflow` evaluates a declarative DAG — [design 42](doc/design/v0.x/42-subagents-and-tasks.vscode.md) |
+| Context management | 0.43 | A declared token budget with a safe cut, auto-compaction at run start and mid-run, `Agent.Compact` and the editor's `/compact`, cached-token accounting, and a meter that counts context left and the cache's remaining life — [design 43](doc/design/v0.x/43-context-management.vscode.md) |
+| MCP management | 0.44 | A host-owned MCP runtime with per-server state and failure isolation, atomic edits to `.cursor/mcp.json` that preserve unknown fields, reconnect, Streamable HTTP, host-owned OAuth tokens, a manager panel and `/mcp` — [design 44](doc/design/v0.x/44-mcp-management.vscode.md) |
+| Editor polish | 0.46 | LSP and test/build wiring, "rewind to here", a plan as a document, focus view with formulas and `/export`, keyboard and live-region accessibility, user-scope rules with protected paths, one root per window, and one version across the VSIX, the host and the docs — [design 46](doc/design/v0.x/46-editor-polish.vscode.md) |
 
 ### VS Code extension (0.35)
 
@@ -137,7 +137,7 @@ Local: anvil.LocalOptions{
 
 A workspace can write down what the agent may do, in `.anvil/permissions.json` — and the
 rules hold whether or not a client is there to ask, `bypass` included. See
-[design 36](doc/design/v0.x/36-tool-permissions.md).
+[design 36](doc/design/v0.x/36-tool-permissions.vscode.md).
 
 ```json
 {
@@ -190,7 +190,7 @@ Options.PermissionRules: []anvil.PermissionRule{
 
 A mode decides only **whether to ask** — never what the rules mean. Five of them:
 `ask`, `accept_edits`, `plan`, `dont_ask`, `bypass`. See
-[design 37](doc/design/v0.x/37-permission-modes.md).
+[design 37](doc/design/v0.x/37-permission-modes.vscode.md).
 
 - **`dont_ask`** is for a run with nobody watching: every gated call the workspace's rules do
   not already allow is refused, with the reason, and no prompt is ever raised. An `allow` rule
@@ -466,7 +466,7 @@ Logs: `.dev/*.log`. Ctrl+C in the script terminal stops the stack.
 
 See [`doc/design/v0.x/26-mobile-app.md`](doc/design/v0.x/26-mobile-app.md) and [`app/README.md`](app/README.md).
 
-Still deferred: Cursor Bridge, cloud agents, full hooks catalog, OIDC/RBAC, workflow/milestone DAG on mobile, and marketplace publication of the VS Code extension (0.35 ships a VSIX you install yourself — [design 35](doc/design/v0.x/35-vscode-extension.md)).
+Still deferred: Cursor Bridge, cloud agents, full hooks catalog, OIDC/RBAC, workflow/milestone DAG on mobile, and marketplace publication of the VS Code extension (0.35 ships a VSIX you install yourself — [design 35](doc/design/v0.x/35-vscode-extension.vscode.md)).
 
 ## License
 

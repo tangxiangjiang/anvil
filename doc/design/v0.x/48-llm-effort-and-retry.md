@@ -239,7 +239,7 @@ larger of the two is sent, so the thinking budget always fits). Zero means today
 | `KindAuth` | `auth` | 401/403 |
 
 `request_rejected` is what carries §3.2's "this model does not accept effort" to the container,
-with the provider's text intact, and what tells chapter [42](43-context-management.md)'s
+with the provider's text intact, and what tells chapter [42](43-context-management.vscode.md)'s
 compaction that the window was not as declared.
 
 ## 6. Non-goals
@@ -248,7 +248,7 @@ compaction that the window was not as declared.
   configuration passed in `Options`.
 - Automatic continuation after `length`.
 - Retrying a tool call, a subagent, or a workflow step. Those are above the provider layer
-  and chapter [41](42-subagents-and-tasks.md) lists them as non-goals.
+  and chapter [41](42-subagents-and-tasks.vscode.md) lists them as non-goals.
 - Sending reasoning text back to a provider in any form other than §3.4's opaque,
   run-scoped, provider-signed block.
 - A per-request effort on `Send`. Effort is an agent property so that a run's cost is

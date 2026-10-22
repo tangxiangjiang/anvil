@@ -35,7 +35,7 @@ See also: [m_0.2/p_0.2.1.md](m_0.2/p_0.2.1.md) notes section.
 | `overflow: hidden` + flex column is a trap | Any flex item that clips its own content has a minimum size of 0; a scroll container must stop its children shrinking (`flex: 0 0 auto`) |
 | Install the package early | This was found in the first five minutes of the manual pass; the longer a packaged build goes uninstalled, the more that pass has to find at once |
 
-See also: [m_0.35/p_0.35.7.md](m_0.35/p_0.35.7.md), [35-vscode-extension.md](../../design/v0.x/35-vscode-extension.md).
+See also: [m_0.35/p_0.35.7.vscode.md](m_0.35/p_0.35.7.vscode.md), [35-vscode-extension.vscode.md](../../design/v0.x/35-vscode-extension.vscode.md).
 
 ## 2026-10-16 — moving the chat from a sidebar view into an editor tab
 
@@ -55,7 +55,7 @@ See also: [m_0.35/p_0.35.7.md](m_0.35/p_0.35.7.md), [35-vscode-extension.md](../
 | A regenerable temp directory must not fail a check | `smoke:vsix` printed OK and then exited 1 on `EPERM` deleting the `anvil-host.exe` it had just run. A green check that reports failure trains you to ignore the exit code |
 | A defect fixed after review is not a lesson until it is guarded | Where the p_0.35.7 bug became a stylesheet invariant, this pass's invariants are the layout's shape: out of flow, measured once, the variables agreed across files |
 
-See also: [m_0.35/p_0.35.8.md](m_0.35/p_0.35.8.md), [35-vscode-extension.md](../../design/v0.x/35-vscode-extension.md).
+See also: [m_0.35/p_0.35.8.vscode.md](m_0.35/p_0.35.8.vscode.md), [35-vscode-extension.vscode.md](../../design/v0.x/35-vscode-extension.vscode.md).
 
 ## 2026-10-16 — rendering a Markdown reply while it is still arriving
 
@@ -73,7 +73,7 @@ See also: [m_0.35/p_0.35.8.md](m_0.35/p_0.35.8.md), [35-vscode-extension.md](../
 | A decode field on a struct shared with the request encoder is a leak | `openAIMessage` encodes requests *and* decodes responses, so giving it a `reasoning` field is how chain-of-thought starts being echoed upstream. The fix cost nothing to keep small — decode-only deltas live in the streaming struct — and a test asserting the serialized request body has no `reasoning` key keeps it that way |
 | Reasoner output is a firehose, and a dropped event is permanent | `Run.emit` drops silently when its buffer fills, and the transcript is append-only, so a dropped *text* chunk corrupts the turn. Coalesce reasoning by size (200 chars) at the source rather than forwarding one event per token |
 
-See also: [m_0.35/p_0.35.9.md](m_0.35/p_0.35.9.md), [35-vscode-extension.md](../../design/v0.x/35-vscode-extension.md).
+See also: [m_0.35/p_0.35.9.vscode.md](m_0.35/p_0.35.9.vscode.md), [35-vscode-extension.vscode.md](../../design/v0.x/35-vscode-extension.vscode.md).
 
 ## 2026-10-16 — a deny that has to hold when nobody is there
 
@@ -101,7 +101,7 @@ and true nowhere.
 | An analyzer that refuses everything unusual will refuse the ordinary | "No unquoted brace metacharacter" made `find . -exec rm {} +` unprovable, and find's `{}` is not brace expansion — bash expands a brace only with a comma or a range. The escape hatch had to be exactly `{}` as a whole token, because `{-delete,}` *would* expand and rewrite a later argument, and a matcher comparing the line as written would then match something the shell never runs |
 | A token prefix is the only safe prefix | `git status:*` must not admit `git status && rm -rf /` nor `git statusx`, and `strings.HasPrefix` admits both. Split, lex, compare argv — and require a single segment, so a compound line can never match a prefix rule |
 
-See also: [m_0.36/p_0.36.1.md](m_0.36/p_0.36.1.md), [36-tool-permissions.md](../../design/v0.x/36-tool-permissions.md).
+See also: [m_0.36/p_0.36.1.vscode.md](m_0.36/p_0.36.1.vscode.md), [36-tool-permissions.vscode.md](../../design/v0.x/36-tool-permissions.vscode.md).
 
 ## 2026-10-16 — the button that writes the rule
 
@@ -132,7 +132,7 @@ is why the check is a test that reads both sides as text, not a comment asking f
 | A new public method can be the cheaper fix | The host may import the public `anvil` package only, so the client-side glue became public wrappers (`LoadPermissionRules`, `AddPermissionRule`, `EvaluatePermissionRules`) over the same evaluation. The alternative — a second evaluator in the host — is how an explanation starts disagreeing with the decision it explains |
 | The extension version and the host banner move together, and they are numbered differently | The drift check compares *minor* lines, so bumping `package.json` alone would warn on every spawn. But `package.json` is numbered by the **phase** that changed the client (0.35.7 … 0.36.2) while the host's `Version` is numbered by the **milestone** (0.35.0-dev → 0.36.0-dev): one binary serves a whole line, one package serves one phase. Two schemes, one release line, and the minor has to agree across them |
 
-See also: [m_0.36/p_0.36.2.md](m_0.36/p_0.36.2.md), [36-tool-permissions.md](../../design/v0.x/36-tool-permissions.md), [35-vscode-extension.md](../../design/v0.x/35-vscode-extension.md).
+See also: [m_0.36/p_0.36.2.vscode.md](m_0.36/p_0.36.2.vscode.md), [36-tool-permissions.vscode.md](../../design/v0.x/36-tool-permissions.vscode.md), [35-vscode-extension.vscode.md](../../design/v0.x/35-vscode-extension.vscode.md).
 
 ## 2026-10-16 — the mode a workspace declares
 
@@ -162,4 +162,4 @@ a field it does not know about is a field the first "always allow" click deletes
 | A pinned vocabulary makes the shape of the declaration part of the contract | The drift test parses `protocol.ts` by regex, so rewriting `PermissionModeSources` as an array of named constants broke the test rather than the code. Either pin the literals or teach the test the new shape — but the test is doing its job: it noticed that the thing it pins had moved |
 | Find which assertion failed before theorizing about why | A drift test reported `actual: []` and cost several rounds of regex debugging on the *first* assertion. It was the second one. The failure output names the assertion; read that line first |
 
-See also: [m_0.37/p_0.37.2.md](m_0.37/p_0.37.2.md), [37-permission-modes.md](../../design/v0.x/37-permission-modes.md), [08-security.md](../../design/v0.x/08-security.md).
+See also: [m_0.37/p_0.37.2.vscode.md](m_0.37/p_0.37.2.vscode.md), [37-permission-modes.vscode.md](../../design/v0.x/37-permission-modes.vscode.md), [08-security.md](../../design/v0.x/08-security.md).

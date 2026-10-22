@@ -60,7 +60,7 @@ Alignment means **same jobs for the caller**, idiomatic Go — not protocol comp
 - `Options.SystemPrompt` replaces the default Anvil main prompt; rules still append when enabled.
 - `BuiltinTools` / `DisallowedTools`: names or groups `shell|read|write|edit|search|mcp`. Custom `Tools` are never filtered out.
 - The full group table — `shell, read, write, edit, search, skills, web, lsp, git, verify, vision, mcp` — now lives in `source/internal/tools/groups.go`, shared by the tool filters and by `Options.PermissionGroups` (0.35), so a client may name a group or a literal tool anywhere a selector is accepted.
-- `Options.PermissionGroups` widens or narrows which calls the `Permission` hook sees. Empty keeps the historical four (`write_file`, `edit_file`, `apply_patch`, `shell`); see [35](35-vscode-extension.md) for the editor's use of it and for `PermissionRequest.Preview`.
+- `Options.PermissionGroups` widens or narrows which calls the `Permission` hook sees. Empty keeps the historical four (`write_file`, `edit_file`, `apply_patch`, `shell`); see [35](35-vscode-extension.vscode.md) for the editor's use of it and for `PermissionRequest.Preview`.
 
 ### Force / Reload / ListRuns
 

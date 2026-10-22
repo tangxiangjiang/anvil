@@ -18,8 +18,8 @@ Caller intentionally grants the agent access to `cwd` and optionally shell. Prim
 | Path sandbox | All file tools confined to resolved `cwd` (see 04) |
 | Symlinks (0.8+) | `EvalSymlinks` / existing-prefix resolve before allow; deny targets outside cwd |
 | Shell gate | `LocalOptions.AllowShell`; default on but documented as dangerous |
-| Policy rules (0.36+) | `.anvil/permissions.json`: `deny > ask > allow`, evaluated in `Registry.Execute` **before** the permission callback; a malformed file fails `Create` rather than being ignored ([36](36-tool-permissions.md)) |
-| Starting mode (0.37+) | The same file's `defaultMode` names the mode a session opens in; `bypass` is refused from a project file and reported in words ([37](37-permission-modes.md)) |
+| Policy rules (0.36+) | `.anvil/permissions.json`: `deny > ask > allow`, evaluated in `Registry.Execute` **before** the permission callback; a malformed file fails `Create` rather than being ignored ([36](36-tool-permissions.vscode.md)) |
+| Starting mode (0.37+) | The same file's `defaultMode` names the mode a session opens in; `bypass` is refused from a project file and reported in words ([37](37-permission-modes.vscode.md)) |
 | Output caps | Truncate tool results (64 KiB default) |
 | Context size | Avoid dumping huge files into history without offset/limit |
 | Secrets | API key from opts/env; never write key into `.anvil` JSONL meta |
@@ -79,14 +79,14 @@ The same principle as the rules file, applied to the mode: a file that arrives w
 content from that repository, and a repository is not a person.
 
 - `.anvil/permissions.json` may carry `"defaultMode"`, and a session that is sent no mode takes
-  it ([37](37-permission-modes.md)). It is the same file the rules live in, under the same
+  it ([37](37-permission-modes.vscode.md)). It is the same file the rules live in, under the same
   `load_permissions` switch — a session that does not read the workspace's rules does not take
   its mode from them either.
 - **`"defaultMode": "bypass"` is refused.** A mode that approves every call without showing it
   is a choice a person makes for a session; a project file may not grant it for whoever opens
   the repository. The session starts in `ask` instead, and both the session result and
   `permissions.get` carry a sentence naming the value — refused and reported, neither fatal nor
-  silent. A word the ladder does not have is refused the same way. ([37](37-permission-modes.md).)
+  silent. A word the ladder does not have is refused the same way. ([37](37-permission-modes.vscode.md).)
 - The mode in force is decided by the host, from what the client sent and the file, and is
   reported back on the session result. The client renders that answer; it does not read the
   file to find it, so there is one implementation and it is the one that can enforce. A mode
