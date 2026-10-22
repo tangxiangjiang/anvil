@@ -25,7 +25,13 @@ type JobRunner interface {
 type schedJobRunner struct{ c *schedclient.Client }
 
 func (r schedJobRunner) CreateJobStream(ctx context.Context, in schedclient.JobCreate, onEvent func(daemon.JobEventBody)) (daemon.JobDoneBody, error) {
-	return r.c.CreateJobStream(ctx, in, onEvent)
+	client := r.c
+	if strings.TrimSpace(in.SchedulerURL) != "" && strings.TrimRight(in.SchedulerURL, "/") != strings.TrimRight(r.c.BaseURL, "/") {
+		copy := *r.c
+		copy.BaseURL = in.SchedulerURL
+		client = &copy
+	}
+	return client.CreateJobStream(ctx, in, onEvent)
 }
 
 // jobHub fans SSE frames for in-flight delivery jobs.
@@ -146,10 +152,11 @@ func (s *Server) jobRunner() JobRunner {
 
 // WorkerTarget is node/repo resolved from inventory for a worker id.
 type WorkerTarget struct {
-	NodeID   string
-	RepoID   string
-	Fleet    string
-	Approval bool
+	NodeID       string
+	RepoID       string
+	Fleet        string
+	SchedulerURL string
+	Approval     bool
 }
 
 func (s *Server) resolveWorkerTarget(workerID string) (WorkerTarget, error) {
@@ -198,7 +205,10 @@ func (s *Server) resolveWorkerTarget(workerID string) (WorkerTarget, error) {
 				if repo == "" {
 					repo = workerID
 				}
-				return WorkerTarget{NodeID: n.ID, RepoID: repo, Fleet: f.ID, Approval: approval}, nil
+				return WorkerTarget{
+					NodeID: n.ID, RepoID: repo, Fleet: f.ID,
+					SchedulerURL: f.SchedulerURL, Approval: approval,
+				}, nil
 			}
 		}
 	}
@@ -303,13 +313,14 @@ func (s *Server) startMilestonePhaseJobWithRollback(
 	ph.JobLastEvent = "queued"
 
 	in := schedclient.JobCreate{
-		JobID:       jobID,
-		RepoID:      target.RepoID,
-		Prompt:      prompt,
-		NodeID:      target.NodeID,
-		ForceStub:   forceStub,
-		MilestoneID: msID,
-		PhaseID:     ph.ID,
+		SchedulerURL: target.SchedulerURL,
+		JobID:        jobID,
+		RepoID:       target.RepoID,
+		Prompt:       prompt,
+		NodeID:       target.NodeID,
+		ForceStub:    forceStub,
+		MilestoneID:  msID,
+		PhaseID:      ph.ID,
 	}
 	if bind != nil {
 		in.EngReqID = bind.engID
@@ -340,6 +351,7 @@ func (s *Server) recordJobEvent(jobID, phaseID string, ev daemon.JobEventBody) {
 	if s.delivery == nil {
 		return
 	}
+	ev = eventForPersistence(ev)
 	_ = s.delivery.AppendJobEvent(delivery.JobEvent{
 		JobID:   jobID,
 		Type:    ev.Type,
@@ -350,6 +362,54 @@ func (s *Server) recordJobEvent(jobID, phaseID string, ev daemon.JobEventBody) {
 		IsError: ev.IsError,
 		Step:    ev.Step,
 	})
+}
+
+// eventForPersistence bounds history and strips secret-shaped JSON fields. Live
+// SSE still carries the tool protocol needed by the owning browser; durable
+// history must not become a credential store.
+func eventForPersistence(ev daemon.JobEventBody) daemon.JobEventBody {
+	const maxField = 64 << 10
+	ev.Text = truncateBytes(ev.Text, maxField)
+	ev.Content = truncateBytes(ev.Content, maxField)
+	if len(ev.Args) > maxField {
+		ev.Args = json.RawMessage(`{"_redacted":"arguments exceeded persistence limit"}`)
+	} else if len(ev.Args) > 0 {
+		var value any
+		if json.Unmarshal(ev.Args, &value) == nil {
+			redactSecretFields(value)
+			if raw, err := json.Marshal(value); err == nil {
+				ev.Args = raw
+			}
+		}
+	}
+	return ev
+}
+
+func truncateBytes(value string, max int) string {
+	if len(value) <= max {
+		return value
+	}
+	return value[:max] + "\n…[truncated]"
+}
+
+func redactSecretFields(value any) {
+	switch v := value.(type) {
+	case map[string]any:
+		for key, child := range v {
+			lower := strings.ToLower(key)
+			if strings.Contains(lower, "password") || strings.Contains(lower, "secret") ||
+				strings.Contains(lower, "token") || strings.Contains(lower, "api_key") ||
+				strings.Contains(lower, "authorization") {
+				v[key] = "[redacted]"
+				continue
+			}
+			redactSecretFields(child)
+		}
+	case []any:
+		for _, child := range v {
+			redactSecretFields(child)
+		}
+	}
 }
 
 // beginPhaseJob records the job header so its events have a row to belong to and
@@ -524,16 +584,22 @@ func (s *Server) softStopMilestoneJobs(msID string, runState string) error {
 	hub := s.ensureJobHub()
 	ph, err := s.delivery.ActivePhaseJob(msID)
 	if err == nil && ph.JobID != "" {
-		_ = s.cancelSchedulerJob(ph.JobID)
+		if err := s.cancelSchedulerJob(ph.JobID); err != nil {
+			return fmt.Errorf("cancel phase job: %w", err)
+		}
 		_ = s.delivery.CompletePhaseJob(ph.ID, delivery.JobCancelled, "cancelled", "cancelled (pause/stop)")
+		_ = s.delivery.FinishJob(ph.JobID, "cancelled", "")
 		hub.publishDone(ph.JobID, daemon.JobDoneBody{JobID: ph.JobID, Status: "cancelled"}, "")
 	}
 	ms, err := s.delivery.GetMilestone(msID)
 	if err == nil {
 		st := ms.CampaignJobStatus
 		if (st == delivery.JobRunning || st == delivery.JobQueued) && ms.CampaignJobID != "" {
-			_ = s.cancelSchedulerJob(ms.CampaignJobID)
+			if err := s.cancelSchedulerJob(ms.CampaignJobID); err != nil {
+				return fmt.Errorf("cancel campaign job: %w", err)
+			}
 			_ = s.delivery.ClearCampaignJob(msID, delivery.JobCancelled, "cancelled (pause/stop)")
+			_ = s.delivery.FinishJob(ms.CampaignJobID, "cancelled", "")
 			hub.publishDone(ms.CampaignJobID, daemon.JobDoneBody{JobID: ms.CampaignJobID, Status: "cancelled"}, "")
 		}
 	}
@@ -543,11 +609,23 @@ func (s *Server) softStopMilestoneJobs(msID string, runState string) error {
 }
 
 func (s *Server) cancelSchedulerJob(jobID string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	return s.cancelSchedulerJobContext(ctx, jobID)
+}
+
+func (s *Server) cancelSchedulerJobContext(ctx context.Context, jobID string) error {
 	jobID = strings.TrimSpace(jobID)
 	if jobID == "" {
 		return fmt.Errorf("job id required")
 	}
+	if s.jobCanceler != nil {
+		return s.jobCanceler(jobID)
+	}
 	tok := s.cfg.SchedulerToken()
+	if len(s.cfg.Fleets) == 0 && s.sched != nil {
+		return s.sched.CancelJob(ctx, jobID)
+	}
 	var last error
 	for _, f := range s.cfg.Fleets {
 		cli := &schedclient.Client{
@@ -555,7 +633,7 @@ func (s *Server) cancelSchedulerJob(jobID string) error {
 			Token:   tok,
 			HTTP:    &http.Client{Timeout: 8 * time.Second},
 		}
-		if err := cli.CancelJob(context.Background(), jobID); err != nil {
+		if err := cli.CancelJob(ctx, jobID); err != nil {
 			last = err
 			continue
 		}

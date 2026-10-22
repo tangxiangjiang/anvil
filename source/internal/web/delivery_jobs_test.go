@@ -5,8 +5,10 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -216,4 +218,18 @@ func TestLaterPhaseJobStartFailureStillPauses(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal("later phase job start failure did not pause run")
+}
+
+func TestPersistedJobEventRedactsSecretsAndBoundsPayload(t *testing.T) {
+	ev := eventForPersistence(daemon.JobEventBody{
+		Args:    json.RawMessage(`{"token":"abc","nested":{"api_key":"def"},"path":"ok"}`),
+		Content: strings.Repeat("x", (64<<10)+1),
+	})
+	text := string(ev.Args)
+	if strings.Contains(text, "abc") || strings.Contains(text, "def") || !strings.Contains(text, `"path":"ok"`) {
+		t.Fatalf("redacted args = %s", text)
+	}
+	if len(ev.Content) > (64<<10)+32 || !strings.Contains(ev.Content, "[truncated]") {
+		t.Fatalf("content was not bounded: %d", len(ev.Content))
+	}
 }

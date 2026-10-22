@@ -177,6 +177,9 @@ func (c *Client) RegisterWorkspace(ctx context.Context, id, token, name string) 
 
 // JobCreate is POST /v1/jobs body (app-facing).
 type JobCreate struct {
+	// SchedulerURL is a web-internal routing hint for multi-fleet deployments.
+	// It is never serialized into the scheduler protocol.
+	SchedulerURL      string   `json:"-"`
 	JobID             string   `json:"job_id,omitempty"`
 	RepoID            string   `json:"repo_id"`
 	Prompt            string   `json:"prompt"`

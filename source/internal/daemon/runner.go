@@ -86,9 +86,25 @@ func (r *EmbeddedRunner) runWith(ctx context.Context, job JobAssignBody, cwd str
 	}
 	opts.Plugins = append([]string(nil), job.Plugins...)
 	opts.PluginDirs = append([]string(nil), r.PluginDirs...)
+	// A daemon Worker is a workspace-scoped SDK client. Load only project
+	// configuration from that checkout: user settings belong to an interactive
+	// editor process and may contain unrelated credentials.
+	opts.Local.LoadPermissions = true
+	opts.Local.LoadHooks = true
+	opts.Local.SettingSources = []anvil.SettingSource{anvil.SettingSourceProject}
+	opts.PermissionGroups = []string{"write", "edit", "shell", "verify", "web", "mcp", "agent"}
 	if job.ApprovalSessionID != "" {
 		opts.Permission = r.approvalBroker().permission(job, emit)
-		opts.PermissionGroups = []string{"write", "edit", "shell", "verify", "web", "mcp", "agent"}
+	} else {
+		// Delivery is unattended. Explicit allow rules still run without calling
+		// this callback; anything that remains undecided fails closed immediately
+		// instead of silently bypassing policy or waiting for a browser forever.
+		opts.Permission = func(context.Context, anvil.PermissionRequest) (anvil.PermissionDecision, error) {
+			return anvil.PermissionDecision{
+				Allow:   false,
+				Message: "unattended job requires an explicit workspace permission allow rule",
+			}, nil
+		}
 	}
 	// Daemon already intersected allowlist; pin Available to resolved set so Init cannot expand.
 	opts.PluginPolicy = &anvil.PluginPolicy{

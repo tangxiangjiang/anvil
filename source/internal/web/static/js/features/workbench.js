@@ -24,12 +24,14 @@ window.Features.workbench = {
   _cards: null,
   _steps: 0,
   _approvals: null,
+  _resumeId: null,
 
   async mount(el) {
     this.el = el;
     this._sessionId = null;
     this._cards = new Map();
     this._approvals = new Map();
+    this._resumeId = null;
     if (!this._snapshotCache) {
       this._snapshotCache = window.AnvilUI.swr.createStore({ maxEntries: 2, maxAgeMs: 5 * 60 * 1000 });
     }
@@ -159,6 +161,7 @@ window.Features.workbench = {
               id: session.id,
               worker_id: session.worker_id,
               state: session.state,
+              resumable: Boolean(session.resumable),
             })),
           }),
         },
@@ -191,14 +194,16 @@ window.Features.workbench = {
       box.innerHTML = `<div class="del-empty"><p class="muted">No Sessions yet. Start one on the right.</p></div>`;
     } else {
       box.innerHTML = rows.map(
-        (s) => `
+        (s) => `<div class="wb-sess-row">
         <button type="button" class="wb-sess${s.id === this._sessionId ? " active" : ""}" data-wb-open="${window.AnvilUI.esc(s.id)}">
           <span class="wb-sess-state ${window.AnvilUI.badgeClass(s.state)}"></span>
           <span class="wb-sess-body">
             <span class="wb-sess-prompt">${window.AnvilUI.esc(s.id || "Session")}</span>
             <span class="muted wb-sess-meta">${window.AnvilUI.esc(s.worker_id)} · ${window.AnvilUI.esc(s.state)}</span>
           </span>
-        </button>`,
+        </button>
+        ${s.resumable ? `<button type="button" class="ghost" data-wb-resume="${window.AnvilUI.esc(s.id)}" data-worker="${window.AnvilUI.esc(s.worker_id)}">Resume</button>` : ""}
+        </div>`,
       ).join("");
     }
     const state = this._snapshotState || {};
@@ -214,6 +219,25 @@ window.Features.workbench = {
     box.querySelectorAll("[data-wb-open]").forEach((btn) => {
       btn.addEventListener("click", () => this.attach(btn.getAttribute("data-wb-open")));
     });
+    box.querySelectorAll("[data-wb-resume]").forEach((btn) => {
+      btn.addEventListener("click", () => this.prepareResume(
+        btn.getAttribute("data-wb-resume"),
+        btn.getAttribute("data-worker"),
+      ));
+    });
+  },
+
+  prepareResume(sessionId, workerId) {
+    this._resumeId = sessionId;
+    const worker = this.el?.querySelector("#wb-worker");
+    if (worker && [...worker.options].some((option) => option.value === workerId)) worker.value = workerId;
+    const start = this.el?.querySelector("#wb-start");
+    if (start) start.textContent = "Resume Session";
+    const prompt = this.el?.querySelector("#wb-prompt");
+    if (prompt) {
+      prompt.placeholder = "Continue this Session…";
+      prompt.focus();
+    }
   },
 
   async start() {
@@ -236,7 +260,11 @@ window.Features.workbench = {
       { key: "wb-start", runningLabel: "Starting…", host: el.querySelector("#del-ui-modal"), errorTitle: "Start failed" },
       async () => {
         try {
-          const sess = await api.v1.workbenchStart({ worker_id: workerId, prompt });
+          const body = { worker_id: workerId, prompt };
+          if (this._resumeId) body.resume_id = this._resumeId;
+          const sess = await api.v1.workbenchStart(body);
+          this._resumeId = null;
+          btn.textContent = "Start Session";
           el.querySelector("#wb-prompt").value = "";
           await this.refresh();
           await this.attach(sess.id);

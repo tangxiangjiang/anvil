@@ -239,10 +239,10 @@ func TestWorkbenchCancelAsksTheScheduler(t *testing.T) {
 		t.Fatalf("state after cancel = %q, want cancelled", got)
 	}
 
-	// Cancelling a finished session is a conflict, not a silent success.
+	// Cancelling a finished session is idempotent.
 	w = call(t, s, tok, http.MethodPost, "/api/v1/workbench/sessions/wb-cancel/cancel", "")
-	if w.Code != http.StatusConflict {
-		t.Fatalf("second cancel: want 409, got %d", w.Code)
+	if w.Code != http.StatusOK {
+		t.Fatalf("second cancel: want 200, got %d", w.Code)
 	}
 }
 
@@ -427,5 +427,38 @@ func TestPhaseJobBridgeIsReadOnlyAndReplays(t *testing.T) {
 	w = call(t, s, tok, http.MethodPost, "/api/v1/workbench/sessions/phasejob-phase-1/cancel", "")
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("phase bridge mutation: want 405, got %d", w.Code)
+	}
+}
+
+func TestProductionConstructionUsesSchedulerForRunAndCancel(t *testing.T) {
+	t.Setenv("ANVIL_SCHEDULER_TOKEN", "prod-token")
+	var cancelled string
+	scheduler := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer prod-token" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/cancel") {
+			cancelled = r.URL.Path
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer scheduler.Close()
+
+	cfg := Config{
+		SchedulerURL: scheduler.URL, SchedulerTokenEnv: "ANVIL_SCHEDULER_TOKEN",
+		Fleets: []FleetEntry{{ID: "prod", SchedulerURL: scheduler.URL}},
+	}
+	s := New(cfg, nil, nil, nil, nil, nil)
+	if _, ok := s.jobs.(schedJobRunner); !ok {
+		t.Fatalf("production runner = %T, want schedJobRunner", s.jobs)
+	}
+	if err := s.jobsCancel(context.Background(), "job-prod"); err != nil {
+		t.Fatal(err)
+	}
+	if cancelled != "/v1/jobs/job-prod/cancel" {
+		t.Fatalf("cancel path = %q", cancelled)
 	}
 }

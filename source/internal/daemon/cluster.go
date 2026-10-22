@@ -265,7 +265,7 @@ func (e *ClusterEdge) forwardAssign(ctx context.Context, sched net.Conn, job Job
 	job.Plugins = resolved
 
 	jobCtx, cancel := context.WithCancel(ctx)
-	_, err = e.server.Slots().TryAcquire(job.JobID, cancel)
+	workerID, err := e.server.Slots().TryAcquire(job.JobID, cancel)
 	if err != nil {
 		cancel()
 		done, _ := MarshalBody(JobDoneBody{JobID: job.JobID, Status: "error", Error: err.Error()})
@@ -275,14 +275,20 @@ func (e *ClusterEdge) forwardAssign(ctx context.Context, sched net.Conn, job Job
 	defer e.server.Slots().Release(job.JobID)
 	defer cancel()
 
-	doneBody := e.server.runner.Run(jobCtx, job, cwd, func(ev JobEventBody) {
+	emit := func(ev JobEventBody) {
 		ev.JobID = job.JobID
 		body, err := MarshalBody(ev)
 		if err != nil {
 			return
 		}
 		_ = e.write(sched, Envelope{Kind: KindClusterEvent, Body: body})
-	})
+	}
+	var doneBody JobDoneBody
+	if r, ok := e.server.runner.(*EmbeddedRunner); ok {
+		doneBody = r.RunOn(jobCtx, job, cwd, e.server.Slots().LLMFor(workerID), emit)
+	} else {
+		doneBody = e.server.runner.Run(jobCtx, job, cwd, emit)
+	}
 	body, _ := MarshalBody(doneBody)
 	_ = e.write(sched, Envelope{Kind: KindClusterDone, Body: body})
 }

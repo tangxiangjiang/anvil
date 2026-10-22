@@ -35,9 +35,14 @@ import (
 type workbenchSession struct {
 	ID       string
 	JobID    string
+	OwnerID  int64
 	WorkerID string
 	Started  time.Time
 	Prompt   string
+	// ResumeSessionID is the durable Workbench session whose SDK AgentID was
+	// claimed for this run. The browser never supplies an AgentID directly.
+	ResumeSessionID string
+	AgentID         string
 
 	mu        sync.Mutex
 	events    []daemon.JobEventBody
@@ -243,9 +248,10 @@ type WorkbenchSession struct {
 	Prompt    string `json:"prompt"`
 	StartedAt string `json:"started_at"`
 	// State is running | finished | error | cancelled.
-	State    string `json:"state"`
-	Approval bool   `json:"approval_supported"`
-	ReadOnly bool   `json:"read_only,omitempty"`
+	State     string `json:"state"`
+	Approval  bool   `json:"approval_supported"`
+	ReadOnly  bool   `json:"read_only,omitempty"`
+	Resumable bool   `json:"resumable,omitempty"`
 }
 
 func sessionState(s *workbenchSession) string {
@@ -266,14 +272,19 @@ func sessionState(s *workbenchSession) string {
 }
 
 func sessionView(s *workbenchSession) WorkbenchSession {
+	s.mu.Lock()
+	agentID := s.AgentID
+	s.mu.Unlock()
+	state := sessionState(s)
 	return WorkbenchSession{
 		ID:        s.ID,
 		JobID:     s.JobID,
 		WorkerID:  s.WorkerID,
 		Prompt:    s.Prompt,
 		StartedAt: s.Started.UTC().Format(time.RFC3339),
-		State:     sessionState(s),
+		State:     state,
 		Approval:  true,
+		Resumable: agentID != "" && state != "running",
 	}
 }
 
@@ -324,9 +335,31 @@ func (s *Server) handleWorkbench(w http.ResponseWriter, r *http.Request) {
 		s.workbench.mu.Lock()
 		out := make([]WorkbenchSession, 0, len(s.workbench.sessions))
 		for _, sess := range s.workbench.sessions {
+			if sess.OwnerID != 0 && sess.OwnerID != userFrom(r.Context()).ID {
+				continue
+			}
 			out = append(out, sessionView(sess))
 		}
 		s.workbench.mu.Unlock()
+		if s.delivery != nil {
+			if stored, err := s.delivery.ListWorkbenchSessions(userFrom(r.Context()).ID, 100); err == nil {
+				live := make(map[string]bool, len(out))
+				for _, item := range out {
+					live[item.ID] = true
+				}
+				for _, rec := range stored {
+					if live[rec.ID] {
+						continue
+					}
+					out = append(out, WorkbenchSession{
+						ID: rec.ID, JobID: rec.JobID, WorkerID: rec.WorkerID,
+						StartedAt: rec.StartedAt, State: rec.State,
+						Approval: false, ReadOnly: true,
+						Resumable: rec.AgentID != "" && rec.State != "running",
+					})
+				}
+			}
+		}
 		// Phase/campaign jobs are the read-only side of the same stream. They
 		// use the persisted job table so they remain addressable after restart.
 		if s.delivery != nil {
@@ -375,7 +408,14 @@ func (s *Server) handleWorkbench(w http.ResponseWriter, r *http.Request) {
 				s.handlePhaseJobBridge(w, r, id)
 				return
 			}
+			if s.handleStoredWorkbench(w, r, id) {
+				return
+			}
 			http.Error(w, "unknown session: "+id, http.StatusNotFound)
+			return
+		}
+		if sess.OwnerID != 0 && sess.OwnerID != userFrom(r.Context()).ID {
+			http.Error(w, "session is outside this user scope", http.StatusForbidden)
 			return
 		}
 		if len(parts) == 2 && r.Method == http.MethodGet {
@@ -452,15 +492,31 @@ func (s *Server) handleWorkbenchStart(w http.ResponseWriter, r *http.Request) {
 	if nodeID == "" {
 		nodeID = target.NodeID
 	}
+	ownerID := userFrom(r.Context()).ID
+	resumeSessionID := strings.TrimSpace(in.ResumeID)
+	resumeAgentID := ""
+	if resumeSessionID != "" {
+		if s.delivery == nil {
+			http.Error(w, "resume store is not configured", http.StatusServiceUnavailable)
+			return
+		}
+		resumeAgentID, err = s.delivery.ClaimWorkbenchResume(resumeSessionID, ownerID, workerID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+	}
 
 	sess := &workbenchSession{
-		ID:        "wb-" + id.New(),
-		JobID:     "wbjob-" + id.New(),
-		WorkerID:  workerID,
-		Started:   time.Now(),
-		Prompt:    in.Prompt,
-		subs:      map[chan wbFrame]struct{}{},
-		approvals: map[string]string{},
+		ID:              "wb-" + id.New(),
+		JobID:           "wbjob-" + id.New(),
+		OwnerID:         ownerID,
+		WorkerID:        workerID,
+		Started:         time.Now(),
+		Prompt:          in.Prompt,
+		ResumeSessionID: resumeSessionID,
+		subs:            map[chan wbFrame]struct{}{},
+		approvals:       map[string]string{},
 	}
 	s.workbench.add(sess)
 	s.log.Printf("workbench.session id=%s worker=%s job=%s", sess.ID, workerID, sess.JobID)
@@ -468,19 +524,39 @@ func (s *Server) handleWorkbenchStart(w http.ResponseWriter, r *http.Request) {
 	// Persist the job header up front, so its events have a row to belong to and
 	// the history list knows about a session that is still running (p_0.45.12).
 	if s.delivery != nil {
-		_ = s.delivery.BeginJob(delivery.JobRecord{
+		if err := s.delivery.BeginJob(delivery.JobRecord{
 			JobID:    sess.JobID,
 			Kind:     "workbench",
 			WorkerID: workerID,
 			Status:   "running",
-		})
+		}); err != nil {
+			if resumeSessionID != "" {
+				_ = s.delivery.ReleaseWorkbenchResume(resumeSessionID)
+			}
+			s.workbench.drop(sess.ID)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := s.delivery.BeginWorkbenchSession(delivery.WorkbenchSessionRecord{
+			ID: sess.ID, JobID: sess.JobID, OwnerID: ownerID, WorkerID: workerID,
+			StartedAt: sess.Started.UTC().Format(time.RFC3339),
+		}); err != nil {
+			if resumeSessionID != "" {
+				_ = s.delivery.ReleaseWorkbenchResume(resumeSessionID)
+			}
+			_ = s.delivery.FinishJob(sess.JobID, "error", "session persistence failed")
+			s.workbench.drop(sess.ID)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 
 	go s.runWorkbenchSession(sess, schedclient.JobCreate{
+		SchedulerURL:      target.SchedulerURL,
 		JobID:             sess.JobID,
 		RepoID:            repoID,
 		Prompt:            in.Prompt,
-		ResumeID:          in.ResumeID,
+		ResumeID:          resumeAgentID,
 		Model:             in.Model,
 		MaxSteps:          in.MaxSteps,
 		NodeID:            nodeID,
@@ -494,6 +570,9 @@ func (s *Server) handleWorkbenchStart(w http.ResponseWriter, r *http.Request) {
 
 // runWorkbenchSession drives the job and fans its events into the session.
 func (s *Server) runWorkbenchSession(sess *workbenchSession, in schedclient.JobCreate) {
+	if sess.ResumeSessionID != "" && s.delivery != nil {
+		defer func() { _ = s.delivery.ReleaseWorkbenchResume(sess.ResumeSessionID) }()
+	}
 	defer func() {
 		if rec := recover(); rec != nil {
 			sess.finish(daemon.JobDoneBody{JobID: sess.JobID, Status: "error", Error: fmt.Sprint(rec)}, fmt.Sprint(rec))
@@ -532,15 +611,16 @@ func (s *Server) runWorkbenchSession(sess *workbenchSession, in schedclient.JobC
 		// is the fast path for a live subscriber, the table is what makes the run
 		// readable after the process that ran it is gone.
 		if s.delivery != nil {
+			persisted := eventForPersistence(ev)
 			_ = s.delivery.AppendJobEvent(delivery.JobEvent{
-				JobID:   ev.JobID,
-				Type:    ev.Type,
-				Text:    ev.Text,
-				Name:    ev.Name,
-				Args:    string(ev.Args),
-				Content: ev.Content,
-				IsError: ev.IsError,
-				Step:    ev.Step,
+				JobID:   persisted.JobID,
+				Type:    persisted.Type,
+				Text:    persisted.Text,
+				Name:    persisted.Name,
+				Args:    string(persisted.Args),
+				Content: persisted.Content,
+				IsError: persisted.IsError,
+				Step:    persisted.Step,
 			})
 		}
 	})
@@ -554,12 +634,16 @@ func (s *Server) runWorkbenchSession(sess *workbenchSession, in schedclient.JobC
 		}
 	}
 	sess.finish(done, errText)
+	sess.mu.Lock()
+	sess.AgentID = done.AgentID
+	sess.mu.Unlock()
 	if s.delivery != nil {
 		status := done.Status
 		if status == "" {
 			status = "finished"
 		}
 		_ = s.delivery.FinishJob(sess.JobID, status, done.Error)
+		_ = s.delivery.FinishWorkbenchSession(sess.ID, done.AgentID, status)
 	}
 }
 
@@ -633,6 +717,42 @@ func (s *Server) handleWorkbenchEvents(w http.ResponseWriter, r *http.Request, s
 			flusher.Flush()
 		}
 	}
+}
+
+// handleStoredWorkbench serves a completed session after anvil-web restart. It
+// is read-only; Resume creates a new owned session through POST /sessions.
+func (s *Server) handleStoredWorkbench(w http.ResponseWriter, r *http.Request, id string) bool {
+	if s.delivery == nil {
+		return false
+	}
+	rec, err := s.delivery.WorkbenchSession(id)
+	if err != nil {
+		return false
+	}
+	if rec.OwnerID != userFrom(r.Context()).ID {
+		http.Error(w, "session is outside this user scope", http.StatusForbidden)
+		return true
+	}
+	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/workbench"), "/")
+	parts := strings.Split(path, "/")
+	view := WorkbenchSession{
+		ID: rec.ID, JobID: rec.JobID, WorkerID: rec.WorkerID,
+		StartedAt: rec.StartedAt, State: rec.State, ReadOnly: true,
+		Resumable: rec.AgentID != "" && rec.State != "running",
+	}
+	if len(parts) == 2 && r.Method == http.MethodGet {
+		writeJSON(w, http.StatusOK, view)
+		return true
+	}
+	if len(parts) == 3 && parts[2] == "events" && r.Method == http.MethodGet {
+		s.handlePhaseJobBridgeEvents(w, r, delivery.JobRecord{
+			JobID: rec.JobID, Kind: "workbench", WorkerID: rec.WorkerID,
+			Status: rec.State, StartedAt: rec.StartedAt,
+		})
+		return true
+	}
+	http.Error(w, "stored sessions are read-only; start a Resume instead", http.StatusMethodNotAllowed)
+	return true
 }
 
 func (s *Server) handlePhaseJobBridge(w http.ResponseWriter, r *http.Request, bridgeID string) {
@@ -741,13 +861,18 @@ func (s *Server) handlePhaseJobBridgeEvents(w http.ResponseWriter, r *http.Reque
 
 func (s *Server) handleWorkbenchCancel(w http.ResponseWriter, r *http.Request, sess *workbenchSession) {
 	if _, done, _ := sess.snapshot(); done != nil {
-		http.Error(w, "session already finished", http.StatusConflict)
+		// Stop is idempotent: a retry after the terminal frame is already visible
+		// has achieved the caller's intent.
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "session_id": sess.ID, "already_stopped": true})
 		return
 	}
 	// One implementation: the job-level cancel decides how to stop a job, and this
 	// route is the session-shaped view of the same act. Two would drift, and the
 	// operator cannot tell which one is authoritative.
-	_ = s.jobsCancel(sess.JobID)
+	if err := s.jobsCancel(r.Context(), sess.JobID); err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
 	s.cancelWorkbenchSession(sess)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "session_id": sess.ID})
 }
@@ -817,9 +942,14 @@ func (s *Server) handleWorkbenchApproval(w http.ResponseWriter, r *http.Request,
 }
 
 // jobsCancel is a seam so tests can observe the scheduler call.
-func (s *Server) jobsCancel(jobID string) error {
+func (s *Server) jobsCancel(ctx context.Context, jobID string) error {
 	if s.jobCanceler != nil {
 		return s.jobCanceler(jobID)
 	}
-	return nil
+	if s.sched == nil {
+		return fmt.Errorf("scheduler client is not configured")
+	}
+	cancelCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	return s.cancelSchedulerJobContext(cancelCtx, jobID)
 }

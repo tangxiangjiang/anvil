@@ -113,6 +113,23 @@ func TestCampaignRunFixRegressJobs(t *testing.T) {
 		t.Fatal("expected job id")
 	}
 	waitCampaignIdle(t, ds, msID)
+	jobs, err := ds.ListJobs(delivery.JobFilter{MilestoneID: msID, Limit: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundRun := false
+	for _, job := range jobs {
+		if job.JobID == res.JobID && job.Kind == delivery.CampaignKindRun && job.Status == "finished" {
+			foundRun = true
+		}
+	}
+	if !foundRun {
+		t.Fatalf("campaign job header was not persisted: %+v", jobs)
+	}
+	events, err := ds.JobEvents(res.JobID)
+	if err != nil || len(events) == 0 || events[0].Text != "stub-run" {
+		t.Fatalf("campaign history = %+v, %v", events, err)
+	}
 
 	cases, err := ds.Snapshot()
 	if err != nil {

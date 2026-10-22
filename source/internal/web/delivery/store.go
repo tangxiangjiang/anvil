@@ -264,6 +264,9 @@ CREATE TABLE IF NOT EXISTS delivery_trash (
 	if err := s.ensureJobEventTables(); err != nil {
 		return err
 	}
+	if err := s.ensureWorkbenchSessionTable(); err != nil {
+		return err
+	}
 	if err := s.ensureAuditTable(); err != nil {
 		return err
 	}

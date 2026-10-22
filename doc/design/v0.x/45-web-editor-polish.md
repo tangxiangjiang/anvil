@@ -208,8 +208,43 @@ expired, cross-session, and post-cancel responses fail closed. Stop releases pen
 denials. `allow_session` is scoped to the Workbench session plus tool and optional preview path.
 Edited arguments are accepted only as bounded valid JSON and replace the SDK call arguments.
 
-Phase/campaign jobs do not opt into this gate. They appear in Workbench read-only, using the same
-renderer: the live job fan while running and persisted events after completion.
+Phase/campaign jobs do not opt into the browser gate. They load project permission rules, hooks and
+MCP configuration at the acquired Worker's checkout. An explicit allow rule can authorize a gated
+call; anything still undecided is denied immediately. An unattended run therefore never silently
+bypasses a prompt and never waits forever for a browser that is not attached. They appear in
+Workbench read-only, using the same renderer: the live job fan while running and persisted events
+after completion.
+
+## 5. Production wiring and restart contract
+
+p_0.45.15 corrects the earlier assumption that the existence of scheduler, daemon and Workbench
+pieces meant the production path was connected.
+
+The production chain is:
+
+`anvil-web → schedclient → scheduler owner map → cluster.assign → acquired agentd Worker
+→ EmbeddedRunner.RunOn(LLMFor(workerID)) → SDK → configured provider/tools`.
+
+Start, stream, terminal result, approval and cancel all use that authenticated chain. Cancel is
+remote-first: web changes local context/business projection only after the owning scheduler accepted
+the cancel. Retries after a terminal state are idempotent. A Workbench session is owned by its web
+user; resume accepts a prior Workbench session id, not an arbitrary SDK AgentID, and atomically claims
+the durable mapping for the same user and Worker.
+
+Project runtime configuration is read from the selected checkout only:
+`.anvil/permissions.json`, `.anvil/hooks.json`, and project MCP configuration. User-level settings
+are intentionally not loaded by agentd. Config parse failure fails job creation; hook command
+execution remains disabled unless daemon policy explicitly enables it. Persisted Job events are
+bounded and secret-shaped argument fields are redacted. Provider keys remain environment/config
+secrets and are not written to Worker or Job state.
+
+Scheduler node connections, job waiters, approval callbacks and cancel routing are leases, not
+durable continuations. After scheduler restart nodes reconnect automatically, but pre-restart jobs
+and approvals are reported unavailable and must not be represented as live. Workspace join tokens
+must be registered again by their owning web control plane. Dynamic LLM state returns to the
+configured bootstrap source; API key values are never persisted by the scheduler. Worker desired
+state and non-secret per-Worker LLM fields persist under the daemon sandbox; a daemon restart reloads
+them, while jobs that were in progress terminate and their web-side stream records an error.
 
 ### Non-goals (assistant)
 

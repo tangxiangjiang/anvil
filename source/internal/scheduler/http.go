@@ -443,13 +443,21 @@ func (h *Hub) handleJobs(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, 256<<10)
 	var req jobRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
 		http.Error(w, "bad json", http.StatusBadRequest)
 		return
 	}
 	if req.RepoID == "" || req.Prompt == "" {
 		http.Error(w, "repo_id and prompt are required", http.StatusBadRequest)
+		return
+	}
+	if len(req.Prompt) > 128<<10 || len(req.RepoID) > 256 || len(req.ResumeID) > 256 ||
+		len(req.JobID) > 256 || len(req.Plugins) > 64 {
+		http.Error(w, "job request exceeds limits", http.StatusRequestEntityTooLarge)
 		return
 	}
 	jobID := req.JobID
@@ -474,16 +482,10 @@ func (h *Hub) handleJobs(w http.ResponseWriter, r *http.Request) {
 		ApprovalSessionID: req.ApprovalSessionID,
 		ApprovalTimeoutMS: req.ApprovalTimeoutMS,
 	}
-	if job.Model == "" || job.Provider == "" {
-		_ = h.EnsureDefaultModel(r.Context())
-		llm := h.GetLLM()
-		if job.Model == "" {
-			job.Model = llm.Model
-		}
-		if job.Provider == "" {
-			job.Provider = llm.Provider
-		}
-	}
+	// Empty model/provider means inherit at the acquired Worker. The scheduler
+	// already provisions fleet defaults to agentd; filling these fields here
+	// would turn a fleet default into a per-job override and make LLMFor(workerID)
+	// unreachable. Explicit request values still override the Worker.
 	wantStream := req.Stream || strings.Contains(r.Header.Get("Accept"), "text/event-stream")
 	if wantStream {
 		h.handleJobsSSE(w, r, job, req.NodeID)

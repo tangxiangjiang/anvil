@@ -260,6 +260,14 @@ func (s *Server) handleJobCancel(w http.ResponseWriter, r *http.Request) {
 		// The session owns the stream; cancelling it ends the read and reports
 		// cancelled.
 		if sess, ok := s.workbench.byJob(jobID); ok {
+			if sess.OwnerID != 0 && sess.OwnerID != userFrom(r.Context()).ID {
+				http.Error(w, "job is outside this user scope", http.StatusForbidden)
+				return
+			}
+			if err := s.jobsCancel(r.Context(), jobID); err != nil {
+				http.Error(w, err.Error(), http.StatusBadGateway)
+				return
+			}
 			s.cancelWorkbenchSession(sess)
 			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "job_id": jobID, "via": "workbench"})
 			return
@@ -272,8 +280,9 @@ func (s *Server) handleJobCancel(w http.ResponseWriter, r *http.Request) {
 	default:
 		// A phase / campaign / polish job: ask the scheduler, then stop the
 		// milestone loop so it does not enqueue the next phase.
-		if s.jobs != nil {
-			_ = s.jobsCancel(jobID)
+		if err := s.jobsCancel(r.Context(), jobID); err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
 		}
 		if rec.MilestoneID != "" {
 			rs := delivery.RunStopped
@@ -296,9 +305,6 @@ func (s *Server) cancelWorkbenchSession(sess *workbenchSession) {
 		return
 	}
 	sess.abortApprovals("session stopped")
-	if s.jobs != nil {
-		_ = s.jobsCancel(sess.JobID)
-	}
 	s.wbCancelMu.Lock()
 	cancel := s.wbCancel[sess.ID]
 	s.wbCancelMu.Unlock()
