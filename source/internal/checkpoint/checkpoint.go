@@ -49,6 +49,11 @@ type Entry struct {
 	// check that restore refuses on: a checkpoint is a convenience, and a hash
 	// mismatch should not make an undo impossible.
 	SHA256 string `json:"sha256,omitempty"`
+	// PostSHA256 is of the file as the run left it, recorded by Finish when the
+	// run ends. Restore refuses to overwrite a file whose current bytes differ
+	// from it: the user changed it after the run. Empty means no post-state was
+	// recorded (a checkpoint from before this field), and Restore warns instead.
+	PostSHA256 string `json:"post_sha256,omitempty"`
 }
 
 // Manifest is one run's record, stored beside its captured files.
@@ -71,6 +76,13 @@ type Restored struct {
 	Path string `json:"path"`
 	// Deleted is true when the file did not exist before the run.
 	Deleted bool `json:"deleted"`
+	// Skipped is true when the file was left as it is because the user changed it
+	// after the run. Reason says why.
+	Skipped bool   `json:"skipped,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+	// Warning is set when the file was restored, but no post-run state was
+	// recorded, so restore could not tell whether the user had changed it.
+	Warning string `json:"warning,omitempty"`
 }
 
 var errUnsafe = errors.New("checkpoint: unsafe name")
@@ -292,6 +304,22 @@ func Restore(root, agentID, runID string, resolve func(rel string) (string, erro
 			restored = append(restored, Restored{Path: entry.Path, Deleted: true})
 			continue
 		}
+		// Decide before touching the file. If the run recorded what it left behind,
+		// a current file that differs was changed by someone after the run, and it
+		// is left alone so the user's edit is not overwritten.
+		current, cerr := os.ReadFile(abs)
+		exists := cerr == nil
+		if exists && entry.PostSHA256 != "" {
+			sum := sha256.Sum256(current)
+			if hex.EncodeToString(sum[:]) != entry.PostSHA256 {
+				restored = append(restored, Restored{
+					Path:    entry.Path,
+					Skipped: true,
+					Reason:  "changed after the run",
+				})
+				continue
+			}
+		}
 		data, err := os.ReadFile(filepath.Join(run.Dir, "files", filepath.FromSlash(entry.Path)))
 		if err != nil {
 			return restored, fmt.Errorf("checkpoint: read saved %s: %w", entry.Path, err)
@@ -302,9 +330,52 @@ func Restore(root, agentID, runID string, resolve func(rel string) (string, erro
 		if err := os.WriteFile(abs, data, 0o644); err != nil {
 			return restored, fmt.Errorf("checkpoint: write %s: %w", entry.Path, err)
 		}
-		restored = append(restored, Restored{Path: entry.Path})
+		item := Restored{Path: entry.Path}
+		if exists && entry.PostSHA256 == "" {
+			// No post-run state was recorded, so there is no way to tell whether
+			// the user changed this file. It is restored, and the caller is told.
+			item.Warning = "no post-run state was recorded; the file was restored without checking for later edits"
+		}
+		restored = append(restored, item)
 	}
 	return restored, nil
+}
+
+// Finish records the post-run state of every file a run captured: the hash of
+// what each file holds now, after the run's writes. resolve maps a manifest path
+// to its absolute path, the same way Restore does, so both agree on where a file
+// is. A file the run deleted, or one that is no longer a regular file, records
+// nothing and is restored without the check.
+func Finish(root, agentID, runID string, resolve func(rel string) (string, error)) error {
+	dir, err := runDir(root, agentID, runID)
+	if err != nil {
+		return err
+	}
+	m, err := loadManifest(dir, agentID, runID)
+	if err != nil {
+		return err
+	}
+	for i := range m.Files {
+		entry := &m.Files[i]
+		if !entry.Existed || entry.Path == "" {
+			continue
+		}
+		abs, err := resolve(entry.Path)
+		if err != nil {
+			return fmt.Errorf("checkpoint: finish %s: %w", entry.Path, err)
+		}
+		info, err := os.Stat(abs)
+		if err != nil || info.IsDir() {
+			continue
+		}
+		data, err := os.ReadFile(abs)
+		if err != nil {
+			return fmt.Errorf("checkpoint: finish read %s: %w", entry.Path, err)
+		}
+		sum := sha256.Sum256(data)
+		entry.PostSHA256 = hex.EncodeToString(sum[:])
+	}
+	return saveManifest(dir, m)
 }
 
 // Prune keeps the newest keep runs and deletes runs older than maxAge. Zero

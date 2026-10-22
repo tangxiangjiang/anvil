@@ -90,13 +90,13 @@ once, which it is not.
 
 ### Checkpoints
 
-**#13 — bug — reported (design undecided: see S1).** `internal/checkpoint/checkpoint.go` `Restore` (lines 288–302 per the
+**#13 — bug — confirmed, and fixed.** `internal/checkpoint/checkpoint.go` `Restore` (lines 288–302 per the
 report). A restore does not check that the current file still matches the run's post-state:
 `Existed=false` deletes whatever is now at the path, and saved bytes overwrite any later edit,
 including the user's own. The SHA256 is recorded but not checked. This may be intended; see
 *Suspicions* S1.
 
-**#14 — bug — reported (design undecided: see S2).** `internal/checkpoint/checkpoint.go` hard-codes mode `0o644` on restore
+**#14 — decided: not a defect (checkpoints do not keep file mode).** `internal/checkpoint/checkpoint.go` hard-codes mode `0o644` on restore
 and records no mode on capture, so an executable bit is lost. Reproducible only on Linux; see
 *Suspicions* S2.
 
@@ -169,7 +169,7 @@ subagent keeps `ParentAgentID` and `Kind="subagent"`, and deleting the original 
 through `subagentDescendants`. Repro: child C with meta `ParentAgentID=P`; `ForkAgent(C, runID)`;
 `DeleteAgent(P)`; `Load(newID)` returns not found.
 
-**#28 — gap — reported (design undecided).** `agent.go` `Run.emit` (`run.go` around 91–100) drops events silently when the
+**#28 — gap — decided: non-blocking, current behaviour kept.** `agent.go` `Run.emit` (`run.go` around 91–100) drops events silently when the
 64-slot buffer is full. Documented as a known limit in design 46 (`editor-polish`). Low severity.
 
 **#29 — bug — confirmed.** `agent.go` `buildRegistry` discards the error from `index.Build` (`_, _ =`), so
@@ -220,6 +220,13 @@ Searched design 33-49 for each open item. None of #13, #14 or #28 is settled in 
 
 - #13 (restore overwrites a later edit) and #14 (executable bit not kept): no chapter says whether a checkpoint restore should refuse on mismatch, or whether checkpoints carry file mode. See S1 and S2.
 - #28 (events dropped when the 64-slot buffer is full): an earlier note in this audit said design 46 records this as a known limit. A search of design 46 and 35 found no such statement, so that note was wrong and is withdrawn here.
+
+
+### Decisions on the open items
+
+- **#13 (fixed).** `Restore` no longer overwrites a file the user changed after the run. `Finish` records each captured file's post-run hash; `Restore` skips a file whose current hash differs and reports it as `Skipped`. A checkpoint with no recorded post-state (written before this change) is still restored, but the result carries a `Warning`, so the user decides. Covered by `TestAuditRestoreSkipsFileChangedAfterRun`, `TestAuditRestoreWarnsWhenNoPostStateWasRecorded` and `TestAuditRestoreIsSilentWhenFileUnchanged`.
+- **#14 (not a defect).** Checkpoints do not keep file mode. The decision is that a restore writes the saved bytes only.
+- **#28 (decided: non-blocking).** `Run.emit` keeps dropping an event when its buffer is full. Blocking was considered and set aside, because a run with no consumer would stop. No code change.
 
 ## Tests
 

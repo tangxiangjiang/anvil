@@ -34,6 +34,13 @@ type CheckpointFile struct {
 type RestoredFile struct {
 	Path    string
 	Deleted bool
+	// Skipped is true when the user changed the file after the run, so restore
+	// left it as it is. Reason says why.
+	Skipped bool
+	Reason  string
+	// Warning is set when the file was restored without a post-run state to check
+	// against, so restore could not tell whether the user had changed it.
+	Warning string
 }
 
 // checkpointRoot is where an agent's checkpoints live, and whether capture is
@@ -114,7 +121,13 @@ func RestoreCheckpoint(cwd, agentID, runID string, opts CheckpointOptions) ([]Re
 	}
 	out := make([]RestoredFile, 0, len(restored))
 	for _, file := range restored {
-		out = append(out, RestoredFile{Path: file.Path, Deleted: file.Deleted})
+		out = append(out, RestoredFile{
+			Path:    file.Path,
+			Deleted: file.Deleted,
+			Skipped: file.Skipped,
+			Reason:  file.Reason,
+			Warning: file.Warning,
+		})
 	}
 	return out, nil
 }

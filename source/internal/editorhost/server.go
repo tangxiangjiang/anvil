@@ -536,7 +536,13 @@ func (s *Server) handleCheckpointRestore(ctx context.Context, params json.RawMes
 	}
 	out := CheckpointRestoreResult{RunID: p.RunID, Files: make([]RestoredFile, 0, len(restored))}
 	for _, file := range restored {
-		out.Files = append(out.Files, RestoredFile{Path: file.Path, Deleted: file.Deleted})
+		out.Files = append(out.Files, RestoredFile{
+			Path:    file.Path,
+			Deleted: file.Deleted,
+			Skipped: file.Skipped,
+			Reason:  file.Reason,
+			Warning: file.Warning,
+		})
 	}
 	s.logf("checkpoint.restore agent=%s run=%s files=%d", p.AgentID, p.RunID, len(out.Files))
 	return out, nil
