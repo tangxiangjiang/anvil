@@ -6,10 +6,12 @@ Read once: `source/agent.go`, `run.go`, `runs.go`, `subagent.go`, `workflow.go`,
 
 Each finding has a severity (`bug`, `gap`, `doc`), a location, the defect, and a status:
 
-- **confirmed** — read in the source at the stated line, and the defect follows from that code.
-  A failing test is still to be written (see *Tests* below).
-- **reported** — found by the audit, not yet re-read at the line. Verify before fixing.
-- **suspicion** — cannot be reduced to a test yet; the entry says what would settle it.
+- **fixed** — reproduced before the fix; its regression test is enabled and passes.
+- **open** — reproduced but held pending a design decision; its test remains skipped.
+- **decided / withdrawn** — not counted as a current defect; the reason is recorded below.
+- **suspicion** — a question needing evidence or a decision. S1–S3 were settled below.
+
+Historical verification sections retain the statuses and results from their respective runs.
 
 Fixes are not part of this phase. A `bug` is fixed in a plain commit with its test.
 
@@ -70,7 +72,7 @@ the session started without rules, so on a first-load failure the deny rules dis
 runs. Repro: `NewSource(cwd, "", home, anvil, nil, nil)` with a malformed workspace file denying
 `shell`; `Execute("shell", ...)` should be denied.
 
-**#10 — bug — confirmed.** `internal/tools/preview.go`/`tools.go` shell calls carry `Command` and no
+**#10 — bug — open (design conflict).** `internal/tools/preview.go`/`tools.go` shell calls carry `Command` and no
 `Paths`, so protection never applies to them (`Set.protectedPaths` returns nil when `len(f.Paths)==0`).
 `allow shell "rm:*"` lets `rm -rf .git` run without a prompt. `protect.go` says a remembered allow must
 not cover these paths, and the existing test only covers reads. Repro: `Evaluate(CallFacts{Tool:
@@ -194,18 +196,20 @@ client's expectation of a complete event stream, which design 46 currently state
 
 ## Counts
 
-| Severity | Findings | Confirmed | Reported |
+| Severity | Defects | Fixed | Open |
 |---|---|---|---|
-| bug | 26 | 24 | 2 |
-| gap | 2 | 1 | 1 |
+| bug | 25 | 24 | 1 |
+| gap | 1 | 1 | 0 |
 | doc | 1 | 1 | 0 |
-| **total** | **29** | **26** | **3** |
+| **total** | **27** | **26** | **1** |
 
-Withdrawn after a source check: #30. It was listed as a finding, so the audit found 30 items, but it is not a defect and is not counted in the table: 29 counted, 26 confirmed.
+The audit recorded 30 items: 26 fixed defects, one open design conflict (#10), two decisions
+that are not defects (#14 and #28), and one withdrawal (#30). The decisions and withdrawal
+are excluded from the current defect count. S1–S3 were settled and are not additional findings.
 
-Suspicions S1–S3 are listed separately and are not counted as findings.
-
-Reproduced by a failing test (skip removed, failed on the current tree): #1, #2, #3, #4, #5, #6, #7, #8, #9, #10, #11, #12, #15, #16, #17, #18, #19, #20, #21, #22, #23, #24, #25, #26, #27, #29.
+Reproduced by failing tests before the respective fixes (or still failing for #10): #1, #2,
+#3, #4, #5, #6, #7, #8, #9, #10, #11, #12, #13, #15, #16, #17, #18, #19, #20, #21, #22,
+#23, #24, #25, #26, #27, #29.
 
 #30 was withdrawn after a source-level check. Both paths that read `t.Info` after the unlock are ordered after the write in `finish()`: the `!running` path reads it after an `m.mu` lock that `finish()` also takes, and the running path reads it under `m.mu` (`defer m.mu.Unlock()`). The 2000-iteration `-race` run agrees: no race.
 
@@ -214,9 +218,10 @@ Reproduced by a failing test (skip removed, failed on the current tree): #1, #2,
 #20 was reproduced under `go test -race` on AlmaLinux 10.2 (gcc 14, Go 1.26.10): the race detector reports a write in `Agent.Close` and a read in `Agent.Send` on `a.closed`.
 
 
-### Design status of the open items
+### Historical design check before the decisions
 
-Searched design 33-49 for each open item. None of #13, #14 or #28 is settled in a design chapter, so none can be called a bug or intended behaviour yet:
+The initial search of design 33–49 found no decision for #13, #14 or #28. At that point they
+needed a policy decision; the subsequent decisions are recorded in the next section:
 
 - #13 (restore overwrites a later edit) and #14 (executable bit not kept): no chapter says whether a checkpoint restore should refuse on mismatch, or whether checkpoints carry file mode. See S1 and S2.
 - #28 (events dropped when the 64-slot buffer is full): an earlier note in this audit said design 46 records this as a known limit. A search of design 46 and 35 found no such statement, so that note was wrong and is withdrawn here.
@@ -229,7 +234,7 @@ Searched design 33-49 for each open item. None of #13, #14 or #28 is settled in 
 - **#28 (decided: non-blocking).** `Run.emit` keeps dropping an event when its buffer is full. Blocking was considered and set aside, because a run with no consumer would stop. No code change.
 
 
-### Latest run (AlmaLinux 10.2, Go 1.26.10, gcc 14, `-race`)
+### Historical reproduction run before the first fixes (AlmaLinux 10.2, Go 1.26.10, gcc 14, `-race`)
 
 With every `audit: open` skip removed in a working copy: 15 audit tests ran.
 
@@ -269,8 +274,10 @@ Known limits of fixes, stated here rather than hidden:
 ## Tests
 
 Each finding with a test is in the package that owns the code it reaches, named
-`TestAudit…`, and marked `t.Skip("audit: open, see audit.md #N")` so the suite stays green.
-Each one was run once with its skip removed to confirm the result above.
+`TestAudit…`. Tests were initially skipped while reproductions and fixes were prepared.
+Current source retains the #10 design-conflict skip and the unconditional #20/#30 race/cgo
+evidence skips. The latter two were explicitly removed in the isolated AlmaLinux audit runs;
+they are not two more open defects. Other fixed-findings tests are enabled.
 
 | Package | File | Tests |
 |---|---|---|
@@ -284,8 +291,8 @@ Each one was run once with its skip removed to confirm the result above.
 | `internal/permissions` | `audit_test.go` | #10, #11, #12 |
 | `internal/tasks` | `audit_test.go` | #30 (not reproduced under -race) |
 
-Thirteen audit tests are skipped; none fails with its skip in place. The two that did not
-reproduce (#2 and #20) say why in their skip comment. #20 reproduces under `go test -race` on AlmaLinux (cgo), and is skipped on Windows only because the race detector is not available there.
-
-Still open: the 17 `reported` findings have no test yet. They need the same treatment: read the
-line, write the test, run it with the skip removed, and only then mark it `confirmed`.
+Current skip inventory (2026-10-23): three `audit: open` strings in test source — #10 (one
+open policy conflict), #20 (fixed, race evidence) and #30 (withdrawn, race evidence). The #20/#30
+skips are unconditional, not platform guards: an ordinary Linux `-race` invocation also skips
+them unless they are explicitly removed as in the historical audit verification. No finding
+remains in the old `reported` state.
