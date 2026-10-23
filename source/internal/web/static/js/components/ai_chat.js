@@ -21,11 +21,7 @@ window.AiChat = {
   CITE_MIME: "application/x-anvil-cite",
 
   esc(s) {
-    return String(s ?? "")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
+    return window.AnvilUI.esc(s);
   },
 
   isVersionKey(key) {

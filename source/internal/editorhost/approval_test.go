@@ -537,7 +537,7 @@ func TestDontAskRefusesAGatedCall(t *testing.T) {
 // call the rules do not cover is still refused.
 func TestDontAskRunsWhatARuleAllows(t *testing.T) {
 	llm := newStubLLM(t,
-		toolTurn("call_1", "shell", `{"command":"ls"}`),
+		toolTurn("call_1", "shell", `{"command":"echo ready"}`),
 		toolTurn("call_2", "shell", `{"command":"rm -rf build"}`),
 		textTurn("done"),
 	)
@@ -713,7 +713,7 @@ func TestBypassAsksWhenARuleAsks(t *testing.T) {
 // not for everything the session does afterwards.
 func TestBypassDoesNotAskWhenNoRuleDoes(t *testing.T) {
 	llm := newStubLLM(t,
-		toolTurn("call_1", "shell", `{"command":"ls"}`),
+		toolTurn("call_1", "shell", `{"command":"echo ready"}`),
 		textTurn("done"),
 	)
 	h, dir := initHost(t, llm.baseURL())
@@ -995,11 +995,11 @@ func TestLoadPermissionsFalseIgnoresTheFile(t *testing.T) {
 
 // The point of the whole feature, end to end: in one turn the model runs a
 // read-only command and a destructive one, and only the second one is worth a
-// prompt. `ls` is admitted by the analyzer through a `readonly` rule; nothing
-// admits `rm -rf build`, so it still asks — and a deny leaves the directory.
+// prompt. `echo ready` is admitted by the analyzer through a `readonly` rule;
+// nothing admits `rm -rf build`, so it still asks — and a deny leaves the directory.
 func TestReadonlyRuleSilencesOnlyTheHarmlessCommand(t *testing.T) {
 	llm := newStubLLM(t,
-		toolTurn("call_1", "shell", `{"command":"ls"}`),
+		toolTurn("call_1", "shell", `{"command":"echo ready"}`),
 		toolTurn("call_2", "shell", `{"command":"rm -rf build"}`),
 		textTurn("done"),
 	)

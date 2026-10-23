@@ -28,7 +28,7 @@
   <div id="view-login" class="login-wrap">
     <form class="login-card" id="login-form">
       <h1>Anvil</h1>
-      <p>Fleet ops console</p>
+      <p>Fleet operations console</p>
       <label for="user">Username</label>
       <input id="user" name="username" autocomplete="username" required />
       <label for="pass">Password</label>
@@ -43,7 +43,7 @@
       <div class="side-search">
         <input id="global-search" type="search" placeholder="Search the plan…" aria-label="Search the planning record" />
       </div>
-      <div class="brand">Anvil<span>cluster console</span>
+      <div class="brand">Anvil<span>Fleet console</span>
         <button type="button" class="ghost help-btn" id="shell-help" title="What is this page?" aria-label="Help for this page">?</button>
       </div>
       <nav class="nav" id="nav"></nav>
@@ -68,33 +68,36 @@
   <script src="/js/shared/action.js"></script>
   <script src="/js/shared/shell.js"></script>
   <script src="/js/shared/selection.js"></script>
+  <script src="/js/shared/swr.js"></script>
   <script src="/js/shared/stream.js"></script>
   <script src="/js/shared/assist.js"></script>
   <script src="/js/components/ai_chat.js"></script>
   <script src="/js/components/md_preview.js"></script>
   <script src="/js/features/clusters.js"></script>
+  <script src="/js/features/clusters/workers.js"></script>
+  <script src="/js/features/clusters/review.js"></script>
   <script src="/js/features/workbench.js"></script>
   <script src="/js/features/jobhistory.js"></script>
   <script src="/js/features/ops.js"></script>
   <!--
     Delivery: eleven files, each assigning onto window.Features.delivery.
-    Order matters — core defines the router, helpers/modals/jobs are its
+    Order matters — index defines the router, helpers/modals/jobs are its
     collaborators, and the surfaces bind against all of them. One literal
     became many; the mounting contract did not change.
   -->
-  <script src="/js/features/delivery/core.js"></script>
+  <script src="/js/features/delivery/index.js"></script>
   <script src="/js/features/delivery/helpers.js"></script>
   <script src="/js/features/delivery/modals.js"></script>
   <script src="/js/features/delivery/jobs.js"></script>
+  <script src="/js/features/delivery/selection.js"></script>
   <script src="/js/features/delivery/reqs.js"></script>
   <script src="/js/features/delivery/versions.js"></script>
   <script src="/js/features/delivery/designs.js"></script>
   <script src="/js/features/delivery/roadmap.js"></script>
   <script src="/js/features/delivery/canvas.js"></script>
   <script src="/js/features/delivery/test.js"></script>
+  <script src="/js/features/delivery/readiness.js"></script>
   <script src="/js/features/delivery/wizard.js"></script>
-  <!-- Entry point: keeps the delivery.js path working and hosts the test seam. -->
-  <script src="/js/features/delivery.js"></script>
   <script src="/js/features/usage.js"></script>
   <script src="/js/app.js"></script>
 </body>

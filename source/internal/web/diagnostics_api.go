@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/anvil-dev/anvil/internal/web/delivery"
 	"github.com/anvil-dev/anvil/internal/web/schedclient"
 )
 
@@ -37,6 +38,8 @@ type ActionError struct {
 	Raw string `json:"raw,omitempty"`
 	// Href is where to go to fix it, when there is a place.
 	Href string `json:"href,omitempty"`
+	// RequestID correlates this client failure with the server log.
+	RequestID string `json:"request_id,omitempty"`
 }
 
 // classifyError maps a server message to an actionable error.
@@ -68,22 +71,22 @@ func classifyError(raw string, status int) ActionError {
 	case strings.Contains(msg, "campaign job already") || strings.Contains(msg, "already running"):
 		out.Code = "already_running"
 		out.Title = "Something is already running here"
-		out.What = "This milestone or worker already has a job in flight."
-		out.Next = "Wait for it to finish, or stop it from the job bar at the top of the page."
+		out.What = "This Milestone or Worker already has a Job in flight."
+		out.Next = "Wait for it to finish, or stop it from the Job bar at the top of the page."
 		out.Href = "#/jobs"
 
 	case strings.Contains(msg, "not found in cluster inventory"):
 		out.Code = "worker_missing"
-		out.Title = "That worker is not in the cluster"
-		out.What = "The console could not find the worker in any configured fleet, so it cannot route work to it."
-		out.Next = "Check that the fleet is reachable and the worker is bound to a project in Clusters."
+		out.Title = "That Worker is not in a Fleet"
+		out.What = "The console could not find the Worker in any configured Fleet, so it cannot route work to it."
+		out.Next = "Check that the Fleet is reachable and the Worker is bound to a Project in Clusters."
 		out.Href = "#/clusters"
 
 	case strings.Contains(msg, "no scheduler fleet configured") || strings.Contains(msg, "no agentd nodes joined"):
 		out.Code = "no_fleet"
-		out.Title = "No scheduler is reachable"
-		out.What = "The console has no fleet it can talk to, so it cannot start or watch work."
-		out.Next = "Start a scheduler and agentd, then add the fleet in Clusters."
+		out.Title = "No Fleet is reachable"
+		out.What = "The console has no Fleet it can talk to, so it cannot start or watch work."
+		out.Next = "Start the scheduler and agentd services, then configure the Fleet in anvil-web."
 		out.Href = "#/clusters"
 
 	case strings.Contains(msg, "ai assist is not configured") || strings.Contains(msg, "not configured"):
@@ -96,13 +99,13 @@ func classifyError(raw string, status int) ActionError {
 	case strings.Contains(msg, "major is sealed") || strings.Contains(msg, "sealed"):
 		out.Code = "major_sealed"
 		out.Title = "This generation is sealed"
-		out.What = "A sealed generation accepts no new milestones or edits."
-		out.Next = "Create a new generation, or work in the one currently in development."
+		out.What = "A sealed Generation accepts no new Milestones or edits."
+		out.Next = "Create a new Generation, or work in the one currently in development."
 		out.Href = "#/delivery/requirements"
 
 	case strings.Contains(msg, "already open") || strings.Contains(msg, "session is already open"):
 		out.Code = "session_busy"
-		out.Title = "That session is open somewhere else"
+		out.Title = "That Session is open somewhere else"
 		out.What = "Two handles on one conversation would interleave their runs into one transcript."
 		out.Next = "Close it in the other window or tab, then resume."
 		out.Href = ""
@@ -110,14 +113,14 @@ func classifyError(raw string, status int) ActionError {
 	case strings.Contains(msg, "already accepted"):
 		out.Code = "already_accepted"
 		out.Title = "Already accepted"
-		out.What = "This milestone has already been accepted."
+		out.What = "This Milestone has already been accepted."
 		out.Next = "Merge it to main if that is what you meant."
 		out.Href = "#/delivery/roadmap"
 
 	case strings.Contains(msg, "only one of") || strings.Contains(msg, "requires status"):
 		out.Code = "wrong_state"
 		out.Title = "That action does not apply in this state"
-		out.What = "The milestone has moved on from the state this action needs."
+		out.What = "The Milestone has moved on from the state this action needs."
 		out.Next = "Refresh the page to see its current state, then pick the action that matches."
 		out.Href = "#/delivery/roadmap"
 
@@ -164,21 +167,25 @@ func (s *Server) handleClassifyError(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Message string `json:"message"`
-		Status  int    `json:"status"`
+		Message   string `json:"message"`
+		Status    int    `json:"status"`
+		RequestID string `json:"request_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	writeJSON(w, http.StatusOK, classifyError(in.Message, in.Status))
+	out := classifyError(in.Message, in.Status)
+	out.RequestID = strings.TrimSpace(in.RequestID)
+	writeJSON(w, http.StatusOK, out)
 }
 
 // HealthReport is what the shell strip renders (GET /api/v1/health).
 type HealthReport struct {
-	Fleets  []FleetHealth `json:"fleets"`
-	OK      bool          `json:"ok"`
-	Summary string        `json:"summary"`
+	Fleets     []FleetHealth `json:"fleets"`
+	OK         bool          `json:"ok"`
+	Summary    string        `json:"summary"`
+	ActiveJobs int           `json:"active_jobs"`
 }
 
 // FleetHealth is one fleet's reachability and capacity.
@@ -193,6 +200,62 @@ type FleetHealth struct {
 	Busy      int    `json:"busy"`
 }
 
+// FirstRunReport is the installation-level onboarding state. It deliberately
+// exposes only booleans and counts: project ids, paths, worker metadata and
+// credentials do not belong in browser-persisted onboarding state.
+type FirstRunReport struct {
+	AdminCreated       bool `json:"admin_created"`
+	FleetConfigured    bool `json:"fleet_configured"`
+	ProjectBound       bool `json:"project_bound"`
+	RequirementCreated bool `json:"requirement_created"`
+	Completed          int  `json:"completed"`
+	Total              int  `json:"total"`
+}
+
+// handleFirstRun reports authoritative, observable completion conditions for
+// the first-run checklist. Dismissal is a browser preference; completion is
+// always recomputed here so it survives reloads and cannot drift from the store.
+func (s *Server) handleFirstRun(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	report := FirstRunReport{
+		AdminCreated:    true, // requireAuth proved an installed admin session.
+		FleetConfigured: len(s.cfg.Fleets) > 0,
+		Total:           4,
+	}
+	if s.delivery != nil {
+		snap, err := s.delivery.Snapshot()
+		if err != nil {
+			http.Error(w, "load first-run state: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		for _, req := range snap.EngReqs {
+			// Seed/demo rows have no project id and therefore do not pretend that
+			// a real Project has been bound.
+			if strings.TrimSpace(req.ProjectID) == "" {
+				continue
+			}
+			report.ProjectBound = true
+			if len(req.Versions) > 0 {
+				report.RequirementCreated = true
+			}
+		}
+	}
+	for _, done := range []bool{
+		report.AdminCreated,
+		report.FleetConfigured,
+		report.ProjectBound,
+		report.RequirementCreated,
+	} {
+		if done {
+			report.Completed++
+		}
+	}
+	writeJSON(w, http.StatusOK, report)
+}
+
 // handleHealth answers GET /api/v1/health.
 //
 // It is deliberately shallow and fast: the shell asks on every route change, and a
@@ -205,6 +268,11 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	report := HealthReport{Fleets: []FleetHealth{}}
+	if s.delivery != nil {
+		if snap, err := s.delivery.Snapshot(); err == nil {
+			report.ActiveJobs = activeJobCount(snap)
+		}
+	}
 	for _, f := range s.cfg.Fleets {
 		fh := FleetHealth{ID: f.ID, URL: f.SchedulerURL}
 		cli := &schedclient.Client{
@@ -249,11 +317,33 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	report.OK = len(report.Fleets) > 0 && reachable == len(report.Fleets)
 	switch {
 	case len(report.Fleets) == 0:
-		report.Summary = "No fleet configured"
+		report.Summary = "No Fleet configured"
 	case reachable == len(report.Fleets):
-		report.Summary = "All fleets reachable"
+		report.Summary = "All Fleets reachable"
 	default:
-		report.Summary = "Some fleets unreachable"
+		report.Summary = "Some Fleets unreachable"
 	}
 	writeJSON(w, http.StatusOK, report)
+}
+
+func activeJobCount(snap delivery.Snapshot) int {
+	active := map[string]bool{}
+	add := func(id, status string) {
+		if strings.TrimSpace(id) != "" && (status == delivery.JobQueued || status == delivery.JobRunning) {
+			active[id] = true
+		}
+	}
+	for _, milestone := range snap.Roadmap.Milestones {
+		add(milestone.CampaignJobID, milestone.CampaignJobStatus)
+		for _, phase := range milestone.Phases {
+			add(phase.JobID, phase.JobStatus)
+		}
+	}
+	for _, polish := range snap.Polishes {
+		add(polish.JobID, polish.JobStatus)
+	}
+	for _, bug := range snap.BuglistItems {
+		add(bug.JobID, bug.JobStatus)
+	}
+	return len(active)
 }

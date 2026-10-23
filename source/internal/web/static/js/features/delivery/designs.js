@@ -172,6 +172,18 @@ Object.assign(window.Features.delivery, {
       </div>`;
       })
       .join("");
+    const listBody = cards
+      ? cards + `
+          <button type="button" class="del-des-card del-des-card-add" id="des-new-card"
+            title="New design">
+            <span class="del-req-plus">+</span>
+            <span class="muted">New design</span>
+          </button>`
+      : this.emptyStateHtml(
+          "No designs in " + majLabel + " — create one from a milestone.",
+          "New design",
+          "des-empty-new",
+        );
     return `
       <p class="del-crumbs">
         <a href="#/delivery/designs">Generations</a>
@@ -187,14 +199,7 @@ Object.assign(window.Features.delivery, {
         </select>
         <span class="muted" style="flex:1">${list.length} design${list.length === 1 ? "" : "s"} in ${this.esc(majLabel)}</span>
       </div>
-      <div class="del-des-grid">
-        ${cards || `<p class="muted" style="grid-column:1/-1">No designs in ${this.esc(majLabel)} yet.</p>`}
-        <button type="button" class="del-des-card del-des-card-add" id="des-new-card"
-          title="New design">
-          <span class="del-req-plus">+</span>
-          <span class="muted">New design</span>
-        </button>
-      </div>`;
+      <div class="del-des-grid">` + listBody + `</div>`;
   },
 
   adrSectionDefs() {
@@ -704,7 +709,10 @@ Object.assign(window.Features.delivery, {
     const ready = (ver.status || "") === "ready" || this.versionsReady([ver]);
     if (approved) {
       return `
-      <div class="card del-ver del-ver-ro" data-ver-id="${this.esc(ver.id)}" id="des-ver-${this.esc(ver.id)}">
+      <div class="card del-ver del-ver-ro del-sel-row" data-ver-id="${this.esc(ver.id)}"
+        data-sel-list="design-versions" data-sel-id="${this.esc(ver.id)}"
+        aria-label="Version ${ver.sort_order}: ${this.esc(ver.title || "Untitled")}"
+        id="des-ver-${this.esc(ver.id)}">
         <div class="toolbar del-ver-head">
           <span class="muted del-ver-ord">v${ver.sort_order}</span>
           <strong class="del-ver-title-ro">${this.esc(ver.title || `Version ${ver.sort_order}`)}</strong>
@@ -715,7 +723,10 @@ Object.assign(window.Features.delivery, {
       </div>`;
     }
     return `
-      <div class="card del-ver" data-ver-id="${this.esc(ver.id)}" id="des-ver-${this.esc(ver.id)}">
+      <div class="card del-ver del-sel-row" data-ver-id="${this.esc(ver.id)}"
+        data-sel-list="design-versions" data-sel-id="${this.esc(ver.id)}"
+        aria-label="Version ${ver.sort_order}: ${this.esc(ver.title || "Untitled")}"
+        id="des-ver-${this.esc(ver.id)}">
         <div class="toolbar del-ver-head">
           <span class="muted del-ver-ord">v${ver.sort_order}</span>
           <input class="del-ver-title-input" data-ver-title value="${this.esc(ver.title || "")}"
@@ -842,20 +853,34 @@ Object.assign(window.Features.delivery, {
       // version's Gate - on Send, with no confirmation. The Gate it touched
       // gates real phase jobs. Now the assistant proposes and the operator
       // applies; nothing reaches the record without that second act.
-      onSend: async ({ composed, cites }, c) => {
+      onSend: async ({ text, cites }, c) => {
         if (approved) return;
         const citeVer = vers.find(
           (v) =>
-            composed.includes("@" + (v.title || "")) ||
-            composed.includes(`@V${v.sort_order}.Gate`),
+            cites.includes(v.title || "") ||
+            cites.includes(`V${v.sort_order}.Gate`),
         );
+        const adrByCite = Object.fromEntries(adrSections.map((sec) => [sec.cite, sec.key]));
+        const versionByCite = {};
+        for (const v of vers) {
+          for (const def of fieldDefs) {
+            versionByCite["V" + v.sort_order + "." + def.citeSuffix] =
+              window.AnvilUI.assist.designVersionRef(d.id, v.id, def.field);
+          }
+        }
+        const citeRefs = cites.flatMap((key) => {
+          if (adrByCite[key]) {
+            return [window.AnvilUI.assist.designRef(d.id, adrByCite[key])];
+          }
+          return versionByCite[key] ? [versionByCite[key]] : [];
+        });
         if (citeVer) {
           await window.AnvilUI.assist.ask({
             surface: "design_version",
             field: "gate",
-            instruction: composed,
-            cites,
-            current: { gate: (citeVer.gate || "").trim() },
+            instruction: text,
+            target: window.AnvilUI.assist.designVersionRef(d.id, citeVer.id),
+            citeRefs,
             host: this.el.querySelector("#des-assist"),
             chat: c,
             onApply: async (_field, value) => {
@@ -869,9 +894,9 @@ Object.assign(window.Features.delivery, {
         await window.AnvilUI.assist.ask({
           surface: "design",
           field: "adr_decision",
-          instruction: composed,
-          cites,
-          current: { adr_decision: (this.adrFieldValue(d, "adr_decision") || "").trim() },
+          instruction: text,
+          target: window.AnvilUI.assist.designRef(d.id),
+          citeRefs,
           host: this.el.querySelector("#des-assist"),
           chat: c,
           onApply: async (_field, value) => {
@@ -913,14 +938,7 @@ Object.assign(window.Features.delivery, {
     const chatHtml = approved
       ? ""
       : chat.render() + `<div id="des-assist" class="assist-host"></div>`;
-    return `
-      <p class="del-crumbs">
-        <a href="#/delivery/designs">Generations</a>
-        <span class="muted">/</span>
-        <a href="#/delivery/designs/m/${d.major}">${this.esc(this.majorLabel(d.major))}</a>
-        <span class="muted">/</span>
-        <span>${this.esc(d.title)}</span>
-      </p>
+    return this.desCrumbs(d.id) + `
       ${this.auditHtml("design", d.id)}
       <div class="desktop-only">
         The ADR editor is two panes with drag-to-cite; it needs a wider screen. The design's
@@ -942,7 +960,7 @@ Object.assign(window.Features.delivery, {
               ${actions.join("")}
             </div>
             <div class="err" id="des-err"></div>
-            <div class="del-adr-block">
+            <div class="del-adr-block needs-wide">
               <div class="del-adr-head">
                 <h4>ADR</h4>
                 <span class="muted">${approved ? "Locked after Approve" : "Context · Decision · Consequences · Spec · Architecture · Sequence · Sample"}</span>
@@ -950,11 +968,12 @@ Object.assign(window.Features.delivery, {
               ${adrHtml}
             </div>
           </div>
-          <div class="toolbar del-des-ver-head">
+          <div class="toolbar del-des-ver-head" data-sel-header="design-versions">
             <h4 style="margin:0;flex:1">Versions</h4>
             <span class="muted">${vers.length} card${vers.length === 1 ? "" : "s"}${approved ? " · locked" : ""}</span>
             ${addVerBtn}
           </div>
+          ${this.batchBarHtml("design-versions", [])}
           <div class="del-des-ver-list">${verCards || `<p class="muted">No Versions yet — add one to define AI execution boundaries.</p>`}</div>
         </div>
         ${chatHtml}

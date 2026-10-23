@@ -25,8 +25,10 @@ type EmbeddedRunner struct {
 	PluginDirs []string
 	Deny       []string
 
-	mu  sync.RWMutex
-	LLM LLMConfig
+	mu          sync.RWMutex
+	LLM         LLMConfig
+	approvalsMu sync.Mutex
+	approvals   *jobApprovalBroker
 }
 
 // SetLLM replaces worker LLM defaults (scheduler provision / live config).
@@ -84,6 +86,26 @@ func (r *EmbeddedRunner) runWith(ctx context.Context, job JobAssignBody, cwd str
 	}
 	opts.Plugins = append([]string(nil), job.Plugins...)
 	opts.PluginDirs = append([]string(nil), r.PluginDirs...)
+	// A daemon Worker is a workspace-scoped SDK client. Load only project
+	// configuration from that checkout: user settings belong to an interactive
+	// editor process and may contain unrelated credentials.
+	opts.Local.LoadPermissions = true
+	opts.Local.LoadHooks = true
+	opts.Local.SettingSources = []anvil.SettingSource{anvil.SettingSourceProject}
+	opts.PermissionGroups = []string{"write", "edit", "shell", "verify", "web", "mcp", "agent"}
+	if job.ApprovalSessionID != "" {
+		opts.Permission = r.approvalBroker().permission(job, emit)
+	} else {
+		// Delivery is unattended. Explicit allow rules still run without calling
+		// this callback; anything that remains undecided fails closed immediately
+		// instead of silently bypassing policy or waiting for a browser forever.
+		opts.Permission = func(context.Context, anvil.PermissionRequest) (anvil.PermissionDecision, error) {
+			return anvil.PermissionDecision{
+				Allow:   false,
+				Message: "unattended job requires an explicit workspace permission allow rule",
+			}, nil
+		}
+	}
 	// Daemon already intersected allowlist; pin Available to resolved set so Init cannot expand.
 	opts.PluginPolicy = &anvil.PluginPolicy{
 		Available: append([]string(nil), job.Plugins...),
@@ -128,6 +150,25 @@ func (r *EmbeddedRunner) runWith(ctx context.Context, job JobAssignBody, cwd str
 		}
 	}
 	return out
+}
+
+func (r *EmbeddedRunner) approvalBroker() *jobApprovalBroker {
+	r.approvalsMu.Lock()
+	defer r.approvalsMu.Unlock()
+	if r.approvals == nil {
+		r.approvals = newJobApprovalBroker()
+	}
+	return r.approvals
+}
+
+// AnswerApproval routes a controller response to the blocked SDK callback.
+func (r *EmbeddedRunner) AnswerApproval(resp JobApprovalResponseBody) error {
+	return r.approvalBroker().answer(resp)
+}
+
+// AbortApprovals releases all callbacks for a cancelled job.
+func (r *EmbeddedRunner) AbortApprovals(jobID string) {
+	r.approvalBroker().abortJob(jobID, "job cancelled before approval")
 }
 
 // applyLLMDefaults fills Options from agentd llm config.

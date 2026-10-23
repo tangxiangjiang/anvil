@@ -339,13 +339,19 @@ Object.assign(window.Features.delivery, {
         }
       },
       // Same contract, same component: propose here, apply through the save.
-      onSend: async ({ composed, cites }, c) => {
+      onSend: async ({ text, cites }, c) => {
+        const target = window.AnvilUI.assist.requirementRef(
+          engId,
+          major,
+          minor,
+          head.patch,
+        );
         await window.AnvilUI.assist.ask({
           surface: "requirement_version",
           field: "success",
-          instruction: composed,
-          cites,
-          current: { success: (head.success || "").trim() },
+          instruction: text,
+          target,
+          citeRefs: window.AnvilUI.assist.requirementCites(cites, engId, target),
           host: this.el.querySelector("#ms-assist"),
           chat: c,
           onApply: async (_field, value) => {
@@ -498,13 +504,14 @@ Object.assign(window.Features.delivery, {
       // Real drafting (p_0.45.8): the assistant proposes, this applies through
       // the surface's own save. It cannot write, which is the invariant the
       // previous mock could not keep.
-      onSend: async ({ composed, cites }, c) => {
+      onSend: async ({ text, cites }, c) => {
+        const target = window.AnvilUI.assist.requirementRef(engId, major, minor, patch);
         await window.AnvilUI.assist.ask({
           surface: "requirement_version",
           field: "success",
-          instruction: composed,
-          cites,
-          current: { success: (ver.success || "").trim() },
+          instruction: text,
+          target,
+          citeRefs: window.AnvilUI.assist.requirementCites(cites, engId, target),
           host: this.el.querySelector("#ver-assist"),
           chat: c,
           onApply: async (_field, value) => {

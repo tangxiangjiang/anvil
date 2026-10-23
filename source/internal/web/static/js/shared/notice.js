@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * In-app notice — replaces every alert() in the console.
+ * In-app notice — replaces every native alert dialog in the console.
  *
- * A console an operator keeps open all day cannot use alert(): it blocks the
+ * A console an operator keeps open all day cannot use a blocking alert: it blocks the
  * event loop, freezes any streaming paint behind it, and reads as a crash. This
  * is the same modal machinery, so it traps focus and closes on Escape like every
  * other dialog.

@@ -66,6 +66,8 @@ type Agent struct {
 	running    bool
 	compacting bool
 	activeRun  *Run
+	// persistErr is the first failed write to the session file, if any.
+	persistErr error
 	history    []llm.Message
 	complete   llm.Completer
 	registry   *tools.Registry
@@ -161,6 +163,10 @@ func createAgent(ctx context.Context, opts Options, ident subagentIdentity) (*Ag
 	}
 	sysPrompt, err := buildSystemPrompt(cwd, opts)
 	if err != nil {
+		// The meta record is already on disk. A session that failed to start must
+		// not stay behind as a meta-only entry that lists as a session with no runs
+		// (audit #23), so the file is removed with the failed create.
+		_ = st.Delete(agentID)
 		_ = st.Close()
 		cleanupRegistry(sessions, plugMgr, lspSup)
 		return nil, newError("load project rules", false, err)
@@ -466,7 +472,11 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 		Model:   opts.EmbedModel,
 	})
 	if opts.Local.EnsureIndex && !index.Exists(cwd) {
-		_, _ = index.Build(ctx, cwd, index.BuildOptions{})
+		// A requested index that cannot be built is an error, not a silent
+		// absence: the caller asked for search and would otherwise get none (audit #29).
+		if _, err := index.Build(ctx, cwd, index.BuildOptions{}); err != nil {
+			return nil, nil, nil, nil, nil, fmt.Errorf("build the project index: %w", err)
+		}
 	}
 
 	reg.SetSkillsConfig(tools.SkillsConfig{
@@ -1040,8 +1050,13 @@ func (a *Agent) Send(ctx context.Context, message string, opts ...SendOption) (*
 		prev := a.activeRun
 		a.mu.Unlock()
 		if prev != nil {
-			_ = prev.Cancel(ctx)
-			_, _ = prev.Wait(ctx)
+			// The caller's context may already be done. It must not make the forced
+			// send give up while the previous run is still active (audit #21): the
+			// previous run is cancelled and waited for on a context of its own.
+			_ = prev.Cancel(context.Background())
+			wait, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			_, _ = prev.Wait(wait)
+			cancel()
 		}
 	}
 
@@ -1318,7 +1333,9 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 		// A child's events travel to whoever asked for the child, tagged with the
 		// call that started it. They do not travel through the parent's stream:
 		// the parent's conversation never sees them, and neither should its card.
-		if origin, ok := subagentOriginFromContext(loopCtx); ok {
+		if origin, ok := subagentOriginFromContext(loopCtx); ok && out.Type != "done" {
+			// The child's done is not a stream event: the parent learns the outcome from
+			// the spawn tool's result, so done is not forwarded (audit #26, design 42).
 			if on := a.opts.Subagents.OnEvent; on != nil {
 				on(SubagentEvent{
 					ParentAgentID: origin.parentAgentID,
@@ -1375,6 +1392,14 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 	if rr.Status == StatusError {
 		err = newError(rr.Err, false, nil)
 	}
+	// A run whose records did not reach the session file must not report success:
+	// the caller would believe a transcript that is not stored (audit #19).
+	a.mu.Lock()
+	persistErr := a.persistErr
+	a.mu.Unlock()
+	if err == nil && persistErr != nil {
+		err = newError("session file write failed; the run is not fully recorded", false, persistErr)
+	}
 	// Release the slot before publishing the result. Wait wakes on finish, so a
 	// caller that waits and immediately sends again would otherwise race this
 	// goroutine's deferred cleanup and be told a run is already in progress.
@@ -1424,11 +1449,30 @@ func (a *Agent) persistMessage(runID string, m llm.Message) {
 	a.persist(rec)
 }
 
+// persist writes one record to the session. The store is read under the lock,
+// because Close clears it under the same lock. A failed write is recorded on
+// the agent rather than dropped, so a run whose transcript did not reach the
+// file is not reported as complete (audit #19).
 func (a *Agent) persist(rec store.Record) {
-	if a.store == nil {
+	a.mu.Lock()
+	st := a.store
+	id := a.id
+	a.mu.Unlock()
+	if st == nil {
 		return
 	}
-	_ = a.store.Append(a.id, rec)
+	if err := st.Append(id, rec); err != nil {
+		a.recordPersistError(err)
+	}
+}
+
+// recordPersistError keeps the first write failure, so Wait can report it.
+func (a *Agent) recordPersistError(err error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.persistErr == nil {
+		a.persistErr = err
+	}
 }
 
 // Close releases agent resources including MCP servers and the store backend.
@@ -1456,9 +1500,21 @@ func (a *Agent) Close() error {
 	a.plugins = nil
 	lspSup := a.lsp
 	a.lsp = nil
+	// The table stays readable after Close: it is the record of what ran, and Close
+	// marks the running rows stopped below. Only the reference to it is kept (audit #24).
 	taskMgr := a.taskMgr
-	a.taskMgr = nil
+	// A run still in flight must not write after the store and the claim are
+	// released (audit #18): it is cancelled here and waited for below.
+	active := a.activeRun
 	a.mu.Unlock()
+
+	if active != nil {
+		_ = active.Cancel(context.Background())
+		// A run that ignores cancellation is not worth holding Close open for ever.
+		wait, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		_, _ = active.Wait(wait)
+		cancel()
+	}
 
 	// Background work ends first: a closed conversation must not leave a process
 	// or a child agent writing into the workspace. The grace is short because a

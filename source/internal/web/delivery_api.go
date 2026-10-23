@@ -129,7 +129,7 @@ func (s *Server) handleDelivery(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if len(parts) == 1 && r.Method == http.MethodDelete {
-			item, err := s.delivery.DeleteMajorToTrash(maj)
+			item, err := s.delivery.DeleteMajorToTrash(maj, userFrom(r.Context()).Username)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
@@ -486,6 +486,9 @@ func (s *Server) handleDelivery(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if len(parts) == 2 && parts[1] == "bootstrap" && r.Method == http.MethodPost {
+			if !s.preflightOrRefuse(w, delivery.TransitionBootstrapRoad, id) {
+				return
+			}
 			d, err := s.delivery.BootstrapDesignRoadmap(id)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
@@ -712,16 +715,14 @@ func (s *Server) handleDelivery(w http.ResponseWriter, r *http.Request) {
 			}
 			// 提交测试: stop active jobs first so testing does not race a live phase job.
 			if submit {
+				if !s.preflightOrRefuse(w, delivery.TransitionSubmitTest, id) {
+					return
+				}
 				_ = s.softStopMilestoneJobs(id, delivery.RunStopped)
 			}
 
 			// Start: persist worker, preflight job, then commit Execute; roll back on enqueue failure.
 			if exec {
-				prev, err := s.delivery.GetMilestone(id)
-				if err != nil {
-					http.Error(w, err.Error(), http.StatusBadRequest)
-					return
-				}
 				if body.ExecuteWorkerID != nil || body.X != nil || body.Y != nil || body.TestNote != nil {
 					if _, err := s.delivery.PatchMilestone(id, delivery.PatchMilestoneInput{
 						X:               body.X,
@@ -733,17 +734,20 @@ func (s *Server) handleDelivery(w http.ResponseWriter, r *http.Request) {
 						return
 					}
 				}
+				if !s.preflightOrRefuse(w, delivery.TransitionStartPhase, id) {
+					return
+				}
 				if _, err := s.preflightMilestonePhaseJob(id, body.ForceStub); err != nil {
 					http.Error(w, err.Error(), http.StatusBadRequest)
 					return
 				}
-				m, err := s.delivery.PatchMilestone(id, delivery.PatchMilestoneInput{Execute: true})
+				m, previous, err := s.delivery.ExecuteMilestone(id)
 				if err != nil {
 					http.Error(w, err.Error(), http.StatusBadRequest)
 					return
 				}
-				if _, err := s.startMilestonePhaseJob(id, body.ForceStub); err != nil {
-					_ = s.delivery.RestoreMilestoneRun(id, prev.Status, prev.RunState)
+				if _, err := s.startMilestonePhaseJobWithRollback(id, body.ForceStub, &previous); err != nil {
+					_ = s.delivery.RestoreMilestoneRun(id, previous.Status, previous.RunState)
 					http.Error(w, err.Error(), http.StatusBadRequest)
 					return
 				}
@@ -753,6 +757,12 @@ func (s *Server) handleDelivery(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				writeJSON(w, http.StatusOK, m)
+				return
+			}
+			if pass && !s.preflightOrRefuse(w, delivery.TransitionPassTest, id) {
+				return
+			}
+			if accept && !s.preflightOrRefuse(w, delivery.TransitionAcceptMile, id) {
 				return
 			}
 

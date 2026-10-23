@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Store persists Delivery entities in the shared anvil-web SQLite DB.
@@ -263,10 +264,16 @@ CREATE TABLE IF NOT EXISTS delivery_trash (
 	if err := s.ensureJobEventTables(); err != nil {
 		return err
 	}
+	if err := s.ensureWorkbenchSessionTable(); err != nil {
+		return err
+	}
 	if err := s.ensureAuditTable(); err != nil {
 		return err
 	}
-	return s.ensureTrashProvenance()
+	if err := s.ensureTrashProvenance(); err != nil {
+		return err
+	}
+	return s.ensureSearchIndex()
 }
 
 func (s *Store) ensureMilestoneAcceptColumns() error {
@@ -1005,6 +1012,11 @@ func (s *Store) AdvanceMajor(major int) (MajorPlan, error) {
 	if next == "" {
 		return MajorPlan{}, fmt.Errorf("major %d is already sealed — no further transition", major)
 	}
+	if next == MajorSealed {
+		if err := s.EnforcePreflight(TransitionSealMajor, fmt.Sprintf("%d", major)); err != nil {
+			return MajorPlan{}, err
+		}
+	}
 	if next == MajorDeveloping {
 		ok, reason, err := s.CanStartMajor(major)
 		if err != nil {
@@ -1047,6 +1059,11 @@ func (s *Store) UpdateMajor(major int, title, status, summary *string) (MajorPla
 		next := NextMajorStatus(m.Status)
 		if st != next {
 			return MajorPlan{}, fmt.Errorf("status only advances planning → developing → sealed (next is %s)", nextOrNone(next))
+		}
+		if st == MajorSealed {
+			if err := s.EnforcePreflight(TransitionSealMajor, fmt.Sprintf("%d", major)); err != nil {
+				return MajorPlan{}, err
+			}
 		}
 		m.Status = st
 	}
@@ -1516,8 +1533,13 @@ func (s *Store) SetMilestoneLifecycle(engID string, major, minor int, status str
 	if err := s.AssertMajorWritable(major); err != nil {
 		return err
 	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
 	ts := nowRFC3339()
-	res, err := s.db.Exec(`
+	res, err := tx.Exec(`
 UPDATE delivery_req_versions SET status=?, updated_at=? WHERE eng_req_id=? AND major=? AND minor=?`,
 		st, ts, engID, major, minor)
 	if err != nil {
@@ -1527,8 +1549,14 @@ UPDATE delivery_req_versions SET status=?, updated_at=? WHERE eng_req_id=? AND m
 	if n == 0 {
 		return fmt.Errorf("milestone %d.%d not found", major, minor)
 	}
-	_, _ = s.db.Exec(`UPDATE delivery_eng_reqs SET updated_at=? WHERE id=?`, ts, engID)
-	return nil
+	msID := fmt.Sprintf("ms_%s_%d_%d", engID, major, minor)
+	if _, err := tx.Exec(`UPDATE delivery_milestones SET status=? WHERE id=?`, st, msID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE delivery_eng_reqs SET updated_at=? WHERE id=?`, ts, engID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func cleanMilestonePhases(msTitle string, phases []MilestonePhaseInput) []MilestonePhaseInput {
@@ -2466,6 +2494,9 @@ func (s *Store) ApproveDesign(id string) (Design, error) {
 
 // BootstrapDesignRoadmap seeds eng-req patches + canvas phases from Design Versions (idempotent when phases exist).
 func (s *Store) BootstrapDesignRoadmap(id string) (Design, error) {
+	if err := s.EnforcePreflight(TransitionBootstrapRoad, id); err != nil {
+		return Design{}, err
+	}
 	d, err := s.getDesign(id)
 	if err != nil {
 		return Design{}, err
@@ -2774,6 +2805,20 @@ func (s *Store) PatchMilestone(id string, in PatchMilestoneInput) (Milestone, er
 	if actionN > 1 {
 		return Milestone{}, fmt.Errorf("only one of execute, submit_test, pass_test, fail_test, ready_dev, accept_milestone allowed")
 	}
+	if in.Execute {
+		if in.X != nil || in.Y != nil || in.ExecuteWorkerID != nil || in.TestNote != nil {
+			if _, err := s.PatchMilestone(id, PatchMilestoneInput{
+				X:               in.X,
+				Y:               in.Y,
+				ExecuteWorkerID: in.ExecuteWorkerID,
+				TestNote:        in.TestNote,
+			}); err != nil {
+				return Milestone{}, err
+			}
+		}
+		m, _, err := s.ExecuteMilestone(id)
+		return m, err
+	}
 
 	x, y := cur.X, cur.Y
 	if in.X != nil {
@@ -2822,25 +2867,9 @@ func (s *Store) PatchMilestone(id string, in PatchMilestoneInput) (Milestone, er
 	acceptedAt := cur.AcceptedAt
 	bind := parseMilestoneBind(id)
 
-	if in.Execute {
-		if workerID == "" {
-			return Milestone{}, fmt.Errorf("execute_worker_id required to execute")
-		}
-		if len(cur.Phases) == 0 {
-			return Milestone{}, fmt.Errorf("milestone has no phases; Bootstrap from Designs first")
-		}
-		status = LifeInDevelopment
-		runState = RunRunning
-		if bind != nil {
-			if err := s.SetMilestoneLifecycle(bind.EngID, bind.Major, bind.Minor, LifeInDevelopment); err != nil {
-				return Milestone{}, err
-			}
-		}
-	}
-
 	if in.SubmitTest {
-		if status != LifeInDevelopment {
-			return Milestone{}, fmt.Errorf("submit_test requires status %s (got %s)", LifeInDevelopment, status)
+		if err := s.EnforcePreflight(TransitionSubmitTest, id); err != nil {
+			return Milestone{}, err
 		}
 		status = LifeTesting
 		runState = RunStopped
@@ -2852,13 +2881,7 @@ func (s *Store) PatchMilestone(id string, in PatchMilestoneInput) (Milestone, er
 	}
 
 	if in.PassTest {
-		if status != LifeTesting {
-			return Milestone{}, fmt.Errorf("pass_test requires status %s (got %s)", LifeTesting, status)
-		}
-		if bind == nil {
-			return Milestone{}, fmt.Errorf("pass_test requires bound milestone id")
-		}
-		if err := s.assertPassCampaignClean(bind.EngID, bind.Major, bind.Minor); err != nil {
+		if err := s.EnforcePreflight(TransitionPassTest, id); err != nil {
 			return Milestone{}, err
 		}
 		status = LifeComplete
@@ -2932,8 +2955,8 @@ func (s *Store) PatchMilestone(id string, in PatchMilestoneInput) (Milestone, er
 	}
 
 	if in.AcceptMilestone {
-		if status != LifeComplete {
-			return Milestone{}, fmt.Errorf("accept_milestone requires status %s (got %s)", LifeComplete, status)
+		if err := s.EnforcePreflight(TransitionAcceptMile, id); err != nil {
+			return Milestone{}, err
 		}
 		if acceptStatus == AcceptAccepted {
 			// idempotent
@@ -3002,6 +3025,98 @@ func (s *Store) GetMilestone(id string) (Milestone, error) {
 	return s.getMilestone(id)
 }
 
+// ExecutePreviousState is the lifecycle state restored when the first phase Job
+// cannot start. It is captured in the same transaction that commits Execute.
+type ExecutePreviousState struct {
+	Status   string
+	RunState string
+}
+
+// ExecuteMilestone atomically guards and commits the Execute lifecycle change.
+func (s *Store) ExecuteMilestone(id string) (Milestone, ExecutePreviousState, error) {
+	var previous ExecutePreviousState
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return Milestone{}, previous, fmt.Errorf("milestone id required")
+	}
+	if err := s.EnforcePreflight(TransitionStartPhase, id); err != nil {
+		return Milestone{}, previous, err
+	}
+	bind := parseMilestoneBind(id)
+	if bind != nil {
+		if err := s.AssertMajorWritable(bind.Major); err != nil {
+			return Milestone{}, previous, err
+		}
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return Milestone{}, previous, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var workerID string
+	var phaseCount int
+	if err := tx.QueryRow(`
+SELECT status, COALESCE(run_state,'idle'), execute_worker_id,
+  (SELECT COUNT(*) FROM delivery_phases WHERE milestone_id=delivery_milestones.id)
+FROM delivery_milestones WHERE id=?`, id).Scan(
+		&previous.Status, &previous.RunState, &workerID, &phaseCount); err != nil {
+		if err == sql.ErrNoRows {
+			return Milestone{}, previous, fmt.Errorf("milestone not found")
+		}
+		return Milestone{}, previous, err
+	}
+	if previous.Status != LifeAwaitingDevelopment && previous.Status != LifeInDevelopment {
+		return Milestone{}, previous, fmt.Errorf(
+			"execute requires status %s or %s (got %s)",
+			LifeAwaitingDevelopment, LifeInDevelopment, previous.Status)
+	}
+	if strings.TrimSpace(workerID) == "" {
+		return Milestone{}, previous, fmt.Errorf("execute_worker_id required to execute")
+	}
+	if phaseCount == 0 {
+		return Milestone{}, previous, fmt.Errorf("milestone has no phases; Bootstrap from Designs first")
+	}
+	if previous.RunState == "" {
+		previous.RunState = RunIdle
+	}
+
+	res, err := tx.Exec(`
+UPDATE delivery_milestones SET status=?, run_state=?
+WHERE id=? AND status=?`,
+		LifeInDevelopment, RunRunning, id, previous.Status)
+	if err != nil {
+		return Milestone{}, previous, err
+	}
+	n, _ := res.RowsAffected()
+	if n != 1 {
+		return Milestone{}, previous, fmt.Errorf("milestone lifecycle changed during execute")
+	}
+	if bind != nil {
+		ts := nowRFC3339()
+		res, err = tx.Exec(`
+UPDATE delivery_req_versions SET status=?, updated_at=?
+WHERE eng_req_id=? AND major=? AND minor=?`,
+			LifeInDevelopment, ts, bind.EngID, bind.Major, bind.Minor)
+		if err != nil {
+			return Milestone{}, previous, err
+		}
+		n, _ = res.RowsAffected()
+		if n == 0 {
+			return Milestone{}, previous, fmt.Errorf("milestone %d.%d not found", bind.Major, bind.Minor)
+		}
+		if _, err := tx.Exec(`UPDATE delivery_eng_reqs SET updated_at=? WHERE id=?`, ts, bind.EngID); err != nil {
+			return Milestone{}, previous, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return Milestone{}, previous, err
+	}
+	m, err := s.getMilestone(id)
+	return m, previous, err
+}
+
 // RestoreMilestoneRun restores status + run_state after a failed Execute start (and eng lifecycle).
 func (s *Store) RestoreMilestoneRun(id, status, runState string) error {
 	id = strings.TrimSpace(id)
@@ -3024,6 +3139,66 @@ func (s *Store) RestoreMilestoneRun(id, status, runState string) error {
 		_ = s.SetMilestoneLifecycle(bind.EngID, bind.Major, bind.Minor, status)
 	}
 	return nil
+}
+
+// RestoreExecuteStart conditionally restores a failed Execute. The phase Job ID
+// is the Execute generation: a stale async failure cannot roll back a newer run.
+func (s *Store) RestoreExecuteStart(id, phaseID, jobID string, previous ExecutePreviousState) (bool, error) {
+	id = strings.TrimSpace(id)
+	phaseID = strings.TrimSpace(phaseID)
+	jobID = strings.TrimSpace(jobID)
+	if id == "" || phaseID == "" || jobID == "" {
+		return false, fmt.Errorf("milestone, phase, and job ids required")
+	}
+	runState := strings.TrimSpace(strings.ToLower(previous.RunState))
+	if runState == "" {
+		runState = RunIdle
+	}
+	norm, err := normalizeRunState(runState)
+	if err != nil {
+		return false, err
+	}
+	if previous.Status != LifeAwaitingDevelopment && previous.Status != LifeInDevelopment {
+		return false, fmt.Errorf("invalid execute restore status %q", previous.Status)
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	res, err := tx.Exec(`
+UPDATE delivery_milestones SET status=?, run_state=?
+WHERE id=? AND status=? AND run_state=?
+  AND EXISTS (
+    SELECT 1 FROM delivery_phases
+    WHERE id=? AND milestone_id=? AND job_id=?
+  )`,
+		previous.Status, norm, id, LifeInDevelopment, RunRunning,
+		phaseID, id, jobID)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return false, nil
+	}
+	if bind := parseMilestoneBind(id); bind != nil {
+		ts := nowRFC3339()
+		if _, err := tx.Exec(`
+UPDATE delivery_req_versions SET status=?, updated_at=?
+WHERE eng_req_id=? AND major=? AND minor=?`,
+			previous.Status, ts, bind.EngID, bind.Major, bind.Minor); err != nil {
+			return false, err
+		}
+		if _, err := tx.Exec(`UPDATE delivery_eng_reqs SET updated_at=? WHERE id=?`, ts, bind.EngID); err != nil {
+			return false, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (s *Store) getMilestone(id string) (Milestone, error) {
@@ -3637,6 +3812,12 @@ type CreateTestCasesInput struct {
 	Cases    []TestCaseDraft
 }
 
+const (
+	MaxTestCasesPerCreate = 100
+	MaxTestCaseTitleRunes = 256
+	MaxTestCaseBodyRunes  = 16 * 1024
+)
+
 // CreateTestCases inserts ready cases for a milestone bind.
 func (s *Store) CreateTestCases(in CreateTestCasesInput) ([]TestCase, error) {
 	engID := strings.TrimSpace(in.EngReqID)
@@ -3646,7 +3827,10 @@ func (s *Store) CreateTestCases(in CreateTestCasesInput) ([]TestCase, error) {
 	if len(in.Cases) == 0 {
 		return nil, fmt.Errorf("cases required")
 	}
-	var out []TestCase
+	if len(in.Cases) > MaxTestCasesPerCreate {
+		return nil, fmt.Errorf("at most %d cases may be created at once", MaxTestCasesPerCreate)
+	}
+	out := make([]TestCase, 0, len(in.Cases))
 	ts := nowRFC3339()
 	for i, d := range in.Cases {
 		title := strings.TrimSpace(d.Title)
@@ -3654,17 +3838,16 @@ func (s *Store) CreateTestCases(in CreateTestCasesInput) ([]TestCase, error) {
 		if title == "" && body == "" {
 			continue
 		}
+		if utf8.RuneCountInString(title) > MaxTestCaseTitleRunes {
+			return nil, fmt.Errorf("case %d title exceeds %d characters", i+1, MaxTestCaseTitleRunes)
+		}
+		if utf8.RuneCountInString(body) > MaxTestCaseBodyRunes {
+			return nil, fmt.Errorf("case %d body exceeds %d characters", i+1, MaxTestCaseBodyRunes)
+		}
 		if title == "" {
 			title = truncateRunes(body, 48)
 		}
 		id := fmt.Sprintf("tc_%d_%d", time.Now().UnixNano(), i)
-		_, err := s.db.Exec(`
-INSERT INTO delivery_test_cases(id, eng_req_id, major, minor, title, body, status, created_at)
-VALUES(?,?,?,?,?,?,?,?)`,
-			id, engID, in.Major, in.Minor, title, body, "ready", ts)
-		if err != nil {
-			return nil, err
-		}
 		out = append(out, TestCase{
 			ID: id, EngReqID: engID, Major: in.Major, Minor: in.Minor,
 			Title: title, Body: body, Status: "ready", CreatedAt: ts,
@@ -3672,6 +3855,22 @@ VALUES(?,?,?,?,?,?,?,?)`,
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("cases required")
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	for _, c := range out {
+		if _, err := tx.Exec(`
+INSERT INTO delivery_test_cases(id, eng_req_id, major, minor, title, body, status, created_at)
+VALUES(?,?,?,?,?,?,?,?)`,
+			c.ID, c.EngReqID, c.Major, c.Minor, c.Title, c.Body, c.Status, c.CreatedAt); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
 	}
 	return out, nil
 }

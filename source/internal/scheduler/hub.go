@@ -79,10 +79,11 @@ type Hub struct {
 	nodes   map[string]*nodeConn
 	rr      int
 
-	waitMu     sync.Mutex
-	waiters    map[string]chan daemon.JobDoneBody
-	eventHooks map[string]func(daemon.JobEventBody)
-	jobNode    map[string]string // jobID -> nodeID
+	waitMu       sync.Mutex
+	waiters      map[string]chan daemon.JobDoneBody
+	eventHooks   map[string]func(daemon.JobEventBody)
+	jobNode      map[string]string // jobID -> nodeID
+	approvalWait map[string]chan daemon.JobApprovalResultBody
 
 	workerWaitMu sync.Mutex
 	workerWait   map[string]chan daemon.ClusterWorkerResultBody // req id -> result
@@ -116,17 +117,18 @@ func NewHub(cfg Config, logger *log.Logger) *Hub {
 		logger = log.Default()
 	}
 	return &Hub{
-		cfg:         cfg,
-		log:         logger,
-		llm:         cfg.BootstrapLLM(),
-		nodes:       make(map[string]*nodeConn),
-		waiters:     make(map[string]chan daemon.JobDoneBody),
-		eventHooks:  make(map[string]func(daemon.JobEventBody)),
-		jobNode:     make(map[string]string),
-		usageN:      make(map[string]UsageTotals),
-		workspaces:  make(map[string]wsReg),
-		workerWait:  make(map[string]chan daemon.ClusterWorkerResultBody),
-		sandboxWait: make(map[string]chan daemon.ClusterSandboxResultBody),
+		cfg:          cfg,
+		log:          logger,
+		llm:          cfg.BootstrapLLM(),
+		nodes:        make(map[string]*nodeConn),
+		waiters:      make(map[string]chan daemon.JobDoneBody),
+		eventHooks:   make(map[string]func(daemon.JobEventBody)),
+		jobNode:      make(map[string]string),
+		approvalWait: make(map[string]chan daemon.JobApprovalResultBody),
+		usageN:       make(map[string]UsageTotals),
+		workspaces:   make(map[string]wsReg),
+		workerWait:   make(map[string]chan daemon.ClusterWorkerResultBody),
+		sandboxWait:  make(map[string]chan daemon.ClusterSandboxResultBody),
 	}
 }
 
@@ -464,6 +466,89 @@ func (h *Hub) ListSandbox(ctx context.Context, nodeID, path string) (daemon.Clus
 	return h.sandboxRPC(ctx, nodeID, daemon.KindClusterSandboxList, daemon.ClusterSandboxListBody{Path: path})
 }
 
+// ListWorkerSandbox lists one directory inside an assigned worker repository.
+func (h *Hub) ListWorkerSandbox(ctx context.Context, nodeID, workerID, path string) (daemon.ClusterSandboxResultBody, error) {
+	if err := h.validateReviewTarget(nodeID, workerID, "sandbox.review.read"); err != nil {
+		return reviewTargetFailure(err), err
+	}
+	return h.sandboxRPC(ctx, nodeID, daemon.KindClusterSandboxList, daemon.ClusterSandboxListBody{WorkerID: workerID, Path: path})
+}
+
+// ReadWorkerSandbox reads one bounded text file inside an assigned worker repository.
+func (h *Hub) ReadWorkerSandbox(ctx context.Context, nodeID, workerID, path string) (daemon.ClusterSandboxResultBody, error) {
+	if err := h.validateReviewTarget(nodeID, workerID, "sandbox.review.read"); err != nil {
+		return reviewTargetFailure(err), err
+	}
+	return h.sandboxRPC(ctx, nodeID, daemon.KindClusterSandboxRead, daemon.ClusterSandboxReadBody{WorkerID: workerID, Path: path})
+}
+
+// GitStatusWorker returns read-only status for an assigned worker repository.
+func (h *Hub) GitStatusWorker(ctx context.Context, nodeID, workerID string) (daemon.ClusterSandboxResultBody, error) {
+	if err := h.validateReviewTarget(nodeID, workerID, "sandbox.review.git"); err != nil {
+		return reviewTargetFailure(err), err
+	}
+	return h.sandboxRPC(ctx, nodeID, daemon.KindClusterGitStatus, daemon.ClusterGitStatusBody{WorkerID: workerID})
+}
+
+// GitDiffWorker returns a bounded read-only diff for an assigned worker repository.
+func (h *Hub) GitDiffWorker(ctx context.Context, nodeID, workerID, path string, staged bool) (daemon.ClusterSandboxResultBody, error) {
+	if err := h.validateReviewTarget(nodeID, workerID, "sandbox.review.git"); err != nil {
+		return reviewTargetFailure(err), err
+	}
+	return h.sandboxRPC(ctx, nodeID, daemon.KindClusterGitDiff, daemon.ClusterGitDiffBody{
+		WorkerID: workerID, Path: path, Staged: staged,
+	})
+}
+
+type reviewTargetError struct {
+	code string
+	text string
+}
+
+func (e *reviewTargetError) Error() string { return e.text }
+
+func reviewTargetFailure(err error) daemon.ClusterSandboxResultBody {
+	code := "invalid_scope"
+	if target, ok := err.(*reviewTargetError); ok {
+		code = target.code
+	}
+	return daemon.ClusterSandboxResultBody{Code: code, Error: err.Error()}
+}
+
+func (h *Hub) validateReviewTarget(nodeID, workerID, capability string) error {
+	h.nodesMu.Lock()
+	defer h.nodesMu.Unlock()
+	node := h.nodes[nodeID]
+	if node == nil {
+		return &reviewTargetError{code: "node_unavailable", text: fmt.Sprintf("unknown node_id %q", nodeID)}
+	}
+	if time.Since(node.lastHB) > time.Duration(h.cfg.StaleSec)*time.Second {
+		return &reviewTargetError{code: "node_unavailable", text: fmt.Sprintf("node %q is unreachable", nodeID)}
+	}
+	hasCapability := false
+	for _, item := range node.caps {
+		if item == capability {
+			hasCapability = true
+			break
+		}
+	}
+	if !hasCapability {
+		return &reviewTargetError{
+			code: "capability_unavailable",
+			text: fmt.Sprintf("node %q does not advertise %s", nodeID, capability),
+		}
+	}
+	for _, worker := range node.workers {
+		if worker.ID == workerID && worker.ProjectPath != "" {
+			return nil
+		}
+	}
+	return &reviewTargetError{
+		code: "invalid_scope",
+		text: fmt.Sprintf("worker %q is not assigned to node %q", workerID, nodeID),
+	}
+}
+
 // MkdirSandbox creates a directory under the node's sandbox.
 func (h *Hub) MkdirSandbox(ctx context.Context, nodeID, path string) (daemon.ClusterSandboxResultBody, error) {
 	return h.sandboxRPC(ctx, nodeID, daemon.KindClusterSandboxMkdir, daemon.ClusterSandboxMkdirBody{Path: path})
@@ -613,6 +698,21 @@ func (h *Hub) deliverDone(done daemon.JobDoneBody) {
 	}
 }
 
+func (h *Hub) deliverApprovalResult(msg daemon.Envelope) {
+	var res daemon.JobApprovalResultBody
+	_ = daemon.DecodeBody(msg, &res)
+	h.waitMu.Lock()
+	ch := h.approvalWait[msg.ID]
+	delete(h.approvalWait, msg.ID)
+	h.waitMu.Unlock()
+	if ch != nil {
+		select {
+		case ch <- res:
+		default:
+		}
+	}
+}
+
 func (h *Hub) recordUsage(nodeID string, u *daemon.TokenUsage) {
 	if u == nil {
 		return
@@ -657,6 +757,48 @@ func (h *Hub) CancelJob(jobID string) error {
 		return fmt.Errorf("cancel on %s: %w", nodeID, err)
 	}
 	return nil
+}
+
+// AnswerJobApproval routes a response to the node currently owning jobID and
+// waits for the daemon to confirm that the request was still pending.
+func (h *Hub) AnswerJobApproval(ctx context.Context, resp daemon.JobApprovalResponseBody) (daemon.JobApprovalResultBody, error) {
+	if strings.TrimSpace(resp.JobID) == "" || strings.TrimSpace(resp.RequestID) == "" {
+		return daemon.JobApprovalResultBody{}, fmt.Errorf("job_id and request_id required")
+	}
+	h.waitMu.Lock()
+	nodeID := h.jobNode[resp.JobID]
+	h.waitMu.Unlock()
+	if nodeID == "" {
+		return daemon.JobApprovalResultBody{}, fmt.Errorf("job %q is not running", resp.JobID)
+	}
+	h.nodesMu.Lock()
+	n := h.nodes[nodeID]
+	h.nodesMu.Unlock()
+	if n == nil {
+		return daemon.JobApprovalResultBody{}, fmt.Errorf("node %q for job %q is offline", nodeID, resp.JobID)
+	}
+	reqID := id.New()
+	ch := make(chan daemon.JobApprovalResultBody, 1)
+	h.waitMu.Lock()
+	h.approvalWait[reqID] = ch
+	h.waitMu.Unlock()
+	defer func() {
+		h.waitMu.Lock()
+		delete(h.approvalWait, reqID)
+		h.waitMu.Unlock()
+	}()
+	body, _ := daemon.MarshalBody(resp)
+	if err := h.writeNode(n, daemon.Envelope{Kind: daemon.KindJobApprovalResponse, ID: reqID, Body: body}); err != nil {
+		return daemon.JobApprovalResultBody{}, err
+	}
+	select {
+	case <-ctx.Done():
+		return daemon.JobApprovalResultBody{}, ctx.Err()
+	case res := <-ch:
+		return res, nil
+	case <-time.After(10 * time.Second):
+		return daemon.JobApprovalResultBody{}, fmt.Errorf("approval response timed out")
+	}
 }
 
 // AssignJobTo runs a job on preferNode (empty = round-robin idle).

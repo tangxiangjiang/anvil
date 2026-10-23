@@ -299,6 +299,15 @@ input { width: 100%; margin-bottom: 0.75rem; }
 .wb-conn.warn { border-color: var(--warn); color: var(--warn); }
 .wb-conn.bad { border-color: var(--danger); color: var(--danger); }
 .wb-conn[hidden] { display: none !important; }
+.snapshot-state {
+  display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap;
+  margin: 0 0 0.6rem; padding: 0.35rem 0.55rem;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  color: var(--muted); font-size: 0.78rem;
+}
+.snapshot-state.warn { border-color: var(--warn); color: var(--warn); }
+.snapshot-state.bad { border-color: var(--danger); color: var(--danger); }
+.snapshot-state button { margin-left: auto; }
 
 /* ---------------------------------------------------------------- reachable
    (p_0.45.14) The console assumed a wide, stable desktop. These rules make the
@@ -342,6 +351,13 @@ input { width: 100%; margin-bottom: 0.75rem; }
   .wb-stream { max-height: 46vh; }
   .modal-card { width: 94vw !important; max-height: 88vh; overflow: auto; }
   .modal-stack { width: 96vw; }
+  /* Tap targets stay usable at the 375px target without relying on gestures. */
+  button, .nav a, .nav-fold, .del-scope-chip { min-height: 44px; }
+  input, select { min-height: 44px; }
+  .ops-row button { min-width: 64px; }
+  .ops-row { min-width: 0; }
+  .del-body, .card, .wb-side, .wb-main { min-width: 0; }
+  table { display: block; max-width: 100%; overflow-x: auto; }
 }
 
 /* A surface that genuinely needs a wide screen says so rather than rendering a
@@ -375,7 +391,10 @@ input { width: 100%; margin-bottom: 0.75rem; }
 .ops-row { display: flex; align-items: center; gap: 0.5rem; padding: 0.3rem 0; border-bottom: 1px solid var(--border); }
 .ops-row:last-child { border-bottom: 0; }
 .ops-row .ops-grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ops-row .ops-grow:has(> strong) { display: flex; flex-direction: column; }
+.ops-row .ops-grow > strong, .ops-row .ops-grow > span { overflow: hidden; text-overflow: ellipsis; }
 .ops-row button { padding: 0.25rem 0.6rem; font-size: 0.82rem; }
+.ops-open { flex: 0 0 auto; padding: 0.25rem 0.45rem; font-size: 0.78rem; }
 /* Per-worker provider settings in the Add worker dialog (0.46). */
 .cl-llm-grid {
   display: grid; grid-template-columns: 1fr 1fr; gap: 0 0.6rem;
@@ -400,6 +419,10 @@ input { width: 100%; margin-bottom: 0.75rem; }
 }
 .del-sel-bar[hidden] { display: none !important; }
 .del-sel-bar button { padding: 0.2rem 0.55rem; font-size: 0.8rem; }
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
 
 /* Shell chrome (p_0.45.11): health strip, help, actionable errors. */
 .help-btn {
@@ -418,10 +441,26 @@ input { width: 100%; margin-bottom: 0.75rem; }
 .sh-dot.warn { background: var(--warn); }
 .sh-dot.bad { background: var(--danger); }
 .sh-cap { font-size: 0.72rem; }
+.shell-first-run {
+  padding: 0.65rem; border: 1px solid var(--accent-dim); border-radius: var(--radius);
+  background: var(--panel); font-size: 0.8rem;
+}
+.shell-first-run-head { display: flex; align-items: center; gap: 0.5rem; }
+.shell-first-run-head strong { flex: 1; color: var(--text); }
+.shell-first-run-head button { padding: 0; width: 1.35rem; height: 1.35rem; }
+.shell-first-run p { margin: 0.25rem 0 0.4rem; }
+.shell-first-run ol { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.3rem; }
+.shell-first-run li { display: grid; grid-template-columns: 1rem 1fr; gap: 0.25rem; }
+.shell-first-run li.done a { color: var(--muted); text-decoration: line-through; }
+.shell-first-run-open { width: 100%; text-align: left; margin-bottom: 0.45rem; font-size: 0.75rem; }
 .help-states { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
 .help-states th, .help-states td { text-align: left; padding: 0.3rem 0.4rem; border-bottom: 1px solid var(--border); vertical-align: top; }
 .help-states th { color: var(--muted); font-weight: 500; font-size: 0.78rem; }
 .help-keys { margin: 0.2rem 0 0; padding-left: 1.1rem; font-size: 0.85rem; }
+.help-vocabulary { margin: 0; display: grid; gap: 0.25rem; font-size: 0.82rem; }
+.help-vocabulary div { display: grid; grid-template-columns: 5.5rem 1fr; gap: 0.5rem; }
+.help-vocabulary dt { color: var(--text); font-weight: 600; }
+.help-vocabulary dd { margin: 0; color: var(--muted); }
 .err-detail { margin-top: 0.6rem; }
 .err-detail summary { cursor: pointer; color: var(--muted); font-size: 0.82rem; }
 .err-detail pre {
@@ -449,6 +488,22 @@ input { width: 100%; margin-bottom: 0.75rem; }
 .del-blocker + .del-blocker { margin-top: 0.25rem; }
 .del-blocker a { margin-left: 0.25rem; }
 button[disabled][aria-describedby] { opacity: 0.65; cursor: not-allowed; }
+
+/* Independent readiness and consistency diagnostics (p_0.45.13). */
+.del-readiness-toolbar {
+  display: flex; flex-wrap: wrap; align-items: end; gap: 0.75rem; margin-bottom: 1rem;
+}
+.del-readiness-toolbar label { display: grid; gap: 0.25rem; min-width: 10rem; }
+.del-readiness-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: 0.75rem;
+}
+.del-readiness-row p { margin: 0.45rem 0; }
+.del-finding-list { display: grid; gap: 0.4rem; padding-left: 1.25rem; }
+.del-finding-list .blocking_error,
+.del-finding-list .blocking-error { color: var(--danger); }
+.del-finding-list .warning { color: var(--warn); }
+.del-finding-list .informational { color: var(--muted); }
+.del-finding-list a { margin-left: 0.4rem; }
 
 /* Global search (p_0.45.12): one box for the whole planning record. */
 .side-search { position: relative; }
@@ -548,6 +603,14 @@ button[disabled][aria-describedby] { opacity: 0.65; cursor: not-allowed; }
 .wb-tool-out { border-top: 1px solid var(--border); color: var(--muted); }
 .wb-tool-error { border-color: var(--danger); }
 .wb-tool-error summary { color: var(--danger); }
+.wb-approval {
+  padding: 0.65rem; border: 2px solid var(--warn); border-radius: var(--radius);
+  background: #2a2317; display: flex; flex-direction: column; gap: 0.45rem;
+}
+.wb-approval label { display: flex; flex-direction: column; gap: 0.25rem; }
+.wb-approval textarea, .wb-approval pre { font-family: var(--mono); font-size: 0.78rem; }
+.wb-approval pre { margin: 0; white-space: pre-wrap; word-break: break-word; }
+.wb-approval-expired { border-color: var(--border); opacity: 0.8; }
 .wb-error { color: var(--danger); white-space: pre-wrap; }
 .wb-done { padding: 0.45rem 0.6rem; border-radius: var(--radius); border: 1px solid var(--ok); background: #14251c; }
 .wb-done-error { border-color: var(--danger); background: #2a1616; }
@@ -1973,4 +2036,50 @@ select {
   .del-split-chatwide > .ai-chat.ai-chat-tall .ai-chat-log {
     min-height: 240px;
   }
+}
+
+/* p_0.32.2 read-only review */
+.review-head {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem;
+}
+.review-head h2 { margin: 0; }
+.review-head p { margin: 0.25rem 0 0; }
+.review-banner {
+  margin: 0.75rem 0; padding: 0.65rem 0.8rem; border: 1px solid var(--border);
+  border-left: 4px solid var(--accent); border-radius: 6px; background: var(--panel);
+}
+.review-grid {
+  display: grid; grid-template-columns: minmax(180px, 0.8fr) minmax(280px, 1.5fr) minmax(240px, 1fr);
+  gap: 0.75rem; min-height: 62vh;
+}
+.review-pane {
+  min-width: 0; overflow: auto; padding: 0.75rem; border: 1px solid var(--border);
+  border-radius: 8px; background: var(--panel);
+}
+.review-pane h3 { margin: 0 0 0.6rem; }
+.review-tree, .review-changes { list-style: none; margin: 0; padding: 0; }
+.review-tree .review-tree { padding-left: 1rem; }
+.review-tree-row, .review-change-row {
+  width: 100%; min-height: 36px; padding: 0.35rem 0.45rem; border: 0;
+  background: transparent; color: var(--text); text-align: left; overflow-wrap: anywhere;
+}
+.review-tree-row:hover, .review-tree-row:focus-visible,
+.review-change-row:hover, .review-change-row:focus-visible { background: #1a222c; }
+.review-pane pre {
+  margin: 0.5rem 0 0; min-height: 4rem; overflow: auto; white-space: pre;
+  font: 0.82rem/1.5 ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+.review-viewer-pane pre { max-height: 68vh; }
+.review-diff-title { margin-top: 1rem !important; }
+.review-changes-pane [data-review-diff] { max-height: 45vh; }
+
+@media (max-width: 900px) {
+  .review-grid { grid-template-columns: 1fr; min-height: 0; }
+  .review-pane { max-height: none; }
+  .review-viewer-pane pre, .review-changes-pane [data-review-diff] { max-height: 55vh; }
+}
+@media (max-width: 600px) {
+  .review-head { align-items: stretch; flex-direction: column; }
+  .review-head button { min-height: 44px; }
+  .review-tree-row, .review-change-row { min-height: 44px; }
 }

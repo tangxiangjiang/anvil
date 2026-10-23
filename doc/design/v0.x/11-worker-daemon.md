@@ -108,6 +108,7 @@ Suggested message kinds (names illustrative):
 | `job.assign` | C→D | Job payload + cwd binding |
 | `job.event` | D→C | Streamed run events |
 | `job.cancel` | C→D | Cancel |
+| `job.approval_response` / `job.approval_result` | C↔D | Settle one pending interactive approval; exact job/session/request binding (0.45.9) |
 | `job.done` | D→C | Terminal status + result summary |
 | `cluster.*` | D↔scheduler | Join / heartbeat / assign / result (phase after local) |
 

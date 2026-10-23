@@ -5,6 +5,8 @@ package web
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"io/fs"
 	"log"
@@ -14,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/anvil-dev/anvil/internal/daemon"
 	"github.com/anvil-dev/anvil/internal/web/auth"
 	"github.com/anvil-dev/anvil/internal/web/delivery"
 	"github.com/anvil-dev/anvil/internal/web/schedclient"
@@ -30,13 +33,13 @@ type Server struct {
 	jobs      JobRunner // optional; defaults to sched client
 	jobHub    *jobHub
 
-	// workbench holds interactive sessions (p_0.45.9). In memory by design:
-	// the durable record of a session is the worker's own transcript, keyed by
-	// the agent id in the terminal event.
-	workbench   *workbenchHub
-	wbCancelMu  sync.Mutex
-	wbCancel    map[string]context.CancelFunc
-	jobCanceler func(jobID string) error // test seam
+	// workbench is the live fan-out for interactive sessions. Durable identity,
+	// events and terminal state live in the delivery store.
+	workbench         *workbenchHub
+	wbCancelMu        sync.Mutex
+	wbCancel          map[string]context.CancelFunc
+	jobCanceler       func(jobID string) error                                            // test seam
+	approvalResponder func(context.Context, string, daemon.JobApprovalResponseBody) error // test seam
 
 	static fs.FS
 	log    *log.Logger
@@ -48,17 +51,25 @@ func New(cfg Config, store *auth.Store, deliveryStore *delivery.Store, workspace
 	if logger == nil {
 		logger = log.Default()
 	}
-	return &Server{
+	sched := &schedclient.Client{BaseURL: cfg.SchedulerURL, Token: cfg.SchedulerToken()}
+	server := &Server{
 		cfg:       cfg,
 		store:     store,
 		delivery:  deliveryStore,
 		workspace: workspaceStore,
-		sched:     &schedclient.Client{BaseURL: cfg.SchedulerURL, Token: cfg.SchedulerToken()},
+		sched:     sched,
+		jobs:      schedJobRunner{c: sched},
 		workbench: newWorkbenchHub(),
 		wbCancel:  map[string]context.CancelFunc{},
 		static:    staticFS,
 		log:       logger,
 	}
+	if deliveryStore != nil {
+		if err := deliveryStore.FailInterruptedJobs(); err != nil {
+			logger.Printf("restart reconciliation: %v", err)
+		}
+	}
+	return server
 }
 
 // Handler returns the root mux.
@@ -83,17 +94,43 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/jobs/", s.requireAuth(s.handleJobsOrCancel))
 	mux.HandleFunc("/api/v1/search", s.requireAuth(s.handleSearch))
 	mux.HandleFunc("/api/v1/delivery/preflight", s.requireAuth(s.handlePreflight))
+	mux.HandleFunc("/api/v1/delivery/readiness", s.requireAuth(s.handleReadiness))
 	mux.HandleFunc("/api/v1/delivery/assist", s.requireAuth(s.handleAssist))
 	mux.HandleFunc("/api/v1/workbench", s.requireAuth(s.handleWorkbench))
 	mux.HandleFunc("/api/v1/workbench/", s.requireAuth(s.handleWorkbench))
 	mux.HandleFunc("/api/v1/health", s.requireAuth(s.handleHealth))
+	mux.HandleFunc("/api/v1/diagnostics/first-run", s.requireAuth(s.handleFirstRun))
 	mux.HandleFunc("/api/v1/diagnostics/classify-error", s.requireAuth(s.handleClassifyError))
 
 	if s.static != nil {
 		fileServer := http.FileServer(http.FS(s.static))
 		mux.Handle("/", spaFallback(fileServer))
 	}
-	return mux
+	return withRequestID(mux)
+}
+
+type ctxRequestID struct{}
+
+func requestIDFrom(ctx context.Context) string {
+	id, _ := ctx.Value(ctxRequestID{}).(string)
+	return id
+}
+
+func withRequestID(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var raw [8]byte
+		if _, err := rand.Read(raw[:]); err != nil {
+			raw = [8]byte{}
+			binaryTime := time.Now().UnixNano()
+			for i := range raw {
+				raw[i] = byte(binaryTime >> (i * 8))
+			}
+		}
+		id := hex.EncodeToString(raw[:])
+		w.Header().Set("X-Request-ID", id)
+		ctx := context.WithValue(r.Context(), ctxRequestID{}, id)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
 
 func spaFallback(next http.Handler) http.Handler {
@@ -123,12 +160,53 @@ func (s *Server) Run(ctx context.Context) error {
 		defer cancel()
 		_ = srv.Shutdown(shCtx)
 	}()
+	// Scheduler workspace registrations are leases: the scheduler intentionally
+	// keeps tokens in memory so a restart cannot leave a secret database behind.
+	// Reconcile from the authoritative web store at startup and periodically so
+	// reconnecting nodes become admissible again after a scheduler restart.
+	go s.reconcileWorkspaceTokens(ctx)
 	s.log.Printf("anvil-web listen http://%s", s.cfg.Listen)
 	err = srv.Serve(ln)
 	if err == http.ErrServerClosed {
 		return nil
 	}
 	return err
+}
+
+func (s *Server) reconcileWorkspaceTokens(ctx context.Context) {
+	if s.workspace == nil {
+		return
+	}
+	sync := func() {
+		tokens, err := s.workspace.AllTokens()
+		if err != nil {
+			s.log.Printf("workspace token reconciliation: %v", err)
+			return
+		}
+		for _, token := range tokens {
+			client, _, ok := s.clientForFleet(token.FleetID)
+			if !ok || client == nil {
+				continue
+			}
+			callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			err := client.RegisterWorkspace(callCtx, token.WorkspaceID, token.Token, "")
+			cancel()
+			if err != nil && ctx.Err() == nil {
+				s.log.Printf("workspace registration %s: %v", token.WorkspaceID, err)
+			}
+		}
+	}
+	sync()
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			sync()
+		}
+	}
 }
 
 func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {

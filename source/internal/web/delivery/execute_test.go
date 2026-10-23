@@ -119,6 +119,36 @@ func TestMilestoneExecuteWorkerBind(t *testing.T) {
 	if m2.ExecuteWorkerID != wid {
 		t.Fatalf("reload lost worker: %q", m2.ExecuteWorkerID)
 	}
+
+	for _, status := range []string{LifeAwaitingDevelopment, LifeInDevelopment} {
+		t.Run("allows_"+status, func(t *testing.T) {
+			if err := s.RestoreMilestoneRun(msID, status, RunIdle); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.PatchMilestone(msID, PatchMilestoneInput{Execute: true}); err != nil {
+				t.Fatalf("execute from %s: %v", status, err)
+			}
+		})
+	}
+	for _, status := range []string{
+		LifeAwaitingDesign, LifeAwaitingRoadmap, LifeTesting, LifeComplete,
+	} {
+		t.Run("rejects_"+status, func(t *testing.T) {
+			if err := s.RestoreMilestoneRun(msID, status, RunIdle); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.PatchMilestone(msID, PatchMilestoneInput{Execute: true}); err == nil {
+				t.Fatalf("execute from %s should fail", status)
+			}
+			got, err := s.GetMilestone(msID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Status != status || got.RunState != RunIdle {
+				t.Fatalf("rejected execute mutated lifecycle: %s / %s", got.Status, got.RunState)
+			}
+		})
+	}
 }
 
 func TestParseMilestoneBind(t *testing.T) {

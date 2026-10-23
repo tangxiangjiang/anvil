@@ -245,6 +245,8 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 				s.handleJobAssign(ctx, w, env)
 			case KindJobCancel:
 				s.handleJobCancel(w, env)
+			case KindJobApprovalResponse:
+				s.handleJobApprovalResponse(w, env)
 			default:
 				_ = s.writeErr(w, env.ID, "unknown kind "+env.Kind, "")
 			}
@@ -265,6 +267,9 @@ func (s *Server) handleHello(w *connWriter, env Envelope) bool {
 		return false
 	}
 	caps := []string{"job.assign", "job.cancel", "worker.list"}
+	if s.SupportsApprovals() {
+		caps = append(caps, "job.approval")
+	}
 	caps = append(caps, s.cfg.PluginCapabilityLabels()...)
 	ok := HelloOKBody{
 		NodeID:       s.cfg.NodeID,
@@ -343,6 +348,7 @@ func (s *Server) handleJobCancel(w *connWriter, env Envelope) {
 		_ = s.writeErr(w, env.ID, "no active job "+body.JobID, body.JobID)
 		return
 	}
+	s.abortJobApprovals(body.JobID)
 	_ = w.WriteEnvelope(Envelope{Kind: KindJobEvent, ID: env.ID, Body: mustBody(JobEventBody{
 		JobID: body.JobID,
 		Type:  "status",
@@ -350,9 +356,57 @@ func (s *Server) handleJobCancel(w *connWriter, env Envelope) {
 	})})
 }
 
+func (s *Server) handleJobApprovalResponse(w *connWriter, env Envelope) {
+	var body JobApprovalResponseBody
+	if err := DecodeBody(env, &body); err != nil {
+		_ = w.WriteEnvelope(Envelope{Kind: KindJobApprovalResult, ID: env.ID, Body: mustBody(JobApprovalResultBody{
+			OK: false, Code: "invalid", Message: "invalid approval response",
+		})})
+		return
+	}
+	res := s.AnswerApproval(body)
+	_ = w.WriteEnvelope(Envelope{Kind: KindJobApprovalResult, ID: env.ID, Body: mustBody(res)})
+}
+
+// AnswerApproval sends an answer only to the embedded run that owns it.
+func (s *Server) AnswerApproval(body JobApprovalResponseBody) JobApprovalResultBody {
+	res := JobApprovalResultBody{JobID: body.JobID, RequestID: body.RequestID}
+	r, ok := s.runner.(*EmbeddedRunner)
+	if !ok {
+		res.Code, res.Message = "unsupported", "runner does not support interactive approval"
+		return res
+	}
+	if err := r.AnswerApproval(body); err != nil {
+		res.Code, res.Message = "stale", err.Error()
+		if err != errStaleApproval {
+			res.Code = "invalid"
+		}
+		return res
+	}
+	res.OK = true
+	return res
+}
+
+func (s *Server) abortJobApprovals(jobID string) {
+	if r, ok := s.runner.(*EmbeddedRunner); ok {
+		r.AbortApprovals(jobID)
+	}
+}
+
+// SupportsApprovals reports whether the active runner can block and settle a
+// tool call. Custom runners must opt in by implementing the protocol first.
+func (s *Server) SupportsApprovals() bool {
+	_, ok := s.runner.(*EmbeddedRunner)
+	return ok
+}
+
 // CancelActiveJob cancels a running slot job (local or via cluster cancel).
 func (s *Server) CancelActiveJob(jobID string) bool {
-	return s.slots.CancelJob(jobID)
+	ok := s.slots.CancelJob(jobID)
+	if ok {
+		s.abortJobApprovals(jobID)
+	}
+	return ok
 }
 
 func (s *Server) writeErr(w *connWriter, id, msg, jobID string) error {

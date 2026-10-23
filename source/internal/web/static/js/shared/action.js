@@ -46,6 +46,13 @@ window.AnvilUI = window.AnvilUI || {};
       return await fn();
     } catch (err) {
       if (typeof o.onError === "function") o.onError(err);
+      else if (window.AnvilShell?.showError) {
+        await window.AnvilShell.showError(
+          err && err.message ? err.message : String(err),
+          err && err.status ? err.status : 0,
+          err && err.requestId ? err.requestId : "",
+        );
+      }
       else if (o.host) {
         window.AnvilUI.notice(o.host, err && err.message ? err.message : String(err), o.errorTitle || "Action failed");
       } else {

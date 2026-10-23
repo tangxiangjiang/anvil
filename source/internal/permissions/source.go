@@ -55,6 +55,12 @@ func NewSource(cwd, userPath, home, anvilHome string, code []Rule, initial *Set)
 // a policy file, which punishes the wrong person: the session already has a
 // policy, and it is the one the file said a moment ago. Refusing a *malformed
 // file at startup* stays a hard error; see Load.
+// HasLast reports whether a read has ever succeeded, so there is a last good
+// policy for a failed read to fall back on. Before the first success it is false.
+func (s *Source) HasLast() bool {
+	return s != nil && s.last != nil
+}
+
 func (s *Source) Read() (*Set, error) {
 	if s == nil {
 		return nil, nil

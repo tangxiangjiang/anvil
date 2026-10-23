@@ -48,7 +48,7 @@ func (s *Set) Protect(p Protection) *Set {
 // in the order the call named them. It reports the paths as the call spelled
 // them, because that is what the card and the result show.
 func (s *Set) protectedPaths(f CallFacts) []string {
-	if s == nil || s.protection == nil || len(f.Paths) == 0 {
+	if s == nil || s.protection == nil {
 		return nil
 	}
 	var out []string
@@ -76,8 +76,7 @@ func (p Protection) isProtected(raw string) bool {
 			}
 		}
 		if p.Root != "" {
-			if rel, err := filepath.Rel(p.Root, filepath.FromSlash(abs)); err == nil &&
-				rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			if rel, ok := relativeToRoot(p.Root, filepath.FromSlash(abs)); ok {
 				return p.protectedRelative(cleanPath(filepath.ToSlash(rel)))
 			}
 		}
@@ -86,18 +85,42 @@ func (p Protection) isProtected(raw string) bool {
 	return p.protectedRelative(cleanPath(expanded))
 }
 
+// relativeToRoot reports the path of abs under root, when abs is inside it. The
+// root may be given as a symlink or junction while abs is in its resolved form
+// (or the reverse); a plain lexical Rel then finds nothing, so both are also
+// compared after resolving the root (audit #12).
+func relativeToRoot(root, abs string) (string, bool) {
+	inside := func(rel string) bool {
+		return rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	}
+	if rel, err := filepath.Rel(root, abs); err == nil && inside(rel) {
+		return rel, true
+	}
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		if rel, err := filepath.Rel(filepath.Clean(resolved), abs); err == nil && inside(rel) {
+			return rel, true
+		}
+	}
+	return "", false
+}
+
 // protectedRelative applies the fixed list and the user's globs to a path in
 // the form a path rule uses: `/` separators, no leading `./`.
 func (p Protection) protectedRelative(n string) bool {
 	if n == "" {
 		return false
 	}
+	// The fixed list is compared without regard to case: NTFS and the default
+	// macOS volume treat ".GIT" and ".git" as one directory, so a different case
+	// must not slip past the protection (audit #11). The user's own globs below
+	// keep their written form.
 	for _, segment := range strings.Split(n, "/") {
-		if segment == ".git" {
+		if strings.EqualFold(segment, ".git") {
 			return true
 		}
 	}
-	if n == ".anvil/checkpoints" || strings.HasPrefix(n, ".anvil/checkpoints/") {
+	lower := strings.ToLower(n)
+	if lower == ".anvil/checkpoints" || strings.HasPrefix(lower, ".anvil/checkpoints/") {
 		return true
 	}
 	for _, g := range p.Extra {

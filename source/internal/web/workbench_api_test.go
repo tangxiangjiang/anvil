@@ -239,10 +239,10 @@ func TestWorkbenchCancelAsksTheScheduler(t *testing.T) {
 		t.Fatalf("state after cancel = %q, want cancelled", got)
 	}
 
-	// Cancelling a finished session is a conflict, not a silent success.
+	// Cancelling a finished session is idempotent.
 	w = call(t, s, tok, http.MethodPost, "/api/v1/workbench/sessions/wb-cancel/cancel", "")
-	if w.Code != http.StatusConflict {
-		t.Fatalf("second cancel: want 409, got %d", w.Code)
+	if w.Code != http.StatusOK {
+		t.Fatalf("second cancel: want 200, got %d", w.Code)
 	}
 }
 
@@ -325,4 +325,140 @@ func TestWorkbenchStreamFramesAreWellFormed(t *testing.T) {
 		}
 	}
 	_ = fmt.Sprint()
+}
+
+func TestWorkbenchApprovalIsSessionBoundAndSingleUse(t *testing.T) {
+	s, tok := wbServer(t, newWBRunner())
+	sess := &workbenchSession{
+		ID: "wb-approval", JobID: "job-approval", WorkerID: "w1",
+		Started: time.Now(), Prompt: "x", subs: map[chan wbFrame]struct{}{},
+		approvals: map[string]string{"appr-1": "pending"},
+	}
+	s.workbench.add(sess)
+	var got daemon.JobApprovalResponseBody
+	s.approvalResponder = func(_ context.Context, jobID string, body daemon.JobApprovalResponseBody) error {
+		got = body
+		return nil
+	}
+
+	w := call(t, s, tok, http.MethodPost,
+		"/api/v1/workbench/sessions/wb-approval/approvals/appr-1",
+		`{"decision":"allow","args":{"path":"a"}}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("approval: %d %s", w.Code, w.Body.String())
+	}
+	if got.JobID != "job-approval" || got.SessionID != "wb-approval" || got.RequestID != "appr-1" {
+		t.Fatalf("response was not server-bound: %+v", got)
+	}
+	w = call(t, s, tok, http.MethodPost,
+		"/api/v1/workbench/sessions/wb-approval/approvals/appr-1",
+		`{"decision":"deny"}`)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("duplicate: want 409, got %d", w.Code)
+	}
+	w = call(t, s, tok, http.MethodPost,
+		"/api/v1/workbench/sessions/wb-approval/approvals/unknown",
+		`{"decision":"allow"}`)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("unknown: want 409, got %d", w.Code)
+	}
+}
+
+func TestWorkbenchApprovalRejectsBadInputAndAfterStop(t *testing.T) {
+	s, tok := wbServer(t, newWBRunner())
+	sess := &workbenchSession{
+		ID: "wb-input", JobID: "job-input", WorkerID: "w1",
+		Started: time.Now(), Prompt: "x", subs: map[chan wbFrame]struct{}{},
+		approvals: map[string]string{"appr-1": "pending"},
+	}
+	s.workbench.add(sess)
+	unauth := httptest.NewRecorder()
+	s.Handler().ServeHTTP(unauth, httptest.NewRequest(http.MethodPost,
+		"/api/v1/workbench/sessions/wb-input/approvals/appr-1", strings.NewReader(`{"decision":"allow"}`)))
+	if unauth.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized approval: want 401, got %d", unauth.Code)
+	}
+	w := call(t, s, tok, http.MethodPost,
+		"/api/v1/workbench/sessions/wb-input/approvals/appr-1",
+		`{"decision":"maybe"}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("unknown decision: want 400, got %d", w.Code)
+	}
+	w = call(t, s, tok, http.MethodPost,
+		"/api/v1/workbench/sessions/wb-input/approvals/appr-1",
+		`{"decision":"allow","message":"`+strings.Repeat("x", 70<<10)+`"}`)
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized response: want 413, got %d", w.Code)
+	}
+	sess.abortApprovals("stopped")
+	w = call(t, s, tok, http.MethodPost,
+		"/api/v1/workbench/sessions/wb-input/approvals/appr-1",
+		`{"decision":"allow"}`)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("after stop: want 409, got %d", w.Code)
+	}
+}
+
+func TestPhaseJobBridgeIsReadOnlyAndReplays(t *testing.T) {
+	s, tok := wbServer(t, newWBRunner())
+	if err := s.delivery.BeginJob(delivery.JobRecord{
+		JobID: "phase-1", Kind: "phase", PhaseID: "p_0.45.9", WorkerID: "w1", Status: "running",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.delivery.AppendJobEvent(delivery.JobEvent{
+		JobID: "phase-1", Type: "assistant", Text: "phase output",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.delivery.FinishJob("phase-1", "finished", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	w := call(t, s, tok, http.MethodGet, "/api/v1/workbench/sessions", "")
+	if !strings.Contains(w.Body.String(), "phasejob-phase-1") || !strings.Contains(w.Body.String(), `"read_only":true`) {
+		t.Fatalf("list missing phase bridge: %s", w.Body.String())
+	}
+	w = call(t, s, tok, http.MethodGet, "/api/v1/workbench/sessions/phasejob-phase-1/events", "")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "phase output") ||
+		!strings.Contains(w.Body.String(), "event: job.done") {
+		t.Fatalf("bridge replay: %d %s", w.Code, w.Body.String())
+	}
+	w = call(t, s, tok, http.MethodPost, "/api/v1/workbench/sessions/phasejob-phase-1/cancel", "")
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("phase bridge mutation: want 405, got %d", w.Code)
+	}
+}
+
+func TestProductionConstructionUsesSchedulerForRunAndCancel(t *testing.T) {
+	t.Setenv("ANVIL_SCHEDULER_TOKEN", "prod-token")
+	var cancelled string
+	scheduler := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer prod-token" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/cancel") {
+			cancelled = r.URL.Path
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer scheduler.Close()
+
+	cfg := Config{
+		SchedulerURL: scheduler.URL, SchedulerTokenEnv: "ANVIL_SCHEDULER_TOKEN",
+		Fleets: []FleetEntry{{ID: "prod", SchedulerURL: scheduler.URL}},
+	}
+	s := New(cfg, nil, nil, nil, nil, nil)
+	if _, ok := s.jobs.(schedJobRunner); !ok {
+		t.Fatalf("production runner = %T, want schedJobRunner", s.jobs)
+	}
+	if err := s.jobsCancel(context.Background(), "job-prod"); err != nil {
+		t.Fatal(err)
+	}
+	if cancelled != "/v1/jobs/job-prod/cancel" {
+		t.Fatalf("cancel path = %q", cancelled)
+	}
 }

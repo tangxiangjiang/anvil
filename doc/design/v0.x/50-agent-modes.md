@@ -62,7 +62,7 @@ It is not a `SendOption`, and it is not a field a tool can change mid-run:
 
 - Checkpoints, the loop guard and the agent budget are all per run. A run that changed mode
   halfway would have two sets of each, and a rewind would have to know which.
-- The role prompt (chapter [47](49-roles-and-prompts.md)) is part of the system prompt, which
+- The role prompt (chapter [49](49-roles-and-prompts.md)) is part of the system prompt, which
   the cache clock (chapter [42](43-context-management.vscode.md)) relies on being stable within a
   session.
 - A container that wants a different mode for the next request resumes the session with new
@@ -115,7 +115,7 @@ the way `run_workflow` does.
 
 ### 4.3 What the child gets
 
-- **Role `worker`** (chapter 47 §3), so its L1 says to follow the brief and report against the
+- **Role `worker`** (chapter 49 §3), so its L1 says to follow the brief and report against the
   acceptance list.
 - **The brief rendered as L3**, from the validated struct, not from the model's JSON. The
   rendering is the SDK's, so a model cannot smuggle an instruction into the layer by formatting
@@ -267,7 +267,7 @@ report per Worker item. The container is not required to understand any of it to
 ## 6. The invariants under every mode
 
 The capabilities that are Anvil's own have to be as true in Multi and Complex as in Single, and
-the way to keep them true is to run their tests under every mode. Chapter [45](47-evaluation.md)
+the way to keep them true is to run their tests under every mode. Chapter [47](47-evaluation.md)
 §6.1's `invariants` suite runs three times, once per `Options.Mode`:
 
 | Invariant | In Multi | In Complex |

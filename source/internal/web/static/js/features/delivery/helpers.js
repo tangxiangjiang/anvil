@@ -24,7 +24,7 @@ Object.assign(window.Features.delivery, {
   sectionMeta: {
     requirements: {
       title: "Requirements",
-      sub: "Generation plan · Project · milestone (major.minor.patch)",
+      sub: "Generation plan · Project · Milestone (major.minor.patch)",
     },
     designs: {
       title: "Designs",
@@ -32,11 +32,15 @@ Object.assign(window.Features.delivery, {
     },
     roadmap: {
       title: "Roadmap",
-      sub: "Generation plan · milestone · Worker · Execute · 提交测试",
+      sub: "Generation plan · Milestone · Worker · Execute · Submit for Test",
     },
     test: {
       title: "Test",
-      sub: "Generation plan · milestones in testing · Pass / Fail",
+      sub: "Generation plan · Milestones in testing · Pass / Fail",
+    },
+    readiness: {
+      title: "Readiness",
+      sub: "Server-authoritative transition blockers and whole-record consistency",
     },
   },
 
@@ -72,18 +76,43 @@ Object.assign(window.Features.delivery, {
 
   async mount(el) {
     this.el = el;
+    if (!this._snapshotCache) {
+      this._snapshotCache = window.AnvilUI.swr.createStore({ maxEntries: 2 });
+    }
+    const cached = this._snapshotCache.peek("delivery:all");
+    if (cached) {
+      this.data = this.normalizeSnapshot(cached.data);
+      this._snapshotState = {
+        refreshing: true,
+        stale: true,
+        updatedAt: cached.updatedAt,
+        error: "",
+      };
+      // Stale content is useful immediately; the network never blocks this
+      // paint. The refresh below atomically replaces it when it succeeds.
+      this.render();
+    }
     // A skeleton, not a line of text: the first paint should have the shape of
     // the list it is about to become, so the swap does not shift layout. This is
     // the component p_0.45.6 introduced; wiring it here is what makes that
     // phase's "a top-level list shows a skeleton rather than a blank body" true.
-    el.innerHTML = `
-      <div class="del-head"><div><h2>&nbsp;</h2><p class="muted del-sub">&nbsp;</p></div></div>
-      ${this.skeletonHtml(4)}`;
+    if (!cached) {
+      el.innerHTML = `
+        <div class="del-head"><div><h2>&nbsp;</h2><p class="muted del-sub">&nbsp;</p></div></div>
+        ${this.skeletonHtml(4)}`;
+    }
     try {
       await this.reload();
+      if (this.el !== el) return;
       this.render();
     } catch (e) {
-      el.innerHTML = `<p class="err">Failed to load Delivery: ${this.esc(e.message || e)}</p>`;
+      if (this.el !== el) return;
+      if (cached) this.render();
+      else {
+        el.innerHTML = `<p class="err">Failed to load Delivery: ${this.esc(e.message || e)}
+          <button type="button" class="ghost" data-del-initial-retry>Retry</button></p>`;
+        el.querySelector("[data-del-initial-retry]")?.addEventListener("click", () => this.mount(el));
+      }
     }
   },
 
@@ -187,7 +216,7 @@ Object.assign(window.Features.delivery, {
             aria-pressed="${on ? "true" : "false"}"
             title="${this.esc(this.majorStatusLabel(m.status))}">
             <span class="del-scope-label">${this.esc(label)}</span>
-            <span class="del-scope-count muted">${counts.milestones}</span>
+            <span class="del-scope-count muted">${this.esc(counts.milestones)} milestones · ${this.esc(counts.designs)} designs</span>
           </button>`;
       })
       .join("");
@@ -243,11 +272,14 @@ Object.assign(window.Features.delivery, {
   },
 
   /** emptyStateHtml: a list with nothing in it should say what to do next. */
-  emptyStateHtml(message, actionLabel, actionId) {
+  emptyStateHtml(message, actionLabel, actionTarget) {
+    const action = !actionLabel
+      ? ""
+      : String(actionTarget || "").startsWith("#/")
+        ? `<a class="ghost" href="${this.esc(actionTarget)}">${this.esc(actionLabel)}</a>`
+        : `<button type="button" id="${this.esc(actionTarget)}">${this.esc(actionLabel)}</button>`;
     return `<div class="del-empty">
-        <p class="muted">${this.esc(message)}</p>
-        ${actionLabel ? `<button type="button" id="${this.esc(actionId)}">${this.esc(actionLabel)}</button>` : ""}
-      </div>`;
+        <p class="muted">${this.esc(message)}</p>` + action + `</div>`;
   },
 
   majorIsSealed(major) {

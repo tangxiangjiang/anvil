@@ -207,6 +207,9 @@ func TestPreflightAndEnforcementAgree(t *testing.T) {
 // once the blockers are resolved it says ok.
 func TestPreflightClearsWhenSatisfied(t *testing.T) {
 	f := newPreflightFixtureWithGate(t, "Eng7", "- [x] done")
+	if err := f.s.SetMilestoneLifecycle(f.engID, f.major, f.minor, LifeAwaitingDevelopment); err != nil {
+		t.Fatal(err)
+	}
 	// Bind a worker.
 	if _, err := f.s.PatchMilestone(f.msID, PatchMilestoneInput{ExecuteWorkerID: strPtr("w1")}); err != nil {
 		t.Fatal(err)
@@ -221,6 +224,40 @@ func TestPreflightClearsWhenSatisfied(t *testing.T) {
 	}
 	if len(res.Blockers) != 0 {
 		t.Fatalf("ok result carries blockers: %+v", res.Blockers)
+	}
+}
+
+func TestAllTransitionEnforcementUsesPreflight(t *testing.T) {
+	f := newPreflightFixtureWithGate(t, "all transitions", "- [ ] evidence")
+	cases := []struct {
+		transition Transition
+		target     string
+	}{
+		{TransitionStartPhase, f.msID},
+		{TransitionSubmitTest, f.msID},
+		{TransitionPassTest, f.msID},
+		{TransitionAcceptMile, f.msID},
+		{TransitionSealMajor, fmt.Sprintf("%d", f.major)},
+		{TransitionBootstrapRoad, f.desID},
+	}
+	for _, tc := range cases {
+		t.Run(string(tc.transition), func(t *testing.T) {
+			preview, err := f.s.Preflight(tc.transition, tc.target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			enforced := f.s.EnforcePreflight(tc.transition, tc.target)
+			if preview.OK != (enforced == nil) {
+				t.Fatalf("preview/enforcement drift: preview=%+v enforcement=%v", preview, enforced)
+			}
+			if enforced != nil {
+				for _, b := range preview.Blockers {
+					if b.Severity != "warning" && !strings.Contains(enforced.Error(), b.Message) {
+						t.Fatalf("enforcement omitted %q: %v", b.Message, enforced)
+					}
+				}
+			}
+		})
 	}
 }
 

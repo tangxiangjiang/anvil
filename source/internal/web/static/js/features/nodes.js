@@ -47,10 +47,10 @@ window.Features.nodes = {
           .map((w) => `${w.id}:${w.status}${w.job_id ? "(" + w.job_id + ")" : ""}`)
           .join(" · ") || "—";
         tr.innerHTML = `
-          <td><strong>${esc(n.id)}</strong></td>
+          <td><strong>${window.AnvilUI.esc(n.id)}</strong></td>
           <td>${badge}</td>
           <td>idle ${n.idle} / busy ${n.busy} / max ${n.max_workers}</td>
-          <td class="workers">${esc(workers)}</td>
+          <td class="workers">${window.AnvilUI.esc(workers)}</td>
           <td class="toolbar" style="margin:0"></td>`;
         const actions = tr.querySelector("td:last-child");
         actions.appendChild(btn("+", async () => {
@@ -82,7 +82,4 @@ function btn(label, onClick, cls) {
   if (cls) b.className = cls;
   b.onclick = () => onClick().catch((e) => console.error(e));
   return b;
-}
-function esc(s) {
-  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }

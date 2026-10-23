@@ -428,9 +428,16 @@ func (r *Registry) Execute(ctx context.Context, name string, args json.RawMessag
 	if r.permSource != nil {
 		// The file is the interface, so it is read per call: a rule the user just
 		// wrote — by hand, or by choosing "always allow" on an approval card —
-		// decides the next call rather than the next session. A read that fails
-		// yields the last policy that read cleanly; see permissions.Source.Read.
-		rules, _ = r.permSource.Read()
+		// decides the next call rather than the next session.
+		//
+		// A read that fails is refused, not treated as "no rules": with no policy
+		// loaded, a deny in the broken file would otherwise vanish and the call
+		// would run (audit #9). The refusal names the file, so it can be fixed.
+		read, err := r.permSource.Read()
+		if err != nil && !r.permSource.HasLast() {
+			return Result{Content: "cannot read the permission rules, so this call is refused until the rule file is fixed: " + err.Error(), IsError: true}
+		}
+		rules = read // on a failed read, Source.Read has returned the last good policy
 	}
 	var decision permissions.Decision
 	if rules.Len() > 0 {
@@ -483,7 +490,9 @@ func (r *Registry) Execute(ctx context.Context, name string, args json.RawMessag
 	// The pre-image is taken from the arguments the call will actually run
 	// with: an approval may have rewritten them, and the file that changes is
 	// the one in the rewritten call, not the one the model first named.
-	r.captureBefore(name, execArgs)
+	if err := r.captureBefore(name, execArgs); err != nil {
+		return Result{Content: err.Error(), IsError: true}
+	}
 	res = t.Execute(ctx, execArgs)
 	res.Content = truncate(res.Content, r.maxOutput)
 	if r.postExec != nil {
@@ -514,9 +523,9 @@ func callFacts(name string, args json.RawMessage) permissions.CallFacts {
 // successful call into a failed one, so every error is dropped: a missing
 // checkpoint is a gap in the undo history, while a refusal here would be a
 // tool that stops working because a backup could not be filed.
-func (r *Registry) captureBefore(name string, args json.RawMessage) {
+func (r *Registry) captureBefore(name string, args json.RawMessage) error {
 	if r.cpDir == "" || r.cpAgent == "" || r.cpRun == "" {
-		return
+		return nil
 	}
 	root := r.cwd
 	if resolved, err := filepath.EvalSymlinks(root); err == nil {
@@ -528,11 +537,58 @@ func (r *Registry) captureBefore(name string, args json.RawMessage) {
 			continue
 		}
 		rel, err := filepath.Rel(root, abs)
-		if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+		// Only a path that climbs out of the root is skipped. A name that merely
+		// starts with two dots, such as "..env", is inside the workspace (audit #5).
+		if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			continue
 		}
-		_ = checkpoint.Capture(r.cpDir, r.cpAgent, r.cpRun, filepath.ToSlash(rel), abs)
+		// A write whose pre-image cannot be saved is refused: the run could not be
+		// undone, and the caller must be told rather than left to assume it can be
+		// (audit #6).
+		if err := checkpoint.Capture(r.cpDir, r.cpAgent, r.cpRun, filepath.ToSlash(rel), abs); err != nil {
+			return fmt.Errorf("cannot save a checkpoint for %s, so the change is refused: %w", rel, err)
+		}
 	}
+	return nil
+}
+
+// captureAbs checkpoints one file, given by its absolute path, under the current
+// run. A path outside the workspace is skipped; the edit's own check refuses it.
+func (r *Registry) captureAbs(abs string) error {
+	rel, err := filepath.Rel(r.cwd, abs)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return nil
+	}
+	if err := checkpoint.Capture(r.cpDir, r.cpAgent, r.cpRun, filepath.ToSlash(rel), abs); err != nil {
+		return fmt.Errorf("cannot save a checkpoint for %s, so the rename is refused: %w", rel, err)
+	}
+	return nil
+}
+
+// captureWorkspaceEdit checkpoints every file a workspace edit will change, before
+// the edit is applied. A file the edit would write outside the workspace is
+// skipped here; lsp.ApplyWorkspaceEdit refuses it on its own check.
+func (r *Registry) captureWorkspaceEdit(we *lsp.WorkspaceEdit) error {
+	if we == nil || r.cpDir == "" || r.cpAgent == "" || r.cpRun == "" {
+		return nil
+	}
+	uris := make([]string, 0, len(we.Changes)+len(we.DocumentChanges))
+	for uri := range we.Changes {
+		uris = append(uris, uri)
+	}
+	for _, dc := range we.DocumentChanges {
+		uris = append(uris, dc.TextDocument.URI)
+	}
+	for _, uri := range uris {
+		abs, err := lsp.UriToPath(uri)
+		if err != nil {
+			continue
+		}
+		if err := r.captureAbs(abs); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // CallFactsFor is callFacts, exported for the SDK's public rule helpers.
@@ -598,9 +654,30 @@ func ResolveInRoot(root, p string) (string, error) {
 
 // resolveSymlinkPath returns abs with all existing symlink prefixes evaluated.
 func resolveSymlinkPath(abs string) (string, error) {
-	abs = filepath.Clean(abs)
+	return resolveSymlinkPathDepth(filepath.Clean(abs), 0)
+}
+
+// resolveSymlinkPathDepth follows symlinks in abs. A leaf that is itself a
+// dangling symlink is followed to its target, so a write through it lands where
+// the link points and ResolveInRoot can refuse it when that is outside the
+// workspace (audit #3). depth bounds a chain of links that point at each other.
+func resolveSymlinkPathDepth(abs string, depth int) (string, error) {
+	const maxLinks = 16
+	if depth > maxLinks {
+		return "", fmt.Errorf("too many levels of symbolic links: %s", abs)
+	}
 	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
 		return filepath.Clean(resolved), nil
+	}
+	if info, err := os.Lstat(abs); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		target, err := os.Readlink(abs)
+		if err != nil {
+			return "", err
+		}
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(abs), target)
+		}
+		return resolveSymlinkPathDepth(filepath.Clean(target), depth+1)
 	}
 	// Walk up to the longest existing ancestor, resolve it, then re-join the suffix.
 	suffix := make([]string, 0, 4)
@@ -989,6 +1066,11 @@ func (t *grepTool) grepWalk(ctx context.Context, root, pattern, glob string) Res
 			if !ok {
 				return nil
 			}
+		}
+		// Only a regular file is read. WalkDir reports a symlink as a non-directory
+		// entry, and os.ReadFile would follow it out of the workspace (audit #1).
+		if !d.Type().IsRegular() {
+			return nil
 		}
 		info, err := d.Info()
 		if err != nil || info.Size() > grepMaxFileBytes {

@@ -82,9 +82,9 @@ Working-state on the worker project (`.anvil/delivery/`) and markdown export are
 | POST | `/api/v1/delivery/roadmap/milestones/{id}/merge` | After Accept: merge `milestone/{id}` → main (stub or `delivery_merge_root`) |
 | POST | `/api/v1/delivery/buglist` | Optional create-only path for a buglist stub (Fail usually goes through milestone PATCH) |
 | POST | `/api/v1/delivery/test-cases` | Batch create cases `{ eng_req_id, major, minor, cases:[{title,body}] }` |
-| POST | `/api/v1/delivery/test-cases/run` | Mock Worker run for bind; failed cases spawn open buglist items |
-| POST | `/api/v1/delivery/buglist/{id}/fix` | Mock Worker fix: `open` → `verified` |
-| POST | `/api/v1/delivery/buglist/regress` | Mock regression for bind; `verified` → `closed` (or reopen) |
+| POST | `/api/v1/delivery/test-cases/run` | Enqueue campaign Run Job; structured result updates cases and opens bugs |
+| POST | `/api/v1/delivery/buglist/{id}/fix` | Enqueue Fix Job; successful fix moves `open` → `verified` |
+| POST | `/api/v1/delivery/buglist/regress` | Enqueue Regress Job; result closes verified bugs or reopens failures |
 | POST | `/api/v1/delivery/jobs` | Create scheduler job for a phase (bind metadata + composed prompt); Start may call this internally |
 | GET | `/api/v1/delivery/jobs/{id}/events` | Proxy scheduler job SSE (`job.event` / `job.done`) |
 
@@ -94,7 +94,7 @@ Working-state on the worker project (`.anvil/delivery/`) and markdown export are
 
 **Gates hard check (0.39.10):** Design Version `Gate` markdown checkboxes (`- [ ]` / `- [x]`) must all be checked before phase Job enqueue (Start / auto-advance) and before Test **Run**. Text-only Gates (no boxes) do not block. Toggle via `POST .../versions/{vid}/gate-check`.
 
-**Cancel / parse / merge (0.39.13–15):** Pause/Stop call scheduler `POST /v1/jobs/{id}/cancel` when possible. Test Run applies `ANVIL_CAMPAIGN_RESULT` JSON from job result when present. After Accept, **Merge main** records merge (local git when `delivery_merge_root` is set).
+**Cancel / parse / merge (0.39.13–15):** Pause/Stop call scheduler `POST /v1/jobs/{id}/cancel` when possible. A real Test Run must return an `ANVIL_CAMPAIGN_RESULT` JSON trailer; a missing trailer is an error and cannot make the campaign pass. After Accept, **Merge main** records a `milestone/{id}` → `main` merge (local Git when `delivery_merge_root` is set, otherwise an explicit stub record).
 
 Workers for the create picker: cluster inventory when available; otherwise snapshot may include denormalized workers from existing eng-reqs plus seed helpers.
 
@@ -116,7 +116,7 @@ Routes: `#/delivery/{requirements|designs|roadmap|test}` → major index; `#/del
 
 3. **Roadmap** — Generations → `m/{M}` **graph** (drag) + **control cards**: Worker, Start / Pause / Stop (`run_state` + **phase Jobs** via scheduler), live job snippet while running, **提交测试** (`in_development` → `testing`), Design / Requirements links, **Polish** ▶ run via Jobs (0.39.9). No separate execute page. No Gates tab — gates live on Design Versions.  
 
-4. **Test** (0.39.3–0.39.4, Jobs in 0.39.8) — Generations → `m/{M}` **queue of milestones in lifecycle `testing` only**. Campaign: **AI assist** drafts cases → **Run** / **Fix** / **Regress** enqueue Jobs on the Roadmap Worker → SSE status on the card → **Pass** when campaign clean (`accept_status=pending`). **Fail** → buglist + **bugfix phases** + `awaiting_roadmap`; Roadmap **Ready** → `awaiting_development` then Start again (0.39.11). **Accept** on complete (0.39.12) records acceptance; merge-to-main not yet.
+4. **Test** (0.39.3–0.39.4, Jobs in 0.39.8) — Generations → `m/{M}` **queue of milestones in lifecycle `testing` only**. Campaign: **AI assist** drafts cases → **Run** / **Fix** / **Regress** enqueue Jobs on the Roadmap Worker → SSE status on the card → **Pass** when campaign clean (`accept_status=pending`). **Fail** → buglist + **bugfix phases** + `awaiting_roadmap`; Roadmap **Ready** → `awaiting_development` then Start again (0.39.11). **Accept** on complete (0.39.12) records acceptance; **Merge main** is separately gated on accepted state (0.39.15).
 
 ## Non-goals
 
@@ -124,7 +124,7 @@ Routes: `#/delivery/{requirements|designs|roadmap|test}` → major index; `#/del
 - Real AI (chat may append a canned field patch)  
 - GraphPatch apply / drag editor polish  
 - VS Code Server / sandbox review (0.32)  
-- Branch / milestone-accept merge policy (phase + campaign Jobs landed; accept→merge later)  
+- Branch policy beyond the 0.39 convention `milestone/{id}` → `main`
 
 ## Acceptance
 

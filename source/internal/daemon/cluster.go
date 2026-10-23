@@ -97,6 +97,13 @@ func (e *ClusterEdge) session(ctx context.Context, url string) error {
 
 	sendHB := func() error {
 		snap := e.server.WorkerSnapshot()
+		caps := e.cfg.PluginCapabilityLabels()
+		if strings.TrimSpace(e.cfg.SandboxDir) != "" {
+			caps = append(caps, "sandbox.review.read", "sandbox.review.git")
+		}
+		if e.server.SupportsApprovals() {
+			caps = append(caps, "job.approval")
+		}
 		hb, _ := MarshalBody(ClusterHeartbeatBody{
 			NodeID:       nodeID,
 			Idle:         snap.Idle,
@@ -104,7 +111,7 @@ func (e *ClusterEdge) session(ctx context.Context, url string) error {
 			Max:          snap.MaxWorkers,
 			Accepting:    e.server.Accepting(),
 			Workers:      snap.Workers,
-			Capabilities: e.cfg.PluginCapabilityLabels(),
+			Capabilities: caps,
 			Hostname:     hostname,
 			Name:         e.cfg.Name,
 			Description:  e.cfg.Description,
@@ -138,6 +145,12 @@ func (e *ClusterEdge) session(ctx context.Context, url string) error {
 				if body.JobID != "" {
 					_ = e.server.CancelActiveJob(body.JobID)
 				}
+			case KindJobApprovalResponse:
+				var body JobApprovalResponseBody
+				_ = DecodeBody(msg, &body)
+				res := e.server.AnswerApproval(body)
+				encoded, _ := MarshalBody(res)
+				_ = e.write(conn, Envelope{Kind: KindJobApprovalResult, ID: msg.ID, Body: encoded})
 			case KindClusterConfig:
 				var cfgBody ClusterConfigBody
 				_ = DecodeBody(msg, &cfgBody)
@@ -200,9 +213,15 @@ func (e *ClusterEdge) session(ctx context.Context, url string) error {
 			case KindClusterSandboxList:
 				var req ClusterSandboxListBody
 				_ = DecodeBody(msg, &req)
-				res, err := e.server.ListSandbox(req.Path)
-				if err != nil {
-					res = ClusterSandboxResultBody{Request: "list", Error: err.Error()}
+				var res ClusterSandboxResultBody
+				if req.WorkerID != "" {
+					res = e.server.ListWorkerSandbox(req.WorkerID, req.Path)
+				} else {
+					var err error
+					res, err = e.server.ListSandbox(req.Path)
+					if err != nil {
+						res = reviewError("list", "invalid_path", err)
+					}
 				}
 				body, _ := MarshalBody(res)
 				_ = e.write(conn, Envelope{Kind: KindClusterSandboxResult, ID: msg.ID, Body: body})
@@ -214,6 +233,21 @@ func (e *ClusterEdge) session(ctx context.Context, url string) error {
 					res = ClusterSandboxResultBody{Request: "mkdir", Error: err.Error()}
 				}
 				body, _ := MarshalBody(res)
+				_ = e.write(conn, Envelope{Kind: KindClusterSandboxResult, ID: msg.ID, Body: body})
+			case KindClusterSandboxRead:
+				var req ClusterSandboxReadBody
+				_ = DecodeBody(msg, &req)
+				body, _ := MarshalBody(e.server.ReadWorkerSandbox(req.WorkerID, req.Path))
+				_ = e.write(conn, Envelope{Kind: KindClusterSandboxResult, ID: msg.ID, Body: body})
+			case KindClusterGitStatus:
+				var req ClusterGitStatusBody
+				_ = DecodeBody(msg, &req)
+				body, _ := MarshalBody(e.server.GitStatusWorker(req.WorkerID))
+				_ = e.write(conn, Envelope{Kind: KindClusterSandboxResult, ID: msg.ID, Body: body})
+			case KindClusterGitDiff:
+				var req ClusterGitDiffBody
+				_ = DecodeBody(msg, &req)
+				body, _ := MarshalBody(e.server.GitDiffWorker(req.WorkerID, req.Path, req.Staged))
 				_ = e.write(conn, Envelope{Kind: KindClusterSandboxResult, ID: msg.ID, Body: body})
 			}
 		}
@@ -255,7 +289,7 @@ func (e *ClusterEdge) forwardAssign(ctx context.Context, sched net.Conn, job Job
 	job.Plugins = resolved
 
 	jobCtx, cancel := context.WithCancel(ctx)
-	_, err = e.server.Slots().TryAcquire(job.JobID, cancel)
+	workerID, err := e.server.Slots().TryAcquire(job.JobID, cancel)
 	if err != nil {
 		cancel()
 		done, _ := MarshalBody(JobDoneBody{JobID: job.JobID, Status: "error", Error: err.Error()})
@@ -265,14 +299,20 @@ func (e *ClusterEdge) forwardAssign(ctx context.Context, sched net.Conn, job Job
 	defer e.server.Slots().Release(job.JobID)
 	defer cancel()
 
-	doneBody := e.server.runner.Run(jobCtx, job, cwd, func(ev JobEventBody) {
+	emit := func(ev JobEventBody) {
 		ev.JobID = job.JobID
 		body, err := MarshalBody(ev)
 		if err != nil {
 			return
 		}
 		_ = e.write(sched, Envelope{Kind: KindClusterEvent, Body: body})
-	})
+	}
+	var doneBody JobDoneBody
+	if r, ok := e.server.runner.(*EmbeddedRunner); ok {
+		doneBody = r.RunOn(jobCtx, job, cwd, e.server.Slots().LLMFor(workerID), emit)
+	} else {
+		doneBody = e.server.runner.Run(jobCtx, job, cwd, emit)
+	}
 	body, _ := MarshalBody(doneBody)
 	_ = e.write(sched, Envelope{Kind: KindClusterDone, Body: body})
 }

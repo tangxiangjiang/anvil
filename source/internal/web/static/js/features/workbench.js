@@ -9,13 +9,7 @@
  * state. It is the one place in anvil-web where work is *started* rather than
  * planned.
  *
- * Two deliberate limits, both stated in the UI instead of hidden:
- *
- *   - **No approvals.** The daemon's job protocol carries no approval event and
- *     no channel to answer one, so a gated tool call inside a Worker job is
- *     decided by the worker's own options, not by a person here. Showing an
- *     approval card that could never be delivered would be worse than saying so.
- *   - **One session per worker.** Two agents on one checkout damage it the same
+ * One session per worker: two agents on one checkout damage it the same
  *     way two writers damage a transcript; the server refuses and this renders
  *     the refusal.
  *
@@ -29,11 +23,18 @@ window.Features.workbench = {
   _abort: null,
   _cards: null,
   _steps: 0,
+  _approvals: null,
+  _resumeId: null,
 
   async mount(el) {
     this.el = el;
     this._sessionId = null;
     this._cards = new Map();
+    this._approvals = new Map();
+    this._resumeId = null;
+    if (!this._snapshotCache) {
+      this._snapshotCache = window.AnvilUI.swr.createStore({ maxEntries: 2, maxAgeMs: 5 * 60 * 1000 });
+    }
     el.innerHTML = `
       <div class="del-head">
         <div>
@@ -47,6 +48,7 @@ window.Features.workbench = {
       <div class="wb-grid">
         <aside class="wb-side">
           <h3 style="margin-top:0">Sessions</h3>
+          <div id="wb-snapshot-state"></div>
           <div id="wb-sessions" class="wb-sessions">${this.skeleton(3)}</div>
           <h3>Start</h3>
           <form id="wb-form">
@@ -55,11 +57,11 @@ window.Features.workbench = {
             <label for="wb-prompt">What should the agent do?</label>
             <textarea id="wb-prompt" rows="4" placeholder="Read the failing test and fix it." required></textarea>
             <div class="err" id="wb-err"></div>
-            <button type="submit" id="wb-start" style="width:100%">Start session</button>
+            <button type="submit" id="wb-start" style="width:100%">Start Session</button>
           </form>
         </aside>
         <section class="wb-main">
-          <div id="wb-session-head" class="wb-session-head muted">No session selected.</div>
+          <div id="wb-session-head" class="wb-session-head muted">No Session selected.</div>
           <div id="wb-approval-note" class="wb-note" hidden></div>
           <div id="wb-conn" class="wb-conn" hidden></div>
           <div id="wb-stream" class="wb-stream" role="log" aria-live="polite"></div>
@@ -77,8 +79,13 @@ window.Features.workbench = {
     });
     el.querySelector("#wb-stop").addEventListener("click", () => this.stop());
 
-    await this.loadWorkers();
-    await this.refresh();
+    const cached = this._snapshotCache.peek("workbench:sessions");
+    if (cached) {
+      this._sessions = cached.data.sessions || [];
+      this._snapshotState = { stale: true, refreshing: true, updatedAt: cached.updatedAt, error: "" };
+      this.paintSessions();
+    }
+    await Promise.all([this.loadWorkers(), this.refresh()]);
   },
 
   unmount() {
@@ -96,7 +103,7 @@ window.Features.workbench = {
     return `${out}</div>`;
   },
 
-  /** loadWorkers fills the picker from the cluster inventory Delivery already reads. */
+  /** loadWorkers fills the picker from the Fleet inventory Delivery already reads. */
   async loadWorkers() {
     const sel = this.el?.querySelector("#wb-worker");
     if (!sel) return;
@@ -129,7 +136,7 @@ window.Features.workbench = {
       return;
     }
     if (opts.length === 0) {
-      sel.innerHTML = `<option value="">No workers bound — bind one in Clusters</option>`;
+      sel.innerHTML = `<option value="">No Workers bound — bind one in Clusters</option>`;
       return;
     }
     sel.innerHTML = opts
@@ -140,30 +147,96 @@ window.Features.workbench = {
   async refresh() {
     const box = this.el?.querySelector("#wb-sessions");
     if (!box) return;
+    this._snapshotState = { ...(this._snapshotState || {}), refreshing: true, error: "" };
+    if (this._sessions) this.paintSessions();
     try {
-      const data = await api.v1.workbenchSessions();
-      const rows = data.sessions || [];
-      if (rows.length === 0) {
-        box.innerHTML = `<div class="del-empty"><p class="muted">No sessions yet. Start one on the right.</p></div>`;
-        return;
-      }
-      box.innerHTML = rows
-        .map(
-          (s) => `
+      const result = await this._snapshotCache.revalidate(
+        "workbench:sessions",
+        () => api.v1.workbenchSessions(),
+        {
+          // Prompts and event content are intentionally excluded. The cached
+          // list is only enough to identify and reopen a Session.
+          project: (data) => ({
+            sessions: (data.sessions || []).map((session) => ({
+              id: session.id,
+              worker_id: session.worker_id,
+              state: session.state,
+              resumable: Boolean(session.resumable),
+            })),
+          }),
+        },
+      );
+      if (!result.accepted || !this.el) return;
+      this._sessions = result.snapshot.sessions || [];
+      this._snapshotState = {
+        stale: false,
+        refreshing: false,
+        updatedAt: result.updatedAt,
+        error: "",
+      };
+    } catch (error) {
+      this._snapshotState = {
+        ...(this._snapshotState || {}),
+        stale: Boolean(this._sessions),
+        refreshing: false,
+        error: error?.message || String(error),
+      };
+    }
+    this.paintSessions();
+  },
+
+  paintSessions() {
+    const box = this.el?.querySelector("#wb-sessions");
+    const stateBox = this.el?.querySelector("#wb-snapshot-state");
+    if (!box || !stateBox) return;
+    const rows = this._sessions || [];
+    if (rows.length === 0) {
+      box.innerHTML = `<div class="del-empty"><p class="muted">No Sessions yet. Start one on the right.</p></div>`;
+    } else {
+      box.innerHTML = rows.map(
+        (s) => `<div class="wb-sess-row">
         <button type="button" class="wb-sess${s.id === this._sessionId ? " active" : ""}" data-wb-open="${window.AnvilUI.esc(s.id)}">
           <span class="wb-sess-state ${window.AnvilUI.badgeClass(s.state)}"></span>
           <span class="wb-sess-body">
-            <span class="wb-sess-prompt">${window.AnvilUI.esc((s.prompt || "").slice(0, 80))}</span>
+            <span class="wb-sess-prompt">${window.AnvilUI.esc(s.id || "Session")}</span>
             <span class="muted wb-sess-meta">${window.AnvilUI.esc(s.worker_id)} · ${window.AnvilUI.esc(s.state)}</span>
           </span>
-        </button>`,
-        )
-        .join("");
-      box.querySelectorAll("[data-wb-open]").forEach((btn) => {
-        btn.addEventListener("click", () => this.attach(btn.getAttribute("data-wb-open")));
-      });
-    } catch (e) {
-      box.innerHTML = `<div class="err">${window.AnvilUI.esc(e.message || String(e))}</div>`;
+        </button>
+        ${s.resumable ? `<button type="button" class="ghost" data-wb-resume="${window.AnvilUI.esc(s.id)}" data-worker="${window.AnvilUI.esc(s.worker_id)}">Resume</button>` : ""}
+        </div>`,
+      ).join("");
+    }
+    const state = this._snapshotState || {};
+    const age = window.AnvilUI.swr.ageLabel(state.updatedAt);
+    stateBox.innerHTML = state.error
+      ? `<div class="snapshot-state bad" role="status">Showing last successful snapshot · updated ${window.AnvilUI.esc(age)} · disconnected <button type="button" class="ghost" data-wb-retry>Retry</button></div>`
+      : state.refreshing || state.stale
+        ? `<div class="snapshot-state warn" role="status">Showing last successful snapshot · updated ${window.AnvilUI.esc(age)} · refreshing…</div>`
+        : state.updatedAt
+          ? `<div class="snapshot-state" role="status">Updated ${window.AnvilUI.esc(age)}</div>`
+          : "";
+    stateBox.querySelector("[data-wb-retry]")?.addEventListener("click", () => this.refresh());
+    box.querySelectorAll("[data-wb-open]").forEach((btn) => {
+      btn.addEventListener("click", () => this.attach(btn.getAttribute("data-wb-open")));
+    });
+    box.querySelectorAll("[data-wb-resume]").forEach((btn) => {
+      btn.addEventListener("click", () => this.prepareResume(
+        btn.getAttribute("data-wb-resume"),
+        btn.getAttribute("data-worker"),
+      ));
+    });
+  },
+
+  prepareResume(sessionId, workerId) {
+    this._resumeId = sessionId;
+    const worker = this.el?.querySelector("#wb-worker");
+    if (worker && [...worker.options].some((option) => option.value === workerId)) worker.value = workerId;
+    const start = this.el?.querySelector("#wb-start");
+    if (start) start.textContent = "Resume Session";
+    const prompt = this.el?.querySelector("#wb-prompt");
+    if (prompt) {
+      prompt.placeholder = "Continue this Session…";
+      prompt.focus();
     }
   },
 
@@ -187,7 +260,11 @@ window.Features.workbench = {
       { key: "wb-start", runningLabel: "Starting…", host: el.querySelector("#del-ui-modal"), errorTitle: "Start failed" },
       async () => {
         try {
-          const sess = await api.v1.workbenchStart({ worker_id: workerId, prompt });
+          const body = { worker_id: workerId, prompt };
+          if (this._resumeId) body.resume_id = this._resumeId;
+          const sess = await api.v1.workbenchStart(body);
+          this._resumeId = null;
+          btn.textContent = "Start Session";
           el.querySelector("#wb-prompt").value = "";
           await this.refresh();
           await this.attach(sess.id);
@@ -218,11 +295,11 @@ window.Features.workbench = {
   },
 
   /**
-   * showApprovalLimit renders the capability note for a session.
+   * showApprovalLimit renders a capability note only for bridged read-only jobs.
    *
    * It reads approval_supported from the session payload rather than assuming:
-   * if the job protocol ever gains an approval channel, the backend flips this
-   * flag and the note disappears without a client change.
+   * Interactive Workbench sessions support approvals; old/read-only records do
+   * not grow controls they cannot route.
    */
   async showApprovalLimit(sessionId) {
     const note = this.el?.querySelector("#wb-approval-note");
@@ -233,8 +310,9 @@ window.Features.workbench = {
       const sess = await api.v1.workbenchSession(sessionId);
       if (sess.approval_supported) return;
       note.hidden = false;
-      note.textContent =
-        "Approvals are not delivered for this run: a gated tool call is decided by the worker's own options, not here.";
+      note.textContent = sess.read_only
+        ? "This Phase Job is read-only here. Interactive approvals are available only on Workbench-started Sessions."
+        : "Interactive approvals are unavailable for this stored Session.";
     } catch (_) {
       // A session that cannot be described must not produce a claim about it.
     }
@@ -245,11 +323,13 @@ window.Features.workbench = {
     this.closeStream();
     this._sessionId = sessionId;
     this._cards = new Map();
+    this._approvals = new Map();
     this._steps = 0;
     // A fresh resumer per session: seq numbers belong to one job, so carrying a
     // seen-set across sessions would drop the first events of the next one.
     this._resumer = window.AnvilUI.stream.createResumer();
     this._ended = false;
+    this._lastEventAt = 0;
     const stream = this.el?.querySelector("#wb-stream");
     const head = this.el?.querySelector("#wb-session-head");
     const stop = this.el?.querySelector("#wb-stop");
@@ -257,12 +337,12 @@ window.Features.workbench = {
     stream.innerHTML = "";
     this.setStatus("connecting…");
     if (head) head.textContent = sessionId;
+    let readOnly = false;
+    try {
+      const info = await api.v1.workbenchSession(sessionId);
+      readOnly = Boolean(info.read_only);
+    } catch (_) {}
 
-    // State the limit the backend reports, once, per attached session. The job
-    // protocol carries no approval event and no channel to answer one, so a
-    // gated tool call inside this run is decided by the worker's options - not
-    // by a person here. Saying so is the difference between a known limit and a
-    // missing feature someone waits for.
     this.showApprovalLimit(sessionId);
 
     // Follow, and keep following: the stream replays then goes live, so a drop
@@ -274,6 +354,8 @@ window.Features.workbench = {
       const outcome = await this.consume(api.v1.workbenchEventsURL(sessionId), ac.signal, {
         onEvent: (ev) => {
           if (!this._resumer.firstSeen(ev)) return;
+          this._lastEventAt = Date.now();
+          this.setConn(this._connState || "live");
           this.renderEvent(ev);
         },
         onDone: (done) => {
@@ -286,7 +368,7 @@ window.Features.workbench = {
         },
         onOpen: () => {
           this._resumer.opened();
-          if (stop) stop.disabled = false;
+          if (stop) stop.disabled = readOnly;
           this.setStatus("running");
           this.setConn("live");
         },
@@ -308,9 +390,13 @@ window.Features.workbench = {
   setConn(state) {
     const el = this.el?.querySelector("#wb-conn");
     if (!el) return;
+    this._connState = state;
     const label = window.AnvilUI.stream.connectionLabel(state);
-    el.hidden = state === "live" || state === "";
-    el.textContent = label;
+    const last = this._lastEventAt
+      ? ` · last event ${window.AnvilUI.swr.ageLabel(this._lastEventAt)}`
+      : "";
+    el.hidden = state === "";
+    el.textContent = label + last;
     el.className = "wb-conn" + (state === "offline" ? " bad" : state === "reconnecting" ? " warn" : "");
   },
 
@@ -421,6 +507,14 @@ window.Features.workbench = {
       this.scroll(stream);
       return;
     }
+    if (type === "approval_request" && ev.approval) {
+      this.renderApproval(ev.approval);
+      return;
+    }
+    if (type === "approval_result" && ev.approval_result) {
+      this.settleApproval(ev.approval_result);
+      return;
+    }
     if (type === "tool_result") {
       const card = this._cards.get(ev.tool_call_id) || stream.lastElementChild;
       if (card && card.classList.contains("wb-tool")) {
@@ -459,6 +553,103 @@ window.Features.workbench = {
       this.scroll(stream);
       return;
     }
+  },
+
+  renderApproval(req) {
+    const stream = this.el?.querySelector("#wb-stream");
+    if (!stream || !req?.request_id || this._approvals.has(req.request_id)) return;
+    const card = document.createElement("section");
+    card.className = "wb-approval";
+    card.dataset.approval = req.request_id;
+
+    const title = document.createElement("strong");
+    title.textContent = "Approval required: " + (req.tool || "tool");
+    card.appendChild(title);
+    const meta = document.createElement("div");
+    meta.className = "muted";
+    meta.textContent = req.expires_at ? "Expires " + req.expires_at : "Waiting for your decision";
+    card.appendChild(meta);
+    if (req.preview?.summary || req.preview?.path || req.preview?.command) {
+      const preview = document.createElement("pre");
+      preview.textContent = req.preview.summary || req.preview.path || (req.preview.command || []).join(" ");
+      card.appendChild(preview);
+    }
+    const label = document.createElement("label");
+    label.textContent = "Arguments (editable JSON)";
+    const args = document.createElement("textarea");
+    args.rows = 5;
+    args.value = this.pretty(req.args || {});
+    label.appendChild(args);
+    card.appendChild(label);
+
+    const actions = document.createElement("div");
+    actions.className = "toolbar";
+    const add = (decision, text, danger = false) => {
+      if (!Array.isArray(req.decisions) || !req.decisions.includes(decision)) return;
+      const btn = document.createElement("button");
+      btn.type = "button";
+      if (danger) btn.className = "danger";
+      btn.textContent = text;
+      btn.addEventListener("click", () => this.answerApproval(req, decision, args, card));
+      actions.appendChild(btn);
+    };
+    add("allow", "Allow");
+    add("allow_session", "Allow for session");
+    add("deny", "Deny", true);
+    card.appendChild(actions);
+    const status = document.createElement("div");
+    status.className = "wb-approval-status muted";
+    card.appendChild(status);
+    stream.appendChild(card);
+    this._approvals.set(req.request_id, { card, state: "pending" });
+    this.scroll(stream);
+  },
+
+  async answerApproval(req, decision, argsEl, card) {
+    const item = this._approvals.get(req.request_id);
+    if (!item || item.state !== "pending") return;
+    let args;
+    try {
+      args = JSON.parse(argsEl.value || "{}");
+    } catch (_) {
+      card.querySelector(".wb-approval-status").textContent = "Arguments must be valid JSON.";
+      return;
+    }
+    item.state = this.approvalNextState(item.state, "respond");
+    card.querySelectorAll("button").forEach((b) => (b.disabled = true));
+    card.querySelector(".wb-approval-status").textContent = "Sending decision…";
+    try {
+      await api.v1.workbenchApproval(this._sessionId, req.request_id, {
+        decision,
+        scope: decision === "allow_session" ? req.preview?.path || "" : "",
+        args: decision === "deny" ? undefined : args,
+      });
+      item.state = this.approvalNextState(item.state, "answered");
+      card.querySelector(".wb-approval-status").textContent =
+        decision === "deny" ? "Denied." : decision === "allow_session" ? "Allowed for this session." : "Allowed.";
+    } catch (e) {
+      item.state = this.approvalNextState(item.state, "expired");
+      card.classList.add("wb-approval-expired");
+      card.querySelector(".wb-approval-status").textContent = e.message || "Approval is no longer pending.";
+    }
+  },
+
+  settleApproval(outcome) {
+    const item = this._approvals.get(outcome?.request_id);
+    if (!item) return;
+    item.state = this.approvalNextState(item.state, outcome.status || "answered");
+    item.card.querySelectorAll("button").forEach((b) => (b.disabled = true));
+    if (item.state === "expired" || item.state === "cancelled") item.card.classList.add("wb-approval-expired");
+    const status = item.card.querySelector(".wb-approval-status");
+    if (status) status.textContent = outcome.message || item.state;
+  },
+
+  approvalNextState(current, event) {
+    const terminal = ["answered", "expired", "cancelled"];
+    if (terminal.includes(current)) return current;
+    if (current === "pending" && event === "respond") return "responding";
+    if ((current === "pending" || current === "responding") && terminal.includes(event)) return event;
+    return current;
   },
 
   renderDone(done) {
@@ -520,5 +711,8 @@ window.Features.workbench = {
 };
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { splitFrames: (...a) => window.Features.workbench.splitFrames(...a) };
+  module.exports = {
+    splitFrames: (...a) => window.Features.workbench.splitFrames(...a),
+    approvalNextState: (...a) => window.Features.workbench.approvalNextState(...a),
+  };
 }

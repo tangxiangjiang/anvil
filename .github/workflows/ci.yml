@@ -29,6 +29,25 @@ jobs:
         working-directory: source
         run: go test ./...
 
+  web-static:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: source/internal/web/static/package-lock.json
+
+      - name: Install
+        working-directory: source/internal/web/static
+        run: npm ci
+
+      - name: Test
+        working-directory: source/internal/web/static
+        run: npm test
+
   vscode:
     runs-on: ubuntu-latest
     steps:

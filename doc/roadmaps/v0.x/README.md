@@ -1,6 +1,8 @@
 # Roadmaps v0.x (cutoff)
 
-Versioned delivery for Anvil through product **0.50**. Design cutoff: [`doc/design/v0.x/`](../../design/v0.x/).
+Versioned delivery for Anvil through milestone **0.50**. Design cutoff: [`doc/design/v0.x/`](../../design/v0.x/).
+Milestone 0.46 closes the VS Code polish line; 0.47–0.50 develop and polish agent capabilities.
+The shipped VSIX and host version remains **0.47.0**; it is not the milestone status.
 
 ## Version index
 
@@ -37,7 +39,7 @@ Versioned delivery for Anvil through product **0.50**. Design cutoff: [`doc/desi
 | 0.29 | Sandbox workers + web FS browser | done | [m_0.29_sandbox_workers.md](m_0.29_sandbox_workers.md) | [29](../../design/v0.x/29-sandbox-workers.md) |
 | 0.30 | Loop guard (unlimited steps) | done | [m_0.30_loop_guard.md](m_0.30_loop_guard.md) | [30](../../design/v0.x/30-loop-guard.md) |
 | 0.31 | Job event stream (app chat) | done | [m_0.31_job_stream.md](m_0.31_job_stream.md) | [31](../../design/v0.x/31-job-event-stream.md) |
-| 0.32 | Sandbox code review + VS Code Server | planned | [m_0.32_sandbox_code_review.md](m_0.32_sandbox_code_review.md) | [32](../../design/v0.x/32-sandbox-code-review.md) |
+| 0.32 | Sandbox code review + VS Code Server | in_progress | [m_0.32_sandbox_code_review.md](m_0.32_sandbox_code_review.md) | [32](../../design/v0.x/32-sandbox-code-review.md) |
 | 0.33 | Delivery UI + schema | done | [m_0.33_delivery_ui.md](m_0.33_delivery_ui.md) | [33](../../design/v0.x/33-delivery-ui.md) |
 | 0.34 | Workspace domain (Clusters hierarchy) | done | [m_0.34_workspace_domain.md](m_0.34_workspace_domain.md) | [34](../../design/v0.x/34-workspace-domain.md) |
 | 0.35 | VS Code extension + editor host | done | [m_0.35_vscode_extension.vscode.md](m_0.35_vscode_extension.vscode.md) | [35](../../design/v0.x/35-vscode-extension.vscode.md) |
@@ -50,9 +52,9 @@ Versioned delivery for Anvil through product **0.50**. Design cutoff: [`doc/desi
 | 0.42 | Subagents, background tasks, and workflows | done | [m_0.42_subagents_and_tasks.vscode.md](m_0.42_subagents_and_tasks.vscode.md) | [42](../../design/v0.x/42-subagents-and-tasks.vscode.md) |
 | 0.43 | Context management | done | [m_0.43_context_management.vscode.md](m_0.43_context_management.vscode.md) | [43](../../design/v0.x/43-context-management.vscode.md) |
 | 0.44 | MCP management | done | [m_0.44_mcp_management.vscode.md](m_0.44_mcp_management.vscode.md) | [44](../../design/v0.x/44-mcp-management.vscode.md) |
-| 0.45 | Editor-host protocol smoke | done | [m_0.45_protocol_smoke.md](m_0.45_protocol_smoke.md) | [35](../../design/v0.x/35-vscode-extension.vscode.md) (CI tour; no new chapter) |
+| 0.45 | Protocol smoke + web polish | done | [m_0.45_protocol_smoke.md](m_0.45_protocol_smoke.md) | [35](../../design/v0.x/35-vscode-extension.vscode.md) + [45](../../design/v0.x/45-web-editor-polish.md) |
 | 0.46 | Editor polish (49 phases) | done | [m_0.46_editor_polish.vscode.md](m_0.46_editor_polish.vscode.md) | [46](../../design/v0.x/46-editor-polish.vscode.md) |
-| 0.47 | Evaluation baseline and audit | planned | [m_0.47_evaluation_and_audit.md](m_0.47_evaluation_and_audit.md) | [47](../../design/v0.x/47-evaluation.md) |
+| 0.47 | Evaluation baseline and audit | done | [m_0.47_evaluation_and_audit.md](m_0.47_evaluation_and_audit.md) | [47](../../design/v0.x/47-evaluation.md) |
 | 0.48 | LLM calls: effort, retry, stop reasons | planned | [m_0.48_llm_calls.md](m_0.48_llm_calls.md) | [48](../../design/v0.x/48-llm-effort-and-retry.md) |
 | 0.49 | Roles and prompts | planned | [m_0.49_roles_and_prompts.md](m_0.49_roles_and_prompts.md) | [49](../../design/v0.x/49-roles-and-prompts.md) |
 | 0.50 | Agent modes | planned | [m_0.50_agent_modes.md](m_0.50_agent_modes.md) | [50](../../design/v0.x/50-agent-modes.md) |

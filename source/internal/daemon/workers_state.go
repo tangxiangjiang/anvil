@@ -154,6 +154,7 @@ func (s *Server) saveWorkersState() {
 			ProjectRel:  rel,
 			GitURL:      w.GitRemote,
 			Enabled:     enabled,
+			LLM:         s.slots.LLMFor(w.ID),
 		})
 	}
 

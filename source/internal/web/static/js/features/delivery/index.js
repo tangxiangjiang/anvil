@@ -12,17 +12,71 @@ window.Features.delivery = window.Features.delivery || {};
 Object.assign(window.Features.delivery, {
   _renderToken: 0,
 
+  normalizeSnapshot(data) {
+    data = data || {};
+    if (!data.eng_reqs) data.eng_reqs = [];
+    if (!data.designs) data.designs = [];
+    if (!data.workers) data.workers = [];
+    if (!data.gates) data.gates = [];
+    if (!data.majors) data.majors = [];
+    if (!data.roadmap) data.roadmap = { milestones: [], edges: [] };
+    if (!data.polishes) data.polishes = [];
+    if (!data.buglist_items) data.buglist_items = [];
+    if (!data.test_cases) data.test_cases = [];
+    return data;
+  },
+
+  cacheableSnapshot(data) {
+    const safe = this.normalizeSnapshot(JSON.parse(JSON.stringify(data || {})));
+    safe.workers = [];
+    for (const eng of safe.eng_reqs) {
+      delete eng.worker_id;
+      delete eng.project_id;
+      delete eng.workspace_id;
+      delete eng.reqs_rel;
+    }
+    for (const milestone of safe.roadmap.milestones || []) {
+      delete milestone.execute_worker_id;
+      delete milestone.campaign_job_last_event;
+      for (const phase of milestone.phases || []) delete phase.job_last_event;
+    }
+    for (const polish of safe.polishes) delete polish.job_last_event;
+    return safe;
+  },
+
   async reload() {
-    this.data = await api.v1.delivery();
-    if (!this.data.eng_reqs) this.data.eng_reqs = [];
-    if (!this.data.designs) this.data.designs = [];
-    if (!this.data.workers) this.data.workers = [];
-    if (!this.data.gates) this.data.gates = [];
-    if (!this.data.majors) this.data.majors = [];
-    if (!this.data.roadmap) this.data.roadmap = { milestones: [], edges: [] };
-    if (!this.data.polishes) this.data.polishes = [];
-    if (!this.data.buglist_items) this.data.buglist_items = [];
-    if (!this.data.test_cases) this.data.test_cases = [];
+    if (!this._snapshotCache) {
+      this._snapshotCache = window.AnvilUI.swr.createStore({ maxEntries: 2 });
+    }
+    this._snapshotState = {
+      ...(this._snapshotState || {}),
+      refreshing: true,
+      error: "",
+    };
+    let result;
+    try {
+      result = await this._snapshotCache.revalidate(
+        "delivery:all",
+        () => api.v1.delivery(),
+        { project: (data) => this.cacheableSnapshot(data) },
+      );
+    } catch (error) {
+      this._snapshotState = {
+        ...(this._snapshotState || {}),
+        refreshing: false,
+        stale: Boolean(this.data),
+        error: error?.message || String(error),
+      };
+      throw error;
+    }
+    if (!result.accepted) return this.data;
+    this.data = this.normalizeSnapshot(result.data);
+    this._snapshotState = {
+      refreshing: false,
+      stale: false,
+      updatedAt: result.updatedAt,
+      error: "",
+    };
     if (this.selectedMajor == null) {
       const dev = (this.data.majors || []).find((m) => m.status === "developing");
       this.selectedMajor = dev ? dev.major : (this.data.majors[0] && this.data.majors[0].major);
@@ -190,6 +244,8 @@ Object.assign(window.Features.delivery, {
     } else if (route.section === "test") {
       if (route.routeMajor != null) body = this.viewTestList(route.routeMajor);
       else body = this.viewMajorIndex("test");
+    } else if (route.section === "readiness") {
+      body = this.viewReadiness();
     } else {
       body = `<p class="muted">Unknown section. Open a Delivery item in the sidebar.</p>`;
     }
@@ -225,10 +281,10 @@ Object.assign(window.Features.delivery, {
     if (reqHome) {
       metaTitle = "Requirements";
       metaSub =
-        "Generation plan · pick a major or a Project (execute picks a Worker later)";
+        "Generation plan · pick a Generation or a Project (execution picks a Worker later)";
     } else if (majorIndex) {
       metaTitle = "Generations";
-      metaSub = `Pick a major line · then ${meta.title}`;
+      metaSub = `Pick a Generation · then ${meta.title}`;
     } else if (majorScope) {
       metaTitle = this.majorLabel(route.routeMajor);
       metaSub = `${meta.title} under this generation`;
@@ -243,11 +299,12 @@ Object.assign(window.Features.delivery, {
     }
 
     const section = route.section || "requirements";
-    const scopeMajor = route.routeMajor != null ? route.routeMajor : route.major;
-    const scope =
-      route.section === "requirements" && route.engId
-        ? ""
-        : this.generationScopeHtml(section, scopeMajor);
+    let scopeMajor = route.routeMajor != null ? route.routeMajor : route.major;
+    if (scopeMajor == null && route.section === "designs" && route.desId) {
+      scopeMajor = (this.data.designs || []).find((d) => d.id === route.desId)?.major;
+    }
+    const scope = this.generationScopeHtml(section, scopeMajor);
+    const snapshotState = this.snapshotStateHtml();
 
     this.el.innerHTML = `
       <div class="del-head">
@@ -255,8 +312,9 @@ Object.assign(window.Features.delivery, {
           <h2>${this.esc(metaTitle)}</h2>
           <p class="muted del-sub">${this.esc(metaSub)}</p>
         </div>
+        ${scope}
       </div>
-      ${scope}
+      ${snapshotState}
       ${this.jobBarHtml()}
       <div class="del-body">${body}</div>
       <div id="del-ui-modal" class="modal" hidden></div>`;
@@ -269,6 +327,16 @@ Object.assign(window.Features.delivery, {
       if (engId) this.openCreateWizardBound(engId);
     });
     this.bindJobBar();
+    this.el.querySelector("[data-snapshot-retry]")?.addEventListener("click", async (event) => {
+      const button = event.currentTarget;
+      button.disabled = true;
+      try {
+        await this.reload();
+        this.render();
+      } catch (_) {
+        this.render();
+      }
+    });
     this.bindAudit(this.el);
     this.bindGenerationScope();
     this.bindMajorPlan();
@@ -276,6 +344,7 @@ Object.assign(window.Features.delivery, {
     this.bindMilestoneCards();
     this.bindVerTips();
     this.bind(route);
+    if (route.section === "readiness") this.bindReadiness(this.el);
     if (!this._activeJob) {
       const recovered = this.activeJobFromSnapshot();
       if (recovered) {
@@ -290,6 +359,24 @@ Object.assign(window.Features.delivery, {
     ) {
       this.loadWorkspaceInventory();
     }
+  },
+
+  snapshotStateHtml() {
+    const state = this._snapshotState || {};
+    if (!state.updatedAt && !state.refreshing && !state.error) return "";
+    const age = window.AnvilUI.swr.ageLabel(state.updatedAt);
+    if (state.error) {
+      return `<div class="snapshot-state bad" role="status">
+        Showing last successful snapshot · updated ${this.esc(age)} · disconnected
+        <button type="button" class="ghost" data-snapshot-retry>Retry</button>
+      </div>`;
+    }
+    if (state.refreshing || state.stale) {
+      return `<div class="snapshot-state warn" role="status">
+        Showing last successful snapshot · updated ${this.esc(age)} · refreshing…
+      </div>`;
+    }
+    return `<div class="snapshot-state" role="status">Updated ${this.esc(age)}</div>`;
   },
 
   /** Fixed-position version tips so .main overflow does not clip them. */
@@ -447,7 +534,7 @@ Object.assign(window.Features.delivery, {
         this._desFilter = ev.target.value || "all";
         this.render();
       });
-      el.querySelector("#des-new-card")?.addEventListener("click", () => {
+      el.querySelector("#des-new-card, #des-empty-new")?.addEventListener("click", () => {
         this.openCreateDesignModal();
       });
       el.querySelectorAll("[data-des-delete]").forEach((btn) => {
@@ -467,6 +554,17 @@ Object.assign(window.Features.delivery, {
     if (route.section === "designs" && route.desId) {
       const des = (this.data.designs || []).find((d) => d.id === route.desId);
       if (!des) return;
+      this.bindSelection("design-versions", {
+        presentIds: (des.versions || []).map((version) => version.id),
+        onOpen: (id) => {
+          const card = [...el.querySelectorAll('[data-sel-list="design-versions"][data-sel-id]')].find(
+            (candidate) => candidate.getAttribute("data-sel-id") === id,
+          );
+          card?.scrollIntoView({ behavior: "smooth", block: "center" });
+          card?.setAttribute("aria-expanded", "true");
+          card?.querySelector("[data-ver-title], textarea")?.focus();
+        },
+      });
       const saveDesignDetail = async () => {
         const adrPatch = this.readAdrFields(el);
         await api.v1.deliveryPatchDesign(des.id, adrPatch);
@@ -685,7 +783,7 @@ Object.assign(window.Features.delivery, {
       <div class="del-major-plan">
         <div class="del-major-plan-head">
           <h3 style="margin:0">Generation plan</h3>
-          <span class="muted">major line · e.g. 0.x → 1.0 · select to filter milestones</span>
+          <span class="muted">Generation · e.g. 0.x → 1.0 · select to filter Milestones</span>
           <button type="button" class="ghost" id="del-trash-open" style="margin-left:auto">
             Trash${trashN ? ` (${trashN})` : ""}
           </button>

@@ -133,9 +133,12 @@ test("decodeKey maps the documented keys and nothing else", () => {
   assert.strictEqual(s.decodeKey("ArrowUp"), "prev");
   assert.strictEqual(s.decodeKey("Enter"), "open");
   assert.strictEqual(s.decodeKey(" "), "select");
+  assert.strictEqual(s.decodeKey("x"), "select");
   assert.strictEqual(s.decodeKey(" ", { shift: true }), "selectRange");
   assert.strictEqual(s.decodeKey("Escape"), "clear");
+  assert.strictEqual(s.decodeKey("/"), "search");
   assert.strictEqual(s.decodeKey("a", { meta: true }), "selectAll");
+  assert.strictEqual(s.decodeKey("a", { meta: true, shift: true }), "selectAll");
   // A bare "a" must not select all: that would fire while typing.
   assert.strictEqual(s.decodeKey("a"), "none");
   assert.strictEqual(s.decodeKey("q"), "none");

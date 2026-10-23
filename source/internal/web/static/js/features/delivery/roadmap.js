@@ -136,8 +136,17 @@ Object.assign(window.Features.delivery, {
     // are sequential on purpose: the scheduler serialises anyway, and a burst of
     // parallel patches against one milestone is how duplicate jobs happen.
     this.bindSelection("roadmap", {
+      presentIds: (this.data.roadmap?.milestones || [])
+        .filter((m) => this.parseRoadmapMsBind(m.id)?.major === this.parseRoute().routeMajor)
+        .map((m) => m.id),
       onOpen: (id) => {
-        const card = el.querySelector(`[data-ms-card="${id}"]`);
+        const card = [...el.querySelectorAll("[data-ms-card]")].find(
+          (candidate) => candidate.getAttribute("data-ms-card") === id,
+        );
+        const row = [...el.querySelectorAll('[data-sel-list="roadmap"][data-sel-id]')].find(
+          (candidate) => candidate.getAttribute("data-sel-id") === id,
+        );
+        row?.setAttribute("aria-expanded", "true");
         card?.scrollIntoView({ behavior: "smooth", block: "center" });
       },
     });
@@ -349,12 +358,12 @@ Object.assign(window.Features.delivery, {
         const token = this.beginAction();
         return window.AnvilUI.withAction(
           btn,
-          { key: "submittest:" + msId, runningLabel: "Submitting…", host: this.uiModal(), errorTitle: "提交测试失败" },
+          { key: "submittest:" + msId, runningLabel: "Submitting…", host: this.uiModal(), errorTitle: "Submit for Test failed" },
           async () => {
             await api.v1.deliveryPatchMilestone(msId, { submit_test: true });
             await this.reload();
             this.render(token);
-            this.showNotice("Milestone moved to Test queue.", "提交测试");
+            this.showNotice("Milestone moved to the Test queue.", "Submit for Test");
           },
         );
       });
@@ -402,15 +411,19 @@ Object.assign(window.Features.delivery, {
       // Real drafting (0.46.6): propose, then write into the note the operator is
       // editing. Nothing reaches the store until they save the polish, which is the
       // same propose-then-accept rule the record-editing surfaces follow.
-      onSend: async ({ composed, cites }, c) => {
+      onSend: async ({ text }, c) => {
         const modal = this.uiModal();
         const bodyEl = modal?.querySelector("#pol-body");
+        const eng = this.findEng(engId);
+        const versions = eng ? this.milestoneVersions(eng, major, minor) : [];
+        const anchor = versions[versions.length - 1];
         await window.AnvilUI.assist.ask({
           surface: "roadmap_polish",
           field: "body",
-          instruction: composed,
-          cites,
-          current: { body: (bodyEl?.value || "").trim() },
+          instruction: text,
+          target: anchor
+            ? window.AnvilUI.assist.requirementRef(engId, major, minor, anchor.patch)
+            : null,
           host: modal?.querySelector("#pol-assist"),
           chat: c,
           onApply: async (_field, value) => {
@@ -467,7 +480,7 @@ Object.assign(window.Features.delivery, {
     };
   },
 
-  /** Flatten cluster inventory workers for Roadmap Execute picker. */
+  /** Flatten Fleet inventory Workers for the Roadmap execution picker. */
   async loadExecuteWorkers() {
     if (this._execWorkersLoading || this._execWorkersLoaded) return;
     this._execWorkersLoading = true;
@@ -547,205 +560,7 @@ Object.assign(window.Features.delivery, {
     return vers[0].status || "";
   },
 
-  /** Pointer-drag milestone cards; persist x/y; click (no drag) selects. */  // ------------------------------------------------------------ selection
-  //
-  // Multi-select over the lists, with one reducer shared by every list that
-  // supports it. Selection is kept in a Set of ids rather than in DOM state, so
-  // the reload after a batch action does not clear it.
-
-  /** sel returns (creating once) the selection for a list key. */
-  sel(key) {
-    if (!this._sels) this._sels = {};
-    if (!this._sels[key]) this._sels[key] = window.AnvilUI.selection.create();
-    return this._sels[key];
-  },
-
-  /** visibleIds is the id order the range selection walks. */
-  visibleIds(key) {
-    return [...(this.el?.querySelectorAll(`[data-sel-id][data-sel-list="${key}"]`) || [])].map(
-      (n) => n.getAttribute("data-sel-id"),
-    );
-  },
-
-  /** paintSelection reflects the state onto the rows and the action bar. */
-  paintSelection(key) {
-    const sel = this.sel(key);
-    this.el?.querySelectorAll(`[data-sel-id][data-sel-list="${key}"]`).forEach((row) => {
-      const on = sel.has(row.getAttribute("data-sel-id"));
-      row.classList.toggle("sel-on", on);
-      row.setAttribute("aria-selected", on ? "true" : "false");
-    });
-    const bar = this.el?.querySelector(`[data-sel-bar="${key}"]`);
-    if (bar) {
-      bar.hidden = sel.isEmpty();
-      const n = bar.querySelector("[data-sel-count]");
-      if (n) n.textContent = String(sel.size);
-    }
-  },
-
-  /**
-   * bindSelection wires click, Shift-click and keys for one list.
-   *
-   * The keyboard mapping is decoded by AnvilUI.selection.decodeKey so every list
-   * answers the same keys, and so the mapping is tested as data rather than by
-   * synthesising events.
-   */
-  bindSelection(key, { onOpen } = {}) {
-    const rows = [...(this.el?.querySelectorAll(`[data-sel-id][data-sel-list="${key}"]`) || [])];
-    if (!rows.length) return;
-    this.paintSelection(key);
-
-    rows.forEach((row) => {
-      const id = row.getAttribute("data-sel-id");
-      row.setAttribute("tabindex", "0");
-      row.addEventListener("click", (e) => {
-        // A click on an inner control (a button, a select) is that control's,
-        // not a selection.
-        if (e.target.closest("button, a, input, select, textarea")) return;
-        const sel = this.sel(key);
-        const order = this.visibleIds(key);
-        if (e.shiftKey) sel.selectRange(id, order);
-        else if (e.metaKey || e.ctrlKey) sel.toggle(id, order);
-        else {
-          // A plain click selects one: the list is a work surface, and a plain
-          // click that opens would make selecting impossible without a modifier.
-          sel.clear();
-          sel.toggle(id, order);
-        }
-        this.paintSelection(key);
-      });
-
-      row.addEventListener("keydown", (e) => {
-        if (e.target.closest("input, textarea, select")) return;
-        const cmd = window.AnvilUI.selection.decodeKey(e.key, {
-          meta: e.metaKey || e.ctrlKey,
-          shift: e.shiftKey,
-        });
-        const sel = this.sel(key);
-        const order = this.visibleIds(key);
-        const at = order.indexOf(id);
-        switch (cmd) {
-          case "select":
-            e.preventDefault();
-            sel.toggle(id, order);
-            this.paintSelection(key);
-            return;
-          case "selectRange":
-            e.preventDefault();
-            sel.selectRange(id, order);
-            this.paintSelection(key);
-            return;
-          case "selectAll":
-            e.preventDefault();
-            sel.selectAll(order);
-            this.paintSelection(key);
-            return;
-          case "clear":
-            e.preventDefault();
-            sel.clear();
-            this.paintSelection(key);
-            return;
-          case "next":
-            e.preventDefault();
-            rows[Math.min(at + 1, rows.length - 1)]?.focus();
-            return;
-          case "prev":
-            e.preventDefault();
-            rows[Math.max(at - 1, 0)]?.focus();
-            return;
-          case "open":
-            e.preventDefault();
-            if (onOpen) onOpen(id);
-            return;
-          default:
-        }
-      });
-    });
-
-    this.el?.querySelector(`[data-sel-all="${key}"]`)?.addEventListener("change", (e) => {
-      const sel = this.sel(key);
-      if (e.target.checked) sel.selectAll(this.visibleIds(key));
-      else sel.clear();
-      this.paintSelection(key);
-    });
-    this.el?.querySelector(`[data-sel-clear="${key}"]`)?.addEventListener("click", () => {
-      this.sel(key).clear();
-      this.paintSelection(key);
-    });
-  },
-
-  /**
-   * runBatch runs a single-item action over the selection, sequentially.
-   *
-   * Sequential on purpose: the scheduler serialises anyway, and a burst of
-   * parallel patches against one milestone is how duplicate jobs happen. Each
-   * item's outcome is reported, so a partial failure says which ones failed
-   * instead of one aggregate error.
-   */
-  async runBatch(ids, fn, { key, okVerb } = {}) {
-    const results = [];
-    for (const id of ids) {
-      try {
-        await fn(id);
-        results.push({ id, ok: true });
-      } catch (e) {
-        results.push({ id, ok: false, error: e.message || String(e) });
-      }
-    }
-    const failed = results.filter((r) => !r.ok);
-    const done = results.length - failed.length;
-    if (key) {
-      const sel = this.sel(key);
-      // Drop the ones that succeeded: they are about to change state, and a
-      // selection holding them would let a second batch fire at them.
-      sel.prune(ids.filter((id) => failed.some((f) => f.id === id)));
-      this.paintSelection(key);
-    }
-    if (failed.length === 0) {
-      this.showNotice(`${done} ${okVerb || "done"}.`, "Batch");
-    } else {
-      this.showNotice(
-        `${done} succeeded, ${failed.length} failed:\n` +
-          failed.map((f) => `· ${f.id}: ${f.error}`).join("\n"),
-        "Partial failure",
-      );
-    }
-    return results;
-  },
-
-  /** batchBarHtml is the action bar shown while a selection is non-empty. */
-  batchBarHtml(key, actions) {
-    const btns = (actions || [])
-      .map(
-        (a) =>
-          `<button type="button" class="ghost" data-batch="${this.esc(a.id)}">${this.esc(a.label)}</button>`,
-      )
-      .join("");
-    return `<div class="del-sel-bar" data-sel-bar="${this.esc(key)}" hidden>
-        <strong><span data-sel-count>0</span> selected</strong>
-        ${btns}
-        <button type="button" class="ghost" data-sel-clear="${this.esc(key)}">Clear</button>
-      </div>`;
-  },
-
-  /** bindBatchBar wires the bar's action buttons. */
-  bindBatchBar(key, handlers) {
-    const bar = this.el?.querySelector(`[data-sel-bar="${key}"]`);
-    if (!bar) return;
-    bar.querySelectorAll("[data-batch]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const h = handlers[btn.getAttribute("data-batch")];
-        if (!h) return;
-        const ids = this.sel(key).ids();
-        if (!ids.length) return;
-        return window.AnvilUI.withAction(
-          btn,
-          { key: "batch:" + key + ":" + btn.getAttribute("data-batch"), host: this.uiModal(), errorTitle: "Batch failed" },
-          () => h(ids, key),
-        );
-      });
-    });
-  },
+  /** Pointer-drag milestone cards; persist x/y; click (no drag) selects. */
   viewRoadmapList(routeMajor) {
     const RM_SEL = "roadmap";    const NODE_W = 216;
     const NODE_H = 78;
@@ -845,11 +660,11 @@ Object.assign(window.Features.delivery, {
             ${edges}
           </svg>
           <div class="del-nodes" style="width:${canvasW}px;height:${canvasH}px">${nodes}</div>`
-      : `<div class="del-canvas-empty">
-           <strong>No milestones in ${this.esc(majLabel)}</strong>
-           <p class="muted">Approve a Design in this generation, then <em>Bootstrap roadmap</em> — one node per milestone.</p>
-           <a class="ghost" href="#/delivery/designs/m/${routeMajor}">Open Designs · ${this.esc(majLabel)}</a>
-         </div>`;
+      : this.emptyStateHtml(
+          "No roadmap milestones in " + majLabel + " — approve a Design and bootstrap it.",
+          "Open Designs · " + majLabel,
+          `#/delivery/designs/m/${routeMajor}`,
+        );
 
     const cards = rows.length
       ? rows
@@ -886,9 +701,9 @@ Object.assign(window.Features.delivery, {
       <div class="needs-wide del-roadmap-graph card del-canvas" data-major="${routeMajor}">${graphBody}</div>
       ${
         cards
-          ? `<div class="del-req-section-head" style="margin-top:1rem">
+          ? `<div class="del-req-section-head" data-sel-header="${RM_SEL}" style="margin-top:1rem">
                <h3 style="margin:0">Milestones</h3>
-               <span class="muted">Worker · Start / Pause / Stop · 提交测试 · Design / Req · Polish</span>
+               <span class="muted">Worker · Start / Pause / Stop · Submit for Test · Design / Requirement · Polish</span>
              </div>
              ${this.batchBarHtml(RM_SEL, [
                { id: "start", label: "Start selected" },
@@ -1066,7 +881,7 @@ Object.assign(window.Features.delivery, {
             ${
               canSubmitTest
                 ? `<button type="button" class="del-run-btn" data-ms-submit-test="${this.esc(m.id)}"
-                     title="Submit to Test">提交测试</button>`
+                     title="Submit for Test">Submit for Test</button>`
                 : ""
             }
             ${

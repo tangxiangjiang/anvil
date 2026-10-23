@@ -28,6 +28,7 @@
     // the help button answers "which button now". Both cross surfaces, so they
     // belong to the shell rather than to any one feature.
     window.AnvilShell.mountHealth();
+    window.AnvilShell.mountFirstRun();
     const help = document.getElementById("shell-help");
     if (help && !help._wired) {
       help._wired = true;

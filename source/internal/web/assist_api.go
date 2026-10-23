@@ -10,8 +10,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/anvil-dev/anvil/internal/web/delivery"
 )
 
 // The drafting assistant (p_0.45.8).
@@ -118,12 +121,29 @@ type AssistRequest struct {
 	Surface string `json:"surface"`
 	// Field limits the proposal to one field; empty means every field the surface
 	// allows.
-	Field       string   `json:"field,omitempty"`
-	Instruction string   `json:"instruction"`
-	Cites       []string `json:"cites,omitempty"`
-	// Current is the text already in the field(s), so the model improves rather
-	// than replaces.
-	Current map[string]string `json:"current,omitempty"`
+	Field       string      `json:"field,omitempty"`
+	Instruction string      `json:"instruction"`
+	Target      *AssistRef  `json:"target,omitempty"`
+	Cites       []AssistRef `json:"cites,omitempty"`
+}
+
+// AssistRef is a stable reference to a Delivery record. It deliberately has no
+// path or free-text member: the server resolves all prompt context from its store.
+type AssistRef struct {
+	Type     string `json:"type"`
+	ID       string `json:"id"`
+	ParentID string `json:"parent_id,omitempty"`
+	Major    int    `json:"major,omitempty"`
+	Minor    int    `json:"minor,omitempty"`
+	Patch    int    `json:"patch,omitempty"`
+	Field    string `json:"field,omitempty"`
+}
+
+// AssistCitation is safe, resolved citation metadata returned for display. The
+// resolved content is never echoed to the browser.
+type AssistCitation struct {
+	Ref   AssistRef `json:"ref"`
+	Label string    `json:"label"`
 }
 
 // AssistProposal is one proposed edit.
@@ -141,6 +161,7 @@ type AssistResult struct {
 	Reason    string           `json:"reason,omitempty"`
 	Model     string           `json:"model,omitempty"`
 	Proposals []AssistProposal `json:"proposals"`
+	Citations []AssistCitation `json:"citations,omitempty"`
 	Usage     *assistUsage     `json:"usage,omitempty"`
 }
 
@@ -156,7 +177,10 @@ func (s *Server) handleAssist(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in AssistRequest
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+	r.Body = http.MaxBytesReader(w, r.Body, 32<<10)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&in); err != nil {
 		http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -165,8 +189,16 @@ func (s *Server) handleAssist(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown surface: "+in.Surface, http.StatusBadRequest)
 		return
 	}
+	if len(in.Instruction) > 4096 {
+		http.Error(w, "instruction exceeds 4096 bytes", http.StatusRequestEntityTooLarge)
+		return
+	}
 	if strings.TrimSpace(in.Instruction) == "" && len(in.Cites) == 0 {
 		http.Error(w, "an instruction or at least one cite is required", http.StatusBadRequest)
+		return
+	}
+	if len(in.Cites) > 8 {
+		http.Error(w, "at most 8 citations are allowed", http.StatusRequestEntityTooLarge)
 		return
 	}
 
@@ -183,6 +215,12 @@ func (s *Server) handleAssist(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	resolved, current, citations, status, err := s.resolveAssistContext(in, allowed)
+	if err != nil {
+		http.Error(w, err.Error(), status)
+		return
+	}
+
 	// Off is stated, not faked.
 	if !s.cfg.Assist.Enabled() {
 		writeJSON(w, http.StatusOK, AssistResult{
@@ -193,7 +231,7 @@ func (s *Server) handleAssist(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	raw, usage, model, err := s.callAssist(r.Context(), surface.Label, allowed, in)
+	raw, usage, model, err := s.callAssist(r.Context(), surface.Label, allowed, in, resolved, current)
 	if err != nil {
 		// A provider failure is reported as an error, never as an empty proposal
 		// list: an empty list reads as "the model had no suggestions", which is a
@@ -202,7 +240,7 @@ func (s *Server) handleAssist(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	proposals, perr := parseAssistProposals(raw, allowed, in.Current)
+	proposals, perr := parseAssistProposals(raw, allowed, current)
 	if perr != nil {
 		http.Error(w, "assist: "+perr.Error(), http.StatusBadGateway)
 		return
@@ -211,12 +249,13 @@ func (s *Server) handleAssist(w http.ResponseWriter, r *http.Request) {
 		Available: true,
 		Model:     model,
 		Proposals: proposals,
+		Citations: citations,
 		Usage:     usage,
 	})
 }
 
 // callAssist performs the one provider request.
-func (s *Server) callAssist(ctx context.Context, surfaceLabel string, allowed map[string]AssistField, in AssistRequest) (string, *assistUsage, string, error) {
+func (s *Server) callAssist(ctx context.Context, surfaceLabel string, allowed map[string]AssistField, in AssistRequest, resolved []resolvedAssistCitation, current map[string]string) (string, *assistUsage, string, error) {
 	cfg := s.cfg.Assist
 	timeout := time.Duration(cfg.TimeoutSec) * time.Second
 	if timeout <= 0 {
@@ -230,7 +269,7 @@ func (s *Server) callAssist(ctx context.Context, surfaceLabel string, allowed ma
 		"temperature": 0.2,
 		"messages": []map[string]string{
 			{"role": "system", "content": assistSystemPrompt(surfaceLabel, allowed)},
-			{"role": "user", "content": assistUserPrompt(in)},
+			{"role": "user", "content": assistUserPrompt(in.Instruction, resolved, current)},
 		},
 	}
 	// Ask for JSON so the response is parseable patches rather than prose, without
@@ -306,20 +345,18 @@ Rules:
 }
 
 // assistUserPrompt carries the instruction and the cited context.
-func assistUserPrompt(in AssistRequest) string {
+func assistUserPrompt(instruction string, cites []resolvedAssistCitation, current map[string]string) string {
 	var b strings.Builder
-	if len(in.Cites) > 0 {
+	if len(cites) > 0 {
 		b.WriteString("Context the request refers to:\n")
-		for _, c := range in.Cites {
-			b.WriteString("- ")
-			b.WriteString(c)
-			b.WriteString("\n")
+		for _, c := range cites {
+			fmt.Fprintf(&b, "--- %s ---\n%s\n", c.Label, c.Content)
 		}
 		b.WriteString("\n")
 	}
-	if len(in.Current) > 0 {
+	if len(current) > 0 {
 		b.WriteString("Current text of the fields being revised:\n")
-		for k, v := range in.Current {
+		for k, v := range current {
 			if strings.TrimSpace(v) == "" {
 				continue
 			}
@@ -327,11 +364,244 @@ func assistUserPrompt(in AssistRequest) string {
 		}
 	}
 	b.WriteString("Request: ")
-	b.WriteString(in.Instruction)
-	if strings.TrimSpace(in.Instruction) == "" {
+	b.WriteString(instruction)
+	if strings.TrimSpace(instruction) == "" {
 		b.WriteString("Improve the fields using the context above.")
 	}
 	return b.String()
+}
+
+const (
+	maxAssistCitationBytes = 4096
+	maxAssistContextBytes  = 16384
+)
+
+type assistScope struct {
+	Project string
+	EngReq  string
+	Major   int
+}
+
+type assistRecord struct {
+	Scope  assistScope
+	Label  string
+	Fields map[string]string
+}
+
+type resolvedAssistCitation struct {
+	Label   string
+	Content string
+}
+
+func (s *Server) resolveAssistContext(in AssistRequest, allowed map[string]AssistField) ([]resolvedAssistCitation, map[string]string, []AssistCitation, int, error) {
+	current := map[string]string{}
+	if s.delivery == nil {
+		return nil, nil, nil, http.StatusServiceUnavailable, fmt.Errorf("delivery store is unavailable")
+	}
+	snap, err := s.delivery.Snapshot()
+	if err != nil {
+		return nil, nil, nil, http.StatusInternalServerError, fmt.Errorf("load assist context: %w", err)
+	}
+
+	var target *assistRecord
+	switch in.Surface {
+	case "requirement_version", "design", "design_version":
+		if in.Target == nil {
+			return nil, nil, nil, http.StatusBadRequest, fmt.Errorf("surface %s requires a target record", in.Surface)
+		}
+	}
+	if in.Target != nil {
+		if in.Target.Field != "" {
+			return nil, nil, nil, http.StatusBadRequest, fmt.Errorf("target must identify a record, not a field")
+		}
+		targetTypes := map[string][]string{
+			"requirement_version": {"requirement_version"},
+			"design":              {"design"},
+			"design_version":      {"design_version"},
+			"major":               {"major"},
+			"milestone":           {"requirement_version"},
+			"roadmap_polish":      {"requirement_version"},
+			"test_case":           {"requirement_version"},
+		}
+		permitted := false
+		for _, typ := range targetTypes[in.Surface] {
+			if in.Target.Type == typ {
+				permitted = true
+				break
+			}
+		}
+		if !permitted {
+			return nil, nil, nil, http.StatusBadRequest, fmt.Errorf("target type %q is not valid for surface %s", in.Target.Type, in.Surface)
+		}
+		rec, status, err := assistRecordFromSnapshot(snap, *in.Target)
+		if err != nil {
+			return nil, nil, nil, status, err
+		}
+		target = &rec
+		for name := range allowed {
+			if value, ok := rec.Fields[name]; ok {
+				current[name] = value
+			}
+		}
+	}
+	if len(in.Cites) > 0 && target == nil {
+		return nil, nil, nil, http.StatusBadRequest, fmt.Errorf("citations require a target record")
+	}
+
+	resolved := make([]resolvedAssistCitation, 0, len(in.Cites))
+	meta := make([]AssistCitation, 0, len(in.Cites))
+	total := 0
+	for _, ref := range in.Cites {
+		rec, status, err := assistRecordFromSnapshot(snap, ref)
+		if err != nil {
+			return nil, nil, nil, status, err
+		}
+		if !assistScopesMatch(target.Scope, rec.Scope) {
+			return nil, nil, nil, http.StatusForbidden, fmt.Errorf("citation crosses the target project or generation")
+		}
+		content, label, ok := assistCitationField(rec, ref.Field)
+		if !ok {
+			return nil, nil, nil, http.StatusBadRequest, fmt.Errorf("field %q is not citeable for %s", ref.Field, ref.Type)
+		}
+		if len(content) > maxAssistCitationBytes {
+			return nil, nil, nil, http.StatusRequestEntityTooLarge, fmt.Errorf("citation %s exceeds %d bytes", label, maxAssistCitationBytes)
+		}
+		total += len(content)
+		if total > maxAssistContextBytes {
+			return nil, nil, nil, http.StatusRequestEntityTooLarge, fmt.Errorf("resolved citation context exceeds %d bytes", maxAssistContextBytes)
+		}
+		resolved = append(resolved, resolvedAssistCitation{Label: label, Content: content})
+		meta = append(meta, AssistCitation{Ref: ref, Label: label})
+	}
+	return resolved, current, meta, http.StatusOK, nil
+}
+
+func assistScopesMatch(target, cite assistScope) bool {
+	if target.EngReq != "" {
+		return cite.EngReq == target.EngReq && cite.Project == target.Project && cite.Major == target.Major
+	}
+	return cite.EngReq == "" && cite.Major == target.Major
+}
+
+func assistCitationField(rec assistRecord, field string) (string, string, bool) {
+	if field == "overview" {
+		var b strings.Builder
+		for _, name := range []string{"title", "problem", "goals", "non_goals", "constraints", "success"} {
+			if value := strings.TrimSpace(rec.Fields[name]); value != "" {
+				fmt.Fprintf(&b, "%s: %s\n", name, value)
+			}
+		}
+		return strings.TrimSpace(b.String()), rec.Label + " · overview", true
+	}
+	value, ok := rec.Fields[field]
+	if !ok {
+		return "", "", false
+	}
+	return value, rec.Label + " · " + field, true
+}
+
+func assistRecordFromSnapshot(snap delivery.Snapshot, ref AssistRef) (assistRecord, int, error) {
+	ref.Type = strings.TrimSpace(ref.Type)
+	ref.ID = strings.TrimSpace(ref.ID)
+	ref.ParentID = strings.TrimSpace(ref.ParentID)
+	if ref.Type == "" || ref.ID == "" || len(ref.ID) > 256 || len(ref.ParentID) > 256 {
+		return assistRecord{}, http.StatusBadRequest, fmt.Errorf("citation type and bounded record id are required")
+	}
+	if strings.Contains(ref.ID, "..") || strings.ContainsAny(ref.ID, `/\`) ||
+		strings.Contains(ref.ParentID, "..") || strings.ContainsAny(ref.ParentID, `/\`) {
+		return assistRecord{}, http.StatusBadRequest, fmt.Errorf("record references cannot contain paths")
+	}
+	projectScope := func(eng delivery.EngReq) string {
+		if eng.ProjectID != "" {
+			return eng.ProjectID
+		}
+		return eng.ID
+	}
+	findEng := func(id string) *delivery.EngReq {
+		for i := range snap.EngReqs {
+			if snap.EngReqs[i].ID == id {
+				return &snap.EngReqs[i]
+			}
+		}
+		return nil
+	}
+
+	switch ref.Type {
+	case "requirement_version":
+		eng := findEng(ref.ID)
+		if eng != nil {
+			for _, v := range eng.Versions {
+				if v.Major == ref.Major && v.Minor == ref.Minor && v.Patch == ref.Patch {
+					return assistRecord{
+						Scope: assistScope{Project: projectScope(*eng), EngReq: eng.ID, Major: v.Major},
+						Label: fmt.Sprintf("Requirement %s %d.%d.%d", eng.ID, v.Major, v.Minor, v.Patch),
+						Fields: map[string]string{
+							"title": v.Title, "problem": v.Problem, "goals": v.Goals,
+							"non_goals": v.NonGoals, "constraints": v.Constraints, "success": v.Success,
+						},
+					}, http.StatusOK, nil
+				}
+			}
+		}
+	case "design":
+		for _, d := range snap.Designs {
+			if d.ID == ref.ID {
+				eng := findEng(d.EngReqID)
+				if eng == nil {
+					break
+				}
+				return assistRecord{
+					Scope: assistScope{Project: projectScope(*eng), EngReq: eng.ID, Major: d.Major},
+					Label: "Design " + d.ID,
+					Fields: map[string]string{
+						"title": d.Title, "adr_context": d.AdrContext, "adr_decision": d.AdrDecision,
+						"adr_consequences": d.AdrConsequences, "adr_spec": d.AdrSpec,
+						"adr_architecture": d.AdrArchitecture, "adr_sequence": d.AdrSequence,
+						"adr_sample": d.AdrSample,
+					},
+				}, http.StatusOK, nil
+			}
+		}
+	case "design_version":
+		for _, d := range snap.Designs {
+			if d.ID != ref.ParentID {
+				continue
+			}
+			eng := findEng(d.EngReqID)
+			if eng == nil {
+				break
+			}
+			for _, v := range d.Versions {
+				if v.ID == ref.ID {
+					return assistRecord{
+						Scope: assistScope{Project: projectScope(*eng), EngReq: eng.ID, Major: d.Major},
+						Label: "Design version " + v.ID,
+						Fields: map[string]string{
+							"title": v.Title, "gate": v.Gate,
+							"sub_architecture": v.SubArchitecture, "class_design": v.ClassDesign,
+						},
+					}, http.StatusOK, nil
+				}
+			}
+		}
+	case "major":
+		major, err := strconv.Atoi(ref.ID)
+		if err != nil || major < 0 {
+			return assistRecord{}, http.StatusBadRequest, fmt.Errorf("major reference id must be a non-negative integer")
+		}
+		for _, m := range snap.Majors {
+			if m.Major == major {
+				return assistRecord{
+					Scope:  assistScope{Major: major},
+					Label:  fmt.Sprintf("Generation %d", major),
+					Fields: map[string]string{"title": m.Title, "summary": m.Summary},
+				}, http.StatusOK, nil
+			}
+		}
+	default:
+		return assistRecord{}, http.StatusBadRequest, fmt.Errorf("unsupported citation type %q", ref.Type)
+	}
+	return assistRecord{}, http.StatusNotFound, fmt.Errorf("referenced record is missing or expired")
 }
 
 // parseAssistProposals enforces the contract.

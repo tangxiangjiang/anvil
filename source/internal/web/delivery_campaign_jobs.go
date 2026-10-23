@@ -59,19 +59,21 @@ func (s *Server) startTestRunJob(engID string, major, minor int, forceStub bool)
 		return out, err
 	}
 	in := schedclient.JobCreate{
-		JobID:       jobID,
-		RepoID:      target.RepoID,
-		Prompt:      prompt,
-		NodeID:      target.NodeID,
-		ForceStub:   forceStub,
-		MilestoneID: ms.ID,
-		PhaseID:     "campaign:run",
-		EngReqID:    engID,
-		Major:       major,
-		Minor:       minor,
+		SchedulerURL: target.SchedulerURL,
+		JobID:        jobID,
+		RepoID:       target.RepoID,
+		Prompt:       prompt,
+		NodeID:       target.NodeID,
+		ForceStub:    forceStub,
+		MilestoneID:  ms.ID,
+		PhaseID:      "campaign:run",
+		EngReqID:     engID,
+		Major:        major,
+		Minor:        minor,
 	}
 	hub := s.ensureJobHub()
 	hub.ensure(jobID)
+	s.beginCampaignJob(jobID, delivery.CampaignKindRun, ms.ID, "campaign:run", ms.ExecuteWorkerID, engID)
 	_ = s.delivery.AppendCampaignJobEvent(ms.ID, delivery.JobRunning, "starting")
 	if localStub {
 		go s.runCampaignLocalStub(ms.ID, jobID, delivery.CampaignKindRun, engID, major, minor, "", true)
@@ -117,19 +119,21 @@ func (s *Server) startBugFixJob(bugID string, forceStub bool) (campaignStartResu
 		return out, err
 	}
 	in := schedclient.JobCreate{
-		JobID:       jobID,
-		RepoID:      target.RepoID,
-		Prompt:      prompt,
-		NodeID:      target.NodeID,
-		ForceStub:   forceStub,
-		MilestoneID: ms.ID,
-		PhaseID:     "campaign:fix:" + bugID,
-		EngReqID:    bug.EngReqID,
-		Major:       bug.Major,
-		Minor:       bug.Minor,
+		SchedulerURL: target.SchedulerURL,
+		JobID:        jobID,
+		RepoID:       target.RepoID,
+		Prompt:       prompt,
+		NodeID:       target.NodeID,
+		ForceStub:    forceStub,
+		MilestoneID:  ms.ID,
+		PhaseID:      "campaign:fix:" + bugID,
+		EngReqID:     bug.EngReqID,
+		Major:        bug.Major,
+		Minor:        bug.Minor,
 	}
 	hub := s.ensureJobHub()
 	hub.ensure(jobID)
+	s.beginCampaignJob(jobID, "fix", ms.ID, "campaign:fix:"+bugID, ms.ExecuteWorkerID, bug.EngReqID)
 	_ = s.delivery.AppendBugJobEvent(bugID, delivery.JobRunning, "starting")
 	if localStub {
 		go s.runCampaignLocalStub(ms.ID, jobID, "fix", bug.EngReqID, bug.Major, bug.Minor, bugID, true)
@@ -162,19 +166,21 @@ func (s *Server) startRegressJob(engID string, major, minor int, forceStub bool)
 		return out, err
 	}
 	in := schedclient.JobCreate{
-		JobID:       jobID,
-		RepoID:      target.RepoID,
-		Prompt:      prompt,
-		NodeID:      target.NodeID,
-		ForceStub:   forceStub,
-		MilestoneID: ms.ID,
-		PhaseID:     "campaign:regress",
-		EngReqID:    engID,
-		Major:       major,
-		Minor:       minor,
+		SchedulerURL: target.SchedulerURL,
+		JobID:        jobID,
+		RepoID:       target.RepoID,
+		Prompt:       prompt,
+		NodeID:       target.NodeID,
+		ForceStub:    forceStub,
+		MilestoneID:  ms.ID,
+		PhaseID:      "campaign:regress",
+		EngReqID:     engID,
+		Major:        major,
+		Minor:        minor,
 	}
 	hub := s.ensureJobHub()
 	hub.ensure(jobID)
+	s.beginCampaignJob(jobID, delivery.CampaignKindRegress, ms.ID, "campaign:regress", ms.ExecuteWorkerID, engID)
 	_ = s.delivery.AppendCampaignJobEvent(ms.ID, delivery.JobRunning, "starting")
 	if localStub {
 		go s.runCampaignLocalStub(ms.ID, jobID, delivery.CampaignKindRegress, engID, major, minor, "", true)
@@ -221,19 +227,21 @@ func (s *Server) startPolishJob(polishID string, forceStub bool) (campaignStartR
 		return out, err
 	}
 	in := schedclient.JobCreate{
-		JobID:       jobID,
-		RepoID:      target.RepoID,
-		Prompt:      prompt,
-		NodeID:      target.NodeID,
-		ForceStub:   forceStub,
-		MilestoneID: ms.ID,
-		PhaseID:     "polish:" + polishID,
-		EngReqID:    p.EngReqID,
-		Major:       p.Major,
-		Minor:       p.Minor,
+		SchedulerURL: target.SchedulerURL,
+		JobID:        jobID,
+		RepoID:       target.RepoID,
+		Prompt:       prompt,
+		NodeID:       target.NodeID,
+		ForceStub:    forceStub,
+		MilestoneID:  ms.ID,
+		PhaseID:      "polish:" + polishID,
+		EngReqID:     p.EngReqID,
+		Major:        p.Major,
+		Minor:        p.Minor,
 	}
 	hub := s.ensureJobHub()
 	hub.ensure(jobID)
+	s.beginCampaignJob(jobID, "polish", ms.ID, "polish:"+polishID, ms.ExecuteWorkerID, p.EngReqID)
 	_ = s.delivery.AppendPolishJobEvent(polishID, delivery.JobRunning, "starting")
 	if localStub {
 		go s.runCampaignLocalStub(ms.ID, jobID, "polish", p.EngReqID, p.Major, p.Minor, polishID, true)
@@ -248,10 +256,12 @@ func (s *Server) runCampaignLocalStub(msID, jobID, kind, engID string, major, mi
 	hub := s.ensureJobHub()
 	ev := daemon.JobEventBody{JobID: jobID, Type: "progress", Text: "force_stub local"}
 	hub.publishEvent(jobID, ev)
+	s.recordJobEvent(jobID, "", ev)
 	s.touchCampaignProgress(kind, msID, refID, delivery.JobRunning, ev.Text)
 	done := daemon.JobDoneBody{JobID: jobID, Status: "finished", Result: "force_stub ok"}
 	hub.publishDone(jobID, done, "")
 	s.applyCampaignFinished(kind, msID, engID, major, minor, refID, done, applyMock)
+	_ = s.delivery.FinishJob(jobID, done.Status, done.Error)
 }
 
 func (s *Server) runCampaignJob(msID, jobID, kind, engID string, major, minor int, refID string, in schedclient.JobCreate) {
@@ -261,6 +271,7 @@ func (s *Server) runCampaignJob(msID, jobID, kind, engID string, major, minor in
 	runner := s.jobRunner()
 	done, err := runner.CreateJobStream(ctx, in, func(ev daemon.JobEventBody) {
 		hub.publishEvent(jobID, ev)
+		s.recordJobEvent(jobID, "", ev)
 		snippet := ev.Text
 		if snippet == "" {
 			snippet = ev.Content
@@ -273,9 +284,15 @@ func (s *Server) runCampaignJob(msID, jobID, kind, engID string, major, minor in
 	if err != nil {
 		hub.publishDone(jobID, daemon.JobDoneBody{JobID: jobID, Status: "error", Error: err.Error()}, err.Error())
 		s.applyCampaignError(kind, msID, refID, err.Error())
+		_ = s.delivery.FinishJob(jobID, "error", err.Error())
 		return
 	}
 	hub.publishDone(jobID, done, "")
+	status := done.Status
+	if status == "" {
+		status = "finished"
+	}
+	_ = s.delivery.FinishJob(jobID, status, done.Error)
 	st := strings.ToLower(done.Status)
 	if st == "finished" {
 		s.applyCampaignFinished(kind, msID, engID, major, minor, refID, done, in.ForceStub)
@@ -286,6 +303,16 @@ func (s *Server) runCampaignJob(msID, jobID, kind, engID string, major, minor in
 		msg = done.Status
 	}
 	s.applyCampaignError(kind, msID, refID, msg)
+}
+
+func (s *Server) beginCampaignJob(jobID, kind, msID, phaseID, workerID, engID string) {
+	if s.delivery == nil {
+		return
+	}
+	_ = s.delivery.BeginJob(delivery.JobRecord{
+		JobID: jobID, Kind: kind, MilestoneID: msID, PhaseID: phaseID,
+		WorkerID: workerID, EngReqID: engID, Status: "running",
+	})
 }
 
 func (s *Server) touchCampaignProgress(kind, msID, refID, status, event string) {
@@ -308,7 +335,8 @@ func (s *Server) applyCampaignFinished(kind, msID, engID string, major, minor in
 			// Stub / injected runner without trailer: deterministic odd-index fail.
 			_, _ = s.delivery.RunTestCases(engID, major, minor)
 		} else {
-			_, _ = s.delivery.RunTestCasesAllPass(engID, major, minor)
+			_ = s.delivery.ClearCampaignJob(msID, delivery.JobError, "campaign result trailer missing")
+			return
 		}
 		_ = s.delivery.ClearCampaignJob(msID, delivery.JobFinished, truncateEvent(done.Result))
 	case delivery.CampaignKindRegress:

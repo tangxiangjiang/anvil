@@ -111,6 +111,8 @@ func (h *Hub) handleClusterConn(ctx context.Context, conn net.Conn) {
 			var done daemon.JobDoneBody
 			_ = daemon.DecodeBody(msg, &done)
 			h.deliverDone(done)
+		case daemon.KindJobApprovalResult:
+			h.deliverApprovalResult(msg)
 		case daemon.KindClusterWorkerResult:
 			h.deliverWorkerResult(msg)
 		case daemon.KindClusterSandboxResult:

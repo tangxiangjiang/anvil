@@ -898,6 +898,11 @@ type CheckpointRestoreResult struct {
 type RestoredFile struct {
 	Path    string `json:"path"`
 	Deleted bool   `json:"deleted"`
+	// Skipped and Reason are set when the file changed after the run and was left
+	// as it is. Warning is set when it was restored with no post-run state to check.
+	Skipped bool   `json:"skipped,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+	Warning string `json:"warning,omitempty"`
 }
 
 // SessionTranscriptResult is a stored conversation, oldest first.

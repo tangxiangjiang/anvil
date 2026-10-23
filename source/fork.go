@@ -94,6 +94,13 @@ func ForkAgent(ctx context.Context, agentID, runID string, opts ListOptions) (st
 	for _, rec := range prefix {
 		if rec.Type == store.TypeMeta {
 			rec.AgentID = newID
+			// A fork is a conversation of its own, not a child of the agent it copied.
+			// Keeping ParentAgentID and Kind would make deleting the original parent
+			// delete the fork too (audit #27).
+			rec.ParentAgentID = ""
+			rec.ParentRunID = ""
+			rec.ParentToolCallID = ""
+			rec.Kind = ""
 		}
 		if err := st.Append(newID, rec); err != nil {
 			return fail("write the fork", err)

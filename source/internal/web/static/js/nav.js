@@ -13,6 +13,7 @@ window.Nav = {
         { hash: "#/delivery/designs", label: "Designs" },
         { hash: "#/delivery/roadmap", label: "Roadmap" },
         { hash: "#/delivery/test", label: "Test" },
+        { hash: "#/delivery/readiness", label: "Readiness" },
       ],
     },
     { hash: "#/usage", label: "Usage", feature: "usage" },

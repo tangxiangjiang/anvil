@@ -58,6 +58,7 @@ Object.assign(window.Features.delivery, {
   },
 
   viewTestList(routeMajor) {
+    const CASE_SEL = "test-cases";
     const majLabel = this.majorLabel(routeMajor);
     const allMs = this.data.roadmap?.milestones || [];
     const rows = allMs
@@ -93,11 +94,11 @@ Object.assign(window.Features.delivery, {
 
     const cards = rows.length
       ? rows.map((r) => this.testControlCardHtml(r)).join("")
-      : `<div class="del-test-empty card">
-           <strong>No milestones in testing</strong>
-           <p class="muted">When development is done on Roadmap, use <em>提交测试</em> — then draft cases, run, fix bugs, regress, Pass.</p>
-           <a class="ghost" href="#/delivery/roadmap/m/${routeMajor}">Open Roadmap · ${this.esc(majLabel)}</a>
-         </div>`;
+      : this.emptyStateHtml(
+          "No milestones are in testing — submit one from Roadmap.",
+          "Open Roadmap · " + majLabel,
+          `#/delivery/roadmap/m/${routeMajor}`,
+        );
 
     return `
       <p class="del-crumbs">
@@ -105,10 +106,11 @@ Object.assign(window.Features.delivery, {
         <span class="muted">/</span>
         <span>${this.esc(majLabel)}</span>
       </p>
-      <div class="toolbar del-rm-list-bar">
+      <div class="toolbar del-rm-list-bar" data-sel-header="${CASE_SEL}">
         <span class="muted" style="flex:1">${rows.length} in testing · ${this.esc(majLabel)}</span>
         <a class="ghost" href="#/delivery/roadmap/m/${routeMajor}">Roadmap</a>
       </div>
+      ${this.batchBarHtml(CASE_SEL, [])}
       <div class="del-test-grid">${cards}</div>`;
   },
 
@@ -167,12 +169,13 @@ Object.assign(window.Features.delivery, {
           ${cases
             .map(
               (c) => `
-            <li class="del-case-row">
+            <li class="del-case-row del-sel-row" data-sel-list="test-cases"
+              data-sel-id="${this.esc(c.id)}" aria-label="${this.esc(c.title || "Case")}">
               <div class="del-bug-main">
                 <span class="del-case-title">${this.esc(c.title || "Case")}</span>
                 ${this.badge(c.status)}
               </div>
-              ${c.body ? `<p class="muted del-bug-body">${this.esc(c.body)}</p>` : ""}
+              ${c.body ? `<p class="muted del-bug-body" data-case-detail hidden>${this.esc(c.body)}</p>` : ""}
             </li>`,
             )
             .join("")}
@@ -219,7 +222,7 @@ Object.assign(window.Features.delivery, {
     const campStrip = campBusy
       ? `<div class="del-job-strip" data-campaign-snip>${this.esc(m.campaign_job_kind || "job")} · ${this.esc(campSt)}${m.campaign_job_last_event ? " · " + this.esc(String(m.campaign_job_last_event).slice(0, 120)) : ""}</div>`
       : campSt === "error"
-        ? `<div class="del-job-strip muted">${this.esc(m.campaign_job_last_event || "campaign job error")}</div>`
+        ? `<div class="del-job-strip muted">${this.esc(m.campaign_job_last_event || "Campaign Job error")}</div>`
         : "";
 
     return `
@@ -267,7 +270,7 @@ Object.assign(window.Features.delivery, {
           <button type="button" class="del-run-btn" data-test-run
             data-eng="${this.esc(bind.engId)}" data-major="${bind.major}" data-minor="${bind.minor}"
             ${canRun ? "" : "disabled"}
-            title="${!hasWorker ? "Bind Worker on Roadmap first" : openGates ? "Close Design Gate checkboxes first" : campBusy ? "Campaign job running" : "Enqueue Worker test run Job"}">▶ Run tests</button>
+            title="${!hasWorker ? "Bind Worker on Roadmap first" : openGates ? "Close Design Gate checkboxes first" : campBusy ? "Campaign Job running" : "Enqueue a Test Job on the Worker"}">▶ Run tests</button>
           <button type="button" class="del-run-btn ghost" data-test-regress
             data-eng="${this.esc(bind.engId)}" data-major="${bind.major}" data-minor="${bind.minor}"
             ${canRegress ? "" : "disabled"}
@@ -275,11 +278,11 @@ Object.assign(window.Features.delivery, {
           ${
             campBusy
               ? `<button type="button" class="del-run-btn ghost" data-test-cancel="${this.esc(m.id)}"
-                   title="Cancel campaign job">⏹ Cancel</button>`
+                   title="Cancel Campaign Job">⏹ Cancel</button>`
               : ""
           }
           <button type="button" class="del-run-btn" data-test-pass="${this.esc(m.id)}"
-            ${canPass ? "" : "disabled"} title="${canPass ? "Complete milestone" : "Need clean campaign (≥1 case, all passed, no open bugs)"}">✓ Pass</button>
+            ${canPass ? "" : "disabled"} title="${canPass ? "Complete Milestone" : "Need clean campaign (≥1 case, all passed, no open bugs)"}">✓ Pass</button>
           <button type="button" class="del-run-btn ghost danger" data-test-fail="${this.esc(m.id)}"
             data-title="${this.esc(m.title)}" ${campBusy ? "disabled" : ""}>✗ Fail</button>
         </div>
@@ -291,6 +294,22 @@ Object.assign(window.Features.delivery, {
   },
 
   bindTestCardControls(el) {
+    const caseIds = [...el.querySelectorAll('[data-sel-list="test-cases"][data-sel-id]')].map(
+      (row) => row.getAttribute("data-sel-id"),
+    );
+    this.bindSelection("test-cases", {
+      presentIds: caseIds,
+      onOpen: (id) => {
+        const row = [...el.querySelectorAll('[data-sel-list="test-cases"][data-sel-id]')].find(
+          (candidate) => candidate.getAttribute("data-sel-id") === id,
+        );
+        if (!row) return;
+        const detail = row.querySelector("[data-case-detail]");
+        if (detail) detail.hidden = false;
+        row.setAttribute("aria-expanded", "true");
+        row.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      },
+    });
     el.querySelectorAll("[data-test-note]").forEach((ta) => {
       let timer = null;
       ta.addEventListener("input", () => {
@@ -344,7 +363,7 @@ Object.assign(window.Features.delivery, {
           }
           await this.reload();
           this.render();
-          this.showNotice("Test run Job finished.", "Run tests");
+          this.showNotice("Test Job finished.", "Run tests");
         } catch (e) {
           this.showNotice(e.message || String(e), "Run failed");
           await this.reload();
@@ -360,7 +379,7 @@ Object.assign(window.Features.delivery, {
           await api.v1.deliveryPatchMilestone(msId, { run_state: "stopped" });
           await this.reload();
           this.render();
-          this.showNotice("Campaign job cancelled.", "Cancel");
+          this.showNotice("Campaign Job cancelled.", "Cancel");
         } catch (e) {
           this.showNotice(e.message || String(e), "Cancel failed");
           await this.reload();
@@ -456,7 +475,9 @@ Object.assign(window.Features.delivery, {
     // The first must not swallow the second: if any separator is present the
     // text is block-shaped, because a line-shaped paste never contains one.
     const hasSeparator = /(^|\n)\s*---+\s*(\n|$)/.test(raw);
-    const blocks = hasSeparator ? raw.split(/\n\s*---+\s*\n/) : raw.split("\n");
+    const blocks = hasSeparator
+      ? raw.split(/(?:^|\n)\s*---+\s*(?:\n|$)/)
+      : raw.split(/\r?\n/);
     for (const block of blocks) {
       const body = String(block || "").trim();
       if (!body) continue;
@@ -526,16 +547,20 @@ Object.assign(window.Features.delivery, {
       // Real drafting: the proposals become the case text, and "Save cases" is
       // still what puts them in the store. One scenario per proposal is the shape
       // the paste path also uses, so both produce the same record.
-      onSend: async ({ composed, cites }, c) => {
+      onSend: async ({ text }, c) => {
         const modal = this.uiModal();
+        const eng = this.findEng(engId);
+        const versions = eng ? this.milestoneVersions(eng, major, minor) : [];
+        const anchor = versions[versions.length - 1];
+        const target = anchor
+          ? window.AnvilUI.assist.requirementRef(engId, major, minor, anchor.patch)
+          : null;
         await window.AnvilUI.assist.ask({
           surface: "test_case",
           field: "body",
-          instruction:
-            (composed || "") +
-            (acceptance ? "\n\nAcceptance the case must cover:\n" + acceptance.slice(0, 1200) : ""),
-          cites,
-          current: {},
+          instruction: text,
+          target,
+          citeRefs: target ? [{ ...target, field: "success" }] : [],
           host: modal?.querySelector("#tc-assist"),
           chat: c,
         });

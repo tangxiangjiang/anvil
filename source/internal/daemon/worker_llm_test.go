@@ -4,6 +4,9 @@
 package daemon
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/anvil-dev/anvil"
@@ -133,5 +136,36 @@ func TestWorkerLLMSurvivesPersistedState(t *testing.T) {
 	}
 	if rec.LLM == nil || rec.LLM.Model != "cheap" || rec.LLM.MaxSteps != 12 {
 		t.Fatalf("persisted llm = %+v", rec.LLM)
+	}
+}
+
+func TestSaveWorkersStateIncludesLLM(t *testing.T) {
+	sandbox := t.TempDir()
+	s := &Server{
+		cfg:   Config{SandboxDir: sandbox},
+		slots: NewSlots(0),
+	}
+	project := filepath.Join(sandbox, "proj")
+	if _, err := s.slots.AddBoundWorkerWithLLM(
+		"demo", "Demo", "", project, "", "demo", true,
+		&WorkerLLMBody{Model: "cheap", APIKeyEnv: "WORKER_KEY"},
+	); err != nil {
+		t.Fatal(err)
+	}
+	s.saveWorkersState()
+	raw, err := os.ReadFile(filepath.Join(sandbox, ".anvil", "workers.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var file WorkersStateFile
+	if err := json.Unmarshal(raw, &file); err != nil {
+		t.Fatal(err)
+	}
+	if len(file.Workers) != 1 || file.Workers[0].LLM == nil ||
+		file.Workers[0].LLM.Model != "cheap" || file.Workers[0].LLM.APIKeyEnv != "WORKER_KEY" {
+		t.Fatalf("persisted workers = %+v", file.Workers)
+	}
+	if string(raw) == "WORKER_KEY_VALUE" {
+		t.Fatal("a key value was persisted")
 	}
 }

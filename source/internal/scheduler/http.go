@@ -290,9 +290,30 @@ func (h *Hub) handleNodeRoutes(w http.ResponseWriter, r *http.Request) {
 		}
 	case "sandbox":
 		if len(parts) == 2 && r.Method == http.MethodGet {
-			res, err := h.ListSandbox(r.Context(), nodeID, r.URL.Query().Get("path"))
+			workerID := strings.TrimSpace(r.URL.Query().Get("worker"))
+			var res daemon.ClusterSandboxResultBody
+			var err error
+			if workerID == "" {
+				res, err = h.ListSandbox(r.Context(), nodeID, r.URL.Query().Get("path"))
+			} else {
+				res, err = h.ListWorkerSandbox(r.Context(), nodeID, workerID, r.URL.Query().Get("path"))
+			}
 			if err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
+				writeReviewError(w, res, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, res)
+			return
+		}
+		if len(parts) == 3 && parts[2] == "file" && r.Method == http.MethodGet {
+			workerID := strings.TrimSpace(r.URL.Query().Get("worker"))
+			if workerID == "" {
+				http.Error(w, "worker is required", http.StatusBadRequest)
+				return
+			}
+			res, err := h.ReadWorkerSandbox(r.Context(), nodeID, workerID, r.URL.Query().Get("path"))
+			if err != nil {
+				writeReviewError(w, res, err)
 				return
 			}
 			writeJSON(w, http.StatusOK, res)
@@ -312,8 +333,49 @@ func (h *Hub) handleNodeRoutes(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, res)
 			return
 		}
+	case "git":
+		if len(parts) != 3 || r.Method != http.MethodGet {
+			break
+		}
+		workerID := strings.TrimSpace(r.URL.Query().Get("worker"))
+		if workerID == "" {
+			http.Error(w, "worker is required", http.StatusBadRequest)
+			return
+		}
+		var res daemon.ClusterSandboxResultBody
+		var err error
+		switch parts[2] {
+		case "status":
+			res, err = h.GitStatusWorker(r.Context(), nodeID, workerID)
+		case "diff":
+			staged := r.URL.Query().Get("staged") == "true"
+			res, err = h.GitDiffWorker(r.Context(), nodeID, workerID, r.URL.Query().Get("path"), staged)
+		default:
+			http.NotFound(w, r)
+			return
+		}
+		if err != nil {
+			writeReviewError(w, res, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
+		return
 	}
 	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+}
+
+func writeReviewError(w http.ResponseWriter, res daemon.ClusterSandboxResultBody, err error) {
+	if res.Error == "" {
+		res.Error = err.Error()
+	}
+	if res.Code == "" {
+		res.Code = "node_unavailable"
+	}
+	status := http.StatusBadRequest
+	if res.Code == "node_unavailable" || strings.Contains(res.Error, "timed out") {
+		status = http.StatusBadGateway
+	}
+	writeJSON(w, status, res)
 }
 
 func (h *Hub) handleNodeByID(w http.ResponseWriter, r *http.Request, id string) {
@@ -374,22 +436,24 @@ func (h *Hub) handleModels(w http.ResponseWriter, r *http.Request) {
 }
 
 type jobRequest struct {
-	JobID       string   `json:"job_id"`
-	RepoID      string   `json:"repo_id"`
-	Prompt      string   `json:"prompt"`
-	ResumeID    string   `json:"resume_id"`
-	MaxSteps    int      `json:"max_steps"`
-	Model       string   `json:"model"`
-	Provider    string   `json:"provider"`
-	Plugins     []string `json:"plugins"`
-	NodeID      string   `json:"node_id"`
-	ForceStub   bool     `json:"force_stub"`
-	Stream      bool     `json:"stream"`
-	MilestoneID string   `json:"milestone_id"`
-	PhaseID     string   `json:"phase_id"`
-	EngReqID    string   `json:"eng_req_id"`
-	Major       int      `json:"major"`
-	Minor       int      `json:"minor"`
+	JobID             string   `json:"job_id"`
+	RepoID            string   `json:"repo_id"`
+	Prompt            string   `json:"prompt"`
+	ResumeID          string   `json:"resume_id"`
+	MaxSteps          int      `json:"max_steps"`
+	Model             string   `json:"model"`
+	Provider          string   `json:"provider"`
+	Plugins           []string `json:"plugins"`
+	NodeID            string   `json:"node_id"`
+	ForceStub         bool     `json:"force_stub"`
+	Stream            bool     `json:"stream"`
+	MilestoneID       string   `json:"milestone_id"`
+	PhaseID           string   `json:"phase_id"`
+	EngReqID          string   `json:"eng_req_id"`
+	Major             int      `json:"major"`
+	Minor             int      `json:"minor"`
+	ApprovalSessionID string   `json:"approval_session_id"`
+	ApprovalTimeoutMS int      `json:"approval_timeout_ms"`
 }
 
 func (h *Hub) handleJobRoutes(w http.ResponseWriter, r *http.Request) {
@@ -405,6 +469,34 @@ func (h *Hub) handleJobRoutes(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "job_id": jobID})
 		return
 	}
+	if len(parts) == 2 && parts[1] == "approval" && r.Method == http.MethodPost {
+		r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+		var resp daemon.JobApprovalResponseBody
+		if err := json.NewDecoder(r.Body).Decode(&resp); err != nil {
+			http.Error(w, "bad approval response", http.StatusBadRequest)
+			return
+		}
+		if resp.JobID != "" && resp.JobID != parts[0] {
+			http.Error(w, "job_id does not match route", http.StatusBadRequest)
+			return
+		}
+		resp.JobID = parts[0]
+		res, err := h.AnswerJobApproval(r.Context(), resp)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		if !res.OK {
+			code := http.StatusConflict
+			if res.Code == "invalid" {
+				code = http.StatusBadRequest
+			}
+			writeJSON(w, code, res)
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
+		return
+	}
 	http.NotFound(w, r)
 }
 
@@ -413,8 +505,11 @@ func (h *Hub) handleJobs(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, 256<<10)
 	var req jobRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
 		http.Error(w, "bad json", http.StatusBadRequest)
 		return
 	}
@@ -422,36 +517,37 @@ func (h *Hub) handleJobs(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "repo_id and prompt are required", http.StatusBadRequest)
 		return
 	}
+	if len(req.Prompt) > 128<<10 || len(req.RepoID) > 256 || len(req.ResumeID) > 256 ||
+		len(req.JobID) > 256 || len(req.Plugins) > 64 {
+		http.Error(w, "job request exceeds limits", http.StatusRequestEntityTooLarge)
+		return
+	}
 	jobID := req.JobID
 	if jobID == "" {
 		jobID = id.New()
 	}
 	job := daemon.JobAssignBody{
-		JobID:       jobID,
-		RepoID:      req.RepoID,
-		Prompt:      req.Prompt,
-		ResumeID:    req.ResumeID,
-		MaxSteps:    req.MaxSteps,
-		Model:       req.Model,
-		Provider:    req.Provider,
-		Plugins:     req.Plugins,
-		ForceStub:   req.ForceStub,
-		MilestoneID: req.MilestoneID,
-		PhaseID:     req.PhaseID,
-		EngReqID:    req.EngReqID,
-		Major:       req.Major,
-		Minor:       req.Minor,
+		JobID:             jobID,
+		RepoID:            req.RepoID,
+		Prompt:            req.Prompt,
+		ResumeID:          req.ResumeID,
+		MaxSteps:          req.MaxSteps,
+		Model:             req.Model,
+		Provider:          req.Provider,
+		Plugins:           req.Plugins,
+		ForceStub:         req.ForceStub,
+		MilestoneID:       req.MilestoneID,
+		PhaseID:           req.PhaseID,
+		EngReqID:          req.EngReqID,
+		Major:             req.Major,
+		Minor:             req.Minor,
+		ApprovalSessionID: req.ApprovalSessionID,
+		ApprovalTimeoutMS: req.ApprovalTimeoutMS,
 	}
-	if job.Model == "" || job.Provider == "" {
-		_ = h.EnsureDefaultModel(r.Context())
-		llm := h.GetLLM()
-		if job.Model == "" {
-			job.Model = llm.Model
-		}
-		if job.Provider == "" {
-			job.Provider = llm.Provider
-		}
-	}
+	// Empty model/provider means inherit at the acquired Worker. The scheduler
+	// already provisions fleet defaults to agentd; filling these fields here
+	// would turn a fleet default into a per-job override and make LLMFor(workerID)
+	// unreachable. Explicit request values still override the Worker.
 	wantStream := req.Stream || strings.Contains(r.Header.Get("Accept"), "text/event-stream")
 	if wantStream {
 		h.handleJobsSSE(w, r, job, req.NodeID)

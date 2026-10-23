@@ -74,7 +74,7 @@ const (
 
 `Options.Effort` sets it for an agent; `llm.Request.Effort` carries it to the adapter; a child
 agent inherits its parent's unless a `delegate` brief or a Complex stage overrides it (chapter
-[48](50-agent-modes.md)). Three named levels and an empty default, not a number: the two
+[50](50-agent-modes.md)). Three named levels and an empty default, not a number: the two
 providers express effort in different units (§3.2, §3.3), and a caller that passes a number
 would be passing one provider's unit through an interface that has to serve both.
 
@@ -134,7 +134,7 @@ it as narrow as the protocol allows:
 **待定.** The exact wire requirement is to be confirmed against the provider's current
 documentation before p_0.48.1 is marked done. If the provider has dropped the requirement, the
 `ProviderState` field is not added and this section is reduced to a note saying so. What is
-needed: one request/response pair from the live tier (chapter [45](47-evaluation.md) §4.3)
+needed: one request/response pair from the live tier (chapter [47](47-evaluation.md) §4.3)
 showing a tool loop with thinking enabled.
 
 ### 3.5 What effort does not do
@@ -194,7 +194,7 @@ failed attempt that carried a usage block (some providers send one on 5xx) is dr
 
 Each retry emits `Event{Type: "retry", Attempt: n, Delay: d, Text: <provider message>}` on the
 run's stream. The event exists so that a UI can show *"provider busy, retrying in 2s (2/3)"*
-rather than a frozen spinner, and so that the scorer (chapter [45](47-evaluation.md) §5) can
+rather than a frozen spinner, and so that the scorer (chapter [47](47-evaluation.md) §5) can
 count it. The final failure, after the last attempt, is today's `CodeProvider` error with the
 attempt count in its message.
 
