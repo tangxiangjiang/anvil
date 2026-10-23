@@ -27,7 +27,7 @@ const ProtocolVersion = 1
 // product line, not the protocol revision (that is ProtocolVersion): the
 // extension compares the dotted minor it packaged with against this string and
 // warns on a mismatch, so the two have to be released together (0.46).
-var Version = "0.47.49"
+var Version = "0.46.49"
 
 // Client to host request methods.
 const (

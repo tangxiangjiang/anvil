@@ -2,7 +2,7 @@
 
 Versioned delivery for Anvil through milestone **0.50**. Design cutoff: [`doc/design/v0.x/`](../../design/v0.x/).
 Milestone 0.46 closes the VS Code polish line; 0.47–0.50 develop and polish agent capabilities.
-The shipped VSIX and host version is **0.47.49**; it is not the milestone status.
+The shipped VSIX and host version is **0.46.49**; it is not the milestone status.
 
 ## Version index
 
