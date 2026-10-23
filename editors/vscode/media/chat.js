@@ -42,6 +42,16 @@
   const modeMenu = document.getElementById('modeMenu');
   const modeLabel = document.getElementById('modeLabel');
   const modeRows = modeMenu ? Array.from(modeMenu.querySelectorAll('.mode-row')) : [];
+  const collaborationButton = document.getElementById('collaboration');
+  const collaborationMenu = document.getElementById('collaborationMenu');
+  const collaborationLabel = document.getElementById('collaborationLabel');
+  const collaborationDot = collaborationButton
+    ? collaborationButton.querySelector('.collaboration-dot')
+    : null;
+  const collaborationRows = collaborationMenu
+    ? Array.from(collaborationMenu.querySelectorAll('.collaboration-row:not(:disabled)'))
+    : [];
+  const agentMapButton = document.getElementById('agentMap');
   const bypassStrip = document.getElementById('bypass');
   const dontAskStrip = document.getElementById('dontAsk');
   const rootLine = document.getElementById('root');
@@ -50,6 +60,7 @@
   const focusButton = document.getElementById('focus');
   const palette = document.getElementById('palette');
   const dock = document.getElementById('composerDock');
+  const scrollBottomButton = document.getElementById('scrollBottom');
   const meter = document.getElementById('meter');
   /**
    * The conversation total, a node per fact rather than one string: each count can
@@ -137,6 +148,9 @@
   let replayPinsBottom = false;
   let replayAsyncBlocks = 0;
   let replayGeneration = 0;
+  let collaborationMode = 'multi';
+  let agentMapDialog = null;
+  let agentMapState = null;
   let replayLoadingAnimations = [];
   /** True once a prompt has been sent: the empty state is gone for good. */
   let started = false;
@@ -165,6 +179,20 @@
   const backgroundCards = new Map();
   /** Last lifecycle event, including one that arrived before the handoff result. */
   const backgroundTaskStates = new Map();
+  /** Stable foreground spawn-call and background task ids that are still working. */
+  const activeSubagents = new Set();
+  /** Spawn calls whose parent result arrived; late child chunks cannot reactivate them. */
+  const completedSubagentSpawns = new Set();
+
+  function syncCollaborationActivity() {
+    const working = collaborationMode === 'multi' && activeSubagents.size > 0;
+    if (collaborationDot) collaborationDot.classList.toggle('active', working);
+    if (collaborationButton) {
+      collaborationButton.title = working
+        ? activeSubagents.size + (activeSubagents.size === 1 ? ' subagent working' : ' subagents working')
+        : 'No subagents working';
+    }
+  }
   /** Runs `fn` with `scope` as the target, and restores the previous one. */
   function inScope(scope, fn) {
     const previous = active;
@@ -694,8 +722,19 @@
     return transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 60;
   }
 
+  function syncScrollBottomButton() {
+    if (!scrollBottomButton) return;
+    scrollBottomButton.hidden = atBottom();
+  }
+
+  function scrollConversationToBottom() {
+    transcript.scrollTop = transcript.scrollHeight;
+    syncScrollBottomButton();
+  }
+
   function scrollIfPinned(wasPinned) {
     if (wasPinned) transcript.scrollTop = transcript.scrollHeight;
+    syncScrollBottomButton();
   }
 
   /**
@@ -989,6 +1028,9 @@
     spawnScopes.clear();
     backgroundCards.clear();
     backgroundTaskStates.clear();
+    activeSubagents.clear();
+    completedSubagentSpawns.clear();
+    syncCollaborationActivity();
     active = mainScope;
     // The block about to be cleared is not this conversation's answer any more,
     // so it is ended without being announced.
@@ -3234,6 +3276,10 @@
   function updateBackgroundTask(task) {
     if (!task || typeof task.id !== 'string' || task.id === '') return;
     backgroundTaskStates.set(task.id, task);
+    const activityId = 'task:' + task.id;
+    if (task.kind === 'agent' && task.status === 'running') activeSubagents.add(activityId);
+    else activeSubagents.delete(activityId);
+    syncCollaborationActivity();
     const card = backgroundCards.get(task.id);
     if (!card) return;
     const state = card.querySelector('.state');
@@ -3274,6 +3320,9 @@
    * is, and the card says what happened rather than pretending the steps exist.
    */
   function addSpawnResult(card, event) {
+    completedSubagentSpawns.add(event.tool_call_id);
+    activeSubagents.delete('spawn:' + event.tool_call_id);
+    syncCollaborationActivity();
     const content = event.content || '';
     const failed = event.is_error === true;
     const state = card.querySelector('.state');
@@ -3303,7 +3352,7 @@
       addSpawnTranscriptButton(pane, scope && scope.agentId);
       backgroundCards.set(background[1], card);
       updateBackgroundTask(
-        backgroundTaskStates.get(background[1]) || { id: background[1], status: 'running' },
+        backgroundTaskStates.get(background[1]) || { id: background[1], kind: 'agent', status: 'running' },
       );
       return;
     }
@@ -4303,6 +4352,7 @@
   function openModeMenu(fromKeyboard) {
     if (!modeMenu || !modeButton || modeButton.disabled) return;
     closeActionMenu(false);
+    closeCollaborationMenu(false);
     modeMenu.hidden = false;
     modeButton.setAttribute('aria-expanded', 'true');
     if (fromKeyboard) {
@@ -4314,6 +4364,230 @@
   function toggleModeMenu(event) {
     if (!modeMenu || modeMenu.hidden) openModeMenu(Boolean(event && event.detail === 0));
     else closeModeMenu(true);
+  }
+
+  // --- collaboration and Agent Map -----------------------------------------
+
+  function showCollaboration(msg) {
+    collaborationMode = msg.mode === 'single' ? 'single' : 'multi';
+    if (collaborationLabel) {
+      collaborationLabel.textContent = collaborationMode === 'single' ? 'Single' : 'Multi';
+    }
+    for (const row of collaborationRows) {
+      const selected = row.dataset.collaboration === collaborationMode;
+      row.classList.toggle('selected', selected);
+      row.setAttribute('aria-checked', selected ? 'true' : 'false');
+    }
+    if (agentMapButton) agentMapButton.hidden = collaborationMode !== 'multi';
+    syncCollaborationActivity();
+  }
+
+  function closeCollaborationMenu(focusTrigger) {
+    if (!collaborationMenu || collaborationMenu.hidden) return;
+    collaborationMenu.hidden = true;
+    collaborationButton.setAttribute('aria-expanded', 'false');
+    if (focusTrigger) collaborationButton.focus();
+  }
+
+  function positionCollaborationMenu() {
+    if (!collaborationMenu || !collaborationButton || collaborationMenu.hidden) return;
+    const trigger = collaborationButton.getBoundingClientRect();
+    const left = Math.max(8, Math.min(trigger.left, window.innerWidth - collaborationMenu.offsetWidth - 8));
+    collaborationMenu.style.left = left + 'px';
+    collaborationMenu.style.right = 'auto';
+    collaborationMenu.style.bottom = Math.max(8, window.innerHeight - trigger.top + 6) + 'px';
+  }
+
+  function openCollaborationMenu(fromKeyboard) {
+    if (!collaborationMenu || !collaborationButton || collaborationButton.disabled) return;
+    closeActionMenu(false);
+    closeModeMenu(false);
+    collaborationMenu.hidden = false;
+    collaborationButton.setAttribute('aria-expanded', 'true');
+    positionCollaborationMenu();
+    if (fromKeyboard) {
+      const selected = collaborationRows.find((row) => row.classList.contains('selected'));
+      (selected || collaborationRows[0])?.focus();
+    }
+  }
+
+  function shortTokens(usage) {
+    const total = usage && Number(usage.total_tokens || usage.totalTokens || 0);
+    return total > 0 ? amount(total) + ' tokens' : 'no token data';
+  }
+
+  function elapsed(node) {
+    const start = Date.parse(node.createdAt || '');
+    if (!Number.isFinite(start)) return '';
+    const end = Date.parse(node.endedAt || '') || Date.now();
+    const seconds = Math.max(0, Math.floor((end - start) / 1000));
+    if (seconds < 60) return seconds + 's';
+    return Math.floor(seconds / 60) + 'm ' + (seconds % 60) + 's';
+  }
+
+  function agentCard(node, selected) {
+    const card = el('button', 'agent-map-card status-' + node.status);
+    card.type = 'button';
+    card.dataset.agentId = node.agentId;
+    card.setAttribute('aria-pressed', selected ? 'true' : 'false');
+    const title = el('span', 'agent-map-card-title');
+    title.appendChild(el('i', 'agent-map-status'));
+    title.appendChild(el('strong', '', node.title));
+    card.appendChild(title);
+    card.appendChild(
+      el(
+        'small',
+        '',
+        [node.model, elapsed(node), shortTokens(node.usage)].filter((part) => part !== '').join(' · '),
+      ),
+    );
+    card.addEventListener('click', () => {
+      if (node.depth === 0) showAgentRootSummary(node);
+      else showAgentDetailLoading(node);
+    });
+    return card;
+  }
+
+  function ensureAgentMapDialog() {
+    if (agentMapDialog && agentMapDialog.isConnected) return agentMapDialog;
+    const dialog = el('dialog', 'agent-map-dialog');
+    dialog.setAttribute('aria-labelledby', 'agentMapTitle');
+    const panel = el('div', 'agent-map-panel');
+    const head = el('div', 'agent-map-head');
+    head.appendChild(el('strong', '', 'Agent map')).id = 'agentMapTitle';
+    const close = el('button', 'agent-map-close', '×');
+    close.type = 'button';
+    close.setAttribute('aria-label', 'Close Agent Map');
+    close.addEventListener('click', () => dialog.close());
+    head.appendChild(close);
+    panel.appendChild(head);
+    panel.appendChild(el('div', 'agent-map-content', 'Loading agents…'));
+    dialog.appendChild(panel);
+    dialog.addEventListener('click', (event) => {
+      if (event.target === dialog) dialog.close();
+    });
+    dialog.addEventListener('close', () => {
+      dialog.remove();
+      agentMapDialog = null;
+      agentMapState = null;
+      if (agentMapButton) agentMapButton.focus();
+    });
+    document.body.appendChild(dialog);
+    agentMapDialog = dialog;
+    if (typeof dialog.showModal === 'function') dialog.showModal();
+    else dialog.setAttribute('open', '');
+    close.focus();
+    return dialog;
+  }
+
+  function renderAgentMap(state) {
+    agentMapState = state;
+    const dialog = ensureAgentMapDialog();
+    const content = dialog.querySelector('.agent-map-content');
+    if (!content) return;
+    content.textContent = '';
+    const nodes = Array.isArray(state.nodes) ? state.nodes : [];
+    const root = nodes.find((node) => node.agentId === state.rootId) || nodes[0];
+    if (!root) {
+      content.appendChild(el('p', 'agent-map-empty', 'No agents in this conversation yet.'));
+      return;
+    }
+    const subtitle = el(
+      'div',
+      'agent-map-subtitle',
+      state.counts.total + (state.counts.total === 1 ? ' agent' : ' agents') + ' · click an agent for details',
+    );
+    content.appendChild(subtitle);
+    const topology = el('div', 'agent-map-topology');
+    const rootColumn = el('div', 'agent-map-root');
+    rootColumn.appendChild(agentCard(root, false));
+    topology.appendChild(rootColumn);
+    const children = el('div', 'agent-map-children');
+    for (const node of nodes.filter((item) => item.depth > 0)) {
+      const row = el('div', 'agent-map-child depth-' + Math.min(4, node.depth));
+      row.appendChild(agentCard(node, false));
+      children.appendChild(row);
+    }
+    if (children.childElementCount === 0) {
+      children.appendChild(el('p', 'agent-map-empty', 'No subagents have been started.'));
+    }
+    topology.appendChild(children);
+    content.appendChild(topology);
+  }
+
+  function showAgentRootSummary(root) {
+    if (!agentMapDialog || !agentMapState) return;
+    const content = agentMapDialog.querySelector('.agent-map-content');
+    if (!content) return;
+    content.textContent = '';
+    const back = el('button', 'agent-map-back', '←  ' + root.title);
+    back.type = 'button';
+    back.addEventListener('click', () => renderAgentMap(agentMapState));
+    content.appendChild(back);
+    content.appendChild(el('p', 'agent-map-meta', root.status + ' · ' + root.model + ' · ' + shortTokens(root.usage)));
+    const stats = el('div', 'agent-map-stats');
+    for (const [label, value] of [
+      ['Agents', agentMapState.counts.total],
+      ['Working', agentMapState.counts.working],
+      ['Finished', agentMapState.counts.finished],
+      ['Failed', agentMapState.counts.failed],
+    ]) {
+      const row = el('div', 'agent-map-stat');
+      row.appendChild(el('span', '', label));
+      row.appendChild(el('strong', '', String(value)));
+      stats.appendChild(row);
+    }
+    content.appendChild(stats);
+  }
+
+  function showAgentDetailLoading(node) {
+    if (!agentMapDialog || !agentMapState) return;
+    const content = agentMapDialog.querySelector('.agent-map-content');
+    if (!content) return;
+    content.textContent = '';
+    const back = el('button', 'agent-map-back', '←  ' + node.title);
+    back.type = 'button';
+    back.addEventListener('click', () => renderAgentMap(agentMapState));
+    content.appendChild(back);
+    content.appendChild(
+      el('p', 'agent-map-meta', [node.status, node.model, node.background ? 'background' : 'foreground'].join(' · ')),
+    );
+    content.appendChild(el('div', 'agent-map-detail-loading', 'Loading transcript…'));
+    vscode.postMessage({ type: 'agentDetail', agentId: node.agentId });
+  }
+
+  function showAgentDetail(msg) {
+    if (!agentMapDialog || !agentMapState) return;
+    const content = agentMapDialog.querySelector('.agent-map-content');
+    const node = agentMapState.nodes.find((item) => item.agentId === msg.agentId);
+    if (!content || !node) return;
+    content.textContent = '';
+    const back = el('button', 'agent-map-back', '←  ' + node.title);
+    back.type = 'button';
+    back.addEventListener('click', () => renderAgentMap(agentMapState));
+    content.appendChild(back);
+    content.appendChild(
+      el(
+        'p',
+        'agent-map-meta',
+        [msg.status || node.status, node.model, msg.steps ? msg.steps + ' steps' : '', shortTokens(msg.usage || node.usage)]
+          .filter((part) => part !== '')
+          .join(' · '),
+      ),
+    );
+    for (const [label, text] of [
+      ['Prompt', msg.prompt],
+      ['Result', msg.result],
+    ]) {
+      const sectionNode = el('section', 'agent-map-detail-section');
+      sectionNode.appendChild(el('h3', '', label));
+      sectionNode.appendChild(el('pre', '', text || '(none)'));
+      content.appendChild(sectionNode);
+    }
+    const open = el('button', 'agent-map-open', 'Open transcript');
+    open.type = 'button';
+    open.addEventListener('click', () => vscode.postMessage({ type: 'openAgent', agentId: node.agentId }));
+    content.appendChild(open);
   }
 
   // --- slash palette --------------------------------------------------------
@@ -4328,6 +4602,7 @@
   function openActionMenu(fromKeyboard) {
     if (!actionMenu) return;
     closeModeMenu(false);
+    closeCollaborationMenu(false);
     closePalette();
     actionMenu.hidden = false;
     attachButton.setAttribute('aria-expanded', 'true');
@@ -4751,6 +5026,8 @@
     // that; the extension's own check is what enforces it.
     if (modeButton) modeButton.disabled = running;
     if (running) closeModeMenu(false);
+    if (collaborationButton) collaborationButton.disabled = running;
+    if (running) closeCollaborationMenu(false);
     if (!running) input.focus();
   }
 
@@ -5564,6 +5841,7 @@
   input.addEventListener('focus', () => {
     closeActionMenu(false);
     closeModeMenu(false);
+    closeCollaborationMenu(false);
   });
 
   if (modeButton && modeMenu) {
@@ -5592,6 +5870,49 @@
       closeModeMenu(false);
     });
     window.addEventListener('blur', () => closeModeMenu(false));
+  }
+
+  if (collaborationButton && collaborationMenu) {
+    collaborationButton.addEventListener('click', (event) => {
+      if (collaborationMenu.hidden) openCollaborationMenu(event.detail === 0);
+      else closeCollaborationMenu(true);
+    });
+    for (const row of collaborationRows) {
+      row.addEventListener('click', () => {
+        closeCollaborationMenu(true);
+        vscode.postMessage({ type: 'collaboration', mode: row.dataset.collaboration });
+      });
+    }
+    collaborationMenu.addEventListener('keydown', (event) => {
+      const current = collaborationRows.indexOf(document.activeElement);
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeCollaborationMenu(true);
+      } else if (event.key === 'ArrowDown' || event.key === 'ArrowRight') {
+        event.preventDefault();
+        collaborationRows[(current + 1 + collaborationRows.length) % collaborationRows.length]?.focus();
+      } else if (event.key === 'ArrowUp' || event.key === 'ArrowLeft') {
+        event.preventDefault();
+        collaborationRows[(current - 1 + collaborationRows.length) % collaborationRows.length]?.focus();
+      }
+    });
+    document.addEventListener('mousedown', (event) => {
+      if (
+        collaborationMenu.hidden ||
+        collaborationMenu.contains(event.target) ||
+        collaborationButton.contains(event.target)
+      ) {
+        return;
+      }
+      closeCollaborationMenu(false);
+    });
+    window.addEventListener('resize', positionCollaborationMenu);
+  }
+  if (agentMapButton) {
+    agentMapButton.addEventListener('click', () => {
+      ensureAgentMapDialog();
+      vscode.postMessage({ type: 'agentMap' });
+    });
   }
 
   if (rulesButton) {
@@ -5656,6 +5977,11 @@
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) closeActionMenu(false);
     });
+  }
+
+  transcript.addEventListener('scroll', syncScrollBottomButton, { passive: true });
+  if (scrollBottomButton) {
+    scrollBottomButton.addEventListener('click', scrollConversationToBottom);
   }
 
   if (focusButton) {
@@ -5901,6 +6227,10 @@
         // also how the card learns which stored session to offer afterwards.
         const target = e.parent_tool_call_id ? spawnScopes.get(e.parent_tool_call_id) : undefined;
         if (target) {
+          if (!completedSubagentSpawns.has(e.parent_tool_call_id)) {
+            activeSubagents.add('spawn:' + e.parent_tool_call_id);
+          }
+          syncCollaborationActivity();
           if (e.agent_id) target.agentId = e.agent_id;
           inScope(target, () => renderEvent(e, msg));
           return;
@@ -5937,6 +6267,7 @@
         return;
       case 'backgroundTask':
         updateBackgroundTask(msg.task);
+        if (agentMapDialog) vscode.postMessage({ type: 'agentMap' });
         return;
       case 'changes':
         showChanges(msg.files, msg.runId);
@@ -5976,6 +6307,15 @@
         return;
       case 'mode':
         showMode(msg);
+        return;
+      case 'collaboration':
+        showCollaboration(msg);
+        return;
+      case 'agentMap':
+        renderAgentMap(msg.state || { rootId: '', nodes: [], counts: { total: 0, working: 0, finished: 0, failed: 0 } });
+        return;
+      case 'agentDetail':
+        showAgentDetail(msg);
         return;
       case 'rules': {
         rules = Array.isArray(msg.files) ? msg.files : [];

@@ -115,7 +115,7 @@ export function readSettings(): ResolvedSettings {
   // editor's normal shape. Sent explicitly both ways, because a host's default
   // is not this client's to assume, and turning it off has to reach the session
   // that was just opened rather than the next one.
-  session.subagents = cfg.get<boolean>('subagents', true) ?? true;
+  session.subagents = cfg.get<boolean>('subagents', false) ?? false;
   // Language servers, the test command and the build command are all "a tool
   // the user configured": when nothing is configured the fields are omitted,
   // so the request is exactly the one an older client sent. A workspace's

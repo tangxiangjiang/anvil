@@ -367,8 +367,8 @@
         },
         "anvil.subagents": {
           "type": "boolean",
-          "default": true,
-          "markdownDescription": "Let a session hand work to child agents: `spawn_agent` runs a brief in its own conversation, and `background: true` starts it in the task table. Children inherit the parent's tools and permissions, and a child's mutating call still stops for approval. Off means the tool is not registered at all, so the model is told it does not exist."
+          "default": false,
+          "markdownDescription": "Let a session hand work to child agents: `spawn_agent` runs a brief in its own conversation, and `background: true` starts it in the task table. Children inherit the parent's tools and permissions, and a child's mutating call still stops for approval. Off by default; the tool is then not registered at all, so the model is told it does not exist."
         },
         "anvil.lsp.enabled": {
           "type": "boolean",

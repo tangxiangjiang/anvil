@@ -263,8 +263,10 @@ func spawnBackground(ctx context.Context, reg *tools.Registry, parent *Agent, in
 	}
 	prompt := in.Prompt
 	info, err := mgr.StartAgent(tasks.AgentSpec{
-		Title:   "subagent " + ident.TaskTitle,
-		AgentID: parent.id,
+		Title:            "subagent " + ident.TaskTitle,
+		AgentID:          parent.id,
+		ParentRunID:      ident.ParentRunID,
+		ParentToolCallID: ident.ParentToolCallID,
 		Run: func(taskCtx context.Context) (string, string, error) {
 			callCtx := withSubagentOrigin(taskCtx, ident.ParentAgentID, ident.ParentRunID, ident.ParentToolCallID)
 			child, err := createSubagent(callCtx, opts, ident)
@@ -272,6 +274,7 @@ func spawnBackground(ctx context.Context, reg *tools.Registry, parent *Agent, in
 				return "error", "", fmt.Errorf("start subagent: %w", err)
 			}
 			defer child.Close()
+			_ = mgr.SetChildAgent(tasks.IDFromContext(taskCtx), child.AgentID())
 			run, err := child.Send(callCtx, prompt)
 			if err != nil {
 				return "error", "", fmt.Errorf("start subagent: %w", err)

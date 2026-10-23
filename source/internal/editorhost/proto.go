@@ -745,10 +745,12 @@ type SessionInfo struct {
 	// Subagent identity (0.42+). Empty on a top-level session. ParentAgentID is
 	// what the tree nests a child under, and TaskTitle is the description its
 	// spawn call carried — the name a person gave the work, not a derived one.
-	ParentAgentID string `json:"parent_agent_id,omitempty"`
-	Depth         int    `json:"depth,omitempty"`
-	Subagent      bool   `json:"subagent,omitempty"`
-	TaskTitle     string `json:"task_title,omitempty"`
+	ParentAgentID    string `json:"parent_agent_id,omitempty"`
+	ParentRunID      string `json:"parent_run_id,omitempty"`
+	ParentToolCallID string `json:"parent_tool_call_id,omitempty"`
+	Depth            int    `json:"depth,omitempty"`
+	Subagent         bool   `json:"subagent,omitempty"`
+	TaskTitle        string `json:"task_title,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
@@ -1270,8 +1272,11 @@ type TaskInfo struct {
 	// AgentID is the agent whose tool call started the task. For an agent task
 	// it is the starter, not the child: the child does not exist yet when the
 	// row is created.
-	AgentID   string    `json:"agent_id,omitempty"`
-	StartedAt time.Time `json:"started_at"`
+	AgentID          string    `json:"agent_id,omitempty"`
+	ChildAgentID     string    `json:"child_agent_id,omitempty"`
+	ParentRunID      string    `json:"parent_run_id,omitempty"`
+	ParentToolCallID string    `json:"parent_tool_call_id,omitempty"`
+	StartedAt        time.Time `json:"started_at"`
 	// EndedAt is absent while the task runs.
 	EndedAt *time.Time `json:"ended_at,omitempty"`
 	// ExitCode is the process exit code of a shell task, -1 when it did not

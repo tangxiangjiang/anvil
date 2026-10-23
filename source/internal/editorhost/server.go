@@ -383,10 +383,12 @@ func (s *Server) handleSessionList(ctx context.Context, params json.RawMessage) 
 			LastRunID:  in.LastRunID,
 			Runs:       in.Runs,
 
-			ParentAgentID: in.ParentAgentID,
-			Depth:         in.Depth,
-			Subagent:      in.Kind == "subagent",
-			TaskTitle:     in.TaskTitle,
+			ParentAgentID:    in.ParentAgentID,
+			ParentRunID:      in.ParentRunID,
+			ParentToolCallID: in.ParentToolCallID,
+			Depth:            in.Depth,
+			Subagent:         in.Kind == "subagent",
+			TaskTitle:        in.TaskTitle,
 		}
 		if !in.CreatedAt.IsZero() {
 			entry.CreatedAt = in.CreatedAt.UTC().Format("2006-01-02T15:04:05Z")
@@ -863,13 +865,16 @@ func (s *Server) forwardTask(sess *session, info anvil.TaskInfo) {
 // taskInfo projects one public task snapshot onto the wire shape.
 func taskInfo(t anvil.TaskInfo) TaskInfo {
 	out := TaskInfo{
-		ID:        t.ID,
-		Kind:      string(t.Kind),
-		Title:     t.Title,
-		Status:    string(t.Status),
-		AgentID:   t.AgentID,
-		StartedAt: t.StartedAt,
-		ExitCode:  t.ExitCode,
+		ID:               t.ID,
+		Kind:             string(t.Kind),
+		Title:            t.Title,
+		Status:           string(t.Status),
+		AgentID:          t.AgentID,
+		ChildAgentID:     t.ChildAgentID,
+		ParentRunID:      t.ParentRunID,
+		ParentToolCallID: t.ParentToolCallID,
+		StartedAt:        t.StartedAt,
+		ExitCode:         t.ExitCode,
 	}
 	if !t.EndedAt.IsZero() {
 		ended := t.EndedAt

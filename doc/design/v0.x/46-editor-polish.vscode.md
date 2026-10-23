@@ -1185,3 +1185,32 @@ relationship lines use no fill and the same theme stroke instead of Mermaid's bl
 Inline diagrams and fenced code are bounded preview surfaces. Content beyond their standard height
 scrolls inside the block. Scrollbar tracks remain transparent, and the thumb appears only on hover
 or keyboard focus, using VS Code's scrollbar theme colours.
+
+## 51. The latest turn is one action away
+
+Reading an earlier part of a long conversation should not make the newest turn difficult to
+recover. When the transcript is away from its bottom, a compact down-to-line button appears above
+the composer at the reading column's right edge. Activating it moves the conversation directly to
+its latest content.
+
+The control is hidden while the transcript is already at the bottom, so it adds no permanent
+chrome to the composer. It is a labelled button with a themed neutral surface and remains outside
+the composer measurement, preventing its appearance from changing the transcript's reserved
+bottom space.
+
+## 52. Collaboration is a session choice with a visible tree
+
+Single and Multi are properties of one conversation, not global working styles. New conversations
+start in Single unless the user explicitly enables `anvil.subagents`. Switching reopens
+the same stored agent with subagent tools disabled or enabled, preserving its identity and
+transcript. Complex remains visible but disabled until orchestration beyond parent/child delegation
+has an implemented runtime.
+
+Multi exposes an Agent Map beside the selector. It contains only the current root and all of its
+stored descendants, augmented by live background task state. Background task records carry the
+concrete child agent id plus the spawning run and tool-call ids, so the view joins identities
+directly instead of inferring them from titles or engineering vocabulary.
+
+The map opens with a compact topology and root totals. Selecting a child then loads at most the
+recent transcript window needed for its prompt, latest result, steps and usage. This keeps opening
+the overview cheap while still making a working or completed delegation inspectable.

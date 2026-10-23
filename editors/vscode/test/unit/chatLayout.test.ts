@@ -151,6 +151,26 @@ test('the composer is out of the flow, and the transcript still fills the body',
   assert.equal(valueOf('.dock > *', 'pointer-events'), 'auto');
 });
 
+test('a floating latest-message button returns the transcript to its bottom', () => {
+  assert.match(
+    JS,
+    /const scrollBottomButton = document\.getElementById\('scrollBottom'\)/,
+  );
+  assert.match(
+    JS,
+    /scrollBottomButton\.addEventListener\('click', scrollConversationToBottom\)/,
+  );
+  assert.match(JS, /transcript\.addEventListener\('scroll', syncScrollBottomButton/);
+  assert.match(
+    JS,
+    /function scrollConversationToBottom\(\) \{\s*transcript\.scrollTop = transcript\.scrollHeight;/,
+  );
+
+  assert.equal(valueOf('.scroll-bottom', 'position'), 'absolute');
+  assert.match(valueOf('.scroll-bottom', 'bottom') ?? '', /100%/);
+  assert.equal(valueOf('.scroll-bottom[hidden]', 'display'), 'none');
+});
+
 test('the transcript reserves the composer height, and the script measures it', () => {
   const reserve = valueOf('.transcript', 'padding-bottom');
   assert.ok(reserve, '.transcript must reserve room for the floating composer');

@@ -320,5 +320,5 @@ test('the setting and the command exist for the two new surfaces', () => {
   assert.ok(commands.includes('anvil.openTasks'));
   const subagents = PACKAGE_JSON.contributes.configuration.properties['anvil.subagents'];
   assert.ok(subagents, 'anvil.subagents is a setting');
-  assert.equal(subagents.default, true);
+  assert.equal(subagents.default, false);
 });

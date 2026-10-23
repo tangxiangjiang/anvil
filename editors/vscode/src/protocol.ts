@@ -686,6 +686,9 @@ export interface TaskInfo {
   status: 'running' | 'finished' | 'failed' | 'cancelled';
   /** The agent whose tool call started the task, not a subagent's own id. */
   agent_id?: string;
+  child_agent_id?: string;
+  parent_run_id?: string;
+  parent_tool_call_id?: string;
   started_at: string;
   ended_at?: string;
   /** A shell task's exit code; -1 when the process did not exit on its own. */
@@ -765,6 +768,8 @@ export interface SessionInfo {
    * these are what nest it under its parent in the sidebar.
    */
   parent_agent_id?: string;
+  parent_run_id?: string;
+  parent_tool_call_id?: string;
   depth?: number;
   subagent?: boolean;
   /** The description the spawn call gave the task, which is the readable name. */

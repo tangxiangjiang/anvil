@@ -73,6 +73,7 @@ import { RunFailure } from './errors';
 import { readSettings, readWebSearchKey } from './settings';
 import { webSearchNeedsKey } from './webSearch';
 import { mediaAsset } from './webviewAsset';
+import { AgentMapState, buildAgentMap } from './agentMap';
 
 /** A message from the webview. */
 type Inbound =
@@ -96,6 +97,10 @@ type Inbound =
   | { type: 'pickMention' }
   | { type: 'commands' }
   | { type: 'mode'; mode: string }
+  | { type: 'collaboration'; mode: 'single' | 'multi' }
+  | { type: 'agentMap' }
+  | { type: 'agentDetail'; agentId: string }
+  | { type: 'openAgent'; agentId: string }
   | { type: 'review'; requestId: string }
   /** "Let me keep only some of this", from an approval card's diff preview. */
   | { type: 'reviewPartial'; requestId: string }
@@ -306,6 +311,17 @@ type Outbound =
   | { type: 'commands'; commands: SlashCommand[] }
   | { type: 'help'; commands: SlashCommand[] }
   | { type: 'mode'; mode: PermissionMode | ''; resolved: PermissionMode; source: PermissionModeSource }
+  | { type: 'collaboration'; mode: 'single' | 'multi' }
+  | { type: 'agentMap'; state: AgentMapState }
+  | {
+      type: 'agentDetail';
+      agentId: string;
+      prompt: string;
+      result: string;
+      status: string;
+      steps: number;
+      usage?: import('./protocol').Usage;
+    }
   | { type: 'rules'; files: RuleFileInfo[] }
   /**
    * What the enabled MCP layers declare, and which of their files are missing.
@@ -387,6 +403,8 @@ type Outbound =
 
 /** Where the chosen permission mode is remembered between windows. */
 const MODE_KEY = 'anvil.permissionMode';
+/** Collaboration belongs to a conversation, not to the workspace default. */
+const COLLABORATION_KEY = 'anvil.collaborationByAgent';
 
 /** How many plans a tab keeps in memory for the palette commands. */
 const PLAN_KEPT = 8;
@@ -439,6 +457,15 @@ function modeNotice(mode: PermissionMode | undefined): string {
 function readMode(context: vscode.ExtensionContext): PermissionMode | undefined {
   const stored = context.workspaceState.get<string>(MODE_KEY);
   return stored !== undefined && isPermissionMode(stored) ? stored : undefined;
+}
+
+function storedCollaboration(
+  context: vscode.ExtensionContext,
+  agentId: string | undefined,
+): 'single' | 'multi' | undefined {
+  if (!agentId) return undefined;
+  const modes = context.workspaceState.get<Record<string, string>>(COLLABORATION_KEY, {});
+  return modes[agentId] === 'single' || modes[agentId] === 'multi' ? modes[agentId] : undefined;
 }
 
 export class ChatPanel implements HostListener {
@@ -517,6 +544,8 @@ export class ChatPanel implements HostListener {
    * decides, which is what makes a team's choice something it can commit.
    */
   private mode: PermissionMode | undefined;
+  /** Whether this conversation exposes subagent tools. Complex is reserved. */
+  private collaboration: 'single' | 'multi';
   /**
    * The last resolved mode a notice was posted for, so a session re-opened for
    * an unrelated reason (a model change) does not repeat what the user already
@@ -562,6 +591,10 @@ export class ChatPanel implements HostListener {
   ) {
     this.mode = readMode(context);
     this.agentId = agentId === '' ? undefined : agentId;
+    this.collaboration =
+      storedCollaboration(context, this.agentId) ??
+      (readSettings().session.subagents === false ? 'single' : 'multi');
+    this.overrides.subagents = this.collaboration === 'multi';
     this.partialReviews = new ReviewPanels(context.extensionUri);
   }
 
@@ -798,6 +831,7 @@ export class ChatPanel implements HostListener {
       this.postAgentId();
       this.postRoot();
       this.postMode();
+      this.postCollaboration();
       if (this.rules.length > 0) this.post({ type: 'rules', files: this.rules });
       this.postState();
       for (const request of this.pendingApprovals()) {
@@ -854,6 +888,18 @@ export class ChatPanel implements HostListener {
         return;
       case 'mode':
         await this.setMode(msg.mode);
+        return;
+      case 'collaboration':
+        await this.setCollaboration(msg.mode);
+        return;
+      case 'agentMap':
+        await this.postAgentMap();
+        return;
+      case 'agentDetail':
+        await this.postAgentDetail(msg.agentId);
+        return;
+      case 'openAgent':
+        await this.hub.openSession(msg.agentId);
         return;
       case 'review':
         await this.openReview(msg.requestId);
@@ -1175,6 +1221,85 @@ export class ChatPanel implements HostListener {
     this.postMode();
     this.postState();
     this.post({ type: 'notice', level: chosen === 'bypass' ? 'warn' : 'info', message: modeNotice(chosen) });
+  }
+
+  private postCollaboration(): void {
+    this.post({ type: 'collaboration', mode: this.collaboration });
+  }
+
+  private async setCollaboration(mode: 'single' | 'multi'): Promise<void> {
+    if (mode === this.collaboration) return;
+    if (this.session?.currentState === 'running') {
+      this.post({ type: 'notice', level: 'warn', message: 'Stop the turn before changing Agent mode.' });
+      this.postCollaboration();
+      return;
+    }
+    try {
+      await this.applyOptions({ subagents: mode === 'multi' });
+      this.collaboration = mode;
+      await this.rememberCollaboration();
+      this.postCollaboration();
+      this.postState();
+    } catch (err) {
+      this.post({ type: 'notice', level: 'error', message: `Could not change Agent mode: ${(err as Error).message}` });
+      this.postCollaboration();
+    }
+  }
+
+  private async rememberCollaboration(): Promise<void> {
+    const agentId = this.currentAgentId();
+    if (!agentId) return;
+    const modes = this.context.workspaceState.get<Record<string, string>>(COLLABORATION_KEY, {});
+    await this.context.workspaceState.update(COLLABORATION_KEY, {
+      ...modes,
+      [agentId]: this.collaboration,
+    });
+  }
+
+  private async agentMapState(): Promise<AgentMapState> {
+    const rootId = this.agentId ?? this.session?.agent ?? '';
+    const [sessions, taskRows] = await Promise.all([this.hub.listSessions(), this.hub.listTasks()]);
+    return buildAgentMap(
+      rootId,
+      sessions,
+      taskRows.map((row) => row.task),
+      new Set(this.hub.runningAgentIds()),
+    );
+  }
+
+  private async postAgentMap(): Promise<void> {
+    if (!this.agentId && !this.session?.agent) {
+      this.post({ type: 'notice', level: 'info', message: 'Start a conversation before opening Agent Map.' });
+      return;
+    }
+    try {
+      this.post({ type: 'agentMap', state: await this.agentMapState() });
+    } catch (err) {
+      this.post({ type: 'notice', level: 'error', message: `Could not load Agent Map: ${(err as Error).message}` });
+    }
+  }
+
+  private async postAgentDetail(agentId: string): Promise<void> {
+    try {
+      const transcript = await this.hub.transcript(agentId, 200);
+      let prompt = '';
+      let result = '';
+      let status = 'idle';
+      let steps = 0;
+      let usage;
+      for (const entry of transcript.entries) {
+        if (entry.kind === 'message' && entry.role === 'user' && prompt === '') prompt = entry.content ?? '';
+        if (entry.kind === 'message' && entry.role === 'assistant' && entry.content) result = entry.content;
+        if (entry.kind === 'run_end') {
+          status = entry.status ?? status;
+          steps = entry.steps ?? steps;
+          usage = entry.usage ?? usage;
+        }
+      }
+      this.post({ type: 'agentDetail', agentId, prompt, result, status, steps, usage });
+    } catch (err) {
+      this.post({ type: 'notice', level: 'error', message: `Could not load Agent detail: ${(err as Error).message}` });
+    }
   }
 
   // --- session history --------------------------------------------------------
@@ -1606,6 +1731,7 @@ export class ChatPanel implements HostListener {
   private rememberAgent(agentId: string): void {
     if (!agentId || agentId === this.agentId) return;
     this.agentId = agentId;
+    void this.rememberCollaboration();
     this.postAgentId();
     this.updateTitle();
     this.hub.notifyTabs();
@@ -2922,6 +3048,12 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri, focus = f
     --anvil-composer-h, which is what the transcript reserves at its bottom.
   -->
   <div id="composerDock" class="dock">
+    <button id="scrollBottom" type="button" class="scroll-bottom" aria-label="Scroll conversation to bottom" title="Go to latest message" hidden>
+      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="m6 7.5 4 4 4-4"/>
+        <path d="M5 15.5h10"/>
+      </svg>
+    </button>
     <div id="bypass" class="bypass" hidden>Bypass is on. Tool calls run without asking.</div>
     <div id="dontAsk" class="dont-ask" hidden>No asking. Only calls this workspace's rules allow will run.</div>
     <div id="actionMenu" class="action-menu" role="menu" aria-label="Add to prompt" hidden>
@@ -3004,6 +3136,19 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri, focus = f
         <span class="mode-row-check" aria-hidden="true">✓</span>
       </button>
     </div>
+    <div id="collaborationMenu" class="collaboration-menu" role="menu" aria-label="Agent collaboration mode" hidden>
+      <button type="button" class="collaboration-row" role="menuitemradio" data-collaboration="single">
+        <span class="collaboration-row-copy"><strong>Single</strong><small>One Agent works directly on the task</small></span>
+        <span class="collaboration-row-check" aria-hidden="true">✓</span>
+      </button>
+      <button type="button" class="collaboration-row" role="menuitemradio" data-collaboration="multi">
+        <span class="collaboration-row-copy"><strong>Multi</strong><small>Main Agent may delegate work to subagents</small></span>
+        <span class="collaboration-row-check" aria-hidden="true">✓</span>
+      </button>
+      <button type="button" class="collaboration-row" role="menuitemradio" data-collaboration="complex" aria-disabled="true" disabled>
+        <span class="collaboration-row-copy"><strong>Complex</strong><small>Advanced orchestration · coming later</small></span>
+      </button>
+    </div>
     <form id="composer" class="composer">
       <div id="palette" class="palette" hidden></div>
       <div id="chips" class="chips" hidden></div>
@@ -3019,6 +3164,18 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri, focus = f
             <path d="M7 3.5H4.5a1 1 0 0 0-1 1V7M13 3.5h2.5a1 1 0 0 1 1 1V7M7 16.5H4.5a1 1 0 0 1-1-1V13M13 16.5h2.5a1 1 0 0 0 1-1V13"/>
           </svg>
         </button>
+        <div class="collaboration-control">
+          <button id="collaboration" type="button" class="collaboration-trigger" aria-label="Agent collaboration mode" aria-expanded="false" aria-controls="collaborationMenu" title="Choose Agent collaboration mode">
+            <span class="collaboration-dot" aria-hidden="true"></span>
+            <span id="collaborationLabel">Multi</span>
+          </button>
+          <button id="agentMap" type="button" class="agent-map-trigger" aria-label="Open Agent Map" title="Open Agent Map">
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="5" cy="10" r="2"/><circle cx="15" cy="5" r="2"/><circle cx="15" cy="15" r="2"/>
+              <path d="M7 9.4 13 5.6M7 10.6l6 3.8"/>
+            </svg>
+          </button>
+        </div>
         <span class="spacer"></span>
         <button id="mode" type="button" class="mode-trigger" aria-label="Agent mode" aria-expanded="false" aria-controls="modeMenu" title="Choose how the agent may act">
           <svg class="mode-trigger-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true">
