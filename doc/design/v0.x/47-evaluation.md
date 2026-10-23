@@ -7,8 +7,10 @@
 
 Before p_0.47.2, `source/eval/eval_test.go` held six request-blind fixtures. The limitations
 below describe that starting point, not the delivered harness. p_0.47.2 now has request
-predicates, scores and five synthetic public Agent capture/replay scenarios; genuine
-provider recordings remain pending. Baseline comparison and invariants belong to p_0.47.3.
+predicates, scores, five synthetic public Agent capture/replay scenarios and four genuine
+provider recordings (`loop_guard` has none: the real model never reached the stop, so the guard
+is covered by the synthetic scenario and an invariant). p_0.47.3 added the baseline and the
+invariants.
 
 The original file held six fixtures. Each one is a scripted `Completer` that replays a
 fixed list of assistant messages into `runtime.Loop`, and a `Check` that inspects the temp
