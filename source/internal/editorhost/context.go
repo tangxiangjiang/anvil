@@ -23,6 +23,7 @@ import (
 // material is partial, and so should the user reading the transcript.
 const (
 	maxMentions       = 32
+	maxQuotes         = 16
 	maxMentionBytes   = 64 << 10
 	maxContextBytes   = 256 << 10
 	maxListingEntries = 200
@@ -48,6 +49,9 @@ func (s *Server) composePromptContext(c *PromptContext) (string, *RPCError) {
 	} else if block != "" {
 		blocks = append(blocks, block)
 	}
+	if block := quoteBlock(c.Quotes, &budget); block != "" {
+		blocks = append(blocks, block)
+	}
 	if block := selectionBlock(c.Selection, &budget); block != "" {
 		blocks = append(blocks, block)
 	}
@@ -58,6 +62,50 @@ func (s *Server) composePromptContext(c *PromptContext) (string, *RPCError) {
 		return "", nil
 	}
 	return "<context>\n" + strings.Join(blocks, "") + "</context>", nil
+}
+
+// quoteBlock renders messages the user explicitly pointed back to. Quotes share
+// the context budget and are labelled by speaker so copied prose cannot lose
+// its place in the conversation.
+func quoteBlock(quotes []Quote, budget *int) string {
+	if len(quotes) == 0 || *budget <= 0 {
+		return ""
+	}
+	kept := quotes
+	omitted := 0
+	if len(kept) > maxQuotes {
+		omitted = len(kept) - maxQuotes
+		kept = kept[:maxQuotes]
+	}
+
+	var b strings.Builder
+	b.WriteString("<quoted_messages>\n")
+	for _, quote := range kept {
+		if *budget <= 0 {
+			omitted++
+			continue
+		}
+		role := "assistant"
+		if quote.Role == "user" {
+			role = "user"
+		}
+		text, cut := clip(quote.Text, min(maxMentionBytes, *budget))
+		*budget -= len(text)
+		fmt.Fprintf(&b, "<quote role=%q>\n", role)
+		b.WriteString(text)
+		if text != "" && !strings.HasSuffix(text, "\n") {
+			b.WriteString("\n")
+		}
+		if cut {
+			b.WriteString("(quote truncated)\n")
+		}
+		b.WriteString("</quote>\n")
+	}
+	if omitted > 0 {
+		fmt.Fprintf(&b, "(%d further quoted messages were left out)\n", omitted)
+	}
+	b.WriteString("</quoted_messages>\n")
+	return b.String()
 }
 
 // mentionBlocks renders the referenced paths. It reports how many were left out

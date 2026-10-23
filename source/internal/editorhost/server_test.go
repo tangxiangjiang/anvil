@@ -440,6 +440,25 @@ func TestProjectEventCarriesUsageOnATerminalEvent(t *testing.T) {
 	}
 }
 
+func TestProjectEventMarksLiveUsageEstimate(t *testing.T) {
+	got, ok := projectEvent("s", "r", anvil.Event{
+		Type:           anvil.EventAssistant,
+		Text:           "chunk",
+		Usage:          &anvil.Usage{InputTokens: 40, OutputTokens: 2, TotalTokens: 42},
+		UsageEstimated: true,
+	})
+	if !ok || got.Usage == nil || !got.UsageEstimated {
+		t.Fatalf("live estimate projection = %+v", got)
+	}
+	raw, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"usage_estimated":true`) {
+		t.Fatalf("estimate marker missing from wire: %s", raw)
+	}
+}
+
 // TestProjectEventCarriesTodoItems checks the checklist across the wire. An
 // empty list has to reach the client as [] rather than null or an absent field:
 // [] is how a call says "nothing is planned now", and the first two would read

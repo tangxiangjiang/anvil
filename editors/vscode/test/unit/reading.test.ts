@@ -32,7 +32,10 @@ test('the page fetches nothing: the CSP keeps its single source per directive', 
   // Inline style attributes are what KaTeX's HTML output needs, and the reason
   // the renderer is used in MathML mode instead. `unsafe-inline` would be the
   // cheap way past it; it is not taken.
-  assert.doesNotMatch(csp, /unsafe-inline|unsafe-eval/);
+  assert.doesNotMatch(csp, /(?:^|\s)'unsafe-(?:inline|eval)'(?:\s|;|$)/);
+  // Shiki's trusted, bundled Oniguruma engine needs WebAssembly compilation.
+  // This narrower source does not enable JavaScript eval or inline scripts.
+  assert.match(csp, /'wasm-unsafe-eval'/);
   assert.doesNotMatch(csp, /https?:\/\//);
   assert.match(csp, /script-src 'nonce-\$\{nonce\}'/);
 });

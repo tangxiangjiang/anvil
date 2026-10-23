@@ -1,0 +1,4 @@
+12.2.0
+
+Copied from node_modules/mermaid/dist/mermaid.min.js by
+scripts/vendor-mermaid.mjs. Mermaid is MIT licensed; see LICENSE.

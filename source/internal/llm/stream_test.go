@@ -84,18 +84,22 @@ func (s *streamMock) Complete(ctx context.Context, req llm.Request) (*llm.Respon
 func (s *streamMock) CompleteStream(ctx context.Context, req llm.Request, onDelta func(llm.Delta)) (*llm.Response, error) {
 	s.n++
 	if s.n == 1 {
-		onDelta(llm.Delta{Text: "A"})
-		onDelta(llm.Delta{Text: "B"})
-		return &llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Content: "AB"}}, nil
+		onDelta(llm.Delta{Text: "ABCD"})
+		onDelta(llm.Delta{Text: "EFGH"})
+		return &llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Content: "ABCDEFGH"}}, nil
 	}
 	return &llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Content: "done"}}, nil
 }
 
 func TestRuntimeEmitsStreamDeltas(t *testing.T) {
 	var texts []string
+	var estimates []*llm.Usage
 	res := runtime.Loop(context.Background(), &streamMock{}, tools.NewRegistry(t.TempDir(), false), runtime.Config{
 		CWD: t.TempDir(), Model: "m", UserMsg: "hi", MaxSteps: 4,
 	}, func(ev runtime.Event) {
+		if ev.UsageEstimated {
+			estimates = append(estimates, ev.Usage)
+		}
 		if ev.Type == "assistant" {
 			texts = append(texts, ev.Text)
 		}
@@ -103,7 +107,13 @@ func TestRuntimeEmitsStreamDeltas(t *testing.T) {
 	if res.Status != "finished" {
 		t.Fatalf("%+v", res)
 	}
-	if strings.Join(texts, "") != "AB" || len(texts) < 2 {
+	if strings.Join(texts, "") != "ABCDEFGH" || len(texts) < 2 {
 		t.Fatalf("texts=%v", texts)
+	}
+	if len(estimates) < 3 || estimates[0].InputTokens <= 0 {
+		t.Fatalf("live estimates=%+v", estimates)
+	}
+	if estimates[len(estimates)-1].OutputTokens <= estimates[1].OutputTokens {
+		t.Fatalf("output estimate did not increase: %+v", estimates)
 	}
 }

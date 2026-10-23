@@ -91,8 +91,8 @@ test('every icon-only control has a name that is not a tooltip', () => {
   // accessible name.
   assert.match(CHAT_JS, /button\.setAttribute\('aria-label', title\);/);
   assert.match(CHAT_JS, /dismiss\.setAttribute\('aria-label', 'Dismiss'\);/);
-  // "@" likewise.
-  assert.match(CHAT_PANEL, /id="attach"[^>]*aria-label="Reference a file or folder"/);
+  // The plus is an SVG and names the menu it controls.
+  assert.match(CHAT_PANEL, /id="attach"[^>]*aria-label="Add to prompt"[^>]*aria-controls="actionMenu"/);
   // Send is an SVG; its label changes with what the button does.
   assert.match(CHAT_JS, /sendButton\.setAttribute\('aria-label', running \? 'Stop' : 'Send'\);/);
 });
@@ -152,4 +152,5 @@ test('the keyboard path through the composer and the slash menu is intact', () =
   assert.match(CHAT_JS, /event\.key === 'Escape'[\s\S]{0,60}closePalette\(\)/);
   assert.match(CHAT_JS, /event\.key === 'Enter' && !event\.shiftKey[\s\S]{0,120}dispatchEvent\(new Event\('submit'/);
   assert.match(CHAT_JS, /if \(event\.key !== 'Escape' \|\| !running\) return;/);
+  assert.match(CHAT_JS, /actionMenu\.addEventListener\('keydown'[\s\S]*?event\.key === 'Escape'[\s\S]*?closeActionMenu\(true\)/);
 });

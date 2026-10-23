@@ -2,8 +2,8 @@
  * A reply's beginning, and the fold around the turn.
  *
  * p_0.46.16 gave a turn an ending. A turn that can be read back also needs a
- * beginning, and a long conversation needs a way to close the turns already
- * read: the reply is one `<details>` from its start marker to its summary.
+ * beginning, and a long conversation needs a way to close the work already
+ * read. The reply is one `<details>` while its Summary remains visible below.
  *
  * The renderer is a browser script with no test window here, so the decisions
  * are pinned in the source and the shape in the stylesheet — the same way the
@@ -92,6 +92,23 @@ test('a user message closes the turn it follows, unless the reader touched it', 
   assert.match(reply, /node\.dataset\.pinned = '1'/);
 });
 
+test('completion folds even the newest or reader-opened turn', () => {
+  const finish = bodyOf(CHAT_JS, 'finishReply');
+  assert.match(finish, /reply\.node\.open = false/);
+  assert.doesNotMatch(finish, /dataset\.pinned/);
+
+  const live = bodyOf(CHAT_JS, 'finishRun');
+  assert.ok(
+    live.indexOf('markSummary(round,') < live.indexOf('finishReply()'),
+    'the live Summary is hoisted before its reply folds',
+  );
+  const replay = bodyOf(CHAT_JS, 'addRunEnd');
+  assert.ok(
+    replay.indexOf('markSummary(round,') < replay.indexOf('finishReply()'),
+    'the replayed Summary is hoisted before its reply folds',
+  );
+});
+
 test('a new conversation forgets the turn on screen', () => {
   const clear = bodyOf(CHAT_JS, 'clearTranscript');
   assert.match(clear, /reply = null/);
@@ -102,6 +119,10 @@ test('the folded face carries the conclusion, and never invents one', () => {
   assert.match(mark, /round\.wrap\.closest\('\.reply'\)/);
   assert.match(mark, /querySelector\('\.reply-hint'\)/);
   assert.match(mark, /hint\.textContent = parts\.title/);
+  // The full Summary is the visible sibling after the folded work, not a child
+  // hidden by the reply details.
+  assert.match(mark, /insertBefore\(round\.wrap, turn\.nextSibling\)/);
+  assert.match(mark, /syncRail\(body\)/);
   // The hint is written only by the summary: a run that did not conclude leaves
   // it empty rather than borrowing a line from somewhere else.
   const writers = CHAT_JS.split('\n').filter((line) => line.includes("querySelector('.reply-hint')"));
@@ -123,6 +144,9 @@ test('the reply is a header with a hollow dot, a hint and a chevron', () => {
   assert.match(body, /display:\s*flex/);
   assert.match(body, /flex-direction:\s*column/);
   assert.match(body, /gap:\s*var\(--anvil-gap\)/);
+  // Author-level `display:flex` overrides Chromium's built-in closed-details
+  // hiding, so the closed state must explicitly remove the body from layout.
+  assert.match(ruleBody('.reply:not([open]) > .reply-body'), /display:\s*none/);
 
   const head = ruleBody('.reply > .reply-head');
   assert.match(head, /display:\s*flex/);

@@ -602,12 +602,19 @@ export interface ApprovalResponse {
 export interface PromptContext {
   /** Workspace-relative paths the user referenced. Files are read by the host. */
   mentions?: Mention[];
+  /** Earlier visible conversation messages the user explicitly quoted. */
+  quotes?: Quote[];
   selection?: Selection;
   diagnostics?: Diagnostic[];
 }
 
 export interface Mention {
   path: string;
+}
+
+export interface Quote {
+  role: 'user' | 'assistant';
+  text: string;
 }
 
 export interface Selection {
@@ -1218,13 +1225,10 @@ export interface HostEvent {
   step?: number;
   max_steps?: number;
   code?: string;
-  /**
-   * The run's token usage so far, on a terminal event the host forwards (an
-   * `error`), when the provider reported any (0.40.8+). Absent elsewhere and
-   * absent when unknown — which is not the same as zero. The authoritative
-   * end-of-run usage is the `done` notification's `usage`.
-   */
+  /** Provider usage on terminal errors, or a live estimate when marked below. */
   usage?: Usage;
+  /** True only for running input/output estimates; `done.usage` replaces them. */
+  usage_estimated?: boolean;
   /**
    * The workspace rule that decided this tool result, when one did. It is how a
    * call that ran without a prompt says why it did not need one; absent means no

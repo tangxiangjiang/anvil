@@ -52,6 +52,13 @@ func Estimate(messages []llm.Message) int {
 	return total
 }
 
+// EstimateText returns the same text-only estimate Estimate uses inside a
+// message. Streaming callers use it for a value that can move before the
+// provider sends authoritative terminal usage.
+func EstimateText(text string) int {
+	return runeTokens(text)
+}
+
 // runeTokens estimates the tokens in s. It counts runes rather than bytes so
 // that a CJK conversation is not under-counted: one rune of CJK is usually one
 // token, while its three UTF-8 bytes would suggest three quarters of one.

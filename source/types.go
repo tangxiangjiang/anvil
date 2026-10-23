@@ -122,11 +122,11 @@ type Event struct {
 	Step       int  // 1-based LLM round; set on EventProgress
 	MaxSteps   int  // configured limit; set on EventProgress
 	Code       Code // set on EventError when classifiable (0.7+)
-	// Usage is the run's token usage so far, set on the terminal event (done or
-	// error) when the provider reported any (0.40.8+). It is absent from every
-	// other event and from a run whose provider sent no counts: nil means
-	// "unknown", which a client must not draw as zero.
-	Usage *Usage
+	// Usage is authoritative on terminal events. While a streamed model request
+	// is in flight it may carry a live estimate, explicitly marked by
+	// UsageEstimated; clients must replace that estimate with RunResult.Usage.
+	Usage          *Usage
+	UsageEstimated bool
 	// Rule is the workspace rule that decided this call, set on EventToolResult
 	// when one did (0.36+). It is nil for a call no rule decided — an ungated
 	// read, a call the mode gate allowed untouched, or one a callback approved —

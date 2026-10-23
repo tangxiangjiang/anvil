@@ -74,12 +74,15 @@ test('only a finished run whose last block is prose becomes a summary', () => {
   assert.doesNotMatch(mark, /innerHTML|outerHTML|insertAdjacentHTML|document\.write/);
 
   // The body is re-rendered from the remainder, so the title is not repeated
-  // under its own header; the rail pass runs again over the changed block.
+  // under its own header. It is then moved after the reply details so folding
+  // the work cannot hide the conclusion, and the old body rail is recomputed.
   assert.match(mark, /round\.text = parts\.body/);
   assert.match(mark, /round\.md = \{ node: round\.body, settled: \[\], offset: 0, rendered: 0 \}/);
   assert.match(mark, /round\.body\.textContent = ''/);
   assert.match(mark, /paintMarkdown\(round\.md, round\.text\)/);
-  assert.match(mark, /syncRail\(round\.wrap\.parentElement\)/);
+  assert.match(mark, /insertBefore\(round\.wrap, turn\.nextSibling\)/);
+  assert.match(mark, /classList\.remove\('rail', 'rail-up', 'rail-down'\)/);
+  assert.match(mark, /syncRail\(body\)/);
 });
 
 test('the two endings call it by their own status rules', () => {
@@ -88,19 +91,41 @@ test('the two endings call it by their own status rules', () => {
   // A clean finish arrives as `{kind: 'none'}`, never as no failure at all, so
   // the live path tests the kind. Testing the object is what made a live run
   // draw no summary while its replay did.
-  assert.match(live, /if \(!failure \|\| failure\.kind === 'none'\) markSummary\(round\)/);
+  assert.match(
+    live,
+    /if \(!failure \|\| failure\.kind === 'none'\) markSummary\(round, done && done\.run_id\)/,
+  );
   assert.doesNotMatch(live, /if \(!failure\) markSummary/);
+  assert.ok(
+    live.indexOf('markSummary(round,') < live.indexOf('finishReply()'),
+    'the live reply folds after its Summary is moved out',
+  );
 
   // A replay knows the stored status: failed and stopped runs are not
   // conclusions, and the summary is marked before the run-end line is appended
   // so it is still the last block the run drew.
   const replay = bodyOf(CHAT_JS, 'addRunEnd');
   assert.match(replay, /const round = currentRound\(\)/);
-  assert.match(replay, /if \(status !== 'error' && status !== 'cancelled'\) markSummary\(round\)/);
-  assert.ok(
-    replay.indexOf('markSummary(round)') < replay.indexOf("el('div', 'msg run-end')"),
-    'the summary is marked before the run-end line',
+  assert.match(
+    replay,
+    /if \(status !== 'error' && status !== 'cancelled'\) markSummary\(round, done && done\.run_id\)/,
   );
+  assert.ok(
+    replay.indexOf('markSummary(round,') < replay.indexOf('finishReply()')
+      && replay.indexOf('finishReply()') < replay.indexOf("el('div', 'msg run-end')"),
+    'the Summary is moved out and the work folded before the run-end line',
+  );
+});
+
+test('a run’s changed-file list is placed directly after its Summary', () => {
+  const mark = bodyOf(CHAT_JS, 'markSummary');
+  assert.match(mark, /runSummaries\.set\(runId, round\.wrap\)/);
+
+  const changes = bodyOf(CHAT_JS, 'showChanges');
+  assert.match(changes, /Changed files · \$\{files\.length\}/);
+  assert.match(changes, /runSummaries\.get\(typeof runId === 'string' \? runId : ''\)/);
+  assert.match(changes, /summary\.insertAdjacentElement\('afterend', card\)/);
+  assert.match(changes, /vscode\.postMessage\(\{ type: 'reviewChange', path: file\.path \}\)/);
 });
 
 test('the summary header is an end dot, a word and a clipped title', () => {

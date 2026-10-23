@@ -46,6 +46,16 @@ Flutter ──POST /api/v1/auth/login──▶ anvil-web (SQLite users/sessions)
 - Proxying jobs through anvil-web BFF
 - Per-user RBAC beyond “any valid web session may call scheduler app HTTP”
 
+These are 0.26 scope boundaries, not a permanent product boundary. After 0.26, Flutter continues
+as the pure-client alternative for database-backed Workspace workflows. It will consume the same
+versioned HTTP-bootstrap/WebSocket contract as the VS Code extension; it must not create a second
+workflow state model. VS Code is expected to deliver workflow UX faster because code, diffs and
+tools are already local to the editor, while Flutter remains the portable choice.
+
+The web client does not compete with either active-work client. Its long-term role is
+review/audit, administration and launching hosted VS Code. See
+[32 — Product direction](32-sandbox-code-review.md#product-direction-locked-2026-10-23).
+
 ## Placement
 
 - Flutter tree: repository root `app/` (outside `source/`).

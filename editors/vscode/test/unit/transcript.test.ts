@@ -164,6 +164,21 @@ test('a second prompt is a user turn again, because a run end closes the first',
   assert.equal(second.text, 'second');
 });
 
+test('replay hides the editor context envelope from the user bubble', () => {
+  const entries: TranscriptEntry[] = [
+    {
+      kind: 'message',
+      run_id: 'r1',
+      role: 'user',
+      content:
+        '<context>\n<diagnostics count="1">\nsrc/main.ts:1:1 error: broken\n</diagnostics>\n</context>\n\n继续帮我实现下',
+    },
+  ];
+
+  const steps = replayOf(entries, 's1');
+  assert.deepEqual(steps, [{ kind: 'user', text: '继续帮我实现下' }]);
+});
+
 test('a turn that carried only an image is still a turn', () => {
   // The prompt is empty and the images were never stored, so this is all there
   // is: an empty user turn. Dropping it would lose the fact that it happened.

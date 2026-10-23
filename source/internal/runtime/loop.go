@@ -5,6 +5,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -32,11 +33,12 @@ type Event struct {
 	Step       int
 	MaxSteps   int // 0 = unlimited
 	Code       string
-	// Usage is what the run has consumed so far, set on the terminal event
-	// (done or error) when the provider reported any counts. It is absent on
-	// every other event: a token count is a fact about a completed exchange,
-	// not a running estimate, and a per-chunk number would be invented.
+	// Usage is authoritative on terminal events and an estimate on streamed
+	// events when UsageEstimated is true.
 	Usage *llm.Usage
+	// UsageEstimated distinguishes the live request/chunk estimate from a
+	// provider's terminal accounting.
+	UsageEstimated bool
 	// Rule is the workspace rule that decided a tool call, on tool_result. It is
 	// nil when no rule did — including when the call was allowed by a callback or
 	// ran ungated.
@@ -103,6 +105,327 @@ const MaxStepsExceededPrefix = "max steps exceeded"
 // size rather than by token rate, which matters because the run's event buffer
 // drops silently when full and a dropped assistant chunk cannot be recovered.
 const reasoningFlushChars = 200
+
+// EmptyResponseError is returned when a provider twice produces neither text
+// nor tool calls. An empty turn is not a successful agent completion.
+const EmptyResponseError = "model returned an empty response twice; no tool call or final answer was produced"
+
+// UnproductiveResponseError is returned when a provider twice stops after
+// announcing work it has not performed.
+const UnproductiveResponseError = "model stopped after only announcing future work twice; no tool call or concrete result was produced"
+
+const continueTaskPrompt = "The preceding assistant message only announced future work and did not perform it. Continue the user's task now. Use tools to inspect or modify the workspace as needed; do not stop at a plan or progress update."
+
+// CompletionEvidenceError is returned when a requested side effect was never
+// observed even though the model claimed to be finished.
+const CompletionEvidenceError = "model claimed completion without performing the requested workspace operation"
+
+// BackgroundDelegationError is returned when a parent agent twice tries to
+// finish without joining and integrating the background subagents it started.
+const BackgroundDelegationError = "model attempted to finish without completing the background subagent handoff"
+
+type completionRequirement int
+
+const (
+	requireNoSideEffect completionRequirement = iota
+	requireMutation
+	requireCommit
+)
+
+type completionEvidence struct {
+	mutation bool
+	commit   bool
+}
+
+// backgroundComposition is the parent side of a background delegation. Starting
+// a child is not completion: the parent must read every terminal result, then
+// pass one explicit composition checkpoint before its final answer is accepted.
+type backgroundComposition struct {
+	tasks        map[string]bool // task id -> terminal output read
+	checkpointed bool
+}
+
+func (b *backgroundComposition) observe(calls []llm.ToolCall, results []tools.Result) {
+	if b.tasks == nil {
+		b.tasks = make(map[string]bool)
+	}
+	for i, call := range calls {
+		if i >= len(results) || results[i].IsError {
+			continue
+		}
+		switch call.Name {
+		case "spawn_agent":
+			var in struct {
+				Background bool `json:"background"`
+			}
+			if json.Unmarshal(call.Args, &in) != nil || !in.Background {
+				continue
+			}
+			if fields := strings.Fields(results[i].Content); len(fields) > 0 {
+				b.tasks[fields[0]] = false
+				b.checkpointed = false
+			}
+		case "task_output":
+			var in struct {
+				TaskID string `json:"task_id"`
+			}
+			if json.Unmarshal(call.Args, &in) != nil {
+				continue
+			}
+			if _, owned := b.tasks[in.TaskID]; !owned {
+				continue
+			}
+			fields := strings.Fields(results[i].Content)
+			if len(fields) >= 2 && fields[0] == in.TaskID && fields[1] != "running" {
+				b.tasks[in.TaskID] = true
+			}
+		}
+	}
+}
+
+func (b *backgroundComposition) pending() bool {
+	for _, read := range b.tasks {
+		if !read {
+			return true
+		}
+	}
+	return false
+}
+
+func (b *backgroundComposition) needsCheckpoint() bool {
+	return len(b.tasks) > 0 && !b.pending() && !b.checkpointed
+}
+
+func completionRequirementFor(message string) completionRequirement {
+	if strings.HasPrefix(strings.TrimSpace(message), "Plan mode is on.") {
+		return requireNoSideEffect
+	}
+	text := strings.ToLower(strings.TrimSpace(visibleRequest(message)))
+	for _, negated := range []string{"不要提交", "不需要提交", "先别提交", "do not commit", "don't commit", "without committing"} {
+		if strings.Contains(text, negated) {
+			return requireNoSideEffect
+		}
+	}
+	commitRequested := strings.HasPrefix(text, "提交") ||
+		strings.HasPrefix(text, "commit ") ||
+		strings.Contains(text, "帮我提交") ||
+		strings.Contains(text, "请提交") ||
+		strings.Contains(text, "提交一下") ||
+		strings.Contains(text, "提交下") ||
+		(strings.Contains(text, "把") && strings.Contains(text, "提交")) ||
+		strings.Contains(text, "please commit")
+	if commitRequested {
+		return requireCommit
+	}
+	for _, marker := range []string{
+		"帮我修", "帮我改", "帮我加", "帮我删", "帮我实现", "帮我安装",
+		"请修", "请改", "请加", "请删", "请实现", "请安装",
+		"继续实现", "继续修改", "继续修复",
+	} {
+		if strings.Contains(text, marker) {
+			return requireMutation
+		}
+	}
+	if chineseMutationRequested(text) {
+		return requireMutation
+	}
+	for _, marker := range []string{
+		"please fix ", "please implement ", "please change ", "please update ",
+		"can you fix ", "can you implement ", "can you change ", "can you update ",
+	} {
+		if strings.HasPrefix(text, marker) {
+			return requireMutation
+		}
+	}
+	return requireNoSideEffect
+}
+
+// chineseMutationRequested covers the short imperative phrasing commonly used
+// in an ongoing Chinese conversation ("调一下", "这个改掉", "做成这样").
+// Question-shaped requests are excluded unless they explicitly ask the agent
+// for help, so "这个怎么改？" remains an explanation request.
+func chineseMutationRequested(text string) bool {
+	explicitRequest := false
+	for _, cue := range []string{"帮我", "帮忙", "麻烦", "请你", "能不能", "可以帮", "给我", "替我"} {
+		if strings.Contains(text, cue) {
+			explicitRequest = true
+			break
+		}
+	}
+	if !explicitRequest {
+		for _, cue := range []string{"为什么", "为何", "怎么", "如何", "什么原因", "是不是", "是否", "哪种", "哪个"} {
+			if strings.Contains(text, cue) {
+				return false
+			}
+		}
+		trimmed := strings.TrimSpace(text)
+		if strings.HasSuffix(trimmed, "？") || strings.HasSuffix(trimmed, "?") ||
+			strings.HasSuffix(trimmed, "吗") || strings.HasSuffix(trimmed, "吗。") {
+			return false
+		}
+	}
+	for _, marker := range []string{
+		"调一下", "调整一下", "调整下",
+		"改一下", "改下", "改掉", "改成",
+		"修一下", "修下", "修复一下", "修复下",
+		"加一下", "加下", "加上", "补一下", "补下", "补上",
+		"删一下", "删下", "删掉", "移除",
+		"更新一下", "更新下", "实现一下", "实现下",
+		"安装一下", "安装下", "做成", "换成",
+		"需要修改", "需要改", "需要调整", "需要修复", "需要更新",
+	} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func visibleRequest(message string) string {
+	if end := strings.LastIndex(message, "</context>\n\n"); end >= 0 {
+		return message[end+len("</context>\n\n"):]
+	}
+	return message
+}
+
+func (r completionRequirement) satisfiedBy(e completionEvidence) bool {
+	switch r {
+	case requireCommit:
+		return e.commit
+	case requireMutation:
+		return e.mutation
+	default:
+		return true
+	}
+}
+
+func (r completionRequirement) correctivePrompt() string {
+	switch r {
+	case requireCommit:
+		return "The user requested a git commit, but no successful git commit command has run. Continue now: inspect the changes, stage the intended files, create the commit, and verify it. Do not claim completion before the commit succeeds."
+	case requireMutation:
+		return "The user requested a workspace change, but no successful write or mutating command has run. Continue now and make the requested change with tools. Do not claim completion before a mutation succeeds."
+	default:
+		return continueTaskPrompt
+	}
+}
+
+func observeCompletionEvidence(e *completionEvidence, calls []llm.ToolCall, results []tools.Result) {
+	for i, call := range calls {
+		if i >= len(results) || results[i].IsError {
+			continue
+		}
+		switch call.Name {
+		case "write_file", "edit_file", "apply_patch":
+			e.mutation = true
+		case "shell":
+			command := shellCommand(call.Args)
+			if shellPerformsCommit(command) {
+				e.commit = true
+				e.mutation = true
+			} else if shellPerformsMutation(command) {
+				e.mutation = true
+			}
+		}
+	}
+}
+
+func shellCommand(args []byte) string {
+	var in struct {
+		Command string `json:"command"`
+	}
+	if json.Unmarshal(args, &in) != nil {
+		return ""
+	}
+	return strings.ToLower(in.Command)
+}
+
+func shellPerformsCommit(command string) bool {
+	fields := strings.Fields(command)
+	for i, field := range fields {
+		if strings.Trim(field, "&;|()\"'") != "git" {
+			continue
+		}
+		for j := i + 1; j < len(fields) && j <= i+8; j++ {
+			token := strings.Trim(fields[j], "&;|()\"'")
+			if token == "commit" {
+				return true
+			}
+			if token == "git" || token == "&&" || token == ";" || token == "|" {
+				break
+			}
+		}
+	}
+	return false
+}
+
+func shellPerformsMutation(command string) bool {
+	for _, marker := range []string{
+		"git add ", "git mv ", "git rm ", "git restore ", "git checkout ",
+		"mkdir ", "rmdir ", "rm ", "mv ", "cp ", "del ", "copy ", "move ",
+		"set-content ", "add-content ", "new-item ", "remove-item ", "move-item ", "copy-item ",
+		"npm install", "pnpm install", "yarn add", "pip install", "--install-extension",
+	} {
+		if strings.Contains(command, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// looksLikeDeferredAction catches short placeholder answers that promise an
+// imminent tool action but end the request instead. Keep this deliberately
+// narrow: ordinary explanations and completed-work summaries must remain valid
+// final answers.
+func looksLikeDeferredAction(content string) bool {
+	text := strings.ToLower(strings.TrimSpace(content))
+	if text == "" || len(text) > 800 || strings.Contains(text, "```") {
+		return false
+	}
+	for _, completed := range []string{
+		"已完成", "已经完成", "已修复", "已修改", "已提交",
+		"completed", "finished", "fixed", "implemented", "committed",
+	} {
+		if strings.Contains(text, completed) {
+			return false
+		}
+	}
+	for _, marker := range []string{
+		"我先确认", "我先检查", "我先查看", "我先读取", "我先核对", "我先梳理",
+		"我会先确认", "我会先检查", "我会先查看", "我会先读取", "我会先核对",
+		"我会按现有", "接下来我会", "下面我会", "现在我会",
+		"i'll first inspect", "i'll first check", "i'll inspect", "i'll check",
+		"i will first inspect", "i will first check", "i will inspect", "i will check",
+		"let me inspect", "let me check", "let me read", "next i'll", "next i will",
+	} {
+		if index := strings.Index(text, marker); index >= 0 && index < 240 {
+			return true
+		}
+	}
+	// Cover ordinary future-tense action announcements without enumerating
+	// every sentence ("我会排除…并提交", "I will update…"). The prefix must be
+	// near the start and the verb must describe an operation, not advice.
+	for _, future := range []string{"我会", "我将", "i'll", "i will", "we'll", "we will"} {
+		index := strings.Index(text, future)
+		if index < 0 || index >= 180 {
+			continue
+		}
+		tail := text[index+len(future):]
+		for _, action := range []string{
+			"确认", "检查", "查看", "读取", "核对", "梳理", "排除", "提交",
+			"修改", "实现", "处理", "修复", "运行", "执行", "创建", "删除",
+			"更新", "添加", "写入", "构建", "测试",
+			"inspect", "check", "read", "exclude", "commit", "modify", "implement",
+			"fix", "run", "execute", "create", "delete", "update", "add", "write",
+			"build", "test",
+		} {
+			if strings.Contains(tail, action) {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 // Result is the terminal run result.
 type Result struct {
@@ -216,6 +539,12 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 	var lastRequestAt time.Time
 	toolDefs := registry.Defs()
 	guard := newLoopGuard()
+	retryReason := ""
+	transientStart := -1
+	requirement := completionRequirementFor(cfg.UserMsg)
+	var evidence completionEvidence
+	var background backgroundComposition
+	completionCorrections := 0
 
 	for step := 0; ; step++ {
 		if cfg.MaxSteps > 0 && step >= cfg.MaxSteps {
@@ -231,16 +560,29 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 		// compares is exactly the one about to be sent. Step 0 is skipped: the
 		// pre-loop check already ran on this exact slice, and repeating it can
 		// only compact twice — the second summary would fold the first.
-		if step > 0 {
+		if step > 0 && retryReason == "" {
 			messages = compactBudget(ctx, completer, cfg, messages, sink, emit)
 		}
 
-		emit(Event{Type: "progress", Step: step + 1, MaxSteps: cfg.MaxSteps})
-
 		streamed := false
+		var streamedText strings.Builder
 		var resp *llm.Response
 		var err error
 		req := llm.Request{Model: cfg.Model, Messages: messages, Tools: toolDefs, PromptCache: cfg.PromptCache}
+		roundInput := compress.Estimate(req.Messages)
+		liveUsage := func(roundOutput int) *llm.Usage {
+			u := &llm.Usage{InputTokens: roundInput, OutputTokens: roundOutput}
+			if usageAcc != nil {
+				u.InputTokens += usageAcc.InputTokens
+				u.OutputTokens += usageAcc.OutputTokens
+			}
+			u.TotalTokens = u.InputTokens + u.OutputTokens
+			return u
+		}
+		emit(Event{
+			Type: "progress", Step: step + 1, MaxSteps: cfg.MaxSteps,
+			Usage: liveUsage(0), UsageEstimated: true,
+		})
 		if sc, ok := completer.(llm.StreamCompleter); ok {
 			// Reasoning is accumulated and flushed in batches rather than per
 			// chunk. A reasoner emits several times the tokens of its answer,
@@ -251,16 +593,22 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 			// ones dropped. Text is never held back: it is what the user is
 			// reading.
 			var reasoning strings.Builder
+			var streamedOutput strings.Builder
 			flushReasoning := func() {
 				if reasoning.Len() == 0 {
 					return
 				}
-				emit(Event{Type: "reasoning", Text: reasoning.String()})
+				emit(Event{
+					Type: "reasoning", Text: reasoning.String(),
+					Usage:          liveUsage(compress.EstimateText(streamedOutput.String())),
+					UsageEstimated: true,
+				})
 				reasoning.Reset()
 			}
 			resp, err = sc.CompleteStream(ctx, req, func(d llm.Delta) {
 				if d.Reasoning != "" {
 					reasoning.WriteString(d.Reasoning)
+					streamedOutput.WriteString(d.Reasoning)
 					if reasoning.Len() >= reasoningFlushChars {
 						flushReasoning()
 					}
@@ -274,11 +622,23 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 				// non-streaming fallback below and lose the whole answer.
 				flushReasoning()
 				streamed = true
-				emit(Event{Type: "assistant", Text: d.Text})
+				streamedText.WriteString(d.Text)
+				streamedOutput.WriteString(d.Text)
+				emit(Event{
+					Type: "assistant", Text: d.Text,
+					Usage:          liveUsage(compress.EstimateText(streamedOutput.String())),
+					UsageEstimated: true,
+				})
 			})
 			flushReasoning() // the round boundary
 		} else {
 			resp, err = completer.Complete(ctx, req)
+		}
+		// A corrective retry sees the rejected assistant turn and an internal
+		// nudge, but neither belongs to the durable conversation or Result.
+		if transientStart >= 0 {
+			messages = messages[:transientStart]
+			transientStart = -1
 		}
 		if err != nil {
 			if ctx.Err() != nil {
@@ -289,6 +649,9 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 			return Result{ID: runID, Status: "error", Steps: step, Usage: usageAcc, Err: msg, Code: CodeProvider, Messages: messages, LastRequestAt: lastRequestAt}
 		}
 		lastRequestAt = time.Now()
+		if resp == nil {
+			resp = &llm.Response{}
+		}
 		if resp.Usage != nil {
 			if usageAcc == nil {
 				usageAcc = &llm.Usage{}
@@ -304,6 +667,67 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 		if assistant.Role == "" {
 			assistant.Role = llm.RoleAssistant
 		}
+		// Some streaming adapters can deliver text chunks but return an empty
+		// assembled message. Preserve what the user already saw so persistence
+		// and the terminal result agree with the stream.
+		if assistant.Content == "" && streamedText.Len() > 0 {
+			assistant.Content = streamedText.String()
+		}
+		invalidReason := ""
+		invalidError := ""
+		correctionPrompt := continueTaskPrompt
+		if len(assistant.ToolCalls) == 0 {
+			switch {
+			case strings.TrimSpace(assistant.Content) == "":
+				invalidReason = "empty"
+				invalidError = EmptyResponseError
+			case background.pending():
+				invalidReason = "background"
+				invalidError = BackgroundDelegationError
+				correctionPrompt = "Background subagents started by this parent are still running or their terminal output has not been read. Continue the parent task: use task_output to join every delegated task, then integrate those results. Starting a subagent is not completion."
+			case background.needsCheckpoint():
+				invalidReason = "composition"
+				invalidError = BackgroundDelegationError
+				correctionPrompt = "All background subagent results are now available. Re-evaluate the original user request against those results. If work remains, continue with tools now; otherwise return a concrete final answer describing the completed result. Do not answer with a plan for future work."
+			case !requirement.satisfiedBy(evidence):
+				invalidReason = "evidence"
+				invalidError = CompletionEvidenceError
+				correctionPrompt = requirement.correctivePrompt()
+			case looksLikeDeferredAction(assistant.Content):
+				invalidReason = "deferred"
+				invalidError = UnproductiveResponseError
+			}
+		}
+		if invalidReason != "" {
+			canCorrect := retryReason == ""
+			if invalidReason == "evidence" && completionCorrections >= 1 {
+				canCorrect = false
+			}
+			if canCorrect {
+				// Keep the rejected turn and corrective instruction in this one
+				// provider request only. They are deliberately not sent to sink.
+				transientStart = len(messages)
+				if strings.TrimSpace(assistant.Content) != "" {
+					messages = append(messages, assistant)
+				}
+				messages = append(messages, llm.Message{Role: llm.RoleUser, Content: correctionPrompt})
+				retryReason = invalidReason
+				if invalidReason == "evidence" {
+					completionCorrections++
+				}
+				if invalidReason == "composition" {
+					background.checkpointed = true
+				}
+				step--
+				continue
+			}
+			emit(Event{Type: "error", Text: invalidError, Code: CodeProvider, Usage: usageAcc, LastRequestAt: lastRequestAt})
+			return Result{
+				ID: runID, Status: "error", Steps: step + 1, Usage: usageAcc,
+				Err: invalidError, Code: CodeProvider, Messages: messages, LastRequestAt: lastRequestAt,
+			}
+		}
+		retryReason = ""
 		if assistant.Content != "" && !streamed {
 			emit(Event{Type: "assistant", Text: assistant.Content})
 		}
@@ -325,6 +749,8 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 
 		var results []tools.Result
 		messages, results = runToolCalls(ctx, registry, assistant.ToolCalls, cfg, messages, sink, emit)
+		observeCompletionEvidence(&evidence, assistant.ToolCalls, results)
+		background.observe(assistant.ToolCalls, results)
 		if parts := registry.TakeVisionParts(); len(parts) > 0 {
 			inj := llm.Message{
 				Role:    llm.RoleUser,

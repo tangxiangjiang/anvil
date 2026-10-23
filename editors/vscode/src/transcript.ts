@@ -40,6 +40,21 @@ export type ReplayStep =
   | { kind: 'runEnd'; done: DoneParams };
 
 /**
+ * The host prepends editor context to the string passed into the SDK, so that
+ * composed string is what the runtime store sees. The live bubble shows only
+ * what the person typed; replay must do the same instead of exposing the
+ * model-only XML envelope.
+ */
+function visibleUserText(content: string): string {
+  const start = content.indexOf('<context>\n');
+  if (start < 0) return content;
+  const marker = '</context>\n\n';
+  const end = content.indexOf(marker, start);
+  if (end < 0) return content;
+  return content.slice(0, start) + content.slice(end + marker.length);
+}
+
+/**
  * Folds stored entries into steps, oldest first.
  *
  * `sessionId` is the session the replay is being shown under, and only travels
@@ -95,7 +110,7 @@ export function replayOf(entries: TranscriptEntry[], sessionId = ''): ReplayStep
         awaitingUser = false;
         // Emitted even when empty: a turn that carried only an image is still a
         // turn, and the images themselves were never written down.
-        steps.push({ kind: 'user', text: content });
+        steps.push({ kind: 'user', text: visibleUserText(content) });
       } else if (content !== '') {
         steps.push({ kind: 'notice', text: content });
       }

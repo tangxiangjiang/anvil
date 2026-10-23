@@ -1186,6 +1186,8 @@ type PromptContext struct {
 	// Mentions are workspace-relative paths the user referenced. Files are read
 	// into the message; directories become a listing.
 	Mentions []Mention `json:"mentions,omitempty"`
+	// Quotes are earlier conversation messages the user explicitly referenced.
+	Quotes []Quote `json:"quotes,omitempty"`
 	// Selection is the editor's active selection, sent as text.
 	Selection *Selection `json:"selection,omitempty"`
 	// Diagnostics are the client's own, straight from its language server.
@@ -1197,6 +1199,12 @@ type PromptContext struct {
 // host's decisions.
 type Mention struct {
 	Path string `json:"path"`
+}
+
+// Quote is one earlier visible conversation message.
+type Quote struct {
+	Role string `json:"role"`
+	Text string `json:"text"`
 }
 
 // Selection is the active editor selection.
@@ -1369,11 +1377,11 @@ type EventParams struct {
 	Step       int             `json:"step,omitempty"`
 	MaxSteps   int             `json:"max_steps,omitempty"`
 	Code       string          `json:"code,omitempty"`
-	// Usage is the run's token usage so far on a terminal event (an error the
-	// host forwards), when the provider reported any (0.40.8+). It is absent
-	// elsewhere, so a client that predates the field reads exactly what it did.
-	// The authoritative end-of-run usage is still the `done` notification.
-	Usage *Usage `json:"usage,omitempty"`
+	// Usage is authoritative on a forwarded terminal error. On streamed events
+	// it may be a live estimate, explicitly marked by UsageEstimated. The
+	// authoritative end-of-run usage is still the `done` notification.
+	Usage          *Usage `json:"usage,omitempty"`
+	UsageEstimated bool   `json:"usage_estimated,omitempty"`
 	// Rule is the rule that decided this tool result, when one did. It is how a
 	// call that ran without a prompt says why it did not need one: nil means no
 	// rule decided it, which is not the same as "some rule allowed it".

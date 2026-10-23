@@ -30,6 +30,7 @@ const HUB = read('src/hub.ts');
 const PROTOCOL_TS = read('src/protocol.ts');
 const STATUS_BAR = read('src/statusBar.ts');
 const TASKS_JS = read('media/tasks.js');
+const TASKS_CSS = read('media/tasks.css');
 const TASKS_PANEL = read('src/tasksPanel.ts');
 const TASK_LIST = read('src/taskList.ts');
 const PACKAGE_JSON = JSON.parse(read('package.json')) as {
@@ -184,7 +185,8 @@ test("a child's events land in the card its spawn call made", () => {
   assert.match(CHAT_JS, /function renderEvent\(e, msg\) \{/);
   // Replacing the transcript drops the scopes with it: a card that no longer
   // exists cannot receive a child's events.
-  assert.match(CHAT_JS, /spawnScopes\.clear\(\);\s*active = mainScope;/);
+  assert.match(CHAT_JS, /spawnScopes\.clear\(\)/);
+  assert.match(CHAT_JS, /active = mainScope/);
 });
 
 test('a spawn result settles the card, whatever the child did', () => {
@@ -204,6 +206,36 @@ test('a spawn result settles the card, whatever the child did', () => {
   assert.match(CHAT_JS, /function addSpawnResult\(card, event\) \{/);
   const toolResult = bodyOf(CHAT_JS, 'addToolResult');
   assert.match(toolResult, /if \(event\.tool_call_id && spawnScopes\.has\(event\.tool_call_id\)\) \{/);
+});
+
+test('background work pulses only while its real task is running', () => {
+  const activity = bodyOf(CHAT_JS, 'backgroundActivity');
+  assert.match(activity, /background-activity/);
+  assert.match(activity, /i < 3/);
+  assert.match(activity, /iterations: Infinity/);
+  assert.match(activity, /!reduceMotion/);
+
+  const update = bodyOf(CHAT_JS, 'updateBackgroundTask');
+  assert.match(update, /backgroundTaskStates\.set\(task\.id, task\)/);
+  assert.match(update, /task\.status === 'running'/);
+  assert.match(update, /classList\.add\('background-running'\)/);
+  assert.match(update, /classList\.remove\('background-running', 'done', 'failed', 'stopped'\)/);
+  assert.match(update, /backgroundCards\.delete\(task\.id\)/);
+
+  const result = bodyOf(CHAT_JS, 'addSpawnResult');
+  assert.match(result, /backgroundCards\.set\(background\[1\], card\)/);
+  assert.match(result, /updateBackgroundTask\(/);
+  assert.match(CHAT_PANEL, /type: 'backgroundTask', task/);
+  assert.match(CHAT_PANEL, /this\.post\(\{ type: 'backgroundTask', task \}\)/);
+});
+
+test('the Tasks panel gives running rows the same reduced-motion-aware pulse', () => {
+  assert.match(TASKS_JS, /function backgroundActivity\(\)/);
+  assert.match(TASKS_JS, /prefers-reduced-motion: reduce/);
+  assert.match(TASKS_JS, /row\.status === 'running'/);
+  assert.match(TASKS_CSS, /\.status-running \{[^}]*display:\s*inline-flex/s);
+  assert.match(TASKS_CSS, /\.background-dot \{[^}]*border-radius:\s*50%/s);
+  assert.match(CHAT_CSS, /\.tool\.spawn\.background-running \.state/);
 });
 
 test('the spawn card and its nested body are styled', () => {

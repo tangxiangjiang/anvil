@@ -12,17 +12,50 @@ Operators review in Anvil; for real editing they open the node-hosted VS Code Se
 
 Builds on sandbox list from [29](29-sandbox-workers.md). Complements Flutter execute/review later; **0.32 ships web + agentd code-server control**.
 
+## Product direction (locked 2026-10-23)
+
+The Web workflow surface is frozen. New workflow interaction belongs in clients built for active
+work: the Anvil VS Code extension first, and the Flutter client in parallel as its slower,
+portable alternative.
+
+`Workspace` is a durable workflow/domain definition stored in the service database. It is not the
+VS Code folder and it is not client-owned state. A checkout opened by desktop VS Code or a hosted
+VS Code Server is an execution projection of that Workspace. The service remains the source of
+truth for Workspace structure, workflow runs, approvals and audit history.
+
+The resulting product split is:
+
+| Surface | Responsibility |
+|---------|----------------|
+| Workflow service + database | Workspace definitions, run state, scheduling, permissions, approvals and event history |
+| VS Code extension | Primary workflow authoring/execution UI; code context, live progress and human decisions |
+| Flutter client | Alternative pure-client workflow UI over the same service contract |
+| anvil-web | Review, audit, administration and **Open in VS Code**; no new workflow authoring UI |
+| Hosted VS Code Server | Cloud editing and workflow execution using the same Anvil extension as desktop VS Code |
+
+The active clients connect to the workflow service over a versioned WebSocket event protocol.
+HTTP bootstrap supplies identity, Workspace metadata and a short-lived connection ticket.
+Commands carry idempotency ids; events carry monotonic sequence numbers; reconnect resumes from
+the last sequence and falls back to a database snapshot when a gap cannot be replayed. The
+extension and Flutter may cache projections, but neither becomes an independent workflow state
+machine.
+
+This decision keeps two **client choices**, not two product implementations: desktop/hosted VS
+Code for the fastest code-centric path, and Flutter for portable pure-client work. Both observe
+and mutate the same database-backed Workspace.
+
 ## Product split (locked)
 
 | Surface | Role |
 |---------|------|
-| anvil-web | Read-only review UI; start/stop control; **owns IDE access auth** (session) |
+| anvil-web | Read-only review/audit UI; start/stop control; **owns IDE access auth** (session) |
 | nginx | Fixed reverse proxy **to the node**; optional `auth_request` to web |
 | agentd ide-proxy | Dynamic HTTP/WS proxy `sid` → loopback; enforce/trust web auth |
-| VS Code Server | Edit UI only (`127.0.0.1`, `--auth none`) |
-| Flutter app | Execute + review chat (later); not required in 0.32 |
+| VS Code Server | Cloud edit/workflow UI through the Anvil extension (`127.0.0.1`, `--auth none`) |
+| Flutter app | Alternative execute/review/workflow client (iterated separately); not required in 0.32 |
 
-**Never in Anvil web:** save file, apply patch, `git add` / `commit` / `push` / branch switch UI, embedded Monaco editor for editing.
+**Never in Anvil web:** save file, apply patch, `git add` / `commit` / `push` / branch
+switch UI, embedded Monaco editor for editing, or a second workflow authoring/execution UI.
 
 ## Scope
 

@@ -128,6 +128,26 @@ test('a replayed conversation is drawn by the renderers the live one uses', () =
   assert.match(CHAT_JS, /case 'runEnd':[\s\S]{0,200}addRunEnd\(msg\.done\)/);
 });
 
+test('a restored conversation settles at its newest turn after async layout', () => {
+  assert.match(CHAT_JS, /case 'replayStart':[\s\S]{0,220}showReplayLoading\(\)/);
+  assert.match(CHAT_JS, /case 'replayEnd':[\s\S]{0,120}settleReplayAtBottom\(\)/);
+  const settle = bodyOf(CHAT_JS, 'settleReplayAtBottom');
+  assert.match(settle, /replayAsyncBlocks > 0/);
+  assert.equal((settle.match(/requestAnimationFrame/g) ?? []).length, 2);
+  assert.match(settle, /replayPinsBottom = false/);
+  assert.match(settle, /hideReplayLoading\(\)/);
+
+  const loading = bodyOf(CHAT_JS, 'showReplayLoading');
+  assert.match(loading, /prefers-reduced-motion/);
+  assert.match(loading, /dot\.animate\(/);
+  assert.match(CHAT_PANEL, /id="replayLoading"[\s\S]{0,320}Loading conversation/);
+
+  const mermaid = bodyOf(CHAT_JS, 'mermaidNode');
+  assert.match(mermaid, /replayAsyncBlocks\+\+/);
+  assert.match(mermaid, /\.finally\(/);
+  assert.match(mermaid, /settleReplayAtBottom\(\)/);
+});
+
 test('a run end settles anything still reading "running"', () => {
   // A call whose result never arrived — a dropped event, or a replay of a run
   // that ended first — would otherwise claim to be in flight forever, which

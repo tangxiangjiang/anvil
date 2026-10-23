@@ -186,6 +186,23 @@ test('the composer is a card, and the tab is themed as an editor', () => {
   assert.doesNotMatch(body, /--vscode-sideBar-background/);
 });
 
+test('the composer is one compact surface with a two-storey layout', () => {
+  const composer = bodiesOf('.composer').join(';');
+  assert.match(composer, /border-radius:\s*10px/);
+  assert.match(composer, /padding:\s*0/);
+  assert.match(composer, /gap:\s*0/);
+  assert.match(composer, /overflow:\s*hidden/);
+
+  const input = bodiesOf('.composer textarea').join(';');
+  assert.match(input, /min-height:\s*2\.8em/);
+  assert.match(input, /background:\s*transparent/);
+  assert.match(input, /border:\s*0/);
+
+  const actions = bodiesOf('.composer .actions').join(';');
+  assert.match(actions, /border-top:\s*1px solid var\(--ui-hairline\)/);
+  assert.match(actions, /min-height:\s*36px/);
+});
+
 test('the error banner can be hidden', () => {
   // `.banner` is `display: flex`, which beats the user-agent rule for the
   // hidden attribute. Without this override the dismiss button sets `hidden`
@@ -202,6 +219,16 @@ test('the assistant body reflows, and a code block does not', () => {
 
   // And the opposite inside a code block: a wrapped code line is a changed line.
   assert.equal(valueOf('.body.md .md-code code', 'white-space'), 'pre');
+});
+
+test('the user speaks from a green bubble on the right', () => {
+  const user = bodiesOf('.msg.user .body').join(';');
+  assert.match(user, /align-self:\s*flex-end/);
+  assert.match(user, /width:\s*fit-content/);
+  assert.match(user, /max-width:\s*66\.666%/);
+  assert.match(user, /text-align:\s*left/);
+  assert.match(user, /testing-iconPassed|charts-green/);
+  assert.match(user, /border-radius:\s*14px 14px 4px 14px/);
 });
 
 test('no rail reaches past the end of the reply it belongs to', () => {

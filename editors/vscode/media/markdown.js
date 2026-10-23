@@ -257,7 +257,7 @@
         // ordinary state of a code block that is still streaming, not an error.
         const last = (j >= lines.length ? lines.length : j) - 1;
         const body = last > i ? text.slice(lines[i + 1].at, lines[last].at + lines[last].text.length) : '';
-        blocks.push({ type: 'code', lang: fence[3].trim(), text: body, start });
+        blocks.push({ type: 'code', lang: fence[3].trim(), text: body, closed: j < lines.length, start });
         i = j >= lines.length ? lines.length : j + 1;
         continue;
       }
@@ -330,7 +330,7 @@
           break;
         }
         body.length = lastCode - i + 1;
-        blocks.push({ type: 'code', lang: '', text: body.join('\n'), start });
+        blocks.push({ type: 'code', lang: '', text: body.join('\n'), closed: true, start });
         i = lastCode + 1;
         continue;
       }

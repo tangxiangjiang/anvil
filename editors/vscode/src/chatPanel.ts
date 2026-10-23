@@ -77,7 +77,13 @@ import { mediaAsset } from './webviewAsset';
 /** A message from the webview. */
 type Inbound =
   | { type: 'ready' }
-  | { type: 'send'; text: string; mentions?: string[]; images?: string[] }
+  | {
+      type: 'send';
+      text: string;
+      mentions?: string[];
+      images?: string[];
+      quotes?: Array<{ role: 'user' | 'assistant'; text: string }>;
+    }
   | { type: 'cancel' }
   | { type: 'answer'; requestId: string; decision: Decision; scope?: string }
   /**
@@ -237,7 +243,9 @@ type Outbound =
       cache_ttl_seconds: number;
       info?: ContextInfo;
     }
-  | { type: 'changes'; files: Array<Pick<ChangedFile, 'path' | 'kind'>> }
+  /** A background task changed state; spawn cards use this to stop their pulse. */
+  | { type: 'backgroundTask'; task: TaskInfo }
+  | { type: 'changes'; runId: string; files: Array<Pick<ChangedFile, 'path' | 'kind'>> }
   /**
    * A finished run that captured pre-images, so it can be undone. Posted only
    * when the run changed something: an undo that would do nothing is not a
@@ -820,7 +828,7 @@ export class ChatPanel implements HostListener {
 
     switch (msg.type) {
       case 'send':
-        await this.sendTurn(msg.text, msg.mentions ?? [], msg.images ?? []);
+        await this.sendTurn(msg.text, msg.mentions ?? [], msg.images ?? [], msg.quotes ?? []);
         return;
       case 'cancel':
         // Nothing running is nothing to cancel: a Stop on an idle tab is not a
@@ -1248,14 +1256,19 @@ export class ChatPanel implements HostListener {
   }
 
   /** Composes and sends one turn, with whatever context the editor has. */
-  private async sendTurn(text: string, mentions: string[], images: string[]): Promise<void> {
+  private async sendTurn(
+    text: string,
+    mentions: string[],
+    images: string[],
+    quotes: Array<{ role: 'user' | 'assistant'; text: string }>,
+  ): Promise<void> {
     // The catalogue is only consulted for a line that could be a command, so an
     // ordinary prompt never pays for the round trip (or for the host process
     // the round trip would start).
     const action = parseSlash(text)
       ? route(text, await this.commandCatalogue())
       : { kind: 'prompt' as const, text };
-    await this.runAction(action, text, mentions, images);
+    await this.runAction(action, text, mentions, images, quotes);
   }
 
   /**
@@ -1268,15 +1281,16 @@ export class ChatPanel implements HostListener {
     text: string,
     mentions: string[],
     images: string[],
+    quotes: Array<{ role: 'user' | 'assistant'; text: string }>,
   ): Promise<void> {
     switch (action.kind) {
       case 'prompt':
-        await this.sendQuestion(action.text, mentions, images);
+        await this.sendQuestion(action.text, mentions, images, quotes);
         return;
       case 'mode':
         await this.setMode(action.mode);
         if (action.args !== '') {
-          await this.sendQuestion(action.args, mentions, images);
+          await this.sendQuestion(action.args, mentions, images, quotes);
           return;
         }
         this.postState();
@@ -1345,7 +1359,7 @@ export class ChatPanel implements HostListener {
           });
         }
         if (action.args !== '') {
-          await this.sendQuestion(action.args, mentions, images);
+          await this.sendQuestion(action.args, mentions, images, quotes);
           return;
         }
         this.postState();
@@ -1354,7 +1368,7 @@ export class ChatPanel implements HostListener {
       default:
         // Unreachable while every action has a case. Sending what was typed is
         // the safe ending: a new command cannot swallow the user's words.
-        await this.sendQuestion(text, mentions, images);
+        await this.sendQuestion(text, mentions, images, quotes);
         return;
     }
   }
@@ -1681,8 +1695,13 @@ export class ChatPanel implements HostListener {
   }
 
   /** One ordinary turn, with the context the editor has. */
-  private async sendQuestion(text: string, mentions: string[], images: string[]): Promise<void> {
-    const context = buildPromptContext(dedupeMentions(mentions));
+  private async sendQuestion(
+    text: string,
+    mentions: string[],
+    images: string[],
+    quotes: Array<{ role: 'user' | 'assistant'; text: string }>,
+  ): Promise<void> {
+    const context = buildPromptContext(dedupeMentions(mentions), quotes);
     const { attachments, errors } = attachmentsFromDataUrls(images);
     for (const error of errors) {
       this.post({ type: 'notice', level: 'warn', message: `Dropped an attachment: ${error}.` });
@@ -2336,6 +2355,7 @@ export class ChatPanel implements HostListener {
    */
   onTask = (task: TaskInfo, sessionId: string): void => {
     this.hub.noteTask(sessionId, task);
+    this.post({ type: 'backgroundTask', task });
   };
 
   /**
@@ -2361,6 +2381,7 @@ export class ChatPanel implements HostListener {
       this.lastChanges = { run: runId, files: new Map(files.map((file) => [file.path, file])) };
       this.post({
         type: 'changes',
+        runId,
         files: files.map((file) => ({ path: file.path, kind: file.kind })),
       });
     } catch (err) {
@@ -2656,7 +2677,7 @@ export class ChatPanel implements HostListener {
     this.postMode();
     this.postState();
     this.post({ type: 'planSettled', runId, action: 'approve', mode: back });
-    await this.sendQuestion(PLAN_APPROVED_PROMPT, [], []);
+    await this.sendQuestion(PLAN_APPROVED_PROMPT, [], [], []);
   }
 
   /**
@@ -2848,7 +2869,7 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri, focus = f
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; font-src ${webview.cspSource}; img-src data: ${webview.cspSource}; script-src 'nonce-${nonce}';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; font-src ${webview.cspSource}; img-src data: ${webview.cspSource}; script-src 'nonce-${nonce}' 'wasm-unsafe-eval';">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="stylesheet" href="${asset('tokens.css')}">
 <link rel="stylesheet" href="${asset('chat.css')}">
@@ -2864,6 +2885,10 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri, focus = f
   <div id="srStatus" class="sr-only" role="status" aria-live="polite" aria-atomic="false"></div>
   <div id="srAlert" class="sr-only" role="alert" aria-live="assertive" aria-atomic="true"></div>
   <div id="banner" class="banner" hidden></div>
+  <div id="replayLoading" class="replay-loading" role="status" aria-live="polite" hidden>
+    <span class="replay-loading-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+    <span>Loading conversation…</span>
+  </div>
   <!--
     The transcript is a log a reader browses, not a live region: chat.js writes
     each finished answer block into the polite region above instead, once.
@@ -2881,12 +2906,13 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri, focus = f
       flight (p_0.46.24). Inside the transcript rather than the dock, because a
       floating line's reserved height is measured a frame late and the
       conversation is painted over it; here it is part of what scrolls, so it
-      cannot be overlapped. It sorts last (order: 1) however turns are appended,
-      and its first line keeps its box when empty so a turn does not change the
-      block's height.
+      cannot be overlapped. It sorts last (order: 1) however turns are appended.
+      The working line owns the active run's token counts; root/context facts
+      follow below it.
     -->
     <div id="footprint" class="footprint" hidden>
       <div id="status" class="status"></div>
+      <span id="meter" class="meter" hidden></span>
       <div id="root" class="root" hidden></div>
     </div>
   </div>
@@ -2898,50 +2924,111 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri, focus = f
   <div id="composerDock" class="dock">
     <div id="bypass" class="bypass" hidden>Bypass is on. Tool calls run without asking.</div>
     <div id="dontAsk" class="dont-ask" hidden>No asking. Only calls this workspace's rules allow will run.</div>
+    <div id="actionMenu" class="action-menu" role="menu" aria-label="Add to prompt" hidden>
+        <button id="mention" type="button" class="action-menu-row" role="menuitem">
+          <span class="action-menu-icon mention" aria-hidden="true">@</span>
+          <span><strong>Reference files or folders</strong><small>Add workspace context to the prompt</small></span>
+        </button>
+        <button id="quote" type="button" class="action-menu-row" role="menuitem">
+          <svg class="action-menu-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M6.8 6.2H4.9a2 2 0 0 0-2 2v2.2h3.9v3.4H3.5"/>
+            <path d="M16.9 6.2H15a2 2 0 0 0-2 2v2.2h3.9v3.4h-3.3"/>
+          </svg>
+          <span><strong>Reference conversation</strong><small>Quote an earlier message with /ref</small></span>
+        </button>
+        <button id="image" type="button" class="action-menu-row" role="menuitem">
+          <svg class="action-menu-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true">
+            <rect x="3.5" y="4" width="13" height="12" rx="2"/>
+            <circle cx="7.3" cy="7.7" r="1.2"/>
+            <path d="m5 14 3.4-3.4 2.3 2.2 1.8-1.7 2.5 2.9"/>
+          </svg>
+          <span><strong>Attach an image</strong><small>Choose an image from disk</small></span>
+        </button>
+        <button id="rules" type="button" class="action-menu-row" role="menuitem">
+          <svg class="action-menu-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true">
+            <path d="M5 3.5h8.5A1.5 1.5 0 0 1 15 5v11H6.5A1.5 1.5 0 0 1 5 14.5z"/>
+            <path d="M7.5 7h5M7.5 10h5"/>
+          </svg>
+          <span><strong>Rules</strong><small>Show rule files loaded for this workspace</small></span>
+        </button>
+        <button id="permissions" type="button" class="action-menu-row" role="menuitem">
+          <svg class="action-menu-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true">
+            <path d="M10 2.8 15 5v4.2c0 3.4-2 6.1-5 8-3-1.9-5-4.6-5-8V5z"/>
+            <path d="m7.7 10 1.5 1.5 3.2-3.4"/>
+          </svg>
+          <span><strong>Permissions</strong><small>Manage tool permission rules</small></span>
+        </button>
+        <button id="slash" type="button" class="action-menu-row" role="menuitem">
+          <span class="action-menu-icon slash" aria-hidden="true">/</span>
+          <span><strong>Commands</strong><small>Browse slash commands and skills</small></span>
+        </button>
+    </div>
+    <div id="modeMenu" class="mode-menu" role="menu" aria-label="Agent mode" hidden>
+      <div class="mode-menu-head">
+        <span>Modes</span>
+        <span class="mode-menu-hint">↑ ↓ · Enter</span>
+      </div>
+      <button type="button" class="mode-row" role="menuitemradio" data-mode="">
+        <span class="mode-row-icon">◇</span>
+        <span class="mode-row-copy"><strong>Workspace default</strong><small>Follow .anvil/permissions.json for this workspace</small></span>
+        <span class="mode-row-check" aria-hidden="true">✓</span>
+      </button>
+      <button type="button" class="mode-row" role="menuitemradio" data-mode="ask">
+        <span class="mode-row-icon">✋</span>
+        <span class="mode-row-copy"><strong>Ask</strong><small>Ask before actions that workspace rules do not allow</small></span>
+        <span class="mode-row-check" aria-hidden="true">✓</span>
+      </button>
+      <button type="button" class="mode-row" role="menuitemradio" data-mode="accept_edits">
+        <span class="mode-row-icon">‹/›</span>
+        <span class="mode-row-copy"><strong>Accept edits</strong><small>Edit files automatically; ask before other protected actions</small></span>
+        <span class="mode-row-check" aria-hidden="true">✓</span>
+      </button>
+      <button type="button" class="mode-row" role="menuitemradio" data-mode="auto">
+        <span class="mode-row-icon">ϟ</span>
+        <span class="mode-row-copy"><strong>Auto</strong><small>Approve safe actions and pause for anything risky</small></span>
+        <span class="mode-row-check" aria-hidden="true">✓</span>
+      </button>
+      <button type="button" class="mode-row" role="menuitemradio" data-mode="plan">
+        <span class="mode-row-icon">▤</span>
+        <span class="mode-row-copy"><strong>Plan</strong><small>Explore the code and present a plan before editing</small></span>
+        <span class="mode-row-check" aria-hidden="true">✓</span>
+      </button>
+      <button type="button" class="mode-row" role="menuitemradio" data-mode="dont_ask">
+        <span class="mode-row-icon">⊘</span>
+        <span class="mode-row-copy"><strong>No asking</strong><small>Refuse actions that workspace rules do not allow</small></span>
+        <span class="mode-row-check" aria-hidden="true">✓</span>
+      </button>
+      <button type="button" class="mode-row danger" role="menuitemradio" data-mode="bypass">
+        <span class="mode-row-icon">⚠</span>
+        <span class="mode-row-copy"><strong>Bypass</strong><small>Run every tool call without approval</small></span>
+        <span class="mode-row-check" aria-hidden="true">✓</span>
+      </button>
+    </div>
     <form id="composer" class="composer">
       <div id="palette" class="palette" hidden></div>
       <div id="chips" class="chips" hidden></div>
-      <textarea id="input" rows="1" placeholder="Describe a change…  (@ references a file, / lists commands)" aria-label="Prompt"></textarea>
+      <textarea id="input" rows="1" placeholder="Ask Anvil anything…  (@ files, / commands)" aria-label="Prompt"></textarea>
       <div class="actions">
-        <!--
-          The empty value is a real choice: "let the workspace decide". It is
-          first because it is what a workspace with no stored choice is in, and
-          the label is filled in by chat.js with the mode it resolved to, since
-          which mode that is depends on a file this side has to read.
-        -->
-        <select id="mode" aria-label="Permission mode" title="What the agent may do without asking">
-          <option value="">Workspace default</option>
-          <option value="ask">Ask before changes</option>
-          <option value="accept_edits">Accept edits</option>
-          <option value="auto">Auto: safe actions</option>
-          <option value="plan">Plan only</option>
-          <option value="dont_ask">Only what the rules allow</option>
-          <option value="bypass">Bypass approvals</option>
-        </select>
-        <button id="rules" type="button" class="ghost" title="Which rule files this workspace loaded" hidden>Rules</button>
-        <button id="permissions" type="button" class="ghost" title="Manage permission rules: what runs without asking, what asks, and what is refused">Permissions</button>
-        <!--
-          The reading view. It is a state, not an action, so it is drawn as a
-          pressed toggle; the label says what it shows rather than what it
-          hides.
-        -->
-        <button id="focus" type="button" class="ghost" aria-pressed="${focus ? 'true' : 'false'}" title="Show only the conversation: hide tool cards and thinking (Ctrl+Alt+F)">Focus</button>
-        <!--
-          What this session has spent, inside the composer rather than floating
-          above the transcript (p_0.46.24): this is the one opaque surface in the
-          dock, so the conversation cannot be painted over it. It is the only
-          flexible child in the row, so a long total truncates here before a
-          button moves, and the whole string stays in the tooltip.
-        -->
-        <div id="meter" class="meter" hidden></div>
+        <button id="attach" type="button" class="composer-tool" aria-label="Add to prompt" aria-expanded="false" aria-controls="actionMenu" title="Add to prompt">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
+            <path d="M10 4v12M4 10h12"/>
+          </svg>
+        </button>
+        <button id="focus" type="button" class="composer-tool" aria-label="Toggle conversation focus view" aria-pressed="${focus ? 'true' : 'false'}" title="Show only the conversation: hide tool cards and thinking (Ctrl+Alt+F)">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true">
+            <path d="M7 3.5H4.5a1 1 0 0 0-1 1V7M13 3.5h2.5a1 1 0 0 1 1 1V7M7 16.5H4.5a1 1 0 0 1-1-1V13M13 16.5h2.5a1 1 0 0 0 1-1V13"/>
+          </svg>
+        </button>
         <span class="spacer"></span>
-        <button id="attach" type="button" class="secondary" aria-label="Reference a file or folder" title="Reference a file or folder">@</button>
-        <!--
-          The picker the paste path already accepts: a button because a paste
-          needs an image in the clipboard first, and a file on disk is the
-          common case.
-        -->
-        <button id="image" type="button" class="secondary" title="Attach an image">Image</button>
+        <button id="mode" type="button" class="mode-trigger" aria-label="Agent mode" aria-expanded="false" aria-controls="modeMenu" title="Choose how the agent may act">
+          <svg class="mode-trigger-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true">
+            <path d="m11.5 2.8-6 8h4l-1 6.4 6-8h-4z"/>
+          </svg>
+          <span id="modeLabel">Workspace default</span>
+          <svg class="mode-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
+            <path d="m5 6.5 3 3 3-3"/>
+          </svg>
+        </button>
         <!--
           One control for both ends of a turn: a paper plane sends, and the same
           button becomes a stop square while a turn runs. A separate Stop button
@@ -2991,6 +3078,12 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri, focus = f
     its fonts ship: the browser already knows how to draw mathematics.
   -->
   <script nonce="${nonce}" src="${asset('vendor/katex/katex.min.js')}"></script>
+  <!-- Mermaid is also vendored. Its SVG is parsed as inert XML and sanitized
+       before insertion; model output is never assigned as markup. -->
+  <script nonce="${nonce}" src="${asset('vendor/mermaid/mermaid.min.js')}"></script>
+  <!-- Shiki supplies offline TextMate grammars for completed code fences.
+       chat.js consumes tokens and still constructs every span through the DOM. -->
+  <script nonce="${nonce}" src="${asset('vendor/shiki/shiki.min.js')}"></script>
   <script nonce="${nonce}" src="${asset('markdown.js')}"></script>
   <script nonce="${nonce}" src="${asset('meter.js')}"></script>
   <script nonce="${nonce}" src="${asset('history.js')}"></script>

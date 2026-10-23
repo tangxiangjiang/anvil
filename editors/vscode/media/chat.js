@@ -30,10 +30,18 @@
    */
   const footprint = document.getElementById('footprint');
   const banner = document.getElementById('banner');
+  const replayLoading = document.getElementById('replayLoading');
   const chipsBar = document.getElementById('chips');
   const attachButton = document.getElementById('attach');
+  const actionMenu = document.getElementById('actionMenu');
+  const mentionButton = document.getElementById('mention');
+  const quoteButton = document.getElementById('quote');
   const imageButton = document.getElementById('image');
-  const modeSelect = document.getElementById('mode');
+  const slashButton = document.getElementById('slash');
+  const modeButton = document.getElementById('mode');
+  const modeMenu = document.getElementById('modeMenu');
+  const modeLabel = document.getElementById('modeLabel');
+  const modeRows = modeMenu ? Array.from(modeMenu.querySelectorAll('.mode-row')) : [];
   const bypassStrip = document.getElementById('bypass');
   const dontAskStrip = document.getElementById('dontAsk');
   const rootLine = document.getElementById('root');
@@ -44,7 +52,7 @@
   const dock = document.getElementById('composerDock');
   const meter = document.getElementById('meter');
   /**
-   * The session total, a node per fact rather than one string: each count can
+   * The conversation total, a node per fact rather than one string: each count can
    * land on its own, and a landing count pulses (p_0.46.26). The clock tick is
    * a node inside the cache count so its per-second write cannot pulse the
    * number beside it, and the window's share is a node of its own because
@@ -55,12 +63,14 @@
   const meterShare = el('span', 'meter-share');
   const meterCache = el('span', 'meter-cache');
   const meterClock = el('span', 'meter-clock');
+  const meterPrefix = el('span', 'meter-prefix', '\u00a0· ');
   const meterDot1 = el('span', 'meter-dot', ' · ');
   const meterDot2 = el('span', 'meter-dot', ' · ');
   const meterDot3 = el('span', 'meter-dot', ' · ');
   /** The counts in the order the line reads them; the dots sit between. */
   const meterCounts = [meterIn, meterOut, meterShare, meterCache];
   if (meter) {
+    meter.appendChild(meterPrefix);
     meter.appendChild(meterIn);
     meter.appendChild(meterDot1);
     meter.appendChild(meterOut);
@@ -123,6 +133,11 @@
    * moment it is opened.
    */
   let replaying = false;
+  /** Keep a restored conversation at its newest turn until async blocks settle. */
+  let replayPinsBottom = false;
+  let replayAsyncBlocks = 0;
+  let replayGeneration = 0;
+  let replayLoadingAnimations = [];
   /** True once a prompt has been sent: the empty state is gone for good. */
   let started = false;
   /**
@@ -146,6 +161,10 @@
    * because a grandchild's spawn call is registered by the same code.
    */
   const spawnScopes = new Map();
+  /** Background task id to the spawn card that handed it off. */
+  const backgroundCards = new Map();
+  /** Last lifecycle event, including one that arrived before the handoff result. */
+  const backgroundTaskStates = new Map();
   /** Runs `fn` with `scope` as the target, and restores the previous one. */
   function inScope(scope, fn) {
     const previous = active;
@@ -208,8 +227,15 @@
    * list: the first waits, the second says the turn changed nothing.
    */
   const rewindStates = new Map();
+  /** The visible conclusion for each completed run, used to place its file list. */
+  const runSummaries = new Map();
   /** Referenced workspace paths, in the order they were picked. */
   let mentions = [];
+  /** Earlier messages selected as context for the next prompt. */
+  let quotes = [];
+  /** Quoteable messages in transcript order. */
+  let quoteCandidates = [];
+  let nextQuoteId = 1;
   /** Pasted images, as data URLs. */
   let images = [];
   /** Whether the session was created with vision on. Images need it. */
@@ -240,6 +266,8 @@
    * the conversation it counted would be a number about nobody.
    */
   let usageTotals = meterMath.empty();
+  /** The current run's cumulative estimate, replaced by terminal provider usage. */
+  let liveUsage = null;
   /**
    * The span on the root line that carries this conversation's share of its
    * context window, or null until a root exists. `renderMeter` owns both
@@ -253,6 +281,7 @@
   /** The palette rows currently shown, and which one is highlighted. */
   let paletteRows = [];
   let paletteIndex = 0;
+  let quotePickerForced = false;
 
   function el(tag, className, text) {
     const node = document.createElement(tag);
@@ -338,19 +367,8 @@
     return svg;
   }
 
-  /*
-   * What the line says while the host is silent, one word every three seconds:
-   * the CLI's habit with this product's verbs. A step text from the host
-   * replaces them and stays.
-   */
-  const WORKING_WORDS = [
-    'Forging…',
-    'Hammering…',
-    'Tempering…',
-    'Striking…',
-    'Quenching…',
-    'Shaping…',
-  ];
+  /** The neutral activity before a stream or tool event says what is happening. */
+  const DEFAULT_WORKING_WORD = 'Thinking…';
 
   /*
    * The status line is two halves that never show at once: the working mark
@@ -359,7 +377,7 @@
    */
   const statusText = el('span', 'status-text');
   const workingLine = el('span', 'working');
-  const workingWord = el('span', 'working-word', WORKING_WORDS[0]);
+  const workingWord = el('span', 'working-word', DEFAULT_WORKING_WORD);
   const workingMeta = el('span', 'working-meta');
   /**
    * The step counter, in its own node so a landing step can pulse without
@@ -383,8 +401,6 @@
   let workingSince = 0;
   let workingStep = 0;
   let workingMax = 0;
-  /** The word the host sent for this run, or '' while the line turns its own. */
-  let workingHostWord = '';
   let workingAnimations = [];
 
   /**
@@ -438,8 +454,8 @@
     workingSince = Date.now();
     workingStep = 0;
     workingMax = 0;
-    workingHostWord = '';
-    workingWord.textContent = WORKING_WORDS[0];
+    workingWord.textContent = DEFAULT_WORKING_WORD;
+    delete workingWord.dataset.flowText;
     statusText.hidden = true;
     workingLine.hidden = false;
     renderWorkingMeta();
@@ -464,15 +480,11 @@
 
   /**
    * The parenthetical, in the order the CLI puts it: what stops the turn, how
-   * long it has run, and — only when the host said — which step it is on. The
-   * same tick turns the word while the host has not named the step itself.
+   * long it has run, which step it is on, and the run's live token estimate.
    */
   function renderWorkingMeta() {
     if (document.hidden) return; // nobody is reading a hidden tab
     const seconds = Math.max(0, Math.floor((Date.now() - workingSince) / 1000));
-    if (workingHostWord === '') {
-      workingWord.textContent = WORKING_WORDS[Math.floor(seconds / 3) % WORKING_WORDS.length];
-    }
     const spent =
       seconds < 60 ? seconds + 's' : Math.floor(seconds / 60) + 'm ' + (seconds % 60) + 's';
     // The escape and the clock stay one run of text; the step is appended
@@ -485,7 +497,17 @@
       workingStepNode.textContent = stepLabel();
       workingMeta.appendChild(workingStepNode);
     }
+    // The meter owns its leading separator and stays hidden until the runtime
+    // has a current-run estimate. Keeping it inside this parenthetical avoids a
+    // second footprint row while preserving its per-character animation.
+    workingMeta.appendChild(meter);
     workingMeta.appendChild(document.createTextNode(')'));
+  }
+
+  /** Changes activity only when an event says the work itself changed. */
+  function setWorkingActivity(text) {
+    if (workingLine.hidden || typeof text !== 'string' || text === '') return;
+    if (workingWord.textContent !== text) flowText(workingWord, text, 620);
   }
 
   /** The step as the line spells it, with the ceiling only when one was set. */
@@ -526,6 +548,94 @@
    * and comparing the assembled text would pulse the count once a second.
    */
   const numberText = new WeakMap();
+  /** Animation frame and currently painted numeric value for live counters. */
+  const rollingFrame = new WeakMap();
+  const rollingValue = new WeakMap();
+  const rollingTarget = new WeakMap();
+  const flowFrame = new WeakMap();
+
+  function paintTextFlow(node, text, progress) {
+    if (node.dataset.flowText !== text) {
+      node.textContent = '';
+      node.dataset.flowText = text;
+      for (const character of text) {
+        const className = /\s/.test(character) ? 'flow-char flow-gap' : 'flow-char';
+        node.appendChild(el('span', className, character));
+      }
+    }
+    const chars = Array.from(node.children);
+    const head = progress * (chars.length + 2) - 1;
+    chars.forEach((char, index) => {
+      const strength = Math.max(0, 1 - Math.abs(index - head) / 1.6);
+      char.style.transform = `translateY(${-0.06 * strength}em) scale(${1 + 0.2 * strength})`;
+      char.style.filter = `brightness(${1 + 0.65 * strength})`;
+      char.style.textShadow =
+        strength > 0.05 ? `0 0 ${6 * strength}px var(--vscode-focusBorder)` : 'none';
+    });
+  }
+
+  /** Replaces text while one bright, enlarged character front travels over it. */
+  function flowText(node, text, duration) {
+    if (!node) return;
+    const previous = flowFrame.get(node);
+    if (previous !== undefined) cancelAnimationFrame(previous);
+    flowFrame.delete(node);
+    if (reduceMotion || typeof requestAnimationFrame !== 'function') {
+      node.textContent = text;
+      delete node.dataset.flowText;
+      return;
+    }
+    const started = performance.now();
+    const length = duration || 560;
+    const tick = (now) => {
+      const progress = Math.min(1, (now - started) / length);
+      paintTextFlow(node, text, progress);
+      if (progress < 1) flowFrame.set(node, requestAnimationFrame(tick));
+      else flowFrame.delete(node);
+    };
+    flowFrame.set(node, requestAnimationFrame(tick));
+  }
+
+  function stopNumberRoll(node) {
+    const frame = rollingFrame.get(node);
+    if (frame !== undefined) cancelAnimationFrame(frame);
+    rollingFrame.delete(node);
+  }
+
+  /**
+   * Rolls one token count toward a new estimate. A new stream chunk retargets
+   * the in-flight roll from the value currently on screen, so fast chunks move
+   * one counter continuously instead of queueing animations.
+   */
+  function rollNumber(node, value, suffix, label, exact) {
+    if (!node) return;
+    const target = Math.max(0, Math.floor(Number(value) || 0));
+    const textOf = (n) => (label ? label + ' ' : '') + (exact ? String(n) : amount(n)) + suffix;
+    const next = textOf(target);
+    if ((numberText.get(node) || '') === next && rollingTarget.get(node) === target) return;
+    numberText.set(node, next);
+    rollingTarget.set(node, target);
+    stopNumberRoll(node);
+    const from = rollingValue.has(node) ? rollingValue.get(node) : 0;
+    if (reduceMotion || from === target || typeof requestAnimationFrame !== 'function') {
+      rollingValue.set(node, target);
+      node.textContent = next;
+      delete node.dataset.flowText;
+      return;
+    }
+    const started = performance.now();
+    const duration = 320;
+    const tick = (now) => {
+      const progress = Math.min(1, (now - started) / duration);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      const current = Math.round(from + (target - from) * eased);
+      rollingValue.set(node, current);
+      paintTextFlow(node, textOf(current), progress);
+      if (progress < 1) rollingFrame.set(node, requestAnimationFrame(tick));
+      else rollingFrame.delete(node);
+    };
+    rollingFrame.set(node, requestAnimationFrame(tick));
+  }
 
   /**
    * Gives a node the number it now holds, and pulses it only when that number is
@@ -539,11 +649,15 @@
    */
   function setNumber(node, text) {
     if (!node) return;
+    stopNumberRoll(node);
+    rollingValue.delete(node);
+    rollingTarget.delete(node);
     const next = String(text);
     const before = numberText.get(node) || '';
     if (before === next) return;
     numberText.set(node, next);
     node.textContent = next;
+    delete node.dataset.flowText;
     if (before !== '' && next !== '') pulseNumber(node);
   }
 
@@ -557,8 +671,8 @@
   }
 
   /**
-   * Shows the footprint once either line has something to say, and hides it
-   * while both are empty.
+   * Shows the footprint once any of its lines has something to say, and hides
+   * it only while all of them are empty.
    *
    * The block is hidden as a whole rather than by its children: the status
    * line keeps its reserved box (see `.footprint .status`), so a turn starting
@@ -566,7 +680,7 @@
    */
   function syncFootprint() {
     if (!footprint) return;
-    footprint.hidden = rootLine.hidden && workingLine.hidden && statusText.hidden;
+    footprint.hidden = rootLine.hidden && meter.hidden && workingLine.hidden && statusText.hidden;
   }
 
   function clearEmpty() {
@@ -582,6 +696,52 @@
 
   function scrollIfPinned(wasPinned) {
     if (wasPinned) transcript.scrollTop = transcript.scrollHeight;
+  }
+
+  /**
+   * Finishes a restored conversation at the newest turn. Two frames are
+   * intentional: the first lets queued Markdown paints run, and the second
+   * wins over VS Code restoring the webview's previous DOM scroll anchor.
+   * Mermaid blocks keep the pin alive until their asynchronous render ends.
+   */
+  function settleReplayAtBottom() {
+    if (!replayPinsBottom || replaying || replayAsyncBlocks > 0) return;
+    transcript.scrollTop = transcript.scrollHeight;
+    requestAnimationFrame(() => {
+      transcript.scrollTop = transcript.scrollHeight;
+      requestAnimationFrame(() => {
+        transcript.scrollTop = transcript.scrollHeight;
+        replayPinsBottom = false;
+        hideReplayLoading();
+      });
+    });
+  }
+
+  function showReplayLoading() {
+    if (!replayLoading) return;
+    replayLoading.hidden = false;
+    for (const animation of replayLoadingAnimations) animation.cancel();
+    replayLoadingAnimations = [];
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const dots = replayLoading.querySelectorAll('.replay-loading-mark i');
+    dots.forEach((dot, index) => {
+      replayLoadingAnimations.push(
+        dot.animate(
+          [
+            { transform: 'translateY(0)', opacity: 0.45 },
+            { transform: 'translateY(-6px)', opacity: 1, offset: 0.33 },
+            { transform: 'translateY(0)', opacity: 0.45 },
+          ],
+          { duration: 900, delay: index * 120, iterations: Infinity, easing: 'ease-in-out' },
+        ),
+      );
+    });
+  }
+
+  function hideReplayLoading() {
+    for (const animation of replayLoadingAnimations) animation.cancel();
+    replayLoadingAnimations = [];
+    if (replayLoading) replayLoading.hidden = true;
   }
 
   /**
@@ -749,7 +909,7 @@
       node.dataset.pinned = '1';
     });
     addToEnd(transcript, node);
-    reply = { node: node, body: body, head: head };
+    reply = { node: node, body: body, head: head, texts: [], quote: null };
     return reply;
   }
 
@@ -762,6 +922,13 @@
     if (!reply) return;
     if (reply.node.dataset.pinned !== '1') reply.node.open = false;
     reply = null;
+  }
+
+  /** Closes the newest turn at the stronger boundary of run completion. */
+  function finishReply() {
+    if (!reply) return;
+    syncReplyQuote(reply);
+    reply.node.open = false;
   }
 
   /**
@@ -820,6 +987,8 @@
     // A card from the vanished conversation cannot receive a child's events any
     // more, and its container is about to be detached with the transcript.
     spawnScopes.clear();
+    backgroundCards.clear();
+    backgroundTaskStates.clear();
     active = mainScope;
     // The block about to be cleared is not this conversation's answer any more,
     // so it is ended without being announced.
@@ -832,12 +1001,18 @@
     planCards.clear();
     rewindTurns.length = 0;
     rewindStates.clear();
+    runSummaries.clear();
     // The turn being built belonged to the conversation that just left.
     reply = null;
     mentions = [];
+    quotes = [];
+    quoteCandidates = [];
+    nextQuoteId = 1;
     images = [];
     renderChips();
     closePalette();
+    closeActionMenu(false);
+    closeModeMenu(false);
     // The history belongs to the conversation the transcript showed; a replaced
     // transcript gets its prompts back from the replay, not from memory.
     historyMath.clear(history);
@@ -863,12 +1038,76 @@
 
   // --- messages -------------------------------------------------------------
 
-  function addUser(text, sentMentions, sentImages) {
+  function quotePreview(text, limit) {
+    const oneLine = String(text || '').replace(/\s+/g, ' ').trim();
+    const cap = typeof limit === 'number' ? limit : 72;
+    return oneLine.length > cap ? oneLine.slice(0, cap - 1) + '…' : oneLine;
+  }
+
+  function messageQuoteIcon() {
+    const svg = svgNode('svg', {
+      viewBox: '0 0 20 20',
+      fill: 'none',
+      stroke: 'currentColor',
+      'stroke-width': '1.5',
+      'stroke-linecap': 'round',
+      'stroke-linejoin': 'round',
+      'aria-hidden': 'true',
+    });
+    svg.appendChild(svgNode('path', { d: 'M6.8 6.2H4.9a2 2 0 0 0-2 2v2.2h3.9v3.4H3.5' }));
+    svg.appendChild(svgNode('path', { d: 'M16.9 6.2H15a2 2 0 0 0-2 2v2.2h3.9v3.4h-3.3' }));
+    return svg;
+  }
+
+  function registerQuote(role, text) {
+    const candidate = { id: nextQuoteId++, role: role === 'user' ? 'user' : 'assistant', text: String(text || '') };
+    quoteCandidates.push(candidate);
+    return candidate;
+  }
+
+  function addQuote(candidate) {
+    if (!candidate || candidate.text.trim() === '') return;
+    if (!quotes.some((quote) => quote.id === candidate.id)) quotes.push(candidate);
+    renderChips();
+    closePalette();
+    input.focus();
+  }
+
+  function quoteAction(candidate, label) {
+    const button = el('button', 'message-quote');
+    button.type = 'button';
+    button.title = label;
+    button.setAttribute('aria-label', label);
+    button.appendChild(messageQuoteIcon());
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      addQuote(candidate);
+    });
+    return button;
+  }
+
+  function syncReplyQuote(state) {
+    if (!state || !state.head) return;
+    const text = state.texts.join('\n\n').trim();
+    if (text === '') return;
+    if (!state.quote) state.quote = registerQuote('assistant', text);
+    else state.quote.text = text;
+    if (!state.head.querySelector('.message-quote')) {
+      state.head.appendChild(quoteAction(state.quote, 'Quote this reply'));
+    }
+  }
+
+  function addUser(text, sentMentions, sentImages, sentQuotes) {
     // This message opens a new turn: the reply above it folds, and the message
     // itself is never part of a reply.
     if (active === mainScope) closeReply();
     const wrap = el('div', 'msg user');
-    wrap.appendChild(el('div', 'who', 'you'));
+    const candidate = registerQuote('user', text);
+    const who = el('div', 'who');
+    who.appendChild(el('span', null, 'you'));
+    who.appendChild(quoteAction(candidate, 'Quote this message'));
+    wrap.appendChild(who);
     wrap.appendChild(el('div', 'body', text));
     // What travelled with the prompt is echoed under it: a file read on the
     // user's behalf is part of the turn, and a transcript that omits it would
@@ -877,6 +1116,15 @@
       const refs = el('div', 'refs');
       for (const mention of sentMentions) refs.appendChild(el('span', 'ref', '@' + mention));
       wrap.appendChild(refs);
+    }
+    if (sentQuotes && sentQuotes.length) {
+      const refs = wrap.querySelector('.refs') || el('div', 'refs');
+      for (const quote of sentQuotes) {
+        refs.appendChild(
+          el('span', 'ref quote-ref', '↳ ' + (quote.role === 'user' ? 'you' : 'anvil') + ': ' + quotePreview(quote.text, 54)),
+        );
+      }
+      if (!refs.parentNode) wrap.appendChild(refs);
     }
     if (sentImages && sentImages.length) {
       const shots = el('div', 'shots');
@@ -957,6 +1205,10 @@
     // that only appeared after the whole turn would refuse to copy the answer
     // the reader is looking at while the agent works on the next step.
     if (round && round.text.trim() !== '') addCopy(round.wrap, round.text);
+    if (round && round.text.trim() !== '' && active === mainScope && reply && round.quoted !== true) {
+      reply.texts.push(round.text);
+      round.quoted = true;
+    }
     // The block is finished, so this is the first moment it can be said as a
     // whole. A child agent's text is not this conversation's answer and is not
     // announced; its card in the transcript is where it is read.
@@ -1081,6 +1333,8 @@
    * renders its first message.
    */
   let markdown = null;
+  let mermaidConfigured = false;
+  let mermaidSequence = 0;
 
   function parseMarkdown(text) {
     if (!markdown) markdown = self.anvilMarkdown;
@@ -1092,7 +1346,12 @@
     if (!a || a.type !== b.type) return false;
     if (a.type === 'heading') return a.level === b.level;
     if (a.type === 'list') return a.ordered === b.ordered;
-    if (a.type === 'code') return (a.lang || '') === (b.lang || '');
+    if (a.type === 'code') {
+      if (isMermaidBlock(a) || isMermaidBlock(b)) {
+        return isMermaidBlock(a) && isMermaidBlock(b) && a.closed === b.closed && a.text === b.text;
+      }
+      return (a.lang || '') === (b.lang || '');
+    }
     // A formula is redrawn when its source changes rather than reconciled: its
     // inner nodes belong to the renderer, not to this file.
     if (a.type === 'math') return a.text === b.text;
@@ -1134,10 +1393,14 @@
         return node;
       }
       case 'code': {
+        if (isMermaidBlock(block) && block.closed === true) return mermaidNode(block.text || '');
         const node = el('pre', 'md-code');
+        node.tabIndex = 0;
+        node.setAttribute('aria-label', block.lang ? block.lang + ' code block' : 'Code block');
+        autoHideScrollbar(node);
         const code = el('code');
         if (block.lang) code.dataset.lang = block.lang;
-        setText(code, block.text || '');
+        fillCode(code, block.text || '', block.lang || '', block.closed === true);
         node.appendChild(code);
         return node;
       }
@@ -1189,10 +1452,11 @@
         updateInline(node, block.spans || []);
         break;
       case 'code':
+        if (isMermaidBlock(block)) break;
         // The one place a growing leaf is large enough for how it is written to
         // matter: a 50 KB code block is the open tail of most long answers, and
         // setting `textContent` on every frame re-lays out all of it.
-        setText(node.firstChild, block.text || '');
+        fillCode(node.firstChild, block.text || '', block.lang || '', block.closed === true);
         break;
       case 'blockquote':
         renderBlocks(node, block.blocks || [], 0);
@@ -1218,6 +1482,643 @@
         break;
     }
     node.anvilBlock = block;
+  }
+
+  const shikiAliases = {
+    c: 'c',
+    h: 'c',
+    cc: 'cpp',
+    cpp: 'cpp',
+    cxx: 'cpp',
+    'c++': 'cpp',
+    hpp: 'cpp',
+    cs: 'csharp',
+    csharp: 'csharp',
+    js: 'javascript',
+    javascript: 'javascript',
+    jsx: 'jsx',
+    ts: 'typescript',
+    typescript: 'typescript',
+    tsx: 'tsx',
+    py: 'python',
+    python: 'python',
+    rb: 'ruby',
+    ruby: 'ruby',
+    rs: 'rust',
+    rust: 'rust',
+    go: 'go',
+    java: 'java',
+    kotlin: 'kotlin',
+    swift: 'swift',
+    php: 'php',
+    sh: 'shellscript',
+    shell: 'shellscript',
+    bash: 'shellscript',
+    shellscript: 'shellscript',
+    ps1: 'powershell',
+    powershell: 'powershell',
+    json: 'json',
+    jsonc: 'jsonc',
+    yaml: 'yaml',
+    yml: 'yaml',
+    toml: 'toml',
+    xml: 'xml',
+    html: 'html',
+    css: 'css',
+    scss: 'scss',
+    less: 'less',
+    sql: 'sql',
+    md: 'markdown',
+    markdown: 'markdown',
+    mdx: 'mdx',
+    diff: 'diff',
+    dockerfile: 'dockerfile',
+    docker: 'dockerfile',
+    cmake: 'cmake',
+    objc: 'objective-c',
+    'objective-c': 'objective-c',
+    lua: 'lua',
+    perl: 'perl',
+    r: 'r',
+    zig: 'zig',
+    proto: 'protobuf',
+    protobuf: 'protobuf',
+    graphql: 'graphql',
+  };
+  let shikiHighlighter = null;
+  let shikiHighlighterPromise = null;
+  let codeHighlightSequence = 0;
+  const shikiLanguageLoads = new Map();
+
+  function inferShikiLanguage(text) {
+    const source = String(text || '');
+    if (
+      /\benum\s+class\b|\bvirtual\b|(?:^|\n)\s*(?:public|private|protected)\s*:|\bnamespace\s+\w+|::|template\s*</.test(
+        source,
+      )
+    ) {
+      return 'cpp';
+    }
+    if (/^\s*#\s*include\b/m.test(source)) return /\b(?:class|constexpr|nullptr|std::)\b/.test(source) ? 'cpp' : 'c';
+    if (/^\s*(?:package\s+\w+|func\s+\w+\s*\()/m.test(source)) return 'go';
+    if (/^\s*(?:def|class)\s+\w+.*:\s*$/m.test(source)) return 'python';
+    if (/\bfn\s+\w+\s*\(|\blet\s+mut\b|\bimpl(?:<[^>]+>)?\s+\w+/m.test(source)) return 'rust';
+    if (/^\s*(?:interface|type)\s+\w+|:\s*(?:string|number|boolean)\b/m.test(source)) return 'typescript';
+    if (/^\s*(?:const|let|var)\s+\w+\s*=|=>|function\s+\w+\s*\(/m.test(source)) return 'javascript';
+    if (/^\s*(?:\{|\[)/.test(source)) {
+      try {
+        JSON.parse(source);
+        return 'json';
+      } catch {
+        // A brace alone is not enough evidence to colour arbitrary output.
+      }
+    }
+    return '';
+  }
+
+  function resolveShikiLanguage(language, text) {
+    const requested = String(language || '').trim().toLowerCase();
+    if (shikiAliases[requested]) return shikiAliases[requested];
+    if (requested === '' || requested === 'text' || requested === 'plaintext' || requested === 'plain') {
+      return inferShikiLanguage(text);
+    }
+    return '';
+  }
+
+  function getShikiHighlighter() {
+    if (shikiHighlighter) return Promise.resolve(shikiHighlighter);
+    if (shikiHighlighterPromise) return shikiHighlighterPromise;
+    const renderer = self.anvilShiki;
+    if (!renderer || typeof renderer.createHighlighter !== 'function') return Promise.resolve(null);
+    shikiHighlighterPromise = renderer
+      .createHighlighter({ themes: ['dark-plus', 'light-plus'], langs: [] })
+      .then((highlighter) => {
+        shikiHighlighter = highlighter;
+        return highlighter;
+      })
+      .catch(() => null);
+    return shikiHighlighterPromise;
+  }
+
+  function loadShikiLanguage(highlighter, language) {
+    if (highlighter.getLoadedLanguages().includes(language)) return Promise.resolve();
+    if (shikiLanguageLoads.has(language)) return shikiLanguageLoads.get(language);
+    const loading = Promise.resolve(highlighter.loadLanguage(language)).catch((error) => {
+      shikiLanguageLoads.delete(language);
+      throw error;
+    });
+    shikiLanguageLoads.set(language, loading);
+    return loading;
+  }
+
+  function paintShikiTokens(code, result) {
+    const fragment = document.createDocumentFragment();
+    const lines = Array.isArray(result && result.tokens) ? result.tokens : [];
+    for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+      for (const token of lines[lineIndex]) {
+        const span = el('span', 'shiki-token', token.content);
+        if (token.color) span.style.color = token.color;
+        const style = Number(token.fontStyle) || 0;
+        if ((style & 1) !== 0) span.style.fontStyle = 'italic';
+        if ((style & 2) !== 0) span.style.fontWeight = 'bold';
+        if ((style & 4) !== 0) span.style.textDecoration = 'underline';
+        fragment.appendChild(span);
+      }
+      if (lineIndex < lines.length - 1) fragment.appendChild(document.createTextNode('\n'));
+    }
+    code.replaceChildren(fragment);
+  }
+
+  async function highlightClosedCode(code, text, language, generation) {
+    const lang = resolveShikiLanguage(language, text);
+    if (!lang) return;
+    const highlighter = await getShikiHighlighter();
+    if (!highlighter) return;
+    await loadShikiLanguage(highlighter, lang);
+    const theme = document.body.classList.contains('vscode-light') ||
+      document.body.classList.contains('vscode-high-contrast-light')
+      ? 'light-plus'
+      : 'dark-plus';
+    const result = highlighter.codeToTokens(text, { lang, theme });
+    if (!code.isConnected || code.dataset.highlightGeneration !== generation) return;
+    paintShikiTokens(code, result);
+  }
+
+  /** Keeps streaming cheap, then applies offline TextMate tokens once closed. */
+  function fillCode(code, text, language, closed) {
+    const generation = String(++codeHighlightSequence);
+    code.dataset.highlightGeneration = generation;
+    setText(code, text);
+    if (!closed) return;
+    highlightClosedCode(code, text, language, generation).catch(() => undefined);
+  }
+
+  function isMermaidBlock(block) {
+    if (!block || block.type !== 'code') return false;
+    const lang = String(block.lang || '').trim().toLowerCase();
+    if (lang === 'mermaid') return true;
+    if (lang !== '' && lang !== 'text' && lang !== 'plaintext') return false;
+    return /^(?:flowchart|graph|sequenceDiagram|classDiagram|stateDiagram(?:-v2)?|erDiagram|journey|gantt|pie|quadrantChart|requirementDiagram|gitGraph|C4(?:Context|Container|Component|Dynamic|Deployment)|mindmap|timeline|sankey-beta|xychart-beta|block-beta|architecture-beta|packet-beta|kanban|radar-beta|treemap-beta)\b/.test(
+      String(block.text || '').trimStart(),
+    );
+  }
+
+  function classMemberKind(text) {
+    const value = String(text || '').trim();
+    if (value === '' || value.startsWith('<<') || value.startsWith('%%')) return '';
+    return value.includes('(') && value.includes(')') ? 'method' : 'member';
+  }
+
+  function compactClassBody(lines) {
+    const kept = { member: 0, method: 0 };
+    const omitted = { member: false, method: false };
+    const out = [];
+    for (const line of lines) {
+      const kind = classMemberKind(line);
+      if (!kind) {
+        out.push(line);
+        continue;
+      }
+      if (kept[kind] < 3) {
+        kept[kind]++;
+        out.push(line);
+        continue;
+      }
+      if (omitted[kind]) continue;
+      omitted[kind] = true;
+      const indent = /^\s*/.exec(line)?.[0] || '  ';
+      out.push(indent + (kind === 'method' ? '+...()' : '...'));
+    }
+    return out;
+  }
+
+  function compactClassDiagramSource(source) {
+    if (!/^\s*classDiagram\b/m.test(source)) return source;
+    const lines = String(source || '').split(/\r?\n/);
+    const out = [];
+    let body = null;
+    const colonCounts = new Map();
+    const colonOmitted = new Set();
+    for (const line of lines) {
+      if (body) {
+        if (/^\s*}\s*$/.test(line)) {
+          out.push(...compactClassBody(body), line);
+          body = null;
+        } else {
+          body.push(line);
+        }
+        continue;
+      }
+      if (/^\s*class\s+.+\{\s*$/.test(line)) {
+        out.push(line);
+        body = [];
+        continue;
+      }
+      const colon = /^(\s*)([A-Za-z_][\w.-]*)\s*:\s*(.+)$/.exec(line);
+      const kind = colon ? classMemberKind(colon[3]) : '';
+      if (!colon || !kind) {
+        out.push(line);
+        continue;
+      }
+      const key = colon[2] + ':' + kind;
+      const count = colonCounts.get(key) || 0;
+      colonCounts.set(key, count + 1);
+      if (count < 3) {
+        out.push(line);
+      } else if (!colonOmitted.has(key)) {
+        colonOmitted.add(key);
+        out.push(`${colon[1]}${colon[2]} : ${kind === 'method' ? '+...()' : '...'}`);
+      }
+    }
+    if (body) out.push(...compactClassBody(body));
+    return out.join('\n');
+  }
+
+  /**
+   * Keeps native scrollbars out of the reading surface until they are useful.
+   * Scrolling, keyboard navigation, or approaching the right/bottom edge shows
+   * the bar briefly; leaving it idle removes the native scrollbar dimensions.
+   */
+  function autoHideScrollbar(node) {
+    let timer = null;
+    const hide = () => {
+      timer = null;
+      node.classList.remove('scroll-active');
+    };
+    const show = () => {
+      node.classList.add('scroll-active');
+      if (timer !== null) clearTimeout(timer);
+      timer = setTimeout(hide, 850);
+    };
+    node.addEventListener('scroll', show, { passive: true });
+    node.addEventListener(
+      'pointermove',
+      (event) => {
+        const box = node.getBoundingClientRect();
+        if (box.right - event.clientX <= 18 || box.bottom - event.clientY <= 18) show();
+      },
+      { passive: true },
+    );
+    node.addEventListener('keydown', show);
+    node.addEventListener('blur', hide);
+  }
+
+  /**
+   * Draws a closed Mermaid fence. The generated SVG is parsed as inert XML and
+   * sanitized before insertion; model-authored markup never enters the page.
+   */
+  function mermaidNode(source) {
+    const wrap = el('div', 'md-mermaid-wrap');
+    const figure = el('figure', 'md-mermaid');
+    figure.tabIndex = 0;
+    figure.setAttribute('aria-label', 'Diagram preview');
+    autoHideScrollbar(figure);
+    wrap.appendChild(figure);
+    const fallback = el('pre', 'md-code md-mermaid-source');
+    const code = el('code');
+    code.dataset.lang = 'mermaid';
+    setText(code, source);
+    fallback.appendChild(code);
+    figure.appendChild(fallback);
+
+    const renderer = self.mermaid;
+    if (!renderer || typeof renderer.render !== 'function') return wrap;
+    if (!mermaidConfigured) {
+      const light = document.body.classList.contains('vscode-light');
+      renderer.initialize({
+        startOnLoad: false,
+        securityLevel: 'strict',
+        suppressErrorRendering: true,
+        // Match VS Code Markdown's standard Mermaid themes instead of
+        // overriding a partial set of variables. A partial custom theme leaves
+        // diagram-specific colours (notably sequence actors and notes) wrong.
+        theme: light ? 'default' : 'dark',
+        flowchart: {
+          htmlLabels: true,
+          wrappingWidth: 260,
+          nodeSpacing: 48,
+          rankSpacing: 64,
+        },
+      });
+      mermaidConfigured = true;
+    }
+
+    const id = 'anvil-mermaid-' + ++mermaidSequence;
+    const previewSource = compactClassDiagramSource(source);
+    const replayBlock = replayPinsBottom ? replayGeneration : 0;
+    if (replayBlock !== 0) replayAsyncBlocks++;
+    Promise.resolve(renderer.render(id, previewSource))
+      .then((result) => {
+        const svg = result && typeof result.svg === 'string' ? result.svg : '';
+        if (svg === '' || !figure.isConnected) return;
+        const diagram = safeMermaidSvg(svg);
+        if (!diagram) throw new Error('Mermaid returned invalid SVG');
+        const pinned = replayPinsBottom || atBottom();
+        const surface = el('div', 'md-mermaid-surface');
+        const view = el('button', 'md-mermaid-view', 'View');
+        view.type = 'button';
+        view.setAttribute('aria-label', 'View Mermaid diagram in large view');
+        view.title = 'View diagram';
+        let detailPromise = null;
+        view.addEventListener('click', async () => {
+          if (previewSource === source) {
+            openMermaidDiagram(diagram, source);
+            return;
+          }
+          if (!detailPromise) {
+            detailPromise = Promise.resolve(renderer.render(id + '-detail', source)).then((detailResult) => {
+              const detailSvg = detailResult && typeof detailResult.svg === 'string' ? detailResult.svg : '';
+              const detail = safeMermaidSvg(detailSvg);
+              if (!detail) throw new Error('Mermaid returned invalid detail SVG');
+              normalizeMermaidContrast(detail);
+              return detail;
+            });
+          }
+          view.disabled = true;
+          try {
+            openMermaidDiagram(await detailPromise, source);
+          } catch {
+            openMermaidDiagram(diagram, source);
+          } finally {
+            view.disabled = false;
+          }
+        });
+        surface.appendChild(diagram);
+        figure.replaceChildren(surface);
+        wrap.appendChild(view);
+        normalizeMermaidContrast(diagram);
+        scrollIfPinned(pinned);
+      })
+      .catch(() => {
+        figure.classList.add('failed');
+        figure.appendChild(el('div', 'md-mermaid-error', 'Diagram could not be rendered.'));
+      })
+      .finally(() => {
+        if (replayBlock !== 0 && replayBlock === replayGeneration) {
+          replayAsyncBlocks = Math.max(0, replayAsyncBlocks - 1);
+        }
+        settleReplayAtBottom();
+      });
+    return wrap;
+  }
+
+  /**
+   * Parses Mermaid's output as inert XML and removes every active or external
+   * surface before the SVG enters the document. The model supplies diagram
+   * text, not markup; Mermaid supplies the markup and strict mode escapes the
+   * labels, but this boundary remains defensive in case that contract changes.
+   */
+  function safeMermaidSvg(source) {
+    // VS Code's Markdown renderer inserts Mermaid's string as HTML. Parsing it
+    // as XML is stricter in the wrong place: flowchart HTML labels may contain
+    // named HTML entities that are valid in VS Code but reject the whole SVG
+    // as XML. HTML parsing preserves those labels; the walk below is the
+    // security boundary before the SVG enters this document.
+    const parsed = new DOMParser().parseFromString(source, 'text/html');
+    const root = parsed.querySelector('svg');
+    if (!root) return null;
+    for (const node of root.querySelectorAll('script, iframe, object, embed, image')) node.remove();
+    for (const node of [root, ...root.querySelectorAll('*')]) {
+      for (const attribute of Array.from(node.attributes)) {
+        const name = attribute.name.toLowerCase();
+        const value = attribute.value.trim();
+        if (
+          name.startsWith('on') ||
+          (/^(?:href|xlink:href)$/.test(name) && !value.startsWith('#')) ||
+          /javascript:/i.test(value) ||
+          (name === 'style' && /(?:url\s*\(|expression\s*\()/i.test(value))
+        ) {
+          node.removeAttribute(attribute.name);
+        }
+      }
+    }
+    const diagram = document.importNode(root, true);
+    diagram.classList.add('md-mermaid-svg');
+    diagram.setAttribute('role', 'img');
+    diagram.setAttribute('aria-label', 'Mermaid diagram');
+    return diagram;
+  }
+
+  /**
+   * Applies the VS Code palette as inline-important styles. Mermaid emits a
+   * style element inside each SVG, so document-level CSS can lose depending on
+   * the diagram and bundle version; writing the final presentation here keeps
+   * actor labels and messages consistently readable.
+   *
+   * Some sequence renderers emit only the number text. When there is no circle
+   * for it, draw one from the text's measured box after the SVG is connected.
+   */
+  function setMermaidNaturalSize(diagram) {
+    const values = String(diagram.getAttribute('viewBox') || '')
+      .trim()
+      .split(/[\s,]+/)
+      .map(Number);
+    const width = values.length === 4 ? values[2] : 0;
+    if (Number.isFinite(width) && width > 0) {
+      diagram.style.setProperty('--anvil-mermaid-natural-width', Math.ceil(width) + 'px');
+    }
+  }
+
+  function normalizeMermaidContrast(diagram) {
+    setMermaidNaturalSize(diagram);
+    const foreground = document.body.classList.contains('vscode-light')
+      ? '#303030'
+      : '#d0d0d0';
+    const nodeFill = 'var(--vscode-editorWidget-background, var(--vscode-editor-background))';
+    const nodeStroke = 'var(--vscode-focusBorder)';
+    for (const shape of diagram.querySelectorAll(
+      '.node rect, .node polygon, .node path, .node circle, .node ellipse',
+    )) {
+      shape.style.setProperty('fill', nodeFill, 'important');
+      shape.style.setProperty('stroke', nodeStroke, 'important');
+    }
+    for (const shape of diagram.querySelectorAll('.cluster rect, .cluster polygon, .cluster path')) {
+      shape.style.setProperty('fill', nodeFill, 'important');
+      shape.style.setProperty(
+        'stroke',
+        'var(--vscode-panel-border, var(--vscode-focusBorder))',
+        'important',
+      );
+    }
+    const relationColor = 'var(--vscode-descriptionForeground)';
+    for (const path of diagram.querySelectorAll(
+      '.relationshipLine, .relation, .edgePath path, path.flowchart-link',
+    )) {
+      path.style.setProperty('fill', 'none', 'important');
+      path.style.setProperty('stroke', relationColor, 'important');
+    }
+    for (const marker of diagram.querySelectorAll('marker path, marker polygon, marker circle')) {
+      marker.style.setProperty('fill', relationColor, 'important');
+      marker.style.setProperty('stroke', relationColor, 'important');
+    }
+    diagram.style.setProperty('color', foreground, 'important');
+    diagram.style.setProperty('-webkit-text-fill-color', foreground, 'important');
+    for (const node of diagram.querySelectorAll('*')) {
+      node.style.setProperty('color', foreground, 'important');
+      node.style.setProperty('-webkit-text-fill-color', foreground, 'important');
+    }
+    for (const node of diagram.querySelectorAll('text, tspan')) {
+      node.style.setProperty('fill', foreground, 'important');
+      node.style.setProperty('stroke', 'none', 'important');
+      node.style.setProperty('opacity', '1', 'important');
+    }
+
+    const numbers = Array.from(diagram.querySelectorAll('.sequenceNumber'));
+    const dots = Array.from(diagram.querySelectorAll('[id$="-sequencenumber" i]'));
+    const styleDot = (dot) => {
+      dot.style.setProperty('fill', '#d8b7b2', 'important');
+      dot.style.setProperty('stroke', '#f0d8d4', 'important');
+      dot.style.setProperty('stroke-width', '1.5px', 'important');
+    };
+    dots.forEach(styleDot);
+    for (const number of numbers) {
+      number.style.setProperty('color', '#292929', 'important');
+      number.style.setProperty('fill', '#292929', 'important');
+      number.style.setProperty('-webkit-text-fill-color', '#292929', 'important');
+      number.style.setProperty('opacity', '1', 'important');
+    }
+    for (let index = dots.length; index < numbers.length; index++) {
+      const number = numbers[index];
+      if (!(number instanceof SVGGraphicsElement) || !number.parentNode) continue;
+      let box;
+      try {
+        box = number.getBBox();
+      } catch {
+        continue;
+      }
+      const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      dot.classList.add('anvil-sequence-number-dot');
+      dot.setAttribute('cx', String(box.x + box.width / 2));
+      dot.setAttribute('cy', String(box.y + box.height / 2));
+      dot.setAttribute('r', String(Math.max(8, Math.max(box.width, box.height) / 2 + 4)));
+      styleDot(dot);
+      number.parentNode.insertBefore(dot, number);
+    }
+  }
+
+  function mermaidToolbarButton(label, title, paths) {
+    const button = el('button', 'ghost md-mermaid-toolbar-button');
+    button.type = 'button';
+    button.setAttribute('aria-label', label);
+    button.title = title;
+    const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    icon.classList.add('md-mermaid-toolbar-icon');
+    icon.setAttribute('viewBox', '0 0 20 20');
+    icon.setAttribute('aria-hidden', 'true');
+    for (const pathData of paths) {
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', pathData);
+      icon.appendChild(path);
+    }
+    button.appendChild(icon);
+    return button;
+  }
+
+  /** Opens a diagram in a scrollable modal with explicit zoom controls. */
+  function openMermaidDiagram(diagram, source) {
+    const dialog = el('dialog', 'md-mermaid-dialog');
+    const panel = el('div', 'md-mermaid-dialog-panel');
+    const toolbar = el('div', 'md-mermaid-toolbar');
+    toolbar.appendChild(el('span', 'title', 'Diagram'));
+    const pan = mermaidToolbarButton('Pan diagram', 'Pan diagram', [
+      'M10 2.5v15M2.5 10h15M10 2.5 7.5 5M10 2.5 12.5 5M17.5 10 15 7.5M17.5 10 15 12.5M10 17.5 7.5 15M10 17.5 12.5 15M2.5 10 5 7.5M2.5 10 5 12.5',
+    ]);
+    const zoomOut = mermaidToolbarButton('Zoom out', 'Zoom out', [
+      'M8.5 3.5a5 5 0 1 0 0 10 5 5 0 0 0 0-10M12.2 12.2 16.5 16.5M6 8.5h5',
+    ]);
+    const zoomIn = mermaidToolbarButton('Zoom in', 'Zoom in', [
+      'M8.5 3.5a5 5 0 1 0 0 10 5 5 0 0 0 0-10M12.2 12.2 16.5 16.5M6 8.5h5M8.5 6v5',
+    ]);
+    const fit = mermaidToolbarButton('Fit diagram', 'Fit diagram', [
+      'M7 3.5H3.5V7M13 3.5h3.5V7M7 16.5H3.5V13M13 16.5h3.5V13',
+    ]);
+    const close = mermaidToolbarButton('Close diagram', 'Close diagram', ['M5 5l10 10M15 5 5 15']);
+    close.classList.add('close');
+    pan.setAttribute('aria-pressed', 'false');
+    const controls = el('div', 'md-mermaid-toolbar-controls');
+    controls.appendChild(pan);
+    controls.appendChild(zoomOut);
+    controls.appendChild(zoomIn);
+    controls.appendChild(fit);
+    controls.appendChild(close);
+    toolbar.appendChild(controls);
+
+    const viewport = el('div', 'md-mermaid-viewport');
+    const large = diagram.cloneNode(true);
+    large.classList.add('md-mermaid-large');
+    large.setAttribute('aria-label', 'Mermaid diagram');
+    large.dataset.source = source;
+    viewport.appendChild(large);
+    panel.appendChild(toolbar);
+    panel.appendChild(viewport);
+    dialog.appendChild(panel);
+    document.body.appendChild(dialog);
+
+    let zoom = 1.5;
+    let panEnabled = false;
+    let drag = null;
+    const applyZoom = () => {
+      large.style.width = Math.round(zoom * 100) + '%';
+      zoomOut.disabled = zoom <= 0.5;
+      zoomIn.disabled = zoom >= 3;
+    };
+    pan.addEventListener('click', () => {
+      panEnabled = !panEnabled;
+      pan.setAttribute('aria-pressed', panEnabled ? 'true' : 'false');
+      viewport.classList.toggle('panning', panEnabled);
+    });
+    viewport.addEventListener('pointerdown', (event) => {
+      if (!panEnabled || event.button !== 0) return;
+      drag = {
+        id: event.pointerId,
+        x: event.clientX,
+        y: event.clientY,
+        left: viewport.scrollLeft,
+        top: viewport.scrollTop,
+      };
+      viewport.setPointerCapture(event.pointerId);
+      viewport.classList.add('dragging');
+      event.preventDefault();
+    });
+    viewport.addEventListener('pointermove', (event) => {
+      if (!drag || event.pointerId !== drag.id) return;
+      viewport.scrollLeft = drag.left - (event.clientX - drag.x);
+      viewport.scrollTop = drag.top - (event.clientY - drag.y);
+    });
+    const stopDragging = (event) => {
+      if (!drag || event.pointerId !== drag.id) return;
+      drag = null;
+      viewport.classList.remove('dragging');
+      if (viewport.hasPointerCapture(event.pointerId)) viewport.releasePointerCapture(event.pointerId);
+    };
+    viewport.addEventListener('pointerup', stopDragging);
+    viewport.addEventListener('pointercancel', stopDragging);
+    zoomOut.addEventListener('click', () => {
+      zoom = Math.max(0.5, zoom - 0.25);
+      applyZoom();
+    });
+    fit.addEventListener('click', () => {
+      zoom = 1;
+      applyZoom();
+      viewport.scrollTo(0, 0);
+    });
+    zoomIn.addEventListener('click', () => {
+      zoom = Math.min(3, zoom + 0.25);
+      applyZoom();
+    });
+    const dismiss = () => {
+      if (dialog.open && typeof dialog.close === 'function') dialog.close();
+      else dialog.remove();
+    };
+    close.addEventListener('click', dismiss);
+    dialog.addEventListener('close', () => dialog.remove());
+    dialog.addEventListener('click', (event) => {
+      if (event.target === dialog) dismiss();
+    });
+    applyZoom();
+    if (typeof dialog.showModal === 'function') dialog.showModal();
+    else dialog.setAttribute('open', '');
+    close.focus();
   }
 
   function sameItemShape(a, b) {
@@ -1580,6 +2481,23 @@
     // reads as "Some tool", not as `some_new_tool`.
     const words = name.replace(/_/g, ' ');
     return words.charAt(0).toUpperCase() + words.slice(1);
+  }
+
+  /** A compact activity for the hammer line, derived from the call being made. */
+  function toolActivity(name) {
+    if (['read_file', 'read_image', 'read_skill', 'memory_read'].includes(name)) return 'Reading…';
+    if (['grep', 'glob', 'semantic_search', 'memory_search'].includes(name)) return 'Searching…';
+    if (['write_file', 'edit_file', 'apply_patch', 'rename_symbol', 'memory_write', 'memory_delete'].includes(name)) {
+      return 'Editing…';
+    }
+    if (name === 'shell') return 'Running Bash…';
+    if (name === 'web_search') return 'Searching web…';
+    if (name === 'fetch_url') return 'Fetching…';
+    if (name === 'build') return 'Building…';
+    if (['diagnostics', 'definition', 'references', 'hover'].includes(name)) return 'Inspecting…';
+    if (['git_status', 'git_diff', 'git_log'].includes(name)) return 'Inspecting Git…';
+    if (['spawn_agent', 'task_list', 'task_output', 'task_cancel'].includes(name)) return 'Delegating…';
+    return toolTitle(name) + '…';
   }
 
   /** A trimmed string argument, or ''. */
@@ -2291,6 +3209,61 @@
     pane.appendChild(row);
   }
 
+  /** Three staggered dots: enough motion to read as work, without flashing the row. */
+  function backgroundActivity() {
+    const activity = el('span', 'background-activity');
+    activity.setAttribute('aria-hidden', 'true');
+    for (let i = 0; i < 3; i++) {
+      const dot = el('span', 'background-dot');
+      activity.appendChild(dot);
+      if (!reduceMotion && typeof dot.animate === 'function') {
+        dot.animate(
+          [
+            { transform: 'translateY(0) scale(0.75)', opacity: 0.32 },
+            { transform: 'translateY(-2px) scale(1)', opacity: 1 },
+            { transform: 'translateY(0) scale(0.75)', opacity: 0.32 },
+          ],
+          { duration: 960, delay: i * 160, iterations: Infinity, easing: 'ease-in-out' },
+        );
+      }
+    }
+    return activity;
+  }
+
+  /** Applies a real task notification to the card that started that background job. */
+  function updateBackgroundTask(task) {
+    if (!task || typeof task.id !== 'string' || task.id === '') return;
+    backgroundTaskStates.set(task.id, task);
+    const card = backgroundCards.get(task.id);
+    if (!card) return;
+    const state = card.querySelector('.state');
+    const note = card.querySelector('.spawn-note');
+    if (!state) return;
+
+    card.classList.remove('background-running', 'done', 'failed', 'stopped');
+    if (task.status === 'running') {
+      card.classList.add('background-running');
+      state.textContent = 'background';
+      state.appendChild(backgroundActivity());
+      if (note) note.textContent = 'Working in the background.';
+      return;
+    }
+
+    const failed = task.status === 'failed';
+    const stopped = task.status === 'cancelled';
+    card.classList.add(failed ? 'failed' : stopped ? 'stopped' : 'done');
+    state.textContent = failed ? 'background failed' : stopped ? 'background stopped' : 'background done';
+    if (note) {
+      note.textContent = failed
+        ? 'Background task failed.'
+        : stopped
+          ? 'Background task stopped.'
+          : 'Background task finished.';
+    }
+    backgroundCards.delete(task.id);
+    backgroundTaskStates.delete(task.id);
+  }
+
   /**
    * Settles a spawn card.
    *
@@ -2303,7 +3276,6 @@
   function addSpawnResult(card, event) {
     const content = event.content || '';
     const failed = event.is_error === true;
-    card.classList.add(failed ? 'failed' : 'done');
     const state = card.querySelector('.state');
     const pane = card.querySelector('.pane');
     const body = card.querySelector('.spawn-body');
@@ -2317,20 +3289,25 @@
     const background = /^(\S+) started in the background/.exec(first);
 
     if (failed) {
+      card.classList.add('failed');
       state.textContent = 'failed';
       pane.appendChild(section('out', 'OUT', content));
       if (!live) card.open = false;
       return;
     }
     if (background) {
-      state.textContent = 'background';
       const row = el('div', 'spawn-actions');
-      row.appendChild(el('span', 'spawn-note', 'Running in the background.'));
+      row.appendChild(el('span', 'spawn-note', 'Working in the background.'));
       row.appendChild(spawnAction('Open Tasks', () => vscode.postMessage({ type: 'openTasks' })));
       pane.appendChild(row);
       addSpawnTranscriptButton(pane, scope && scope.agentId);
+      backgroundCards.set(background[1], card);
+      updateBackgroundTask(
+        backgroundTaskStates.get(background[1]) || { id: background[1], status: 'running' },
+      );
       return;
     }
+    card.classList.add('done');
     state.textContent = finished ? `done · ${finished[2]} steps` : 'done';
     addSpawnTranscriptButton(pane, (scope && scope.agentId) || (finished ? finished[1] : ''));
     // A live spawn already has the child's message in the body, streamed as the
@@ -2461,6 +3438,8 @@
   function showApproval(request) {
     endRound();
     const card = el('div', 'approval');
+    card.dataset.tool = typeof request.tool === 'string' ? request.tool : '';
+    setWorkingActivity('Waiting for ' + toolTitle(request.tool) + ' approval…');
 
     const head = el('div', 'head');
     // The buttons below are a group named by this question, so a reader that
@@ -2625,6 +3604,7 @@
       const verdict = el('div', 'why', 'Allowed, and remembered: ');
       verdict.appendChild(el('code', null, ruleText(msg.rule)));
       card.appendChild(verdict);
+      setWorkingActivity(toolActivity(card.dataset.tool));
       announce('Allowed, and remembered.');
       return;
     }
@@ -2665,6 +3645,7 @@
     for (const button of card.querySelectorAll('button')) button.disabled = true;
     const verdict = el('div', 'why', decision === 'deny' ? 'Denied.' : 'Allowed.');
     card.appendChild(verdict);
+    setWorkingActivity(decision === 'deny' ? DEFAULT_WORKING_WORD : toolActivity(card.dataset.tool));
     announce(verdict.textContent);
     refocusAfter(hadFocus);
     vscode.postMessage({ type: 'answer', requestId, decision, scope });
@@ -2678,6 +3659,7 @@
     card.classList.add('resolved');
     for (const button of card.querySelectorAll('button')) button.disabled = true;
     card.appendChild(el('div', 'why', 'This request is no longer pending.'));
+    setWorkingActivity(DEFAULT_WORKING_WORD);
     announce('This approval request is no longer pending.');
     refocusAfter(hadFocus);
   }
@@ -2696,6 +3678,7 @@
     for (const button of card.querySelectorAll('button')) button.disabled = true;
     if (msg.decision === 'deny') {
       card.appendChild(el('div', 'why', 'Denied.'));
+      setWorkingActivity(DEFAULT_WORKING_WORD);
       announce('Denied.');
       return;
     }
@@ -2706,6 +3689,7 @@
         ? 'Allowed, keeping ' + kept + ' of ' + total + ' parts.'
         : 'Allowed.';
     card.appendChild(el('div', 'why', text));
+    setWorkingActivity(toolActivity(card.dataset.tool));
     announce(text);
   }
 
@@ -2715,8 +3699,9 @@
   function renderChips() {
     chipsBar.textContent = '';
     for (const mention of mentions) chipsBar.appendChild(mentionChip(mention));
+    for (const quote of quotes) chipsBar.appendChild(quoteChip(quote));
     for (let index = 0; index < images.length; index++) chipsBar.appendChild(imageChip(index));
-    chipsBar.hidden = mentions.length === 0 && images.length === 0;
+    chipsBar.hidden = mentions.length === 0 && quotes.length === 0 && images.length === 0;
   }
 
   function removeChip(title, onRemove) {
@@ -2736,6 +3721,21 @@
     chip.appendChild(
       removeChip(`Stop referencing ${path}`, () => {
         mentions = mentions.filter((candidate) => candidate !== path);
+        renderChips();
+      }),
+    );
+    return chip;
+  }
+
+  function quoteChip(quote) {
+    const speaker = quote.role === 'user' ? 'you' : 'anvil';
+    const chip = el('span', 'chip quote');
+    chip.title = speaker + ': ' + quote.text;
+    chip.appendChild(el('span', 'chip-quote-mark', '“'));
+    chip.appendChild(el('span', 'chip-label', speaker + ': ' + quotePreview(quote.text, 48)));
+    chip.appendChild(
+      removeChip('Stop quoting this message', () => {
+        quotes = quotes.filter((candidate) => candidate.id !== quote.id);
         renderChips();
       }),
     );
@@ -2816,10 +3816,10 @@
    *   - a deletion: against an empty side;
    *   - an addition: against an empty side too, which is what it was.
    */
-  function showChanges(files) {
+  function showChanges(files, runId) {
     if (!Array.isArray(files) || files.length === 0) return;
     const card = el('div', 'changes');
-    card.appendChild(el('div', 'head', `Changed ${files.length} file${files.length === 1 ? '' : 's'}`));
+    card.appendChild(el('div', 'head', `Changed files · ${files.length}`));
     for (const file of files) {
       if (!file || typeof file.path !== 'string') continue;
       const row = el('button', 'change');
@@ -2830,7 +3830,9 @@
       row.addEventListener('click', () => vscode.postMessage({ type: 'reviewChange', path: file.path }));
       card.appendChild(row);
     }
-    append(card);
+    const summary = runSummaries.get(typeof runId === 'string' ? runId : '');
+    if (summary && summary.isConnected) summary.insertAdjacentElement('afterend', card);
+    else append(card);
     endRound();
   }
 
@@ -3240,29 +4242,34 @@
   // --- mode -----------------------------------------------------------------
 
   /**
-   * Reflects the permission mode the extension is actually using. The select is
+   * Reflects the permission mode the extension is actually using. The menu is
    * driven from there, never from what was clicked: the extension can refuse a
-   * change (a turn is running, the host said no), and a select that kept the
+   * change (a turn is running, the host said no), and a menu that kept the
    * refused value would be lying about what the next tool call will do.
    *
    * Two values travel, and they are not the same one. `mode` is the choice this
-   * workspace has stored — empty when it has none, which the select shows as
+   * workspace has stored — empty when it has none, which the trigger shows as
    * "Workspace default" — and `resolved` is what the session runs under, which
    * the workspace's permissions.json may have supplied. The select shows the
    * first, because that is what clicking it would change; the label says the
    * second, because that is what the next tool call will actually do.
    */
   function showMode(msg) {
-    if (!modeSelect) return;
+    if (!modeButton) return;
     const chosen = msg.mode || '';
     const resolved = msg.resolved || chosen || 'ask';
-    modeSelect.value = chosen;
-
-    const fallback = modeSelect.querySelector('option[value=""]');
-    if (fallback) {
-      const label = modeLabels[resolved] || resolved;
-      fallback.textContent = chosen === '' ? 'Workspace default (' + label + ')' : 'Workspace default';
+    modeButton.dataset.mode = chosen;
+    if (modeLabel) {
+      modeLabel.textContent = chosen === '' ? 'Workspace default' : modeLabels[chosen] || chosen;
     }
+    for (const row of modeRows) {
+      const selected = row.dataset.mode === chosen;
+      row.classList.toggle('selected', selected);
+      row.setAttribute('aria-checked', selected ? 'true' : 'false');
+    }
+    const resolvedLabel = modeLabels[resolved] || resolved;
+    modeButton.title =
+      chosen === '' ? 'Workspace default · currently ' + resolvedLabel : 'Agent mode · ' + resolvedLabel;
 
     const bypass = resolved === 'bypass';
     const dontAsk = resolved === 'dont_ask';
@@ -3286,7 +4293,54 @@
     bypass: 'Bypass',
   };
 
+  function closeModeMenu(focusTrigger) {
+    if (!modeMenu || modeMenu.hidden) return;
+    modeMenu.hidden = true;
+    modeButton.setAttribute('aria-expanded', 'false');
+    if (focusTrigger) modeButton.focus();
+  }
+
+  function openModeMenu(fromKeyboard) {
+    if (!modeMenu || !modeButton || modeButton.disabled) return;
+    closeActionMenu(false);
+    modeMenu.hidden = false;
+    modeButton.setAttribute('aria-expanded', 'true');
+    if (fromKeyboard) {
+      const selected = modeRows.find((row) => row.classList.contains('selected'));
+      (selected || modeRows[0])?.focus();
+    }
+  }
+
+  function toggleModeMenu(event) {
+    if (!modeMenu || modeMenu.hidden) openModeMenu(Boolean(event && event.detail === 0));
+    else closeModeMenu(true);
+  }
+
   // --- slash palette --------------------------------------------------------
+
+  function closeActionMenu(focusTrigger) {
+    if (!actionMenu || actionMenu.hidden) return;
+    actionMenu.hidden = true;
+    attachButton.setAttribute('aria-expanded', 'false');
+    if (focusTrigger) attachButton.focus();
+  }
+
+  function openActionMenu(fromKeyboard) {
+    if (!actionMenu) return;
+    closeModeMenu(false);
+    closePalette();
+    actionMenu.hidden = false;
+    attachButton.setAttribute('aria-expanded', 'true');
+    if (fromKeyboard) {
+      const first = actionMenu.querySelector('button:not(:disabled)');
+      if (first) first.focus();
+    }
+  }
+
+  function toggleActionMenu(event) {
+    if (!actionMenu || actionMenu.hidden) openActionMenu(Boolean(event && event.detail === 0));
+    else closeActionMenu(true);
+  }
 
   /**
    * The query the palette is open for: text starting with `/` and nothing else.
@@ -3297,8 +4351,13 @@
     const trimmed = input.value.trim();
     if (trimmed.charAt(0) !== '/') return null;
     const body = trimmed.slice(1);
-    if (body === '' || /\s/.test(body)) return null;
+    if (/\s/.test(body)) return null;
     return body;
+  }
+
+  function quotePaletteQuery() {
+    const match = /^\s*\/ref[ \t]+([^\r\n]*)$/i.exec(input.value);
+    return match ? match[1].trim().toLowerCase() : null;
   }
 
   /** Prefix match first, then anything whose description mentions the query. */
@@ -3314,6 +4373,7 @@
   function closePalette() {
     paletteRows = [];
     paletteIndex = 0;
+    quotePickerForced = false;
     palette.hidden = true;
     palette.textContent = '';
   }
@@ -3324,9 +4384,15 @@
       const command = paletteRows[index];
       const row = el('button', 'palette-row' + (index === paletteIndex ? ' current' : ''));
       row.type = 'button';
-      row.appendChild(el('span', 'palette-name', '/' + command.name));
-      row.appendChild(el('span', 'palette-desc', command.description || ''));
-      if (command.source === 'skill') row.appendChild(el('span', 'palette-tag', 'skill'));
+      if (command.kind === 'quote') {
+        row.appendChild(el('span', 'palette-name', command.role === 'user' ? 'you' : 'anvil'));
+        row.appendChild(el('span', 'palette-desc', quotePreview(command.text, 110)));
+        if (quotes.some((quote) => quote.id === command.id)) row.appendChild(el('span', 'palette-tag', 'added'));
+      } else {
+        row.appendChild(el('span', 'palette-name', '/' + command.name));
+        row.appendChild(el('span', 'palette-desc', command.description || ''));
+        if (command.source === 'skill') row.appendChild(el('span', 'palette-tag', 'skill'));
+      }
       row.addEventListener('mousedown', (event) => {
         // mousedown, not click: the textarea would blur first and the palette
         // would be gone before the click ever landed.
@@ -3339,6 +4405,22 @@
   }
 
   function updatePalette() {
+    const quoteQuery = quotePickerForced ? '' : quotePaletteQuery();
+    if (quoteQuery !== null) {
+      const needle = quoteQuery.toLowerCase();
+      paletteRows = quoteCandidates
+        .slice()
+        .reverse()
+        .filter((quote) => {
+          const speaker = quote.role === 'user' ? 'you' : 'anvil';
+          return needle === '' || speaker.indexOf(needle) !== -1 || quote.text.toLowerCase().indexOf(needle) !== -1;
+        })
+        .slice(0, 10)
+        .map((quote) => ({ ...quote, kind: 'quote' }));
+      if (paletteIndex >= paletteRows.length) paletteIndex = 0;
+      paintPalette();
+      return;
+    }
     const query = paletteQuery();
     if (query === null) {
       closePalette();
@@ -3351,7 +4433,13 @@
       palette.hidden = true;
       return;
     }
-    paletteRows = paletteMatches(catalogue, query);
+    const commands = catalogue.some((command) => command.name === 'ref')
+      ? catalogue
+      : [
+          { name: 'ref', description: 'Quote an earlier message', source: 'builtin', local: true },
+          ...catalogue,
+        ];
+    paletteRows = paletteMatches(commands, query);
     if (paletteIndex >= paletteRows.length) paletteIndex = 0;
     paintPalette();
   }
@@ -3361,8 +4449,25 @@
     const command = paletteRows[index];
     closePalette();
     if (!command) return;
+    if (command.kind === 'quote') {
+      if (/^\s*\/ref(?:[ \t].*)?$/i.test(input.value)) input.value = '';
+      addQuote(command);
+      growInput();
+      return;
+    }
     input.value = '/' + command.name + ' ';
     growInput();
+    input.focus();
+    if (command.name === 'ref') updatePalette();
+  }
+
+  function openQuotePicker() {
+    closeActionMenu(false);
+    closeModeMenu(false);
+    closePalette();
+    quotePickerForced = true;
+    paletteIndex = 0;
+    updatePalette();
     input.focus();
   }
 
@@ -3640,10 +4745,12 @@
     if (running && hadInputFocus) sendButton.focus();
     attachButton.disabled = running;
     if (imageButton) imageButton.disabled = running;
+    if (running) closeActionMenu(false);
     // The mode is a session option, so the extension refuses a change mid-turn
     // rather than applying it half way. Saying so by disabling is honest about
     // that; the extension's own check is what enforces it.
-    if (modeSelect) modeSelect.disabled = running;
+    if (modeButton) modeButton.disabled = running;
+    if (running) closeModeMenu(false);
     if (!running) input.focus();
   }
 
@@ -3655,8 +4762,16 @@
    * so counting both would count the same run twice.
    */
   function recordUsage(done) {
+    liveUsage = null;
     meterMath.add(usageTotals, done);
     recordContext(done);
+    renderMeter();
+  }
+
+  /** Replaces the current run's estimate; it is never added to stored totals. */
+  function recordLiveUsage(event) {
+    if (!event || event.usage_estimated !== true || !event.usage) return;
+    liveUsage = event.usage;
     renderMeter();
   }
 
@@ -3681,20 +4796,19 @@
   /** Forgets the session's totals, for a session that is replacing this one. */
   function resetUsage() {
     usageTotals = meterMath.empty();
+    liveUsage = null;
     contextInfo = null;
     lastRequestAt = null;
     renderMeter();
   }
 
   /**
-   * Draws the two scopes of the session's token facts.
+   * Draws the current run's live counts and the conversation's context facts.
    *
-   * They used to share one line under the composer. Two numbers, two sources,
-   * and since p_0.46.24 two places as well: this conversation's share of its
-   * window is written on the root line inside the transcript's footprint,
-   * where it belongs to that conversation; what the window as a whole has
-   * spent is written inside the composer, the dock's one opaque surface, so
-   * the conversation cannot be painted over it.
+   * The estimated input and output for the active run sit immediately below
+   * the hammer/status line in the transcript footprint (p_0.46.28). The
+   * conversation's context share remains on the root line below them; provider
+   * cache accounting waits for the settled run summary.
    *
    * Context comes from the host's estimate against the declared window; before
    * the host has answered, the last run's total stands in, because it is
@@ -3705,6 +4819,8 @@
    */
   function renderMeter() {
     if (!meter) return;
+    const pinned = atBottom();
+    const countsBefore = meterCounts.map((node) => numberText.get(node) || '').join('\u0000');
     // This conversation: its estimated use against the window it declared.
     const facts = [];
     const context = meterMath.remaining(usageTotals, contextInfo, autoCompactAt);
@@ -3731,9 +4847,15 @@
       rootFacts.textContent = factsText;
       scrollIfPinned(pinned);
     }
-    // This session: what it has spent, which survives every conversation the
-    // window ends. All three counts are drawn whenever the provider reported
-    // them — in, out and cache are one sentence about the session, and
+    // The footprint and the settled status describe one run. The runtime's
+    // estimate is already cumulative across that run's model rounds, so adding
+    // completed conversation totals here mixes scopes and makes the live number
+    // jump above the provider total it must converge on.
+    const hasLive = liveUsage !== null;
+    const input = meterMath.count(liveUsage && liveUsage.input_tokens);
+    const output = meterMath.count(liveUsage && liveUsage.output_tokens);
+    // All three counts are drawn whenever the provider reported them — in, out
+    // and cache are one sentence about the conversation, and
     // dropping in/out because a context window happened to be declared left
     // the line saying only 'cache' (p_0.46.26).
     const cache = meterMath.cache(usageTotals, cacheTtlSeconds, lastRequestAt, Date.now());
@@ -3743,15 +4865,21 @@
     // than "nothing has been counted yet" (p_0.46.26). An em dash is the one
     // spelling that cannot be mistaken for a count — and it keeps the count's
     // name, so the line says which fact is not known yet.
-    const pending = usageTotals.input <= 0 && usageTotals.output <= 0;
+    const pending = input <= 0 && output <= 0;
     const countText = (value, suffix, label) => {
       const name = label ? label + ' ' : '';
       if (value > 0) return name + amount(value) + suffix;
       return pending ? name + '\u2014' : '';
     };
-    setNumber(meterIn, countText(usageTotals.input, ' in', ''));
-    setNumber(meterOut, countText(usageTotals.output, ' out', ''));
-    setNumber(meterCache, countText(cache.cached, '', 'cache'));
+    if (input > 0 || hasLive) rollNumber(meterIn, input, '\u00a0in', '', false);
+    else setNumber(meterIn, countText(input, ' in', ''));
+    // A live request starts at zero output and then moves; keeping the zero
+    // visible makes the first streamed increment a roll rather than an appear.
+    if (output > 0 || hasLive) rollNumber(meterOut, output, '\u00a0out', '', false);
+    else setNumber(meterOut, countText(output, ' out', ''));
+    // Cache is provider accounting, not a live estimate. It appears in the
+    // terminal run summary once the provider has settled the request.
+    setNumber(meterCache, hasLive ? '' : countText(cache.cached, '', 'cache'));
     // The window's share of the last run, which `meterMath.label` reports
     // beside the three counts rather than instead of them. It is a node like
     // them, so it can be hidden and can pulse on its own.
@@ -3779,7 +4907,7 @@
     // rather than to the line, so its per-second tick does not pulse the count
     // it sits beside.
     meterClock.textContent = '';
-    if (cache.cached > 0 && cache.remaining !== null) {
+    if (!hasLive && cache.cached > 0 && cache.remaining !== null) {
       meterClock.textContent =
         ' · ' + (cache.remaining > 0 ? meterMath.clock(cache.remaining) : 'cold');
       meterCache.appendChild(meterClock);
@@ -3791,11 +4919,19 @@
     const parts = [];
     for (const node of meterCounts) if (!node.hidden) parts.push(node.textContent);
     const text = parts.join(' · ');
-    meter.hidden = text === '';
+    // The meter is the live face. Once the run settles, runSummary owns these
+    // facts in one line and this duplicate disappears.
+    meter.hidden = text === '' || !hasLive;
     // The row may have truncating width: the whole line stays reachable.
     meter.title = text;
     meter.setAttribute('aria-label', text);
-    syncCacheClock(cache);
+    syncFootprint();
+    const countsAfter = meterCounts.map((node) => numberText.get(node) || '').join('\u0000');
+    // A changed count grows the footprint, so keep a reader already at the end
+    // at the end. The cache clock is deliberately excluded: its one-second
+    // tick must never pull a reader who scrolled up.
+    if (countsBefore !== countsAfter) scrollIfPinned(pinned);
+    syncCacheClock(cache, hasLive);
   }
 
   /**
@@ -3804,13 +4940,15 @@
    * the person can actually see. Everything else on the line moves on an event,
    * so anything more than this would be a timer redrawing static text.
    */
-  function syncCacheClock(cache) {
+  function syncCacheClock(cache, hasLive) {
     const wanted =
       cacheTtlSeconds > 0 &&
       lastRequestAt !== null &&
       cache.cached > 0 &&
       cache.remaining !== null &&
       cache.remaining > 0 &&
+      !hasLive &&
+      !meter.hidden &&
       !document.hidden;
     if (wanted && cacheClock === null) {
       cacheClock = setInterval(renderMeter, 1000);
@@ -3906,12 +5044,19 @@
     if (steps) parts.push(steps);
     const usage = (done && done.usage) || null;
     if (usage) {
-      const total = count(usage.total_tokens);
+      const inputTokens = meterMath.count(usage.input_tokens);
+      const outputTokens = meterMath.count(usage.output_tokens);
+      const totalTokens = meterMath.count(usage.total_tokens) || inputTokens + outputTokens;
+      const total = count(totalTokens);
       if (total) {
-        const split = count(usage.input_tokens) && count(usage.output_tokens)
-          ? ` (${count(usage.input_tokens)} in / ${count(usage.output_tokens)} out)`
+        const split = inputTokens || outputTokens
+          ? ` (${count(inputTokens) || '0'} in / ${count(outputTokens) || '0'} out)`
           : '';
         parts.push(`${total} tokens${split}`);
+      }
+      const cachedTokens = meterMath.count(usage.cached_tokens);
+      if (cachedTokens > 0 && inputTokens > 0) {
+        parts.push(`${Math.min(100, Math.round((cachedTokens / inputTokens) * 100))}% cache`);
       }
     }
     return parts;
@@ -3930,7 +5075,8 @@
     // not a conclusion, so both keep the ending they had. `failure` is always
     // present — a clean finish is `{kind: 'none'}` — so the kind is what says
     // the run finished, not the object's absence.
-    if (!failure || failure.kind === 'none') markSummary(round);
+    if (!failure || failure.kind === 'none') markSummary(round, done && done.run_id);
+    finishReply();
     const parts = runSummary(done);
     recordUsage(done);
     setStatus(parts.join(' · '));
@@ -3964,7 +5110,8 @@
     const word = status === 'error' ? 'Run failed' : status === 'cancelled' ? 'Run stopped' : 'Run finished';
     // Before the run-end line is appended: the summary has to still be the last
     // block the run drew, and the line is the replay's ending, not its content.
-    if (status !== 'error' && status !== 'cancelled') markSummary(round);
+    if (status !== 'error' && status !== 'cancelled') markSummary(round, done && done.run_id);
+    finishReply();
     const line = el('div', 'msg run-end');
     line.appendChild(el('div', 'body', [word].concat(runSummary(done)).join(' · ')));
     append(line);
@@ -4028,7 +5175,7 @@
    * title is said once. The Copy action already holds the whole answer, because
    * `endRound` copied it before this ran.
    */
-  function markSummary(round) {
+  function markSummary(round, runId) {
     if (!round || !round.wrap || !round.body) return false;
     if (round.text.trim() === '') return false;
     if (!isLastBlock(round.wrap)) return false;
@@ -4052,7 +5199,17 @@
     const turn = round.wrap.closest('.reply');
     const hint = turn ? turn.querySelector('.reply-hint') : null;
     if (hint) hint.textContent = parts.title;
-    syncRail(round.wrap.parentElement);
+    const body = round.wrap.parentElement;
+    if (turn && turn.parentElement && body) {
+      // Keep the conclusion next to its turn, but outside the fold containing
+      // the work that led to it.
+      turn.parentElement.insertBefore(round.wrap, turn.nextSibling);
+      round.wrap.classList.remove('rail', 'rail-up', 'rail-down');
+      syncRail(body);
+    } else {
+      syncRail(body);
+    }
+    if (typeof runId === 'string' && runId !== '') runSummaries.set(runId, round.wrap);
     return true;
   }
 
@@ -4257,11 +5414,16 @@
       vscode.postMessage({ type: 'openTasks' });
       return;
     }
+    if (/^\/ref(?:\s.*)?$/i.test(text)) {
+      openQuotePicker();
+      return;
+    }
     if (text === '' || running) return;
     // The composer is emptied here but the turn keeps what was sent, so the
     // optimistic echo below is the record of it either way.
     const sentMentions = mentions.slice();
     const sentImages = images.slice();
+    const sentQuotes = quotes.slice();
     // Recorded before the box is emptied: the prompt is what the user typed,
     // and the walk below must not depend on the composer still holding it.
     historyMath.record(history, text);
@@ -4269,10 +5431,11 @@
     input.value = '';
     growInput();
     mentions = [];
+    quotes = [];
     images = [];
     closePalette();
     renderChips();
-    addUser(text, sentMentions, sentImages);
+    addUser(text, sentMentions, sentImages, sentQuotes);
     // Optimistic: the host's `state` notification confirms it a moment later,
     // but the composer must lock immediately or a double Enter sends twice.
     setRunning(true);
@@ -4280,7 +5443,13 @@
     // A new turn: a plan the reader closed last time is allowed to appear
     // again, even if the model repeats it word for word.
     todoEpoch += 1;
-    vscode.postMessage({ type: 'send', text, mentions: sentMentions, images: sentImages });
+    vscode.postMessage({
+      type: 'send',
+      text,
+      mentions: sentMentions,
+      images: sentImages,
+      quotes: sentQuotes.map((quote) => ({ role: quote.role, text: quote.text })),
+    });
   });
 
   // True while an IME composition is open, and for the Enter that closes it.
@@ -4372,6 +5541,8 @@
    * question, and `key` is "Digit2" on the layouts where "@" needs Shift.
    */
   input.addEventListener('input', () => {
+    quotePickerForced = false;
+    closeActionMenu(false);
     // An edit to a recalled prompt ends the walk: `placed` is the value the
     // history put there, so anything else came from the keyboard, and the next
     // Up should start again from the newest prompt rather than overwrite this.
@@ -4390,25 +5561,101 @@
   });
 
   input.addEventListener('blur', () => closePalette());
+  input.addEventListener('focus', () => {
+    closeActionMenu(false);
+    closeModeMenu(false);
+  });
 
-  if (modeSelect) {
-    modeSelect.addEventListener('change', () => {
-      // The echo is optimistic only in that it is immediate: the extension
-      // answers with a `mode` message, and that is what the select ends up
-      // showing, so a refusal corrects this instead of sticking.
-      vscode.postMessage({ type: 'mode', mode: modeSelect.value });
+  if (modeButton && modeMenu) {
+    modeButton.addEventListener('click', toggleModeMenu);
+    for (const row of modeRows) {
+      row.addEventListener('click', () => {
+        closeModeMenu(true);
+        vscode.postMessage({ type: 'mode', mode: row.dataset.mode || '' });
+      });
+    }
+    modeMenu.addEventListener('keydown', (event) => {
+      const current = modeRows.indexOf(document.activeElement);
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeModeMenu(true);
+      } else if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        modeRows[(current + 1 + modeRows.length) % modeRows.length]?.focus();
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        modeRows[(current - 1 + modeRows.length) % modeRows.length]?.focus();
+      }
     });
+    document.addEventListener('mousedown', (event) => {
+      if (modeMenu.hidden || modeMenu.contains(event.target) || modeButton.contains(event.target)) return;
+      closeModeMenu(false);
+    });
+    window.addEventListener('blur', () => closeModeMenu(false));
   }
 
   if (rulesButton) {
-    rulesButton.addEventListener('click', () => showRules(rules));
+    rulesButton.addEventListener('click', () => {
+      closeActionMenu(false);
+      showRules(rules);
+      input.focus();
+    });
   }
 
   if (permissionsButton) {
     // Always offered, even before the file exists: creating it is one of the two
     // things this button is for, and an entry point that only appears once
     // somebody has already found the file is not an entry point.
-    permissionsButton.addEventListener('click', () => vscode.postMessage({ type: 'openPermissions' }));
+    permissionsButton.addEventListener('click', () => {
+      closeActionMenu(false);
+      vscode.postMessage({ type: 'openPermissions' });
+    });
+  }
+
+  if (slashButton) {
+    slashButton.addEventListener('click', () => {
+      closeActionMenu(false);
+      input.value = '/';
+      growInput();
+      input.focus();
+      updatePalette();
+    });
+  }
+
+  if (mentionButton) {
+    mentionButton.addEventListener('click', () => {
+      closeActionMenu(false);
+      askForMentions();
+    });
+  }
+
+  if (quoteButton) {
+    quoteButton.addEventListener('click', openQuotePicker);
+  }
+
+  if (actionMenu) {
+    actionMenu.addEventListener('keydown', (event) => {
+      const rows = Array.from(actionMenu.querySelectorAll('button:not(:disabled)'));
+      const current = rows.indexOf(document.activeElement);
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeActionMenu(true);
+      } else if (event.key === 'ArrowDown' || event.key === 'ArrowRight') {
+        event.preventDefault();
+        rows[(current + 1 + rows.length) % rows.length]?.focus();
+      } else if (event.key === 'ArrowUp' || event.key === 'ArrowLeft') {
+        event.preventDefault();
+        rows[(current - 1 + rows.length) % rows.length]?.focus();
+      }
+    });
+    document.addEventListener('mousedown', (event) => {
+      if (actionMenu.hidden || actionMenu.contains(event.target) || attachButton.contains(event.target)) return;
+      closeActionMenu(false);
+    });
+    window.addEventListener('blur', () => closeActionMenu(false));
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) closeActionMenu(false);
+    });
   }
 
   if (focusButton) {
@@ -4445,14 +5692,17 @@
     for (const file of files) readImage(file);
   });
 
-  attachButton.addEventListener('click', askForMentions);
+  attachButton.addEventListener('click', toggleActionMenu);
 
   if (imageButton) {
     // The picker is the editor's: the webview can read a `File` it was given,
     // but it cannot open a dialog, and a picked path is then read by the same
     // side that reads an attachment. The host answers with data URLs, so the
     // composer ends up with exactly what a paste puts there.
-    imageButton.addEventListener('click', () => vscode.postMessage({ type: 'pickImages' }));
+    imageButton.addEventListener('click', () => {
+      closeActionMenu(false);
+      vscode.postMessage({ type: 'pickImages' });
+    });
   }
 
   /**
@@ -4561,10 +5811,20 @@
    * the event means. Everything that appends goes through `active`.
    */
   function renderEvent(e, msg) {
-    if (e.type === 'assistant') addAssistantChunk(e.text || '');
-    else if (e.type === 'reasoning') addReasoning(e.text || '');
-    else if (e.type === 'tool_call') addToolCall(e, msg.reviewable === true, msg.edit);
-    else if (e.type === 'tool_result') addToolResult(e);
+    if (e.usage_estimated === true && active === mainScope) recordLiveUsage(e);
+    if (e.type === 'assistant') {
+      if (active === mainScope) setWorkingActivity('Responding…');
+      addAssistantChunk(e.text || '');
+    } else if (e.type === 'reasoning') {
+      if (active === mainScope) setWorkingActivity(DEFAULT_WORKING_WORD);
+      addReasoning(e.text || '');
+    } else if (e.type === 'tool_call') {
+      if (active === mainScope) setWorkingActivity(toolActivity(e.name));
+      addToolCall(e, msg.reviewable === true, msg.edit);
+    } else if (e.type === 'tool_result') {
+      addToolResult(e);
+      if (active === mainScope) setWorkingActivity(DEFAULT_WORKING_WORD);
+    }
     else if (e.type === 'todo') setTodos(e.items);
     else if (e.type === 'compact') addCompact(e.compact);
     else if (e.type === 'error') addNotice(e.text || 'The run reported an error.');
@@ -4579,15 +5839,15 @@
         workingStep = e.step;
         workingMax = typeof e.maxSteps === 'number' && e.maxSteps > 0 ? e.maxSteps : 0;
         if (!workingLine.hidden) {
+          if (advanced) setWorkingActivity(e.text || DEFAULT_WORKING_WORD);
           renderWorkingMeta();
           if (advanced) pulseNumber(workingStepNode);
         }
       }
       if (e.text) {
-        // The host named the step: its word outranks the rotation and stays.
+        // A host-supplied activity is another event-driven state.
         if (!workingLine.hidden) {
-          workingHostWord = e.text;
-          workingWord.textContent = e.text;
+          setWorkingActivity(e.text);
         } else setStatus(e.text);
         // The line is what the eye reads; the polite region is what the ear
         // hears, and the throttle is what keeps a run of them from becoming
@@ -4675,8 +5935,11 @@
       case 'fontSize':
         applyFontSize(msg.size);
         return;
+      case 'backgroundTask':
+        updateBackgroundTask(msg.task);
+        return;
       case 'changes':
-        showChanges(msg.files);
+        showChanges(msg.files, msg.runId);
         return;
       case 'checkpoint':
         showCheckpoint(msg);
@@ -4717,8 +5980,9 @@
       case 'rules': {
         rules = Array.isArray(msg.files) ? msg.files : [];
         if (rulesButton) {
-          rulesButton.hidden = rules.length === 0;
-          rulesButton.textContent = 'Rules (' + rules.length + ')';
+          const label = 'Loaded rule files (' + rules.length + ')';
+          rulesButton.setAttribute('aria-label', label);
+          rulesButton.title = label;
         }
         // Only what the user cannot see for themselves is shown unbidden. A
         // rule file that was skipped or cut short is a silent failure of
@@ -4765,9 +6029,14 @@
         return;
       case 'replayStart':
         replaying = true;
+        replayPinsBottom = true;
+        replayAsyncBlocks = 0;
+        replayGeneration++;
+        showReplayLoading();
         return;
       case 'replayEnd':
         replaying = false;
+        settleReplayAtBottom();
         return;
       case 'reset':
         clearTranscript();

@@ -22,6 +22,8 @@
   const droppedEl = document.getElementById('dropped');
   const outputRefreshEl = document.getElementById('outputRefresh');
   const outputCloseEl = document.getElementById('outputClose');
+  const reduceMotion =
+    typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   /** The rows from the last state message, kept for elapsed updates. */
   let rows = [];
@@ -33,6 +35,27 @@
     if (className) node.className = className;
     if (text !== undefined && text !== null) node.textContent = text;
     return node;
+  }
+
+  /** The same quiet three-dot pulse used by a background spawn in the chat. */
+  function backgroundActivity() {
+    const activity = el('span', 'background-activity');
+    activity.setAttribute('aria-hidden', 'true');
+    for (let i = 0; i < 3; i++) {
+      const dot = el('span', 'background-dot');
+      activity.appendChild(dot);
+      if (!reduceMotion && typeof dot.animate === 'function') {
+        dot.animate(
+          [
+            { transform: 'translateY(0) scale(0.75)', opacity: 0.32 },
+            { transform: 'translateY(-2px) scale(1)', opacity: 1 },
+            { transform: 'translateY(0) scale(0.75)', opacity: 0.32 },
+          ],
+          { duration: 960, delay: i * 160, iterations: Infinity, easing: 'ease-in-out' },
+        );
+      }
+    }
+    return activity;
   }
 
   function setStatus(text) {
@@ -96,6 +119,7 @@
     node.appendChild(el('span', 'title', row.title));
 
     const status = el('span', 'status status-' + row.status, row.status);
+    if (row.status === 'running') status.appendChild(backgroundActivity());
     node.appendChild(status);
 
     const elapsed = el('span', 'elapsed', elapsedOf(row));

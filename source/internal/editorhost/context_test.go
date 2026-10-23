@@ -5,6 +5,7 @@ package editorhost
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -213,6 +214,32 @@ func TestSelectionOutsideTheWorkspaceIsStillSent(t *testing.T) {
 
 	if text := lastUserText(t, llm.lastRequestBody(t)); !strings.Contains(text, "hello") {
 		t.Fatalf("the selected text did not reach the model:\n%s", text)
+	}
+}
+
+func TestQuotedMessagesKeepTheirSpeakerAndShareTheContextBudget(t *testing.T) {
+	quotes := make([]Quote, maxQuotes+1)
+	for i := range quotes {
+		role := "assistant"
+		if i == 0 {
+			role = "user"
+		}
+		quotes[i] = Quote{Role: role, Text: fmt.Sprintf("message %d", i)}
+	}
+	budget := maxContextBytes
+	block := quoteBlock(quotes, &budget)
+
+	if !strings.Contains(block, `<quote role="user">`+"\nmessage 0") {
+		t.Fatalf("the user quote lost its speaker:\n%s", block)
+	}
+	if !strings.Contains(block, `<quote role="assistant">`+"\nmessage 1") {
+		t.Fatalf("the assistant quote lost its speaker:\n%s", block)
+	}
+	if strings.Contains(block, "message 16") || !strings.Contains(block, "1 further quoted messages were left out") {
+		t.Fatalf("the quote cap was not reported:\n%s", block)
+	}
+	if budget >= maxContextBytes {
+		t.Fatal("quotes did not spend the shared context budget")
 	}
 }
 

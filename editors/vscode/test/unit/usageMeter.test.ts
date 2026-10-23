@@ -1,5 +1,5 @@
 /**
- * The composer's token meter: the arithmetic, and where it is wired in.
+ * The conversation's token meter: the arithmetic, and where it is wired in.
  *
  * The sums live in `media/meter.js`, a plain browser script that assigns a
  * global — `media/` is linted as browser code and never built, so the same
@@ -172,6 +172,10 @@ test('counts use one shorthand', () => {
   assert.equal(meter.short(999), '999');
   assert.equal(meter.short(1200), '1.2k');
   assert.equal(meter.short(12000), '12k');
+  assert.equal(meter.short(829000), '829k');
+  assert.equal(meter.short(1000000), '1M');
+  assert.equal(meter.short(3715000), '3.7M');
+  assert.equal(meter.short(12000000), '12M');
   assert.equal(meter.short(0), '');
   assert.equal(meter.count(42.9), 42);
 });
@@ -358,37 +362,34 @@ test('the renderer keeps both clocks, and only the cache one ticks', () => {
   assert.doesNotMatch(render, /\.innerHTML\s*(\+)?=(?!=)/);
   // The line is no longer one string: each count has its own node so a landing
   // count can pulse without moving the others (p_0.46.26).
-  assert.match(render, /setNumber\(meterIn, /);
+  assert.match(render, /rollNumber\(meterIn, /);
   assert.match(render, /meter\.title = text/);
   assert.match(render, /meterMath\.remaining\(/);
   assert.match(render, /meterMath\.cache\(/);
-  // Two scopes, two places (p_0.46.24): the conversation's share of its window
-  // is written on the root line, and the session's spent total and cache are
-  // written in the composer.
+  // Two scopes, one footprint: the conversation's share of its window is
+  // written on the root line, and its spent total and cache sit above that,
+  // directly below the hammer/status line (p_0.46.28).
   assert.match(render, /facts\.push\('compact at '/);
   assert.match(render, /rootFacts\.textContent = factsText/);
   // The root line lives in the transcript; only a change to it may pull a
   // reader back to the bottom. This renderer runs once a second while a cache
   // is live, and pinning on a countdown would undo a scroll the reader made.
   assert.match(render, /rootFacts\.textContent !== factsText/);
-  assert.equal(
-    (render.match(/scrollIfPinned\(/g) ?? []).length,
-    1,
-    'only the root line change pins the transcript, not the per-second tick',
-  );
+  assert.equal((render.match(/scrollIfPinned\(/g) ?? []).length, 2, 'root or count changes may pin');
+  assert.match(render, /if \(countsBefore !== countsAfter\) scrollIfPinned\(pinned\)/);
   assert.match(render, /meterMath\.clock\(cache\.remaining\)/);
   assert.match(render, /'cold'/);
   // The per-second tick is written into its own node, so the cache count beside
   // it is not re-written (and not pulsed) once a second (p_0.46.26).
   assert.match(render, /meterClock\.textContent = ''/);
-  // All three session counts are drawn whenever the provider reported them.
+  // All three conversation counts are drawn whenever the provider reported them.
   // Gating in/out on a missing context window left the line saying only
   // 'cache' (p_0.46.26).
-  assert.match(render, /setNumber\(meterIn, countText\(usageTotals\.input/);
-  assert.match(render, /setNumber\(meterOut, countText\(usageTotals\.output/);
-  assert.match(render, /setNumber\(meterCache, countText\(cache\.cached/);
+  assert.match(render, /rollNumber\(meterIn, input/);
+  assert.match(render, /rollNumber\(meterOut, output/);
+  assert.match(render, /setNumber\(meterCache, hasLive \? '' : countText\(cache\.cached/);
   assert.doesNotMatch(render, /if \(!context\)/);
-  // The composer's row can truncate the total; the whole line stays reachable.
+  // The footprint line can truncate the total; the whole line stays reachable.
   assert.match(render, /meter\.title = text/);
   assert.match(render, /meter\.setAttribute\('aria-label', text\)/);
 
@@ -433,7 +434,67 @@ test('a compact draws one divider, live and replayed, as text', () => {
 test('the protocol carries usage on an event', () => {
   const hostEvent = PROTOCOL.slice(PROTOCOL.indexOf('export interface HostEvent'));
   assert.match(hostEvent.slice(0, hostEvent.indexOf('\n}')), /usage\?: Usage/);
+  assert.match(hostEvent.slice(0, hostEvent.indexOf('\n}')), /usage_estimated\?: boolean/);
   assert.match(PROTOCOL, /export interface Usage \{/);
+});
+
+test('live estimates use the current run and terminal usage replaces them', () => {
+  const live = bodyOf(CHAT_JS, 'recordLiveUsage');
+  assert.match(live, /event\.usage_estimated !== true/);
+  assert.match(live, /liveUsage = event\.usage/);
+  assert.match(live, /renderMeter\(\)/);
+
+  const record = bodyOf(CHAT_JS, 'recordUsage');
+  assert.match(record, /liveUsage = null/);
+  assert.ok(record.indexOf('liveUsage = null') < record.indexOf('meterMath.add'), 'clear before add');
+
+  const render = bodyOf(CHAT_JS, 'renderMeter');
+  assert.match(render, /const input = meterMath\.count\(liveUsage && liveUsage\.input_tokens\)/);
+  assert.match(render, /const output = meterMath\.count\(liveUsage && liveUsage\.output_tokens\)/);
+  assert.doesNotMatch(render, /usageTotals\.(input|output) \+/);
+  assert.match(render, /if \(output > 0 \|\| hasLive\) rollNumber\(meterOut/);
+  // Cache remains derived only from completed provider usage and stays out of
+  // the live line. The settled status owns it once the current run ends.
+  assert.match(render, /meterMath\.cache\(usageTotals,/);
+  assert.doesNotMatch(render, /meterMath\.cache\(liveUsage,/);
+  assert.match(render, /setNumber\(meterCache, hasLive \? '' : countText/);
+});
+
+test('live input and output roll without queuing, and reduced motion updates immediately', () => {
+  const roll = bodyOf(CHAT_JS, 'rollNumber');
+  assert.match(roll, /stopNumberRoll\(node\)/);
+  assert.match(roll, /requestAnimationFrame\(tick\)/);
+  assert.match(roll, /from \+ \(target - from\) \* eased/);
+  assert.match(roll, /duration = 320/);
+  assert.match(roll, /if \(reduceMotion \|\| from === target/);
+  assert.match(roll, /exact \? String\(n\) : amount\(n\)/);
+  const render = bodyOf(CHAT_JS, 'renderMeter');
+  assert.match(render, /rollNumber\(meterIn, input, '\\u00a0in'/);
+  assert.match(render, /rollNumber\(meterOut, output, '\\u00a0out'/);
+});
+
+test('the travelling highlight enlarges and brightens one character front', () => {
+  const paint = bodyOf(CHAT_JS, 'paintTextFlow');
+  assert.match(paint, /'flow-char flow-gap'/);
+  assert.match(paint, /el\('span', className, character\)/);
+  assert.match(paint, /scale\(\$\{1 \+ 0\.2 \* strength\}\)/);
+  assert.match(paint, /brightness\(\$\{1 \+ 0\.65 \* strength\}\)/);
+  assert.match(paint, /var\(--vscode-focusBorder\)/);
+  const flow = bodyOf(CHAT_JS, 'flowText');
+  assert.match(flow, /if \(reduceMotion/);
+  assert.match(flow, /requestAnimationFrame\(tick\)/);
+  assert.match(CHAT_CSS, /\.flow-char\.flow-gap\s*\{[^}]*width:\s*0\.4em/s);
+});
+
+test('a finished run owns one compact usage line with terminal cache percentage', () => {
+  const summary = bodyOf(CHAT_JS, 'runSummary');
+  assert.match(summary, /count\(totalTokens\)/);
+  assert.match(summary, /count\(inputTokens\).* in \/ \$\{count\(outputTokens\).* out/);
+  assert.match(summary, /Math\.round\(\(cachedTokens \/ inputTokens\) \* 100\)/);
+  assert.match(summary, /% cache/);
+
+  const render = bodyOf(CHAT_JS, 'renderMeter');
+  assert.match(render, /meter\.hidden = text === '' \|\| !hasLive/);
 });
 
 test('a count that lands pulses once, and a redraw does not', () => {
@@ -469,7 +530,7 @@ test('a count that lands pulses once, and a redraw does not', () => {
   // can be parsed as text. The pulse is the script's job for that reason.
   assert.doesNotMatch(CHAT_CSS, /@[a-z-]+\s*[({]/, 'chat.css must stay free of at-rules');
   // Each count needs its own box: a transform on an inline box does not apply.
-  assert.match(CHAT_CSS, /\.composer \.meter > span \{[^}]*display: inline-block/);
+  assert.match(CHAT_CSS, /\.footprint \.meter > span \{[^}]*display: inline-block/);
   assert.match(CHAT_CSS, /\.status \.working-step \{[^}]*display: inline-block/);
 });
 
@@ -479,7 +540,7 @@ test('a count with nothing to report keeps its place instead of vanishing', () =
   // "this build has no meter" rather than "nothing has been counted yet"
   // (p_0.46.26).
   const render = bodyOf(CHAT_JS, 'renderMeter');
-  assert.match(render, /const pending = usageTotals\.input <= 0 && usageTotals\.output <= 0/);
+  assert.match(render, /const pending = input <= 0 && output <= 0/);
   // An em dash is the one spelling that cannot be mistaken for a count — and
   // it keeps the count's name, so the first turn reads `— · — · cache —`
   // rather than three bare dashes.
