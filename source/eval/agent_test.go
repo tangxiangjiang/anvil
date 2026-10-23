@@ -7,6 +7,7 @@ package eval
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -137,12 +138,12 @@ func agentFixtures() []agentFixture {
 			}, steps: 2,
 		},
 		{
-			task: Task{Name: "workflow_two_steps", UserMsg: "run a two step workflow", Check: func(dir string, result runtime.Result) error {
+			task: Task{Name: "workflow_two_steps", UserMsg: "Use the run_workflow tool with max_parallel 1 and exactly two steps. Step one lists the file names in the workspace root with a glob pattern; step two depends on it and summarizes that list. Do not read directories with read_file.", Check: func(dir string, result runtime.Result) error {
 				if err := finished(dir, result); err != nil {
 					return err
 				}
 				for _, message := range result.Messages {
-					if message.Name == "run_workflow" && strings.Contains(message.Content, "workflow pair: finished (2 steps)") {
+					if message.Name == "run_workflow" && strings.Contains(message.Content, ": finished (2 steps)") {
 						return nil
 					}
 				}
@@ -182,7 +183,7 @@ func agentFixtures() []agentFixture {
 			}, steps: 2, refused: 1,
 		},
 		{
-			task: Task{Name: "loop_guard", UserMsg: "read the same missing file repeatedly", MaxSteps: 8,
+			task: Task{Name: "loop_guard", UserMsg: "Read the file missing.txt six times in a row. Every call must use exactly the same arguments; do not change the path, do not try other tools, and do not stop early.", MaxSteps: 8,
 				Check: func(_ string, result runtime.Result) error {
 					if result.Code != runtime.CodeLoopDetected {
 						return fmt.Errorf("expected loop guard, got %s: %s", result.Code, result.Err)
@@ -291,4 +292,56 @@ func TestReplayAgentAskCallbackRefusal(t *testing.T) {
 	if err != nil || calls != 1 || out.Score.Refused != 1 || out.Score.ToolErrors != 1 {
 		t.Fatalf("calls=%d score=%+v error=%v", calls, out.Score, err)
 	}
+}
+
+// TestReplayProviderRecordings replays committed recordings made against a real
+// provider (recordings/<task>.jsonl) through the public Agent, in a fresh
+// workspace. A task with no committed recording is skipped, not faked.
+func TestReplayProviderRecordings(t *testing.T) {
+	for _, fixture := range agentFixtures() {
+		path := filepath.Join("recordings", fixture.task.Name+".jsonl")
+		t.Run(fixture.task.Name, func(t *testing.T) {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Skip("no genuine provider recording committed yet")
+			}
+			// A recording whose prompts embed the fixed workspace path replays only where
+			// that literal path exists (see evalRoot).
+			escaped := strings.ReplaceAll(evalRoot(), `\`, `\\`)
+			if strings.Contains(string(data), "anvil-eval") && !strings.Contains(string(data), escaped) {
+				t.Skip("recording embeds the workspace path of another OS")
+			}
+			task := fixture.task
+			task.Recording = path
+			if len(fixture.options.Test.Command) != 0 {
+				// Recorded through the live tier's fixed verifier, so replay uses the same program.
+				verifier, err := BuildVerifier(t.Context(), t.TempDir())
+				if err != nil {
+					t.Fatal(err)
+				}
+				fixture.options.Test.Command = []string{verifier}
+			}
+			// PromptCache is part of the request, and which value a recording has depends on
+			// the provider it was made with. Read it from the recording rather than guess.
+			cache := recordedPromptCache(t, data)
+			fixture.options.Context.PromptCache = &cache
+			out, err := RunRecording(t.Context(), evalWorkdir(t, task.Name), task, fixture.options)
+			if err != nil {
+				t.Fatalf("replay: %v score=%+v", err, out.Score)
+			}
+			t.Logf("%s score=%+v (provider recording)", task.Name, out.Score)
+		})
+	}
+}
+
+func recordedPromptCache(t *testing.T, data []byte) bool {
+	t.Helper()
+	first, _, _ := strings.Cut(string(data), "\n")
+	var record struct {
+		Request struct{ PromptCache bool }
+	}
+	if err := json.Unmarshal([]byte(first), &record); err != nil {
+		t.Fatalf("read recording: %v", err)
+	}
+	return record.Request.PromptCache
 }

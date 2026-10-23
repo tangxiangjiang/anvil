@@ -28,12 +28,19 @@ import (
 )
 
 func main() {
-	for name, want := range map[string]string{"a.go": "return 3", "b.go": "return 4"} {
-		data, err := os.ReadFile(name)
-		if err != nil || !strings.Contains(string(data), want) {
-			fmt.Printf("FAIL %s: want %q\n", name, want)
-			os.Exit(1)
+	// A fixed order and a full report: the output is part of the model's next request,
+	// so it must not depend on map iteration order.
+	checks := []struct{ name, want string }{{"a.go", "return 3"}, {"b.go", "return 4"}}
+	failed := false
+	for _, check := range checks {
+		data, err := os.ReadFile(check.name)
+		if err != nil || !strings.Contains(string(data), check.want) {
+			fmt.Printf("FAIL %s: want %q\n", check.name, check.want)
+			failed = true
 		}
+	}
+	if failed {
+		os.Exit(1)
 	}
 	fmt.Println("ok  evalfixture")
 }

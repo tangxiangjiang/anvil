@@ -162,7 +162,7 @@
       "refused": 0,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 3347,
+      "request_bytes": 3345,
       "agents": 0
     }
   },
@@ -197,7 +197,7 @@
       "refused": 0,
       "loop_stops": 1,
       "retries": 0,
-      "request_bytes": 8813,
+      "request_bytes": 9331,
       "agents": 0
     }
   },
@@ -247,7 +247,72 @@
       "refused": 1,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 3307,
+      "request_bytes": 3309,
+      "agents": 0
+    }
+  },
+  "provider_permission_deny_no_callback": {
+    "gated": [
+      "completed",
+      "steps",
+      "refused"
+    ],
+    "score": {
+      "completed": true,
+      "steps": 2,
+      "tool_errors": 1,
+      "refused": 1,
+      "loop_stops": 0,
+      "retries": 0,
+      "request_bytes": 3238,
+      "agents": 0
+    }
+  },
+  "provider_spawn_read_report": {
+    "gated": [
+      "completed",
+      "steps"
+    ],
+    "score": {
+      "completed": true,
+      "steps": 2,
+      "tool_errors": 0,
+      "refused": 0,
+      "loop_stops": 0,
+      "retries": 0,
+      "request_bytes": 17571,
+      "agents": 0
+    }
+  },
+  "provider_two_file_edit_test": {
+    "gated": [
+      "completed",
+      "steps"
+    ],
+    "score": {
+      "completed": true,
+      "steps": 7,
+      "tool_errors": 3,
+      "refused": 0,
+      "loop_stops": 0,
+      "retries": 0,
+      "request_bytes": 22014,
+      "agents": 0
+    }
+  },
+  "provider_workflow_two_steps": {
+    "gated": [
+      "completed",
+      "steps"
+    ],
+    "score": {
+      "completed": true,
+      "steps": 2,
+      "tool_errors": 0,
+      "refused": 0,
+      "loop_stops": 0,
+      "retries": 0,
+      "request_bytes": 16731,
       "agents": 0
     }
   },
@@ -279,7 +344,7 @@
       "refused": 0,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 7855,
+      "request_bytes": 7853,
       "agents": 0
     }
   },
@@ -311,7 +376,7 @@
       "refused": 0,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 9839,
+      "request_bytes": 10253,
       "agents": 0
     }
   }

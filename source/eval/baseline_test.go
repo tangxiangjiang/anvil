@@ -56,6 +56,42 @@ func behaviourCases() []evalCase {
 			return out.Score, err
 		}})
 	}
+	cases = append(cases, providerCases()...)
+	return cases
+}
+
+// providerCases replays each committed real-provider recording through the public
+// Agent. A task with no committed recording has no baseline entry, so it is neither
+// scored nor faked.
+func providerCases() []evalCase {
+	var cases []evalCase
+	for _, fixture := range agentFixtures() {
+		path := filepath.Join("recordings", fixture.task.Name+".jsonl")
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		gated := behaviourGate
+		if fixture.refused != 0 {
+			gated = append(append([]string(nil), behaviourGate...), "refused")
+		}
+		cases = append(cases, evalCase{name: "provider_" + fixture.task.Name, gated: gated, run: func(t *testing.T) (Score, error) {
+			task := fixture.task
+			task.Recording = path
+			options := fixture.options
+			cache := recordedPromptCache(t, data)
+			options.Context.PromptCache = &cache
+			if len(options.Test.Command) != 0 {
+				verifier, err := BuildVerifier(t.Context(), t.TempDir())
+				if err != nil {
+					return Score{}, err
+				}
+				options.Test.Command = []string{verifier}
+			}
+			out, err := RunRecording(t.Context(), evalWorkdir(t, task.Name), task, options)
+			return out.Score, err
+		}})
+	}
 	return cases
 }
 

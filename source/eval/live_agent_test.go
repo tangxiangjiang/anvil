@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -28,14 +29,18 @@ func TestLiveReport(t *testing.T) {
 	for _, fixture := range agentFixtures() {
 		t.Run(fixture.task.Name, func(t *testing.T) {
 			if len(fixture.options.Test.Command) != 0 {
-				t.Skip("live test-command execution needs a separately authorized OS sandbox")
+				verifier, err := BuildVerifier(t.Context(), t.TempDir())
+				if err != nil {
+					t.Fatal(err)
+				}
+				fixture.options.Test.Command = []string{verifier}
 			}
 			// Separate paths, exclusively created; committed data is never replaced.
 			if err := os.MkdirAll("recordings", 0o755); err != nil {
 				t.Fatal(err)
 			}
 			path := filepath.Join("recordings", fixture.task.Name+".live.jsonl")
-			out, err := RunLive(t.Context(), t.TempDir(), fixture.task, path, fixture.options)
+			out, err := RunLive(t.Context(), evalWorkdir(t, fixture.task.Name), fixture.task, path, fixture.options)
 			// Remote model performance is a report: no remote-dependent red gate.
 			t.Logf("%s live score=%+v error=%v", fixture.task.Name, out.Score, err)
 		})
@@ -113,4 +118,31 @@ func TestLiveAcceptsOnlyBuiltVerifier(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "leak")); !os.IsNotExist(err) {
 		t.Fatal("a model-supplied argument made the verifier write a file")
 	}
+}
+
+// evalRoot is a fixed, user-independent parent for live and replay workspaces. A real
+// model copies the workspace path into its own prompts (a workflow step, a child
+// task), and that text is user content the digest must not normalize away. Recording
+// and replaying in the same literal path keeps those requests identical without
+// weakening the digest. The path differs per OS, so such a recording replays only on
+// the OS that made it.
+func evalRoot() string {
+	if runtime.GOOS == "windows" {
+		return `C:\anvil-eval`
+	}
+	return "/tmp/anvil-eval"
+}
+
+// evalWorkdir returns an empty directory at evalRoot()/<task> and removes it afterwards.
+func evalWorkdir(t *testing.T, task string) string {
+	t.Helper()
+	dir := filepath.Join(evalRoot(), task)
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
 }
