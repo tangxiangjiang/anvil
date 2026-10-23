@@ -124,8 +124,9 @@ already recorded digest fails capture before writing an unreplayable line, inclu
 in tool-call IDs or usage; identical duplicate responses are allowed with finite counts.
 Runs use controlled fresh
 workspaces, restricted tools and bounded delegation/time. No shell, executable hooks, MCP or
-verification commands are enabled; the two-file test-command scenario needs a separately
-authorized OS sandbox and is not included in the current live report.
+model-chosen commands are enabled. The two-file scenario runs a fixed verifier that ignores its
+arguments and only reads the two edited files; real `go test` of model-written code would need an
+OS sandbox and is not part of the live tier.
 
 Model-dependent completion/scores are reports, not regression gates. Runner/recorder errors
 are surfaced, not counted as successful captures. No real provider calls or genuine recordings

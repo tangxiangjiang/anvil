@@ -8,6 +8,7 @@ package eval
 import (
 	"flag"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -53,6 +54,7 @@ func TestLiveRejectsUnsafeSettings(t *testing.T) {
 	}{
 		{"test_command", anvil.Options{Test: anvil.TestOptions{Command: []string{"unused"}}}, "OS sandbox"},
 		{"build_command", anvil.Options{Build: anvil.BuildOptions{Command: []string{"unused"}}}, "OS sandbox"},
+		{"model_test_command", anvil.Options{Test: anvil.TestOptions{Command: []string{"go", "test", "./..."}}}, "only the eval-built verifier"},
 		{"shell_only", anvil.Options{BuiltinTools: []string{"shell"}}, "no safe selected tools"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -80,5 +82,35 @@ func TestLiveRequiresExplicitOptIn(t *testing.T) {
 	_, err = RunLive(t.Context(), t.TempDir(), Task{Name: "live"}, filepath.Join(t.TempDir(), "live.live.jsonl"), anvil.Options{})
 	if err == nil || !strings.Contains(err.Error(), "ANVIL_MODEL and ANVIL_API_KEY") {
 		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestLiveAcceptsOnlyBuiltVerifier(t *testing.T) {
+	verifier, err := BuildVerifier(t.Context(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !trustedVerifierCommand([]string{verifier}) {
+		t.Fatal("built verifier was not trusted")
+	}
+	for _, command := range [][]string{{verifier, "-test.cpuprofile=x"}, {"go", "test"}, {verifier + "-other"}, nil} {
+		if trustedVerifierCommand(command) {
+			t.Fatalf("untrusted command accepted: %v", command)
+		}
+	}
+	// The verifier ignores arguments the model passes through extra_args.
+	dir := t.TempDir()
+	for name, body := range map[string]string{"a.go": "return 3", "b.go": "return 4"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmd := exec.Command(verifier, "-test.cpuprofile="+filepath.Join(dir, "leak"), "--anything")
+	cmd.Dir = dir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("verifier: %v\n%s", err, output)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "leak")); !os.IsNotExist(err) {
+		t.Fatal("a model-supplied argument made the verifier write a file")
 	}
 }

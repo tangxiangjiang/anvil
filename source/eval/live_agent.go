@@ -43,10 +43,14 @@ func RunLive(ctx context.Context, dir string, task Task, path string, settings a
 	default:
 		return Outcome{}, fmt.Errorf("unsupported live eval provider")
 	}
-	if len(settings.Test.Command) != 0 || len(settings.Build.Command) != 0 {
-		return Outcome{}, fmt.Errorf("live verification commands require a separately authorized OS sandbox")
+	trusted := len(settings.Test.Command) != 0 && trustedVerifierCommand(settings.Test.Command)
+	if (len(settings.Test.Command) != 0 && !trusted) || len(settings.Build.Command) != 0 {
+		return Outcome{}, fmt.Errorf("live verification commands require a separately authorized OS sandbox; only the eval-built verifier is allowed")
 	}
 	allowed := []string{"read_file", "list_dir", "glob", "edit_file", "write_file", "apply_patch", "spawn_agent", "run_workflow"}
+	if trusted {
+		allowed = append(allowed, "run_tests")
+	}
 	if len(settings.BuiltinTools) != 0 {
 		selected := tools.ExpandToolSelectors(settings.BuiltinTools)
 		filtered := make([]string, 0, len(allowed))
@@ -66,6 +70,7 @@ func RunLive(ctx context.Context, dir string, task Task, path string, settings a
 	}
 	opts := anvil.Options{Provider: anvil.Provider(provider), APIKey: key, Model: anvil.Model{ID: model}, BaseURL: config.BaseURL,
 		BuiltinTools:     allowed,
+		Test:             settings.Test,
 		PermissionRules:  append([]anvil.PermissionRule(nil), settings.PermissionRules...),
 		Permission:       settings.Permission,
 		PermissionGroups: append([]string(nil), settings.PermissionGroups...),
