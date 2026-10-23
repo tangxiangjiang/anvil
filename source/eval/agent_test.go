@@ -201,7 +201,21 @@ func agentFixtures() []agentFixture {
 // cache variables in the SDK's deliberately scrubbed command environment.
 func prepareFixtureTest(t *testing.T) string {
 	t.Helper()
-	dir := t.TempDir()
+	// Not t.TempDir: Windows can hold a just-executed binary briefly (scanners),
+	// and a failed cleanup would fail a test whose behaviour passed.
+	dir, err := os.MkdirTemp("", "anvil-eval-check-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		for attempt := 0; attempt < 20; attempt++ {
+			if os.RemoveAll(dir) == nil {
+				return
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		t.Logf("could not remove %s", dir)
+	})
 	source := filepath.Join(dir, "check_test.go")
 	body := `package check
 import ("os"; "strings"; "testing")

@@ -158,10 +158,10 @@ structured decisions and narrow SDK/callback markers, not arbitrary "permission 
 file errors. Tool errors include children; `loop_stops` uses the authoritative root outcome
 and terminal child errors, not warnings counted a second time.
 
-## 6. The baseline (p_0.47.3, planned)
+## 6. The baseline (p_0.47.3, delivered)
 
-p_0.47.3 will add `source/eval/baseline.json` for the last accepted `Score` per task.
-`go test -tags anvileval ./eval/...` will compare against it:
+p_0.47.3 added `source/eval/baseline.json` for the last accepted `Score` per task.
+`go test -tags anvileval ./eval/...` compares against it:
 
 - A gated field that moved in the wrong direction fails the test and prints both numbers.
 - A gated field that improved passes and prints a note; the baseline is updated by running
@@ -169,7 +169,7 @@ p_0.47.3 will add `source/eval/baseline.json` for the last accepted `Score` per 
 - A task missing from the baseline fails: a new fixture must record its number before it can
   guard anything.
 
-The planned `scripts/eval.sh` will wrap `go test -tags anvileval -count=1 ./eval/...`, with
+`scripts/eval.sh` wraps `go test -tags anvileval -count=1 ./eval/...`, with
 `-update` and `-live` passed through, so later roadmap gates can name a single command.
 
 ### 6.1 The invariants suite

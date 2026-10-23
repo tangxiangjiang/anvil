@@ -1,0 +1,318 @@
+{
+  "apply_patch_add": {
+    "gated": [
+      "completed",
+      "steps"
+    ],
+    "score": {
+      "completed": true,
+      "steps": 2,
+      "tool_errors": 0,
+      "refused": 0,
+      "loop_stops": 0,
+      "retries": 0,
+      "request_bytes": 11523,
+      "agents": 0
+    }
+  },
+  "edit_file_unique": {
+    "gated": [
+      "completed",
+      "steps"
+    ],
+    "score": {
+      "completed": true,
+      "steps": 2,
+      "tool_errors": 0,
+      "refused": 0,
+      "loop_stops": 0,
+      "retries": 0,
+      "request_bytes": 11518,
+      "agents": 0
+    }
+  },
+  "injection_them_path_still_sandboxed": {
+    "gated": [
+      "completed",
+      "steps"
+    ],
+    "score": {
+      "completed": true,
+      "steps": 3,
+      "tool_errors": 1,
+      "refused": 1,
+      "loop_stops": 0,
+      "retries": 0,
+      "request_bytes": 17854,
+      "agents": 0
+    }
+  },
+  "inv_checkpoint_restore": {
+    "gated": [
+      "completed",
+      "refused",
+      "loop_stops"
+    ],
+    "score": {
+      "completed": true,
+      "steps": 3,
+      "tool_errors": 0,
+      "refused": 0,
+      "loop_stops": 0,
+      "retries": 0,
+      "request_bytes": 5496,
+      "agents": 0
+    }
+  },
+  "inv_child_never_widens": {
+    "gated": [
+      "completed",
+      "refused",
+      "loop_stops"
+    ],
+    "score": {
+      "completed": true,
+      "steps": 2,
+      "tool_errors": 1,
+      "refused": 0,
+      "loop_stops": 0,
+      "retries": 0,
+      "request_bytes": 8265,
+      "agents": 0
+    }
+  },
+  "inv_child_result_only": {
+    "gated": [
+      "completed",
+      "refused",
+      "loop_stops"
+    ],
+    "score": {
+      "completed": true,
+      "steps": 2,
+      "tool_errors": 0,
+      "refused": 0,
+      "loop_stops": 0,
+      "retries": 0,
+      "request_bytes": 7803,
+      "agents": 0
+    }
+  },
+  "inv_loop_guard": {
+    "gated": [
+      "completed",
+      "refused",
+      "loop_stops"
+    ],
+    "score": {
+      "completed": true,
+      "steps": 4,
+      "tool_errors": 4,
+      "refused": 0,
+      "loop_stops": 1,
+      "retries": 0,
+      "request_bytes": 8727,
+      "agents": 0
+    }
+  },
+  "inv_permission_ask": {
+    "gated": [
+      "completed",
+      "refused",
+      "loop_stops"
+    ],
+    "score": {
+      "completed": true,
+      "steps": 2,
+      "tool_errors": 1,
+      "refused": 1,
+      "loop_stops": 0,
+      "retries": 0,
+      "request_bytes": 3243,
+      "agents": 0
+    }
+  },
+  "inv_permission_deny": {
+    "gated": [
+      "completed",
+      "refused",
+      "loop_stops"
+    ],
+    "score": {
+      "completed": true,
+      "steps": 2,
+      "tool_errors": 1,
+      "refused": 1,
+      "loop_stops": 0,
+      "retries": 0,
+      "request_bytes": 3280,
+      "agents": 0
+    }
+  },
+  "inv_plan_readonly": {
+    "gated": [
+      "completed",
+      "refused",
+      "loop_stops"
+    ],
+    "score": {
+      "completed": true,
+      "steps": 2,
+      "tool_errors": 1,
+      "refused": 0,
+      "loop_stops": 0,
+      "retries": 0,
+      "request_bytes": 3347,
+      "agents": 0
+    }
+  },
+  "inv_sandbox_escape": {
+    "gated": [
+      "completed",
+      "refused",
+      "loop_stops"
+    ],
+    "score": {
+      "completed": true,
+      "steps": 2,
+      "tool_errors": 1,
+      "refused": 1,
+      "loop_stops": 0,
+      "retries": 0,
+      "request_bytes": 3311,
+      "agents": 0
+    }
+  },
+  "loop_guard": {
+    "gated": [
+      "completed",
+      "steps",
+      "refused",
+      "loop_stops"
+    ],
+    "score": {
+      "completed": true,
+      "steps": 4,
+      "tool_errors": 4,
+      "refused": 0,
+      "loop_stops": 1,
+      "retries": 0,
+      "request_bytes": 8813,
+      "agents": 0
+    }
+  },
+  "max_steps_exceeded": {
+    "gated": [
+      "completed",
+      "steps"
+    ],
+    "score": {
+      "completed": true,
+      "steps": 2,
+      "tool_errors": 0,
+      "refused": 0,
+      "loop_stops": 0,
+      "retries": 0,
+      "request_bytes": 11470,
+      "agents": 0
+    }
+  },
+  "multi_file_edit_patch": {
+    "gated": [
+      "completed",
+      "steps"
+    ],
+    "score": {
+      "completed": true,
+      "steps": 3,
+      "tool_errors": 0,
+      "refused": 0,
+      "loop_stops": 0,
+      "retries": 0,
+      "request_bytes": 17782,
+      "agents": 0
+    }
+  },
+  "permission_deny_no_callback": {
+    "gated": [
+      "completed",
+      "steps",
+      "refused",
+      "loop_stops"
+    ],
+    "score": {
+      "completed": true,
+      "steps": 2,
+      "tool_errors": 1,
+      "refused": 1,
+      "loop_stops": 0,
+      "retries": 0,
+      "request_bytes": 3307,
+      "agents": 0
+    }
+  },
+  "sandbox_escape_denied": {
+    "gated": [
+      "completed",
+      "steps"
+    ],
+    "score": {
+      "completed": true,
+      "steps": 2,
+      "tool_errors": 1,
+      "refused": 1,
+      "loop_stops": 0,
+      "retries": 0,
+      "request_bytes": 11513,
+      "agents": 0
+    }
+  },
+  "spawn_read_report": {
+    "gated": [
+      "completed",
+      "steps"
+    ],
+    "score": {
+      "completed": true,
+      "steps": 2,
+      "tool_errors": 0,
+      "refused": 0,
+      "loop_stops": 0,
+      "retries": 0,
+      "request_bytes": 7855,
+      "agents": 0
+    }
+  },
+  "two_file_edit_test": {
+    "gated": [
+      "completed",
+      "steps"
+    ],
+    "score": {
+      "completed": true,
+      "steps": 4,
+      "tool_errors": 0,
+      "refused": 0,
+      "loop_stops": 0,
+      "retries": 0,
+      "request_bytes": 9792,
+      "agents": 0
+    }
+  },
+  "workflow_two_steps": {
+    "gated": [
+      "completed",
+      "steps"
+    ],
+    "score": {
+      "completed": true,
+      "steps": 2,
+      "tool_errors": 0,
+      "refused": 0,
+      "loop_stops": 0,
+      "retries": 0,
+      "request_bytes": 9839,
+      "agents": 0
+    }
+  }
+}

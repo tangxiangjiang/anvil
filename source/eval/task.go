@@ -30,6 +30,9 @@ type Task struct {
 type Outcome struct {
 	Result runtime.Result
 	Score  Score
+	// AgentID is set by the public Agent runner, so a task can look at what the
+	// run left behind (for example its checkpoint) after the agent is closed.
+	AgentID string
 }
 
 func (task Task) maxSteps() int {

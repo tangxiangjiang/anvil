@@ -132,7 +132,7 @@ streamLoop:
 	if harnessErr == nil {
 		harnessErr = checkTask(dir, task, result)
 	}
-	return Outcome{Result: result, Score: score.finish(result, harnessErr == nil, bytes)}, harnessErr
+	return Outcome{Result: result, Score: score.finish(result, harnessErr == nil, bytes), AgentID: agent.AgentID()}, harnessErr
 }
 
 // RunRecording is tier 2's default entry point. It never reaches a provider.
