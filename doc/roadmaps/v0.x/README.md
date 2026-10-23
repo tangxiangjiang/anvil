@@ -37,7 +37,7 @@ Versioned delivery for Anvil through product **0.45**. Design cutoff: [`doc/desi
 | 0.29 | Sandbox workers + web FS browser | done | [m_0.29_sandbox_workers.md](m_0.29_sandbox_workers.md) | [29](../../design/v0.x/29-sandbox-workers.md) |
 | 0.30 | Loop guard (unlimited steps) | done | [m_0.30_loop_guard.md](m_0.30_loop_guard.md) | [30](../../design/v0.x/30-loop-guard.md) |
 | 0.31 | Job event stream (app chat) | done | [m_0.31_job_stream.md](m_0.31_job_stream.md) | [31](../../design/v0.x/31-job-event-stream.md) |
-| 0.32 | Sandbox code review + VS Code Server | planned | [m_0.32_sandbox_code_review.md](m_0.32_sandbox_code_review.md) | [32](../../design/v0.x/32-sandbox-code-review.md) |
+| 0.32 | Sandbox code review + VS Code Server | in_progress | [m_0.32_sandbox_code_review.md](m_0.32_sandbox_code_review.md) | [32](../../design/v0.x/32-sandbox-code-review.md) |
 | 0.33 | Delivery UI + schema | done | [m_0.33_delivery_ui.md](m_0.33_delivery_ui.md) | [33](../../design/v0.x/33-delivery-ui.md) |
 | 0.34 | Workspace domain (Clusters hierarchy) | done | [m_0.34_workspace_domain.md](m_0.34_workspace_domain.md) | [34](../../design/v0.x/34-workspace-domain.md) |
 | 0.35 | VS Code extension + editor host | done | [m_0.35_vscode_extension.vscode.md](m_0.35_vscode_extension.vscode.md) | [35](../../design/v0.x/35-vscode-extension.vscode.md) |

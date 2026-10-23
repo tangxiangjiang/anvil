@@ -48,3 +48,26 @@ func TestJobAssignRoundTrip(t *testing.T) {
 		t.Fatalf("%+v", job)
 	}
 }
+
+func TestSandboxReviewProtocolRoundTrip(t *testing.T) {
+	body, err := MarshalBody(ClusterGitDiffBody{WorkerID: "worker-1", Path: "src/main.go", Staged: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := WriteEnvelope(&buf, Envelope{Kind: KindClusterGitDiff, ID: "review-1", Body: body}); err != nil {
+		t.Fatal(err)
+	}
+	env, err := ReadEnvelope(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var request ClusterGitDiffBody
+	if err := DecodeBody(env, &request); err != nil {
+		t.Fatal(err)
+	}
+	if env.Kind != KindClusterGitDiff || request.WorkerID != "worker-1" ||
+		request.Path != "src/main.go" || !request.Staged {
+		t.Fatalf("envelope=%+v request=%+v", env, request)
+	}
+}

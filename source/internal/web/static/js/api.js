@@ -87,6 +87,41 @@ window.api = {
       if (path) u += "?path=" + encodeURIComponent(path);
       return api.req("GET", u);
     },
+    reviewTree(fleetId, nodeId, workerId, path) {
+      const q = new URLSearchParams({ worker: workerId });
+      if (path) q.set("path", path);
+      return api.req(
+        "GET",
+        "/api/v1/clusters/" + encodeURIComponent(fleetId) + "/nodes/" +
+          encodeURIComponent(nodeId) + "/sandbox?" + q.toString(),
+      );
+    },
+    reviewFile(fleetId, nodeId, workerId, path) {
+      const q = new URLSearchParams({ worker: workerId, path });
+      return api.req(
+        "GET",
+        "/api/v1/clusters/" + encodeURIComponent(fleetId) + "/nodes/" +
+          encodeURIComponent(nodeId) + "/sandbox/file?" + q.toString(),
+      );
+    },
+    reviewStatus(fleetId, nodeId, workerId) {
+      const q = new URLSearchParams({ worker: workerId });
+      return api.req(
+        "GET",
+        "/api/v1/clusters/" + encodeURIComponent(fleetId) + "/nodes/" +
+          encodeURIComponent(nodeId) + "/git/status?" + q.toString(),
+      );
+    },
+    reviewDiff(fleetId, nodeId, workerId, path, staged) {
+      const q = new URLSearchParams({ worker: workerId });
+      if (path) q.set("path", path);
+      if (staged) q.set("staged", "true");
+      return api.req(
+        "GET",
+        "/api/v1/clusters/" + encodeURIComponent(fleetId) + "/nodes/" +
+          encodeURIComponent(nodeId) + "/git/diff?" + q.toString(),
+      );
+    },
     mkdirSandbox(fleetId, nodeId, path) {
       return api.req(
         "POST",

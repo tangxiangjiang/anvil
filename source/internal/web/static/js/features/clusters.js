@@ -14,14 +14,16 @@ window.Features.clusters = {
     // clusters/:fleetId/workspaces/:wsId/graph
     // clusters/:fleetId/workspaces/:wsId/projects/:projId
     const fleetId = parts[1] || null;
+    const [reviewNodeId, reviewWorkerId] = parts[2] === "review" ? [parts[3] || null, parts[4] || null] : [null, null];
     const workspaceId = parts[2] === "workspaces" ? parts[3] || null : null;
     let view = "schedulers";
-    if (parts[2] === "workspaces" && !parts[3]) view = "workspaces";
+    if (parts[2] === "review" && reviewNodeId && reviewWorkerId) view = "review";
+    else if (parts[2] === "workspaces" && !parts[3]) view = "workspaces";
     else if (parts[4] === "graph") view = "graph";
     else if (parts[4] === "projects" && parts[5]) view = "project";
     else if (workspaceId) view = "workspace";
     else if (parts[2] === "workspaces") view = "workspaces";
-    return { fleetId, workspaceId, view };
+    return { fleetId, workspaceId, reviewNodeId, reviewWorkerId, view };
   },
 
   go(path) {
@@ -38,6 +40,7 @@ window.Features.clusters = {
   },
 
   unmount() {
+    window.AnvilReview?.unmount();
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
     this.el = null;
@@ -111,6 +114,14 @@ window.Features.clusters = {
       await this.loadClusters();
     } catch (e) {
       root.innerHTML = `<p class="err">${this.esc(e.message || e)}</p>`;
+      return;
+    }
+
+    if (route.view === "review") {
+      const fleet = this.fleet(route.fleetId);
+      if (!window.AnvilReview.mountRoute(root, route, fleet)) {
+        root.innerHTML = `<p class="err">The selected review worker is unavailable or outside this fleet scope.</p>`;
+      }
       return;
     }
 
@@ -854,7 +865,10 @@ window.Features.clusters = {
           <code>${this.esc(w.git_branch || "—")}</code>
           · ${this.esc(this.nodeLabel(node))}
         </div>
-        <div class="toolbar cl-worker-actions">${startStop}</div>
+        <div class="toolbar cl-worker-actions">
+          <button type="button" class="ghost" data-w-review="${this.esc(w.id)}" data-node="${this.esc(node.id)}">Review</button>
+          ${startStop}
+        </div>
         <div class="cl-worker-tip" hidden>${this.esc(tip)}</div>
       </div>`;
       })
@@ -905,6 +919,15 @@ window.Features.clusters = {
     root.querySelector("#c-worker-add")?.addEventListener("click", () =>
       this.openAddWorker(fleetId, wsId, projId),
     );
+    root.querySelectorAll("[data-w-review]").forEach((btn) => {
+      btn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        const nodeId = btn.getAttribute("data-node");
+        const workerId = btn.getAttribute("data-w-review");
+        this.go("#/clusters/" + encodeURIComponent(fleetId) + "/review/" +
+          encodeURIComponent(nodeId) + "/" + encodeURIComponent(workerId));
+      });
+    });
     root.querySelectorAll(".cl-worker-card").forEach((card) => {
       const tip = card.querySelector(".cl-worker-tip");
       card.addEventListener("mouseenter", () => {

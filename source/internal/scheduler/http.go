@@ -290,9 +290,30 @@ func (h *Hub) handleNodeRoutes(w http.ResponseWriter, r *http.Request) {
 		}
 	case "sandbox":
 		if len(parts) == 2 && r.Method == http.MethodGet {
-			res, err := h.ListSandbox(r.Context(), nodeID, r.URL.Query().Get("path"))
+			workerID := strings.TrimSpace(r.URL.Query().Get("worker"))
+			var res daemon.ClusterSandboxResultBody
+			var err error
+			if workerID == "" {
+				res, err = h.ListSandbox(r.Context(), nodeID, r.URL.Query().Get("path"))
+			} else {
+				res, err = h.ListWorkerSandbox(r.Context(), nodeID, workerID, r.URL.Query().Get("path"))
+			}
 			if err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
+				writeReviewError(w, res, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, res)
+			return
+		}
+		if len(parts) == 3 && parts[2] == "file" && r.Method == http.MethodGet {
+			workerID := strings.TrimSpace(r.URL.Query().Get("worker"))
+			if workerID == "" {
+				http.Error(w, "worker is required", http.StatusBadRequest)
+				return
+			}
+			res, err := h.ReadWorkerSandbox(r.Context(), nodeID, workerID, r.URL.Query().Get("path"))
+			if err != nil {
+				writeReviewError(w, res, err)
 				return
 			}
 			writeJSON(w, http.StatusOK, res)
@@ -312,8 +333,49 @@ func (h *Hub) handleNodeRoutes(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, res)
 			return
 		}
+	case "git":
+		if len(parts) != 3 || r.Method != http.MethodGet {
+			break
+		}
+		workerID := strings.TrimSpace(r.URL.Query().Get("worker"))
+		if workerID == "" {
+			http.Error(w, "worker is required", http.StatusBadRequest)
+			return
+		}
+		var res daemon.ClusterSandboxResultBody
+		var err error
+		switch parts[2] {
+		case "status":
+			res, err = h.GitStatusWorker(r.Context(), nodeID, workerID)
+		case "diff":
+			staged := r.URL.Query().Get("staged") == "true"
+			res, err = h.GitDiffWorker(r.Context(), nodeID, workerID, r.URL.Query().Get("path"), staged)
+		default:
+			http.NotFound(w, r)
+			return
+		}
+		if err != nil {
+			writeReviewError(w, res, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
+		return
 	}
 	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+}
+
+func writeReviewError(w http.ResponseWriter, res daemon.ClusterSandboxResultBody, err error) {
+	if res.Error == "" {
+		res.Error = err.Error()
+	}
+	if res.Code == "" {
+		res.Code = "node_unavailable"
+	}
+	status := http.StatusBadRequest
+	if res.Code == "node_unavailable" || strings.Contains(res.Error, "timed out") {
+		status = http.StatusBadGateway
+	}
+	writeJSON(w, status, res)
 }
 
 func (h *Hub) handleNodeByID(w http.ResponseWriter, r *http.Request, id string) {

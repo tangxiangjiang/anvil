@@ -466,6 +466,89 @@ func (h *Hub) ListSandbox(ctx context.Context, nodeID, path string) (daemon.Clus
 	return h.sandboxRPC(ctx, nodeID, daemon.KindClusterSandboxList, daemon.ClusterSandboxListBody{Path: path})
 }
 
+// ListWorkerSandbox lists one directory inside an assigned worker repository.
+func (h *Hub) ListWorkerSandbox(ctx context.Context, nodeID, workerID, path string) (daemon.ClusterSandboxResultBody, error) {
+	if err := h.validateReviewTarget(nodeID, workerID, "sandbox.review.read"); err != nil {
+		return reviewTargetFailure(err), err
+	}
+	return h.sandboxRPC(ctx, nodeID, daemon.KindClusterSandboxList, daemon.ClusterSandboxListBody{WorkerID: workerID, Path: path})
+}
+
+// ReadWorkerSandbox reads one bounded text file inside an assigned worker repository.
+func (h *Hub) ReadWorkerSandbox(ctx context.Context, nodeID, workerID, path string) (daemon.ClusterSandboxResultBody, error) {
+	if err := h.validateReviewTarget(nodeID, workerID, "sandbox.review.read"); err != nil {
+		return reviewTargetFailure(err), err
+	}
+	return h.sandboxRPC(ctx, nodeID, daemon.KindClusterSandboxRead, daemon.ClusterSandboxReadBody{WorkerID: workerID, Path: path})
+}
+
+// GitStatusWorker returns read-only status for an assigned worker repository.
+func (h *Hub) GitStatusWorker(ctx context.Context, nodeID, workerID string) (daemon.ClusterSandboxResultBody, error) {
+	if err := h.validateReviewTarget(nodeID, workerID, "sandbox.review.git"); err != nil {
+		return reviewTargetFailure(err), err
+	}
+	return h.sandboxRPC(ctx, nodeID, daemon.KindClusterGitStatus, daemon.ClusterGitStatusBody{WorkerID: workerID})
+}
+
+// GitDiffWorker returns a bounded read-only diff for an assigned worker repository.
+func (h *Hub) GitDiffWorker(ctx context.Context, nodeID, workerID, path string, staged bool) (daemon.ClusterSandboxResultBody, error) {
+	if err := h.validateReviewTarget(nodeID, workerID, "sandbox.review.git"); err != nil {
+		return reviewTargetFailure(err), err
+	}
+	return h.sandboxRPC(ctx, nodeID, daemon.KindClusterGitDiff, daemon.ClusterGitDiffBody{
+		WorkerID: workerID, Path: path, Staged: staged,
+	})
+}
+
+type reviewTargetError struct {
+	code string
+	text string
+}
+
+func (e *reviewTargetError) Error() string { return e.text }
+
+func reviewTargetFailure(err error) daemon.ClusterSandboxResultBody {
+	code := "invalid_scope"
+	if target, ok := err.(*reviewTargetError); ok {
+		code = target.code
+	}
+	return daemon.ClusterSandboxResultBody{Code: code, Error: err.Error()}
+}
+
+func (h *Hub) validateReviewTarget(nodeID, workerID, capability string) error {
+	h.nodesMu.Lock()
+	defer h.nodesMu.Unlock()
+	node := h.nodes[nodeID]
+	if node == nil {
+		return &reviewTargetError{code: "node_unavailable", text: fmt.Sprintf("unknown node_id %q", nodeID)}
+	}
+	if time.Since(node.lastHB) > time.Duration(h.cfg.StaleSec)*time.Second {
+		return &reviewTargetError{code: "node_unavailable", text: fmt.Sprintf("node %q is unreachable", nodeID)}
+	}
+	hasCapability := false
+	for _, item := range node.caps {
+		if item == capability {
+			hasCapability = true
+			break
+		}
+	}
+	if !hasCapability {
+		return &reviewTargetError{
+			code: "capability_unavailable",
+			text: fmt.Sprintf("node %q does not advertise %s", nodeID, capability),
+		}
+	}
+	for _, worker := range node.workers {
+		if worker.ID == workerID && worker.ProjectPath != "" {
+			return nil
+		}
+	}
+	return &reviewTargetError{
+		code: "invalid_scope",
+		text: fmt.Sprintf("worker %q is not assigned to node %q", workerID, nodeID),
+	}
+}
+
 // MkdirSandbox creates a directory under the node's sandbox.
 func (h *Hub) MkdirSandbox(ctx context.Context, nodeID, path string) (daemon.ClusterSandboxResultBody, error) {
 	return h.sandboxRPC(ctx, nodeID, daemon.KindClusterSandboxMkdir, daemon.ClusterSandboxMkdirBody{Path: path})

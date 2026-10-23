@@ -6,6 +6,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"sync"
@@ -20,6 +21,7 @@ func (s *Server) clientForFleet(fleetID string) (*schedclient.Client, FleetEntry
 			return &schedclient.Client{
 				BaseURL: f.SchedulerURL,
 				Token:   s.cfg.SchedulerToken(),
+				HTTP:    &http.Client{Timeout: 15 * time.Second},
 			}, f, true
 		}
 	}
@@ -101,6 +103,10 @@ func (s *Server) handleClusterRoutes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fleetID := parts[0]
+	if !safeClusterRouteID(fleetID) {
+		http.Error(w, "invalid fleet scope", http.StatusBadRequest)
+		return
+	}
 	cli, _, ok := s.clientForFleet(fleetID)
 	if !ok {
 		http.Error(w, "unknown fleet", http.StatusNotFound)
@@ -114,6 +120,10 @@ func (s *Server) handleClusterRoutes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	nodeID := parts[2]
+	if !safeClusterRouteID(nodeID) {
+		http.Error(w, "invalid node scope", http.StatusBadRequest)
+		return
+	}
 	if len(parts) == 3 && r.Method == http.MethodPatch {
 		var body map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -176,14 +186,64 @@ func (s *Server) handleClusterRoutes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(parts) == 4 && parts[3] == "sandbox" && r.Method == http.MethodGet {
-		raw, err := cli.ListSandbox(r.Context(), nodeID, r.URL.Query().Get("path"))
+		workerID := strings.TrimSpace(r.URL.Query().Get("worker"))
+		var raw json.RawMessage
+		var err error
+		if workerID == "" {
+			raw, err = cli.ListSandbox(r.Context(), nodeID, r.URL.Query().Get("path"))
+		} else if safeClusterRouteID(workerID) {
+			raw, err = cli.ListWorkerSandbox(r.Context(), nodeID, workerID, r.URL.Query().Get("path"))
+		} else {
+			http.Error(w, "invalid worker scope", http.StatusBadRequest)
+			return
+		}
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeSchedulerReviewError(w, err)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(raw)
+		return
+	}
+	if len(parts) == 5 && parts[3] == "sandbox" && parts[4] == "file" && r.Method == http.MethodGet {
+		workerID := strings.TrimSpace(r.URL.Query().Get("worker"))
+		if !safeClusterRouteID(workerID) {
+			http.Error(w, "invalid worker scope", http.StatusBadRequest)
+			return
+		}
+		raw, err := cli.ReadWorkerFile(r.Context(), nodeID, workerID, r.URL.Query().Get("path"))
+		if err != nil {
+			writeSchedulerReviewError(w, err)
+			return
+		}
+		writeRawJSON(w, raw)
+		return
+	}
+	if len(parts) == 5 && parts[3] == "git" && r.Method == http.MethodGet {
+		workerID := strings.TrimSpace(r.URL.Query().Get("worker"))
+		if !safeClusterRouteID(workerID) {
+			http.Error(w, "invalid worker scope", http.StatusBadRequest)
+			return
+		}
+		var raw json.RawMessage
+		var err error
+		switch parts[4] {
+		case "status":
+			raw, err = cli.GitStatus(r.Context(), nodeID, workerID)
+		case "diff":
+			raw, err = cli.GitDiff(
+				r.Context(), nodeID, workerID, r.URL.Query().Get("path"), r.URL.Query().Get("staged") == "true",
+			)
+		default:
+			http.NotFound(w, r)
+			return
+		}
+		if err != nil {
+			writeSchedulerReviewError(w, err)
+			return
+		}
+		writeRawJSON(w, raw)
 		return
 	}
 	if len(parts) == 5 && parts[3] == "sandbox" && parts[4] == "mkdir" && r.Method == http.MethodPost {
@@ -203,4 +263,39 @@ func (s *Server) handleClusterRoutes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+}
+
+func safeClusterRouteID(value string) bool {
+	if value == "" || len(value) > 128 {
+		return false
+	}
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func writeRawJSON(w http.ResponseWriter, raw json.RawMessage) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(raw)
+}
+
+func writeSchedulerReviewError(w http.ResponseWriter, err error) {
+	var upstream *schedclient.HTTPError
+	if errors.As(err, &upstream) && json.Valid(upstream.Body) {
+		status := upstream.Status
+		if status < 400 || status > 599 {
+			status = http.StatusBadGateway
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_, _ = w.Write(upstream.Body)
+		return
+	}
+	writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "code": "scheduler_unreachable", "error": err.Error()})
 }

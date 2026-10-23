@@ -40,6 +40,9 @@ const (
 	KindClusterWorkerResult   = "cluster.worker_result"
 	KindClusterSandboxList    = "cluster.sandbox_list"
 	KindClusterSandboxMkdir   = "cluster.sandbox_mkdir"
+	KindClusterSandboxRead    = "cluster.sandbox_read"
+	KindClusterGitStatus      = "cluster.git_status"
+	KindClusterGitDiff        = "cluster.git_diff"
 	KindClusterSandboxResult  = "cluster.sandbox_result"
 )
 
@@ -329,12 +332,31 @@ type ClusterWorkerResultBody struct {
 
 // ClusterSandboxListBody lists entries under a sandbox-relative path.
 type ClusterSandboxListBody struct {
-	Path string `json:"path,omitempty"`
+	WorkerID string `json:"worker_id,omitempty"`
+	Path     string `json:"path,omitempty"`
 }
 
 // ClusterSandboxMkdirBody creates a directory under the sandbox.
 type ClusterSandboxMkdirBody struct {
 	Path string `json:"path"`
+}
+
+// ClusterSandboxReadBody reads a file relative to an assigned worker repository.
+type ClusterSandboxReadBody struct {
+	WorkerID string `json:"worker_id"`
+	Path     string `json:"path"`
+}
+
+// ClusterGitStatusBody requests porcelain status for an assigned worker repository.
+type ClusterGitStatusBody struct {
+	WorkerID string `json:"worker_id"`
+}
+
+// ClusterGitDiffBody requests a fixed read-only diff operation.
+type ClusterGitDiffBody struct {
+	WorkerID string `json:"worker_id"`
+	Staged   bool   `json:"staged,omitempty"`
+	Path     string `json:"path,omitempty"`
 }
 
 // SandboxEntry is one filesystem entry inside the sandbox.
@@ -347,14 +369,31 @@ type SandboxEntry struct {
 	Mtime int64  `json:"mtime,omitempty"` // unix seconds
 }
 
-// ClusterSandboxResultBody is the reply for sandbox list/mkdir.
+// GitStatusEntry is one porcelain-v1 status record.
+type GitStatusEntry struct {
+	Path     string `json:"path"`
+	OrigPath string `json:"orig_path,omitempty"`
+	Index    string `json:"index"`
+	Worktree string `json:"worktree"`
+}
+
+// ClusterSandboxResultBody is the bounded reply for sandbox and git review RPCs.
 type ClusterSandboxResultBody struct {
-	OK         bool           `json:"ok"`
-	Error      string         `json:"error,omitempty"`
-	Request    string         `json:"request,omitempty"` // list|mkdir
-	SandboxDir string         `json:"sandbox_dir,omitempty"`
-	Path       string         `json:"path,omitempty"`
-	Entries    []SandboxEntry `json:"entries,omitempty"`
+	OK         bool             `json:"ok"`
+	Code       string           `json:"code,omitempty"`
+	Error      string           `json:"error,omitempty"`
+	Request    string           `json:"request,omitempty"` // list|mkdir|read|git_status|git_diff
+	SandboxDir string           `json:"sandbox_dir,omitempty"`
+	Path       string           `json:"path,omitempty"`
+	Entries    []SandboxEntry   `json:"entries,omitempty"`
+	Content    string           `json:"content,omitempty"`
+	Encoding   string           `json:"encoding,omitempty"`
+	Size       int64            `json:"size,omitempty"`
+	Binary     bool             `json:"binary,omitempty"`
+	Truncated  bool             `json:"truncated,omitempty"`
+	Branch     string           `json:"branch,omitempty"`
+	Status     []GitStatusEntry `json:"status,omitempty"`
+	Diff       string           `json:"diff,omitempty"`
 }
 
 // MustMarshalBody encodes v as JSON RawMessage; panics only on programmer error in tests — prefer MarshalBody.

@@ -98,6 +98,9 @@ func (e *ClusterEdge) session(ctx context.Context, url string) error {
 	sendHB := func() error {
 		snap := e.server.WorkerSnapshot()
 		caps := e.cfg.PluginCapabilityLabels()
+		if strings.TrimSpace(e.cfg.SandboxDir) != "" {
+			caps = append(caps, "sandbox.review.read", "sandbox.review.git")
+		}
 		if e.server.SupportsApprovals() {
 			caps = append(caps, "job.approval")
 		}
@@ -210,9 +213,15 @@ func (e *ClusterEdge) session(ctx context.Context, url string) error {
 			case KindClusterSandboxList:
 				var req ClusterSandboxListBody
 				_ = DecodeBody(msg, &req)
-				res, err := e.server.ListSandbox(req.Path)
-				if err != nil {
-					res = ClusterSandboxResultBody{Request: "list", Error: err.Error()}
+				var res ClusterSandboxResultBody
+				if req.WorkerID != "" {
+					res = e.server.ListWorkerSandbox(req.WorkerID, req.Path)
+				} else {
+					var err error
+					res, err = e.server.ListSandbox(req.Path)
+					if err != nil {
+						res = reviewError("list", "invalid_path", err)
+					}
 				}
 				body, _ := MarshalBody(res)
 				_ = e.write(conn, Envelope{Kind: KindClusterSandboxResult, ID: msg.ID, Body: body})
@@ -224,6 +233,21 @@ func (e *ClusterEdge) session(ctx context.Context, url string) error {
 					res = ClusterSandboxResultBody{Request: "mkdir", Error: err.Error()}
 				}
 				body, _ := MarshalBody(res)
+				_ = e.write(conn, Envelope{Kind: KindClusterSandboxResult, ID: msg.ID, Body: body})
+			case KindClusterSandboxRead:
+				var req ClusterSandboxReadBody
+				_ = DecodeBody(msg, &req)
+				body, _ := MarshalBody(e.server.ReadWorkerSandbox(req.WorkerID, req.Path))
+				_ = e.write(conn, Envelope{Kind: KindClusterSandboxResult, ID: msg.ID, Body: body})
+			case KindClusterGitStatus:
+				var req ClusterGitStatusBody
+				_ = DecodeBody(msg, &req)
+				body, _ := MarshalBody(e.server.GitStatusWorker(req.WorkerID))
+				_ = e.write(conn, Envelope{Kind: KindClusterSandboxResult, ID: msg.ID, Body: body})
+			case KindClusterGitDiff:
+				var req ClusterGitDiffBody
+				_ = DecodeBody(msg, &req)
+				body, _ := MarshalBody(e.server.GitDiffWorker(req.WorkerID, req.Path, req.Staged))
 				_ = e.write(conn, Envelope{Kind: KindClusterSandboxResult, ID: msg.ID, Body: body})
 			}
 		}

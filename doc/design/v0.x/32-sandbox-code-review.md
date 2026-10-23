@@ -1,7 +1,7 @@
 # 32 — Sandbox code review + VS Code Server
 
 **Product version focus:** **0.32** ([m_0.32_sandbox_code_review.md](../../roadmaps/v0.x/m_0.32_sandbox_code_review.md))  
-**Status:** planned
+**Status:** in_progress
 
 ## Intent
 

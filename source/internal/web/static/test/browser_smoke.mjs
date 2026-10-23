@@ -128,16 +128,102 @@ async function waitJS(cdp, expression, message) {
 async function main() {
   const webPort = await freePort();
   const cdpPort = await freePort();
+  const schedulerPort = await freePort();
+  const clusterPort = await freePort();
+  const agentPort = await freePort();
   const base = `http://127.0.0.1:${webPort}`;
+  const schedulerBase = `http://127.0.0.1:${schedulerPort}`;
+  const sandbox = path.join(temp, "sandbox");
+  const repo = path.join(sandbox, "repo");
+  fs.mkdirSync(repo, { recursive: true });
+  const git = (...args) => {
+    const result = spawnSync("git", ["-C", repo, ...args], { encoding: "utf8" });
+    if (result.status !== 0) throw new Error(`git ${args.join(" ")}: ${result.stderr}`);
+  };
+  git("init");
+  git("config", "user.email", "smoke@example.invalid");
+  git("config", "user.name", "Browser Smoke");
+  fs.writeFileSync(path.join(repo, "review.txt"), "before\n");
+  git("add", "--", "review.txt");
+  git("commit", "-m", "base");
+  fs.writeFileSync(path.join(repo, "review.txt"), "after\n");
+  fs.writeFileSync(path.join(repo, "xss.md"), "<script>window.__reviewPwned=true</script>\n");
+
+  const schedulerConfig = path.join(temp, "scheduler.json");
+  fs.writeFileSync(schedulerConfig, JSON.stringify({
+    listen_app: `127.0.0.1:${schedulerPort}`,
+    listen_cluster: `tcp://127.0.0.1:${clusterPort}`,
+    token_env: "ANVIL_SCHEDULER_TOKEN",
+    stale_sec: 10,
+  }));
+  const scheduler = spawn("go", ["run", "./cmd/anvil-scheduler", "--config", schedulerConfig], {
+    cwd: SOURCE,
+    env: { ...process.env, ANVIL_SCHEDULER_TOKEN: "browser-smoke-only" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  children.push(scheduler);
+  let schedulerLog = "";
+  scheduler.stdout.on("data", (chunk) => (schedulerLog += chunk));
+  scheduler.stderr.on("data", (chunk) => (schedulerLog += chunk));
+  await eventually(async () => {
+    const response = await fetch(`${schedulerBase}/v1/health`, {
+      headers: { Authorization: "Bearer browser-smoke-only" },
+    });
+    return response.ok;
+  }, `scheduler did not start\n${schedulerLog}`, 60000);
+
+  const agentConfig = path.join(temp, "agentd.json");
+  fs.writeFileSync(agentConfig, JSON.stringify({
+    listen: `tcp://127.0.0.1:${agentPort}`,
+    sandbox_dir: sandbox,
+    cluster: {
+      enabled: true,
+      url: `tcp://127.0.0.1:${clusterPort}`,
+      node_id: "node-smoke",
+      token_env: "ANVIL_SCHEDULER_TOKEN",
+      heartbeat_sec: 1,
+    },
+  }));
+  const agent = spawn("go", ["run", "./cmd/agentd", "--config", agentConfig], {
+    cwd: SOURCE,
+    env: {
+      ...process.env,
+      ANVIL_SCHEDULER_TOKEN: "browser-smoke-only",
+      ANVIL_AGENTD_TOKEN: "browser-agent-only",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  children.push(agent);
+  let agentLog = "";
+  agent.stdout.on("data", (chunk) => (agentLog += chunk));
+  agent.stderr.on("data", (chunk) => (agentLog += chunk));
+  await eventually(async () => {
+    const response = await fetch(`${schedulerBase}/v1/nodes`, {
+      headers: { Authorization: "Bearer browser-smoke-only" },
+    });
+    if (!response.ok) return false;
+    const data = await response.json();
+    return (data.nodes || []).some((node) => node.id === "node-smoke");
+  }, `agentd did not join\n${agentLog}`, 60000);
+  const addWorker = await fetch(`${schedulerBase}/v1/nodes/node-smoke/workers`, {
+    method: "POST",
+    headers: {
+      Authorization: "Bearer browser-smoke-only",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ worker_id: "worker-smoke", name: "Smoke worker", project_path: "repo" }),
+  });
+  if (!addWorker.ok) throw new Error(`worker setup failed: ${addWorker.status} ${await addWorker.text()}`);
+
   const config = path.join(temp, "web.json");
   fs.writeFileSync(
     config,
     JSON.stringify({
       listen: `127.0.0.1:${webPort}`,
       db_path: path.join(temp, "smoke.db"),
-      scheduler_url: "http://127.0.0.1:1",
+      scheduler_url: schedulerBase,
       scheduler_token_env: "ANVIL_SCHEDULER_TOKEN",
-      fleets: [{ id: "smoke", name: "Smoke", scheduler_url: "http://127.0.0.1:1" }],
+      fleets: [{ id: "smoke", name: "Smoke", scheduler_url: schedulerBase }],
     }),
   );
 
@@ -472,6 +558,52 @@ async function main() {
     action: true,
   });
 
+  // Real local chain: Chrome → authenticated Web BFF → scheduler → agentd →
+  // the temporary sandbox repository created above. No API method is replaced
+  // for this acceptance.
+  await evaluate(
+    cdp,
+    `(() => {
+      api.v1.clusters = () => api.req("GET", "/api/v1/clusters");
+      location.hash = "#/clusters/smoke/review/node-smoke/worker-smoke";
+    })()`,
+  );
+  await waitJS(
+    cdp,
+    `[...document.querySelectorAll(".review-tree-row")].some((button) => button.textContent.includes("xss.md")) &&
+     [...document.querySelectorAll(".review-change-row")].some((button) => button.textContent.includes("review.txt"))`,
+    "real review tree/status did not traverse Web → scheduler → agentd",
+  );
+  await evaluate(
+    cdp,
+    `[...document.querySelectorAll(".review-tree-row")].find((button) => button.textContent.includes("xss.md")).click()`,
+  );
+  await waitJS(
+    cdp,
+    `document.querySelector("[data-review-file]")?.textContent.includes("<script>window.__reviewPwned=true</script>")`,
+    "real review file did not load",
+  );
+  assert.deepEqual(
+    await evaluate(
+      cdp,
+      `({
+        pwned: window.__reviewPwned === true,
+        injected: !!document.querySelector(".review-viewer-pane script"),
+        readOnly: !document.querySelector(".review-grid textarea, .review-grid [contenteditable], .review-grid [data-terminal]")
+      })`,
+    ),
+    { pwned: false, injected: false, readOnly: true },
+  );
+  await evaluate(
+    cdp,
+    `[...document.querySelectorAll(".review-change-row")].find((button) => button.textContent.includes("review.txt")).click()`,
+  );
+  await waitJS(
+    cdp,
+    `document.querySelector("[data-review-diff]")?.textContent.includes("+after")`,
+    "real review diff did not load",
+  );
+
   await evaluate(
     cdp,
     `(() => {
@@ -640,6 +772,19 @@ async function main() {
   await cdp.send("Emulation.setDeviceMetricsOverride", {
     width: 375, height: 812, deviceScaleFactor: 1, mobile: true,
   });
+  await evaluate(cdp, `location.hash = "#/clusters/smoke/review/node-smoke/worker-smoke"`);
+  await waitJS(cdp, `!!document.querySelector(".review-grid")`, "375px Review did not render");
+  const mobileReview = await evaluate(
+    cdp,
+    `({
+      overflow: document.documentElement.scrollWidth - innerWidth,
+      columns: getComputedStyle(document.querySelector(".review-grid")).gridTemplateColumns,
+      refreshHeight: document.querySelector("[data-review-refresh]").getBoundingClientRect().height
+    })`,
+  );
+  assert.ok(mobileReview.overflow <= 1, `Review overflowed 375px by ${mobileReview.overflow}px`);
+  assert.ok(mobileReview.refreshHeight >= 44, `Review refresh target was ${mobileReview.refreshHeight}px`);
+
   await evaluate(
     cdp,
     `(() => {
@@ -775,6 +920,7 @@ async function main() {
         browser: path.basename(chromiumPath()),
         delivery: deliveryResults,
         clusters: "project + worker sandbox picker",
+        review: "Chrome → Web BFF → scheduler → agentd → sandbox",
         deliveryWizard: "fleet → node → worker → folder → config",
         workbench: "approval card → routed answer",
         reconnect: "drop → backoff → replay dedupe → resume",

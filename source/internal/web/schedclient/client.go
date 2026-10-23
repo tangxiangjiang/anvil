@@ -25,6 +25,18 @@ type Client struct {
 	HTTP    *http.Client
 }
 
+// HTTPError preserves a scheduler's bounded JSON error for a same-origin BFF.
+type HTTPError struct {
+	Method string
+	Path   string
+	Status int
+	Body   []byte
+}
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("scheduler %s %s: HTTP %d: %s", e.Method, e.Path, e.Status, strings.TrimSpace(string(e.Body)))
+}
+
 func (c *Client) http() *http.Client {
 	if c.HTTP != nil {
 		return c.HTTP
@@ -57,7 +69,7 @@ func (c *Client) do(ctx context.Context, method, path string, body any, dest any
 	defer res.Body.Close()
 	data, _ := io.ReadAll(res.Body)
 	if res.StatusCode >= 300 {
-		return fmt.Errorf("scheduler %s %s: HTTP %d: %s", method, path, res.StatusCode, strings.TrimSpace(string(data)))
+		return &HTTPError{Method: method, Path: path, Status: res.StatusCode, Body: data}
 	}
 	if dest == nil {
 		return nil
@@ -147,6 +159,47 @@ func (c *Client) ListSandbox(ctx context.Context, nodeID, relPath string) (json.
 		return nil, err
 	}
 	return raw, nil
+}
+
+// ListWorkerSandbox lists a directory relative to an assigned worker.
+func (c *Client) ListWorkerSandbox(ctx context.Context, nodeID, workerID, relPath string) (json.RawMessage, error) {
+	var raw json.RawMessage
+	q := url.Values{"worker": []string{workerID}}
+	if relPath != "" {
+		q.Set("path", relPath)
+	}
+	err := c.do(ctx, http.MethodGet, "/v1/nodes/"+url.PathEscape(nodeID)+"/sandbox?"+q.Encode(), nil, &raw)
+	return raw, err
+}
+
+// ReadWorkerFile reads a bounded file relative to an assigned worker.
+func (c *Client) ReadWorkerFile(ctx context.Context, nodeID, workerID, relPath string) (json.RawMessage, error) {
+	var raw json.RawMessage
+	q := url.Values{"worker": []string{workerID}, "path": []string{relPath}}
+	err := c.do(ctx, http.MethodGet, "/v1/nodes/"+url.PathEscape(nodeID)+"/sandbox/file?"+q.Encode(), nil, &raw)
+	return raw, err
+}
+
+// GitStatus returns read-only status for an assigned worker.
+func (c *Client) GitStatus(ctx context.Context, nodeID, workerID string) (json.RawMessage, error) {
+	var raw json.RawMessage
+	q := url.Values{"worker": []string{workerID}}
+	err := c.do(ctx, http.MethodGet, "/v1/nodes/"+url.PathEscape(nodeID)+"/git/status?"+q.Encode(), nil, &raw)
+	return raw, err
+}
+
+// GitDiff returns a bounded read-only diff for an assigned worker.
+func (c *Client) GitDiff(ctx context.Context, nodeID, workerID, relPath string, staged bool) (json.RawMessage, error) {
+	var raw json.RawMessage
+	q := url.Values{"worker": []string{workerID}}
+	if relPath != "" {
+		q.Set("path", relPath)
+	}
+	if staged {
+		q.Set("staged", "true")
+	}
+	err := c.do(ctx, http.MethodGet, "/v1/nodes/"+url.PathEscape(nodeID)+"/git/diff?"+q.Encode(), nil, &raw)
+	return raw, err
 }
 
 // MkdirSandbox creates a directory under a node's sandbox.
