@@ -106,36 +106,72 @@ const MaxStepsExceededPrefix = "max steps exceeded"
 // drops silently when full and a dropped assistant chunk cannot be recovered.
 const reasoningFlushChars = 200
 
-// EmptyResponseError is returned when a provider twice produces neither text
-// nor tool calls. An empty turn is not a successful agent completion.
-const EmptyResponseError = "model returned an empty response twice; no tool call or final answer was produced"
+// EmptyResponseError is returned after bounded recovery when a provider keeps
+// producing neither text nor tool calls. An empty turn is not a successful
+// agent completion.
+const EmptyResponseError = "model provider returned 3 consecutive empty responses; automatic recovery produced no tool call or final answer"
 
-// UnproductiveResponseError is returned when a provider twice stops after
-// announcing work it has not performed.
-const UnproductiveResponseError = "model stopped after only announcing future work twice; no tool call or concrete result was produced"
+const maxEmptyResponses = 3
+const maxFinishProtocolMisses = 3
 
-const continueTaskPrompt = "The preceding assistant message only announced future work and did not perform it. Continue the user's task now. Use tools to inspect or modify the workspace as needed; do not stop at a plan or progress update."
+// FinishTaskRequiredError is returned when an editor-style run repeatedly
+// returns ordinary assistant text instead of the explicit terminal control
+// call. The model's prose cannot reliably distinguish progress from a final
+// answer; finish_task is that distinction on the wire.
+const FinishTaskRequiredError = "model did not call finish_task after 3 attempts; ordinary assistant text is not a terminal signal"
 
-// CompletionEvidenceError is returned when a requested side effect was never
-// observed even though the model claimed to be finished.
-const CompletionEvidenceError = "model claimed completion without performing the requested workspace operation"
+const finishTaskToolName = "finish_task"
+
+const finishTaskInstruction = `# Completion protocol
+Ordinary assistant text does not end this run. Continue using tools while work remains. When the task is fully complete or honestly blocked, call finish_task exactly once and as the only tool call, with the final user-facing summary. Do not announce future work and stop.`
+
+const finishTaskCorrection = "This run is still active because ordinary assistant text is not a completion signal. If work remains, continue now with the appropriate tools. If the task is complete or honestly blocked, call finish_task alone with a non-empty final summary."
+
+func finishTaskDef() llm.ToolDef {
+	return llm.ToolDef{
+		Name:        finishTaskToolName,
+		Description: "Finish the current agent run. Call only when all work is complete or honestly blocked, and call it as the only tool in the response.",
+		Parameters: json.RawMessage(`{
+			"type":"object",
+			"properties":{"summary":{"type":"string","minLength":1,"description":"Final user-facing result, including completed work, verification, or the concrete blocker."}},
+			"required":["summary"],
+			"additionalProperties":false
+		}`),
+	}
+}
+
+func finishTaskSummary(calls []llm.ToolCall) (summary string, present bool, problem string) {
+	var finish *llm.ToolCall
+	for i := range calls {
+		if calls[i].Name != finishTaskToolName {
+			continue
+		}
+		if finish != nil || len(calls) != 1 {
+			return "", true, "finish_task must be the only tool call in its response"
+		}
+		finish = &calls[i]
+	}
+	if finish == nil {
+		return "", false, ""
+	}
+	var in struct {
+		Summary string `json:"summary"`
+	}
+	if err := json.Unmarshal(finish.Args, &in); err != nil {
+		return "", true, "finish_task arguments are invalid JSON: " + err.Error()
+	}
+	in.Summary = strings.TrimSpace(in.Summary)
+	if in.Summary == "" {
+		return "", true, "finish_task requires a non-empty summary"
+	}
+	return in.Summary, true, ""
+}
+
+const continueTaskPrompt = "The preceding model response was empty. Continue the user's task now with a tool call, or call finish_task with the final summary if the task is complete."
 
 // BackgroundDelegationError is returned when a parent agent twice tries to
 // finish without joining and integrating the background subagents it started.
 const BackgroundDelegationError = "model attempted to finish without completing the background subagent handoff"
-
-type completionRequirement int
-
-const (
-	requireNoSideEffect completionRequirement = iota
-	requireMutation
-	requireCommit
-)
-
-type completionEvidence struct {
-	mutation bool
-	commit   bool
-}
 
 // backgroundComposition is the parent side of a background delegation. Starting
 // a child is not completion: the parent must read every terminal result, then
@@ -196,237 +232,6 @@ func (b *backgroundComposition) needsCheckpoint() bool {
 	return len(b.tasks) > 0 && !b.pending() && !b.checkpointed
 }
 
-func completionRequirementFor(message string) completionRequirement {
-	if strings.HasPrefix(strings.TrimSpace(message), "Plan mode is on.") {
-		return requireNoSideEffect
-	}
-	text := strings.ToLower(strings.TrimSpace(visibleRequest(message)))
-	for _, negated := range []string{"不要提交", "不需要提交", "先别提交", "do not commit", "don't commit", "without committing"} {
-		if strings.Contains(text, negated) {
-			return requireNoSideEffect
-		}
-	}
-	commitRequested := strings.HasPrefix(text, "提交") ||
-		strings.HasPrefix(text, "commit ") ||
-		strings.Contains(text, "帮我提交") ||
-		strings.Contains(text, "请提交") ||
-		strings.Contains(text, "提交一下") ||
-		strings.Contains(text, "提交下") ||
-		(strings.Contains(text, "把") && strings.Contains(text, "提交")) ||
-		strings.Contains(text, "please commit")
-	if commitRequested {
-		return requireCommit
-	}
-	for _, marker := range []string{
-		"帮我修", "帮我改", "帮我加", "帮我删", "帮我实现", "帮我安装",
-		"请修", "请改", "请加", "请删", "请实现", "请安装",
-		"继续实现", "继续修改", "继续修复",
-	} {
-		if strings.Contains(text, marker) {
-			return requireMutation
-		}
-	}
-	if chineseMutationRequested(text) {
-		return requireMutation
-	}
-	for _, marker := range []string{
-		"please fix ", "please implement ", "please change ", "please update ",
-		"can you fix ", "can you implement ", "can you change ", "can you update ",
-	} {
-		if strings.HasPrefix(text, marker) {
-			return requireMutation
-		}
-	}
-	return requireNoSideEffect
-}
-
-// chineseMutationRequested covers the short imperative phrasing commonly used
-// in an ongoing Chinese conversation ("调一下", "这个改掉", "做成这样").
-// Question-shaped requests are excluded unless they explicitly ask the agent
-// for help, so "这个怎么改？" remains an explanation request.
-func chineseMutationRequested(text string) bool {
-	explicitRequest := false
-	for _, cue := range []string{"帮我", "帮忙", "麻烦", "请你", "能不能", "可以帮", "给我", "替我"} {
-		if strings.Contains(text, cue) {
-			explicitRequest = true
-			break
-		}
-	}
-	if !explicitRequest {
-		for _, cue := range []string{"为什么", "为何", "怎么", "如何", "什么原因", "是不是", "是否", "哪种", "哪个"} {
-			if strings.Contains(text, cue) {
-				return false
-			}
-		}
-		trimmed := strings.TrimSpace(text)
-		if strings.HasSuffix(trimmed, "？") || strings.HasSuffix(trimmed, "?") ||
-			strings.HasSuffix(trimmed, "吗") || strings.HasSuffix(trimmed, "吗。") {
-			return false
-		}
-	}
-	for _, marker := range []string{
-		"调一下", "调整一下", "调整下",
-		"改一下", "改下", "改掉", "改成",
-		"修一下", "修下", "修复一下", "修复下",
-		"加一下", "加下", "加上", "补一下", "补下", "补上",
-		"删一下", "删下", "删掉", "移除",
-		"更新一下", "更新下", "实现一下", "实现下",
-		"安装一下", "安装下", "做成", "换成",
-		"需要修改", "需要改", "需要调整", "需要修复", "需要更新",
-	} {
-		if strings.Contains(text, marker) {
-			return true
-		}
-	}
-	return false
-}
-
-func visibleRequest(message string) string {
-	if end := strings.LastIndex(message, "</context>\n\n"); end >= 0 {
-		return message[end+len("</context>\n\n"):]
-	}
-	return message
-}
-
-func (r completionRequirement) satisfiedBy(e completionEvidence) bool {
-	switch r {
-	case requireCommit:
-		return e.commit
-	case requireMutation:
-		return e.mutation
-	default:
-		return true
-	}
-}
-
-func (r completionRequirement) correctivePrompt() string {
-	switch r {
-	case requireCommit:
-		return "The user requested a git commit, but no successful git commit command has run. Continue now: inspect the changes, stage the intended files, create the commit, and verify it. Do not claim completion before the commit succeeds."
-	case requireMutation:
-		return "The user requested a workspace change, but no successful write or mutating command has run. Continue now and make the requested change with tools. Do not claim completion before a mutation succeeds."
-	default:
-		return continueTaskPrompt
-	}
-}
-
-func observeCompletionEvidence(e *completionEvidence, calls []llm.ToolCall, results []tools.Result) {
-	for i, call := range calls {
-		if i >= len(results) || results[i].IsError {
-			continue
-		}
-		switch call.Name {
-		case "write_file", "edit_file", "apply_patch":
-			e.mutation = true
-		case "shell":
-			command := shellCommand(call.Args)
-			if shellPerformsCommit(command) {
-				e.commit = true
-				e.mutation = true
-			} else if shellPerformsMutation(command) {
-				e.mutation = true
-			}
-		}
-	}
-}
-
-func shellCommand(args []byte) string {
-	var in struct {
-		Command string `json:"command"`
-	}
-	if json.Unmarshal(args, &in) != nil {
-		return ""
-	}
-	return strings.ToLower(in.Command)
-}
-
-func shellPerformsCommit(command string) bool {
-	fields := strings.Fields(command)
-	for i, field := range fields {
-		if strings.Trim(field, "&;|()\"'") != "git" {
-			continue
-		}
-		for j := i + 1; j < len(fields) && j <= i+8; j++ {
-			token := strings.Trim(fields[j], "&;|()\"'")
-			if token == "commit" {
-				return true
-			}
-			if token == "git" || token == "&&" || token == ";" || token == "|" {
-				break
-			}
-		}
-	}
-	return false
-}
-
-func shellPerformsMutation(command string) bool {
-	for _, marker := range []string{
-		"git add ", "git mv ", "git rm ", "git restore ", "git checkout ",
-		"mkdir ", "rmdir ", "rm ", "mv ", "cp ", "del ", "copy ", "move ",
-		"set-content ", "add-content ", "new-item ", "remove-item ", "move-item ", "copy-item ",
-		"npm install", "pnpm install", "yarn add", "pip install", "--install-extension",
-	} {
-		if strings.Contains(command, marker) {
-			return true
-		}
-	}
-	return false
-}
-
-// looksLikeDeferredAction catches short placeholder answers that promise an
-// imminent tool action but end the request instead. Keep this deliberately
-// narrow: ordinary explanations and completed-work summaries must remain valid
-// final answers.
-func looksLikeDeferredAction(content string) bool {
-	text := strings.ToLower(strings.TrimSpace(content))
-	if text == "" || len(text) > 800 || strings.Contains(text, "```") {
-		return false
-	}
-	for _, completed := range []string{
-		"已完成", "已经完成", "已修复", "已修改", "已提交",
-		"completed", "finished", "fixed", "implemented", "committed",
-	} {
-		if strings.Contains(text, completed) {
-			return false
-		}
-	}
-	for _, marker := range []string{
-		"我先确认", "我先检查", "我先查看", "我先读取", "我先核对", "我先梳理",
-		"我会先确认", "我会先检查", "我会先查看", "我会先读取", "我会先核对",
-		"我会按现有", "接下来我会", "下面我会", "现在我会",
-		"i'll first inspect", "i'll first check", "i'll inspect", "i'll check",
-		"i will first inspect", "i will first check", "i will inspect", "i will check",
-		"let me inspect", "let me check", "let me read", "next i'll", "next i will",
-	} {
-		if index := strings.Index(text, marker); index >= 0 && index < 240 {
-			return true
-		}
-	}
-	// Cover ordinary future-tense action announcements without enumerating
-	// every sentence ("我会排除…并提交", "I will update…"). The prefix must be
-	// near the start and the verb must describe an operation, not advice.
-	for _, future := range []string{"我会", "我将", "i'll", "i will", "we'll", "we will"} {
-		index := strings.Index(text, future)
-		if index < 0 || index >= 180 {
-			continue
-		}
-		tail := text[index+len(future):]
-		for _, action := range []string{
-			"确认", "检查", "查看", "读取", "核对", "梳理", "排除", "提交",
-			"修改", "实现", "处理", "修复", "运行", "执行", "创建", "删除",
-			"更新", "添加", "写入", "构建", "测试",
-			"inspect", "check", "read", "exclude", "commit", "modify", "implement",
-			"fix", "run", "execute", "create", "delete", "update", "add", "write",
-			"build", "test",
-		} {
-			if strings.Contains(tail, action) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 // Result is the terminal run result.
 type Result struct {
 	ID       string
@@ -469,6 +274,9 @@ type Config struct {
 	Sink func(llm.Message)
 	// SystemPrompt overrides the default prompt.System(cwd) when non-empty.
 	SystemPrompt string
+	// RequireFinishTask makes finish_task the only terminal signal. Ordinary
+	// assistant text is progress and receives a bounded corrective retry.
+	RequireFinishTask bool
 	// ParallelTools runs same-turn tool_calls concurrently when all are non-mutating (0.9+).
 	ParallelTools bool
 	// ParallelToolsMax bounds concurrent tool executions (0 = 4).
@@ -508,6 +316,14 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 		}
 		messages = append([]llm.Message{{Role: llm.RoleSystem, Content: sys}}, messages...)
 	}
+	if cfg.RequireFinishTask {
+		for i := range messages {
+			if messages[i].Role == llm.RoleSystem {
+				messages[i].Content += "\n\n" + finishTaskInstruction
+				break
+			}
+		}
+	}
 	user := llm.Message{Role: llm.RoleUser, Content: cfg.UserMsg, Parts: cfg.UserParts}
 	messages = append(messages, user)
 	sink(user)
@@ -538,13 +354,16 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 	var usageAcc *llm.Usage
 	var lastRequestAt time.Time
 	toolDefs := registry.Defs()
+	if cfg.RequireFinishTask {
+		toolDefs = append(toolDefs, finishTaskDef())
+	}
 	guard := newLoopGuard()
 	retryReason := ""
 	transientStart := -1
-	requirement := completionRequirementFor(cfg.UserMsg)
-	var evidence completionEvidence
 	var background backgroundComposition
-	completionCorrections := 0
+	finishProtocolMisses := 0
+	emptyResponses := 0
+	forceNonStreaming := false
 
 	for step := 0; ; step++ {
 		if cfg.MaxSteps > 0 && step >= cfg.MaxSteps {
@@ -583,7 +402,7 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 			Type: "progress", Step: step + 1, MaxSteps: cfg.MaxSteps,
 			Usage: liveUsage(0), UsageEstimated: true,
 		})
-		if sc, ok := completer.(llm.StreamCompleter); ok {
+		if sc, ok := completer.(llm.StreamCompleter); ok && !forceNonStreaming {
 			// Reasoning is accumulated and flushed in batches rather than per
 			// chunk. A reasoner emits several times the tokens of its answer,
 			// and Run.emit drops events silently once its buffer fills -- a lost
@@ -634,6 +453,7 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 		} else {
 			resp, err = completer.Complete(ctx, req)
 		}
+		forceNonStreaming = false
 		// A corrective retry sees the rejected assistant turn and an internal
 		// nudge, but neither belongs to the durable conversation or Result.
 		if transientStart >= 0 {
@@ -676,11 +496,29 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 		invalidReason := ""
 		invalidError := ""
 		correctionPrompt := continueTaskPrompt
-		if len(assistant.ToolCalls) == 0 {
+		finishSummary, finishPresent, finishProblem := "", false, ""
+		if cfg.RequireFinishTask {
+			finishSummary, finishPresent, finishProblem = finishTaskSummary(assistant.ToolCalls)
+		}
+		switch {
+		case cfg.RequireFinishTask && finishProblem != "":
+			invalidReason = "finish"
+			invalidError = finishProblem
+			correctionPrompt = finishTaskCorrection + " " + finishProblem + "."
+		case cfg.RequireFinishTask && finishPresent && background.pending():
+			invalidReason = "background"
+			invalidError = BackgroundDelegationError
+			correctionPrompt = "Background subagents started by this parent are still running or their terminal output has not been read. Continue the parent task: use task_output to join every delegated task, then integrate those results. Do not call finish_task yet."
+		case cfg.RequireFinishTask && finishPresent && background.needsCheckpoint():
+			invalidReason = "composition"
+			invalidError = BackgroundDelegationError
+			correctionPrompt = "All background subagent results are now available. Re-evaluate the original request and integrate those results. Continue with tools if work remains; otherwise call finish_task alone with the final summary."
+		case len(assistant.ToolCalls) == 0:
 			switch {
 			case strings.TrimSpace(assistant.Content) == "":
 				invalidReason = "empty"
 				invalidError = EmptyResponseError
+				emptyResponses++
 			case background.pending():
 				invalidReason = "background"
 				invalidError = BackgroundDelegationError
@@ -689,31 +527,35 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 				invalidReason = "composition"
 				invalidError = BackgroundDelegationError
 				correctionPrompt = "All background subagent results are now available. Re-evaluate the original user request against those results. If work remains, continue with tools now; otherwise return a concrete final answer describing the completed result. Do not answer with a plan for future work."
-			case !requirement.satisfiedBy(evidence):
-				invalidReason = "evidence"
-				invalidError = CompletionEvidenceError
-				correctionPrompt = requirement.correctivePrompt()
-			case looksLikeDeferredAction(assistant.Content):
-				invalidReason = "deferred"
-				invalidError = UnproductiveResponseError
+			case cfg.RequireFinishTask:
+				invalidReason = "finish"
+				invalidError = FinishTaskRequiredError
+				correctionPrompt = finishTaskCorrection
 			}
 		}
 		if invalidReason != "" {
 			canCorrect := retryReason == ""
-			if invalidReason == "evidence" && completionCorrections >= 1 {
-				canCorrect = false
+			if invalidReason == "empty" {
+				canCorrect = emptyResponses < maxEmptyResponses
+			}
+			if invalidReason == "finish" {
+				finishProtocolMisses++
+				canCorrect = finishProtocolMisses < maxFinishProtocolMisses
 			}
 			if canCorrect {
 				// Keep the rejected turn and corrective instruction in this one
 				// provider request only. They are deliberately not sent to sink.
 				transientStart = len(messages)
-				if strings.TrimSpace(assistant.Content) != "" {
+				if len(assistant.ToolCalls) == 0 && strings.TrimSpace(assistant.Content) != "" {
 					messages = append(messages, assistant)
 				}
 				messages = append(messages, llm.Message{Role: llm.RoleUser, Content: correctionPrompt})
 				retryReason = invalidReason
-				if invalidReason == "evidence" {
-					completionCorrections++
+				if invalidReason == "empty" {
+					// A streamed empty completion can be an SSE assembly defect
+					// rather than a model decision. Recover through the complete
+					// response parser so the same failure path is not repeated.
+					forceNonStreaming = true
 				}
 				if invalidReason == "composition" {
 					background.checkpointed = true
@@ -721,13 +563,37 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 				step--
 				continue
 			}
-			emit(Event{Type: "error", Text: invalidError, Code: CodeProvider, Usage: usageAcc, LastRequestAt: lastRequestAt})
+			code := CodeProvider
+			if invalidReason == "empty" {
+				code = CodeEmptyResponse
+			} else if invalidReason == "finish" {
+				code = CodeFinishProtocol
+			}
+			emit(Event{Type: "error", Text: invalidError, Code: code, Usage: usageAcc, LastRequestAt: lastRequestAt})
 			return Result{
 				ID: runID, Status: "error", Steps: step + 1, Usage: usageAcc,
-				Err: invalidError, Code: CodeProvider, Messages: messages, LastRequestAt: lastRequestAt,
+				Err: invalidError, Code: code, Messages: messages, LastRequestAt: lastRequestAt,
 			}
 		}
 		retryReason = ""
+		emptyResponses = 0
+		finishProtocolMisses = 0
+		if cfg.RequireFinishTask && finishPresent {
+			final := llm.Message{Role: llm.RoleAssistant, Content: finishSummary}
+			emit(Event{Type: "assistant", Text: finishSummary})
+			messages = append(messages, final)
+			sink(final)
+			emit(Event{Type: "done", Text: finishSummary, Usage: usageAcc, LastRequestAt: lastRequestAt})
+			return Result{
+				ID:            runID,
+				Status:        "finished",
+				Result:        finishSummary,
+				Steps:         step + 1,
+				Usage:         usageAcc,
+				Messages:      messages,
+				LastRequestAt: lastRequestAt,
+			}
+		}
 		if assistant.Content != "" && !streamed {
 			emit(Event{Type: "assistant", Text: assistant.Content})
 		}
@@ -749,7 +615,6 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 
 		var results []tools.Result
 		messages, results = runToolCalls(ctx, registry, assistant.ToolCalls, cfg, messages, sink, emit)
-		observeCompletionEvidence(&evidence, assistant.ToolCalls, results)
 		background.observe(assistant.ToolCalls, results)
 		if parts := registry.TakeVisionParts(); len(parts) > 0 {
 			inj := llm.Message{

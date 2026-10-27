@@ -19,6 +19,8 @@ type RunInfo struct {
 	StartedAt time.Time
 	EndedAt   time.Time
 	Usage     *Usage
+	Err       string
+	Code      Code
 }
 
 // ListRuns returns runs for agentID under opts.Local.CWD (from run_start/run_end records).
@@ -97,6 +99,8 @@ func runsFromRecords(recs []store.Record) []RunInfo {
 			info.Status = rec.Status
 			info.Steps = rec.Steps
 			info.EndedAt = rec.Time
+			info.Err = rec.Err
+			info.Code = Code(rec.Code)
 			if rec.Usage != nil {
 				info.Usage = &Usage{
 					InputTokens:      rec.Usage.InputTokens,

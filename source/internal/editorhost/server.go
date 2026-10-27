@@ -585,6 +585,8 @@ func (s *Server) handleSessionTranscript(ctx context.Context, params json.RawMes
 			Name:       in.Name,
 			Status:     in.Status,
 			Steps:      in.Steps,
+			Err:        in.Err,
+			Code:       string(in.Code),
 		}
 		for _, tc := range in.ToolCalls {
 			entry.ToolCalls = append(entry.ToolCalls, TranscriptCall{
@@ -1414,15 +1416,16 @@ func (s *Server) buildOptions(ctx context.Context, p SessionParams, sess *sessio
 	// computations of one flag is how the option and the mode start disagreeing
 	// about whether this session has read the workspace's policy.
 	opts := anvil.Options{
-		PermissionGroups: groups,
-		Provider:         anvil.Provider(firstNonEmpty(p.Provider, s.cfg.Provider, os.Getenv("ANVIL_PROVIDER"))),
-		BaseURL:          firstNonEmpty(p.BaseURL, s.cfg.BaseURL, os.Getenv("ANVIL_BASE_URL")),
-		SystemPrompt:     p.SystemPrompt,
-		MaxSteps:         p.MaxSteps,
-		BuiltinTools:     p.BuiltinTools,
-		DisallowedTools:  p.DisallowedTools,
-		Skills:           p.Skills,
-		Plugins:          p.Plugins,
+		PermissionGroups:  groups,
+		Provider:          anvil.Provider(firstNonEmpty(p.Provider, s.cfg.Provider, os.Getenv("ANVIL_PROVIDER"))),
+		BaseURL:           firstNonEmpty(p.BaseURL, s.cfg.BaseURL, os.Getenv("ANVIL_BASE_URL")),
+		SystemPrompt:      p.SystemPrompt,
+		RequireFinishTask: true,
+		MaxSteps:          p.MaxSteps,
+		BuiltinTools:      p.BuiltinTools,
+		DisallowedTools:   p.DisallowedTools,
+		Skills:            p.Skills,
+		Plugins:           p.Plugins,
 		Local: anvil.LocalOptions{
 			CWD:             s.cwdPath(),
 			LoadRules:       p.LoadRules,

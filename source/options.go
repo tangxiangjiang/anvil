@@ -109,6 +109,10 @@ type Options struct {
 	// SystemPrompt replaces Anvil's default main system text when non-empty (0.10+).
 	// Project rules (when enabled) are still appended. Not persisted across Resume unless passed again.
 	SystemPrompt string
+	// RequireFinishTask makes the reserved finish_task control call the only
+	// terminal signal. Ordinary assistant text remains progress. Editor clients
+	// enable this; false preserves the SDK's historical plain-text completion.
+	RequireFinishTask bool
 
 	// BuiltinTools, when non-empty, is an allow-list of built-in tool names or groups (0.10+).
 	// Groups: shell, read, write, edit, search, skills, web, lsp, git, verify, vision, mcp. Custom Tools entries are never filtered out.

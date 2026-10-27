@@ -860,6 +860,8 @@ export interface TranscriptEntry {
   status?: RunStatus;
   steps?: number;
   usage?: Usage;
+  err?: string;
+  code?: string;
 }
 
 export interface SessionTranscriptResult {

@@ -214,13 +214,14 @@ test('the panel tells the document how to measure, then asks the session', () =>
   assert.match(HUB, /panel\.reportContext\(\)/);
 });
 
-test('the setting is a number that defaults to unknown', () => {
+test('the setting has a conservative default and keeps zero as an opt-out', () => {
   const property = PACKAGE.contributes.configuration.properties['anvil.contextWindow'];
   assert.equal(property.type, 'number');
-  assert.equal(property.default, 0);
+  assert.equal(property.default, 128000);
   assert.equal(property.minimum, 0);
-  assert.match(property.markdownDescription, /does not guess/);
-  assert.match(SETTINGS, /get<number>\('contextWindow', 0\)/);
+  assert.match(property.markdownDescription, /prevents an unconfigured conversation from growing without bound/);
+  assert.match(property.markdownDescription, /Set 0 explicitly to disable automatic compaction/);
+  assert.match(SETTINGS, /get<number>\('contextWindow', 128000\)/);
   assert.match(SETTINGS, /Number\.isFinite\(window\) && window > 0 \? Math\.floor\(window\) : 0/);
 });
 

@@ -61,6 +61,8 @@ type TranscriptEntry struct {
 	Status string
 	Steps  int
 	Usage  *Usage
+	Err    string
+	Code   Code
 }
 
 // TranscriptOptions configures LoadTranscript. Only Local.CWD is required.
@@ -159,6 +161,8 @@ func transcriptFromRecords(recs []store.Record, limit int) TranscriptResult {
 				RunID:  rec.RunID,
 				Status: rec.Status,
 				Steps:  rec.Steps,
+				Err:    rec.Err,
+				Code:   Code(rec.Code),
 			}
 			if rec.Usage != nil {
 				entry.Usage = &Usage{

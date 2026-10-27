@@ -91,6 +91,8 @@ const (
 	CodeContextDeadline Code = "context_deadline"
 	CodeMaxWallTime     Code = "max_wall_time"
 	CodeProvider        Code = "provider"
+	CodeEmptyResponse   Code = "empty_response"
+	CodeFinishProtocol  Code = "finish_protocol"
 	CodeToolPanic       Code = "tool_panic"
 )
 

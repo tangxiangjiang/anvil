@@ -14,6 +14,8 @@ export type FailureKind =
   | 'cancelled'
   | 'max_steps'
   | 'provider'
+  | 'empty_response'
+  | 'finish_protocol'
   | 'wall_time'
   | 'deadline'
   | 'context'
@@ -31,6 +33,8 @@ const MESSAGES: Record<Exclude<FailureKind, 'none'>, string> = {
   cancelled: 'Stopped.',
   max_steps: 'The agent hit its step limit before finishing. Raise anvil.maxSteps or ask for a smaller change.',
   provider: 'The model provider rejected the request. Check the API key, the model id, and anvil.baseUrl.',
+  empty_response: 'The model provider repeatedly returned an empty completion. Automatic recovery produced no text or tool call.',
+  finish_protocol: 'The model did not send the required finish_task completion signal.',
   wall_time: 'The turn ran out of wall-clock time.',
   deadline: 'The turn ran out of time.',
   context: 'The conversation no longer fits the model context. Start a new session or shorten the request.',
@@ -49,6 +53,9 @@ export function classifyDone(done: DoneParams): RunFailure {
 
   const kind = classifyCode(done.code);
   const detail = (done.err || '').trim();
+  if (kind === 'empty_response' || kind === 'finish_protocol') {
+    return { kind, message: detail || MESSAGES.empty_response, isError: true };
+  }
   let message = MESSAGES[kind] ?? '';
   if (message === '') {
     message = detail || 'The run failed.';
@@ -69,6 +76,10 @@ export function classifyCode(code: string | undefined): Exclude<FailureKind, 'no
     case 'provider_error':
     case 'auth':
       return 'provider';
+    case 'empty_response':
+      return 'empty_response';
+    case 'finish_protocol':
+      return 'finish_protocol';
     case 'max_wall_time':
       return 'wall_time';
     case 'context_deadline':

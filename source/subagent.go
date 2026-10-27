@@ -397,6 +397,7 @@ func (a *Agent) childOptions(in spawnParams, selectors []string, depth int) Opti
 		// must carry the same switch that lets command hooks run (audit #25).
 		AllowHookCommands: a.opts.AllowHookCommands,
 		SystemPrompt:      subagentBrief,
+		RequireFinishTask: a.opts.RequireFinishTask,
 		BuiltinTools:      selectors,
 		DisallowedTools:   append([]string(nil), a.opts.DisallowedTools...),
 		Subagents:         a.opts.Subagents,

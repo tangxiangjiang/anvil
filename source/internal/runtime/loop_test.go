@@ -244,7 +244,7 @@ func (c *toolEmptyThenFinishCompleter) Complete(ctx context.Context, req llm.Req
 			},
 			Usage: &llm.Usage{InputTokens: 3, OutputTokens: 1, TotalTokens: 4},
 		}, nil
-	case 2:
+	case 2, 3:
 		return &llm.Response{
 			Message: llm.Message{Role: llm.RoleAssistant, Content: " \n\t"},
 			Usage:   &llm.Usage{InputTokens: 4, TotalTokens: 4},
@@ -277,10 +277,10 @@ func TestLoopRetriesEmptyResponseWithoutPersistingIt(t *testing.T) {
 	if res.Status != "finished" || res.Result != "done after retry" {
 		t.Fatalf("status=%s result=%q err=%q", res.Status, res.Result, res.Err)
 	}
-	if completer.n != 3 || res.Steps != 2 {
+	if completer.n != 4 || res.Steps != 2 {
 		t.Fatalf("calls=%d steps=%d", completer.n, res.Steps)
 	}
-	if res.Usage == nil || res.Usage.TotalTokens != 14 {
+	if res.Usage == nil || res.Usage.TotalTokens != 18 {
 		t.Fatalf("usage=%+v", res.Usage)
 	}
 	for _, message := range persisted {
@@ -304,7 +304,7 @@ func (c *emptyCompleter) Complete(ctx context.Context, req llm.Request) (*llm.Re
 	}, nil
 }
 
-func TestLoopErrorsAfterTwoEmptyResponses(t *testing.T) {
+func TestLoopErrorsAfterThreeEmptyResponses(t *testing.T) {
 	dir := t.TempDir()
 	reg := tools.NewRegistry(dir, false)
 	completer := &emptyCompleter{}
@@ -328,10 +328,10 @@ func TestLoopErrorsAfterTwoEmptyResponses(t *testing.T) {
 		}
 	})
 
-	if res.Status != "error" || res.Code != runtime.CodeProvider || res.Err != runtime.EmptyResponseError {
+	if res.Status != "error" || res.Code != runtime.CodeEmptyResponse || res.Err != runtime.EmptyResponseError {
 		t.Fatalf("status=%s code=%q err=%q", res.Status, res.Code, res.Err)
 	}
-	if completer.n != 2 || res.Steps != 1 {
+	if completer.n != 3 || res.Steps != 1 {
 		t.Fatalf("calls=%d steps=%d", completer.n, res.Steps)
 	}
 	if doneEvents != 0 || errorEvent == nil || errorEvent.Text != runtime.EmptyResponseError {
@@ -340,7 +340,7 @@ func TestLoopErrorsAfterTwoEmptyResponses(t *testing.T) {
 	if len(persisted) != 1 || persisted[0].Role != llm.RoleUser {
 		t.Fatalf("persisted=%+v", persisted)
 	}
-	if res.Usage == nil || res.Usage.TotalTokens != 4 {
+	if res.Usage == nil || res.Usage.TotalTokens != 6 {
 		t.Fatalf("usage=%+v", res.Usage)
 	}
 }
@@ -372,13 +372,17 @@ func (c *deferredThenToolCompleter) Complete(ctx context.Context, req llm.Reques
 		}}, nil
 	default:
 		return &llm.Response{Message: llm.Message{
-			Role:    llm.RoleAssistant,
-			Content: "已完成实际处理。",
+			Role: llm.RoleAssistant,
+			ToolCalls: []llm.ToolCall{{
+				ID:   "finish",
+				Name: "finish_task",
+				Args: json.RawMessage(`{"summary":"已完成实际处理。"}`),
+			}},
 		}}, nil
 	}
 }
 
-func TestLoopContinuesAfterModelOnlyAnnouncesWork(t *testing.T) {
+func TestLoopRequiresFinishTaskAfterModelOnlyAnnouncesWork(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "note.txt"), []byte("hello"), 0o644); err != nil {
 		t.Fatal(err)
@@ -387,9 +391,10 @@ func TestLoopContinuesAfterModelOnlyAnnouncesWork(t *testing.T) {
 	completer := &deferredThenToolCompleter{}
 	var persisted []llm.Message
 	res := runtime.Loop(context.Background(), completer, reg, runtime.Config{
-		CWD:     dir,
-		Model:   "m",
-		UserMsg: "处理一下",
+		CWD:               dir,
+		Model:             "m",
+		UserMsg:           "处理一下",
+		RequireFinishTask: true,
 		Sink: func(message llm.Message) {
 			persisted = append(persisted, message)
 		},
@@ -401,15 +406,28 @@ func TestLoopContinuesAfterModelOnlyAnnouncesWork(t *testing.T) {
 	if len(completer.requests) < 2 {
 		t.Fatalf("requests=%d", len(completer.requests))
 	}
+	first := completer.requests[0]
+	hasFinishDef := false
+	for _, def := range first.Tools {
+		hasFinishDef = hasFinishDef || def.Name == "finish_task"
+	}
+	if !hasFinishDef || len(first.Messages) == 0 || !strings.Contains(first.Messages[0].Content, "Completion protocol") {
+		t.Fatalf("finish protocol was not declared: tools=%+v messages=%+v", first.Tools, first.Messages)
+	}
 	retryMessages := completer.requests[1].Messages
 	if len(retryMessages) < 2 ||
 		!strings.Contains(retryMessages[len(retryMessages)-2].Content, "我先确认") ||
-		!strings.Contains(retryMessages[len(retryMessages)-1].Content, "do not stop") {
+		!strings.Contains(retryMessages[len(retryMessages)-1].Content, "finish_task") {
 		t.Fatalf("corrective retry messages=%+v", retryMessages)
 	}
 	for _, message := range persisted {
-		if strings.Contains(message.Content, "我先确认") || strings.Contains(message.Content, "do not stop") {
+		if strings.Contains(message.Content, "我先确认") || strings.Contains(message.Content, "ordinary assistant text") {
 			t.Fatalf("transient corrective turn was persisted: %+v", message)
+		}
+		for _, call := range message.ToolCalls {
+			if call.Name == "finish_task" {
+				t.Fatalf("finish control call was persisted: %+v", message)
+			}
 		}
 	}
 }
@@ -424,20 +442,21 @@ func (c *alwaysDeferredCompleter) Complete(ctx context.Context, req llm.Request)
 	c.n++
 	return &llm.Response{Message: llm.Message{
 		Role:    llm.RoleAssistant,
-		Content: "我会排除路径或文件名含 Streaming 的改动，其余改动作为一次本地快照提交。",
+		Content: "我继续完成这版实现，先核对已写入的代码和 RHI 接口，再补齐 IO 完成、取消回收与 CPU 回退路径。",
 	}}, nil
 }
 
-func TestLoopErrorsWhenModelOnlyAnnouncesWorkTwice(t *testing.T) {
+func TestLoopErrorsWhenModelNeverCallsFinishTask(t *testing.T) {
 	dir := t.TempDir()
 	reg := tools.NewRegistry(dir, false)
 	completer := &alwaysDeferredCompleter{}
 	var persisted []llm.Message
 	var doneEvents int
 	res := runtime.Loop(context.Background(), completer, reg, runtime.Config{
-		CWD:     dir,
-		Model:   "m",
-		UserMsg: "修复问题",
+		CWD:               dir,
+		Model:             "m",
+		UserMsg:           "修复问题",
+		RequireFinishTask: true,
 		Sink: func(message llm.Message) {
 			persisted = append(persisted, message)
 		},
@@ -447,10 +466,10 @@ func TestLoopErrorsWhenModelOnlyAnnouncesWorkTwice(t *testing.T) {
 		}
 	})
 
-	if res.Status != "error" || res.Code != runtime.CodeProvider || res.Err != runtime.UnproductiveResponseError {
+	if res.Status != "error" || res.Code != runtime.CodeFinishProtocol || res.Err != runtime.FinishTaskRequiredError {
 		t.Fatalf("status=%s code=%q err=%q", res.Status, res.Code, res.Err)
 	}
-	if completer.n != 2 || doneEvents != 0 {
+	if completer.n != 3 || doneEvents != 0 {
 		t.Fatalf("calls=%d done=%d", completer.n, doneEvents)
 	}
 	if len(persisted) != 1 || persisted[0].Role != llm.RoleUser {
@@ -473,28 +492,24 @@ func (c *mutationEvidenceCompleter) Complete(ctx context.Context, req llm.Reques
 		return &llm.Response{Message: llm.Message{
 			Role: llm.RoleAssistant,
 			ToolCalls: []llm.ToolCall{{
-				ID:   "read",
-				Name: "read_file",
-				Args: json.RawMessage(`{"path":"note.txt"}`),
-			}},
-		}}, nil
-	case 2:
-		return &llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Content: "已完成修改。"}}, nil
-	case 3:
-		return &llm.Response{Message: llm.Message{
-			Role: llm.RoleAssistant,
-			ToolCalls: []llm.ToolCall{{
 				ID:   "write",
 				Name: "write_file",
 				Args: json.RawMessage(`{"path":"note.txt","content":"changed"}`),
 			}},
 		}}, nil
 	default:
-		return &llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Content: "已完成修改。"}}, nil
+		return &llm.Response{Message: llm.Message{
+			Role: llm.RoleAssistant,
+			ToolCalls: []llm.ToolCall{{
+				ID:   "finish",
+				Name: "finish_task",
+				Args: json.RawMessage(`{"summary":"已完成修改。"}`),
+			}},
+		}}, nil
 	}
 }
 
-func TestLoopRequiresMutationEvidenceForAChangeRequest(t *testing.T) {
+func TestLoopFinishesOnlyFromFinishTaskAndPersistsItsSummary(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "note.txt"), []byte("original"), 0o644); err != nil {
 		t.Fatal(err)
@@ -503,28 +518,31 @@ func TestLoopRequiresMutationEvidenceForAChangeRequest(t *testing.T) {
 	completer := &mutationEvidenceCompleter{}
 	var persisted []llm.Message
 	res := runtime.Loop(context.Background(), completer, reg, runtime.Config{
-		CWD:     dir,
-		Model:   "m",
-		UserMsg: "帮我修改 note.txt",
+		CWD:               dir,
+		Model:             "m",
+		UserMsg:           "继续按照架构落地代码，之前中断了",
+		RequireFinishTask: true,
 		Sink: func(message llm.Message) {
 			persisted = append(persisted, message)
 		},
 	}, nil)
 
-	if res.Status != "finished" || completer.n != 4 {
+	if res.Status != "finished" || res.Result != "已完成修改。" || completer.n != 2 {
 		t.Fatalf("status=%s calls=%d err=%q", res.Status, completer.n, res.Err)
 	}
 	data, err := os.ReadFile(filepath.Join(dir, "note.txt"))
 	if err != nil || string(data) != "changed" {
 		t.Fatalf("file=%q err=%v", data, err)
 	}
-	if !strings.Contains(completer.requests[2].Messages[len(completer.requests[2].Messages)-1].Content, "no successful write") {
-		t.Fatalf("corrective request=%+v", completer.requests[2].Messages)
-	}
 	for _, message := range persisted {
-		if strings.Contains(message.Content, "no successful write") {
-			t.Fatalf("completion correction was persisted: %+v", message)
+		for _, call := range message.ToolCalls {
+			if call.Name == "finish_task" {
+				t.Fatalf("finish control call was persisted: %+v", message)
+			}
 		}
+	}
+	if persisted[len(persisted)-1].Role != llm.RoleAssistant || persisted[len(persisted)-1].Content != "已完成修改。" {
+		t.Fatalf("final persisted message = %+v", persisted[len(persisted)-1])
 	}
 }
 
@@ -563,6 +581,42 @@ func TestLoopUsesStreamedTextWhenFinalMessageIsEmpty(t *testing.T) {
 	}
 	if len(persisted) != 2 || persisted[1].Content != "streamed answer" {
 		t.Fatalf("persisted=%+v", persisted)
+	}
+}
+
+type emptyStreamFallbackCompleter struct {
+	streamCalls   int
+	completeCalls int
+}
+
+func (c *emptyStreamFallbackCompleter) Complete(context.Context, llm.Request) (*llm.Response, error) {
+	c.completeCalls++
+	return &llm.Response{
+		Message: llm.Message{Role: llm.RoleAssistant, Content: "recovered without streaming"},
+	}, nil
+}
+
+func (c *emptyStreamFallbackCompleter) CompleteStream(
+	context.Context, llm.Request, func(llm.Delta),
+) (*llm.Response, error) {
+	c.streamCalls++
+	return &llm.Response{Message: llm.Message{Role: llm.RoleAssistant}}, nil
+}
+
+func TestLoopRetriesAnEmptyStreamThroughComplete(t *testing.T) {
+	dir := t.TempDir()
+	reg := tools.NewRegistry(dir, false)
+	completer := &emptyStreamFallbackCompleter{}
+
+	res := runtime.Loop(context.Background(), completer, reg, runtime.Config{
+		CWD: dir, Model: "m", UserMsg: "answer",
+	}, nil)
+
+	if res.Status != "finished" || res.Result != "recovered without streaming" {
+		t.Fatalf("status=%s result=%q err=%q", res.Status, res.Result, res.Err)
+	}
+	if completer.streamCalls != 1 || completer.completeCalls != 1 || res.Steps != 1 {
+		t.Fatalf("stream=%d complete=%d steps=%d", completer.streamCalls, completer.completeCalls, res.Steps)
 	}
 }
 

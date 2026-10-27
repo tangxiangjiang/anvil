@@ -5374,9 +5374,9 @@
    * status line: a replay shows several runs at once, and a line at the bottom
    * could only report the last of them.
    *
-   * The status is a word, not a colour: the store keeps whether a run finished,
-   * failed or was stopped, and keeps neither the reason nor anything about a
-   * call that failed inside it, so there is nothing more to show.
+   * The status is a word, not a colour. Newer stores also keep a terminal
+   * failure reason; showing it here makes a reopened failed run as actionable
+   * as the same run was while it was live.
    */
   function addRunEnd(done) {
     const round = currentRound();
@@ -5389,6 +5389,7 @@
     // block the run drew, and the line is the replay's ending, not its content.
     if (status !== 'error' && status !== 'cancelled') markSummary(round, done && done.run_id);
     finishReply();
+    if (status === 'error' && done && done.err) addNotice(done.err);
     const line = el('div', 'msg run-end');
     line.appendChild(el('div', 'body', [word].concat(runSummary(done)).join(' · ')));
     append(line);

@@ -11,47 +11,35 @@ import (
 	"github.com/anvil-dev/anvil/internal/tools"
 )
 
-func TestCompletionRequirementRecognizesCommitRequest(t *testing.T) {
-	message := "<context>\n<diagnostics count=\"0\">\n</diagnostics>\n</context>\n\ngit 先把非Streaming的提交下"
-	if got := completionRequirementFor(message); got != requireCommit {
-		t.Fatalf("requirement=%v", got)
+func TestFinishTaskDefinitionDeclaresTheTerminalContract(t *testing.T) {
+	def := finishTaskDef()
+	if def.Name != finishTaskToolName || !json.Valid(def.Parameters) {
+		t.Fatalf("definition = %+v", def)
+	}
+	if def.Description == "" {
+		t.Fatal("finish_task has no model-facing instruction")
 	}
 }
 
-func TestCompletionRequirementDoesNotTurnQuestionsIntoMutations(t *testing.T) {
-	for _, message := range []string{
-		"为什么这次修改没有生效？",
-		"这个架构图怎么调整一下比较好？",
-		"这个文件需要修改吗？",
-		"解释一下 git commit 的工作原理",
-		"不要提交，只看一下改动",
-		"I will update this myself; explain the API.",
+func TestFinishTaskSummaryAcceptsOnlyOneValidControlCall(t *testing.T) {
+	summary, present, problem := finishTaskSummary([]llm.ToolCall{{
+		ID: "finish", Name: finishTaskToolName, Args: json.RawMessage(`{"summary":"  work complete  "}`),
+	}})
+	if summary != "work complete" || !present || problem != "" {
+		t.Fatalf("summary=%q present=%v problem=%q", summary, present, problem)
+	}
+
+	for _, calls := range [][]llm.ToolCall{
+		{{Name: finishTaskToolName, Args: json.RawMessage(`{"summary":" "}`)}},
+		{{Name: finishTaskToolName, Args: json.RawMessage(`{`)}},
+		{
+			{Name: finishTaskToolName, Args: json.RawMessage(`{"summary":"done"}`)},
+			{Name: "read_file", Args: json.RawMessage(`{"path":"a"}`)},
+		},
 	} {
-		if got := completionRequirementFor(message); got != requireNoSideEffect {
-			t.Fatalf("message=%q requirement=%v", message, got)
+		if _, present, problem := finishTaskSummary(calls); !present || problem == "" {
+			t.Fatalf("calls=%+v present=%v problem=%q", calls, present, problem)
 		}
-	}
-}
-
-func TestCompletionRequirementRecognizesConversationalChineseChangeRequests(t *testing.T) {
-	for _, message := range []string{
-		"好，调一下，定定案的TextureStreaming架构图",
-		"我们的这个需要改掉，做成后面这种的",
-		"把状态动画补上",
-		"可以帮我调整一下吗？",
-	} {
-		if got := completionRequirementFor(message); got != requireMutation {
-			t.Fatalf("message=%q requirement=%v", message, got)
-		}
-	}
-}
-
-func TestShellCompletionEvidenceDistinguishesInspectionFromCommit(t *testing.T) {
-	if shellPerformsCommit("git diff --name-only --cached && git diff --shortstat") {
-		t.Fatal("read-only diff counted as a commit")
-	}
-	if !shellPerformsCommit(`git -c user.name=Anvil -c user.email=a@example.test commit -m "snapshot"`) {
-		t.Fatal("git commit with options was not recognized")
 	}
 }
 

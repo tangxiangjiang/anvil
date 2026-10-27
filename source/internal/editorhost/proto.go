@@ -934,6 +934,8 @@ type TranscriptEntry struct {
 	Status string `json:"status,omitempty"`
 	Steps  int    `json:"steps,omitempty"`
 	Usage  *Usage `json:"usage,omitempty"`
+	Err    string `json:"err,omitempty"`
+	Code   string `json:"code,omitempty"`
 }
 
 // TranscriptCall is one tool invocation inside a replayed assistant message.

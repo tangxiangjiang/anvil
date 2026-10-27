@@ -305,16 +305,16 @@
         },
         "anvil.contextWindow": {
           "type": "number",
-          "default": 0,
+          "default": 128000,
           "minimum": 0,
-          "markdownDescription": "The context window the token meter measures against, in tokens. 0 means unknown: the composer then shows cumulative input and output counts with no fraction, and the session does not auto-compact. Anvil does not guess a window from the model name, so a percentage appears only when this is set."
+          "markdownDescription": "The context budget the token meter measures against, in tokens. The conservative 128k default prevents an unconfigured conversation from growing without bound; set the model's real window to use more capacity. Set 0 explicitly to disable automatic compaction and show cumulative counts without a fraction."
         },
         "anvil.autoCompactAt": {
           "type": "number",
           "default": 0.8,
           "minimum": 0.1,
           "maximum": 1,
-          "markdownDescription": "How full the context window may get before the host summarizes the conversation on its own, as a fraction of `anvil.contextWindow`. The meter marks this point and counts down to it. Ignored while the window is 0."
+          "markdownDescription": "How full the context budget may get before the host summarizes the conversation on its own, as a fraction of `anvil.contextWindow`. The meter marks this point and counts down to it. Ignored while the window is 0."
         },
         "anvil.contextKeepRecent": {
           "type": "number",

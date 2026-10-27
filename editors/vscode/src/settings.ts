@@ -148,9 +148,10 @@ export function readSettings(): ResolvedSettings {
   };
   const web = webSearchParams(webSearch);
   if (web) session.web_search = web;
-  // A window of zero, or a nonsense value, means the user has not told the
-  // panel one: the meter then shows counts and no fraction.
-  const window = cfg.get<number>('contextWindow', 0) ?? 0;
+  // Fresh installs get a conservative safety budget: leaving this unknown used
+  // to disable compaction silently and let a long editor conversation grow
+  // until the provider rejected it. Zero remains an explicit opt-out.
+  const window = cfg.get<number>('contextWindow', 128000) ?? 128000;
   const contextWindow = Number.isFinite(window) && window > 0 ? Math.floor(window) : 0;
   const compactShare = cfg.get<number>('autoCompactAt', 0.8) ?? 0.8;
   const autoCompactAt = fractionOf(compactShare, 0.8);

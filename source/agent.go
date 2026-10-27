@@ -1304,11 +1304,12 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 			AutoCompactAt: a.opts.Context.AutoCompactAt,
 			KeepRecent:    a.opts.Context.KeepRecent,
 		},
-		PromptCache:      promptCacheEnabled(a.opts),
-		SystemPrompt:     sysPrompt,
-		ParallelTools:    a.opts.ParallelTools,
-		ParallelToolsMax: a.opts.ParallelToolsMax,
-		Sink:             func(m llm.Message) { a.persistMessage(run.id, m) },
+		PromptCache:       promptCacheEnabled(a.opts),
+		SystemPrompt:      sysPrompt,
+		RequireFinishTask: a.opts.RequireFinishTask,
+		ParallelTools:     a.opts.ParallelTools,
+		ParallelToolsMax:  a.opts.ParallelToolsMax,
+		Sink:              func(m llm.Message) { a.persistMessage(run.id, m) },
 	}, func(ev runtime.Event) {
 		out := Event{
 			Type:           EventType(ev.Type),
@@ -1386,6 +1387,8 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 		Status: string(rr.Status),
 		Steps:  rr.Steps,
 		Usage:  usage,
+		Err:    rr.Err,
+		Code:   string(rr.Code),
 	})
 
 	var err error

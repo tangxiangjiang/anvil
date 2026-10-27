@@ -25,6 +25,8 @@ test('each host code maps to its own message', () => {
   const cases: Array<[string, string]> = [
     ['max_steps', 'max_steps'],
     ['provider', 'provider'],
+    ['empty_response', 'empty_response'],
+    ['finish_protocol', 'finish_protocol'],
     ['max_wall_time', 'wall_time'],
     ['context_deadline', 'deadline'],
     ['context_overflow', 'context'],
@@ -40,6 +42,14 @@ test('each host code maps to its own message', () => {
   }
   // The whole point of the mapping: a user can tell these apart.
   assert.equal(messages.size, cases.length);
+});
+
+test('an exhausted empty response does not blame credentials', () => {
+  const detail = 'model provider returned 3 consecutive empty responses';
+  const failure = classifyDone(done({ code: 'empty_response', err: detail }));
+  assert.equal(failure.kind, 'empty_response');
+  assert.equal(failure.message, detail);
+  assert.doesNotMatch(failure.message, /API key|model id|baseUrl/i);
 });
 
 test('an unknown code keeps whatever the host said', () => {

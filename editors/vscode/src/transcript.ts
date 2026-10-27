@@ -86,6 +86,8 @@ export function replayOf(entries: TranscriptEntry[], sessionId = ''): ReplayStep
           status: entry.status ?? 'finished',
           steps: entry.steps,
           usage: entry.usage,
+          err: entry.err,
+          code: entry.code,
         },
       });
       awaitingUser = true;
