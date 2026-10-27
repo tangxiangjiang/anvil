@@ -27,7 +27,7 @@ type anthropicStreamRequest struct {
 // CompleteStream implements StreamCompleter for Anthropic SSE.
 func (c *Anthropic) CompleteStream(ctx context.Context, req Request, onDelta func(Delta)) (*Response, error) {
 	if c.cfg.APIKey == "" {
-		return nil, &HTTPError{Status: 401, Message: "missing API key", Retryable: false}
+		return nil, NewHTTPError(401, "missing API key")
 	}
 	if onDelta == nil {
 		onDelta = func(Delta) {}
@@ -38,7 +38,7 @@ func (c *Anthropic) CompleteStream(ctx context.Context, req Request, onDelta fun
 	}
 	body := anthropicStreamRequest{
 		Model:     firstNonEmpty(req.Model, c.cfg.Model),
-		MaxTokens: anthropicMaxTokens(req.Effort),
+		MaxTokens: anthropicMaxTokens(req.Effort, req.MaxOutputTokens),
 		System:    system,
 		Messages:  messages,
 		Tools:     toAnthropicTools(req.Tools),
@@ -61,7 +61,7 @@ func (c *Anthropic) CompleteStream(ctx context.Context, req Request, onDelta fun
 
 	httpResp, err := c.client.Do(httpReq)
 	if err != nil {
-		return nil, &HTTPError{Status: 0, Message: "anthropic stream request failed", Retryable: true, Cause: err}
+		return nil, newTransportError("anthropic stream request failed", err)
 	}
 	defer httpResp.Body.Close()
 	if httpResp.StatusCode >= 400 {
@@ -71,6 +71,7 @@ func (c *Anthropic) CompleteStream(ctx context.Context, req Request, onDelta fun
 
 	var content strings.Builder
 	var toolCalls []ToolCall
+	var stopReason string
 	var curTool *ToolCall
 	var curArgs strings.Builder
 	var usage *Usage
@@ -93,6 +94,7 @@ func (c *Anthropic) CompleteStream(ctx context.Context, req Request, onDelta fun
 				Type        string `json:"type"`
 				Text        string `json:"text"`
 				PartialJSON string `json:"partial_json"`
+				StopReason  string `json:"stop_reason"`
 			} `json:"delta"`
 			ContentBlock struct {
 				Type  string          `json:"type"`
@@ -115,7 +117,7 @@ func (c *Anthropic) CompleteStream(ctx context.Context, req Request, onDelta fun
 			return nil, fmt.Errorf("anthropic stream: malformed event: %w", err)
 		}
 		if envelope.Error != nil {
-			return nil, &HTTPError{Status: httpResp.StatusCode, Message: envelope.Error.Message, Retryable: false}
+			return nil, NewHTTPError(httpResp.StatusCode, envelope.Error.Message)
 		}
 		switch envelope.Type {
 		case "content_block_start":
@@ -147,6 +149,9 @@ func (c *Anthropic) CompleteStream(ctx context.Context, req Request, onDelta fun
 				usage = envelope.Message.Usage.usage()
 			}
 		case "message_delta":
+			if envelope.Delta.StopReason != "" {
+				stopReason = envelope.Delta.StopReason
+			}
 			if envelope.Usage != nil {
 				if usage == nil {
 					usage = &Usage{}
@@ -177,8 +182,9 @@ func (c *Anthropic) CompleteStream(ctx context.Context, req Request, onDelta fun
 		return nil, fmt.Errorf("anthropic stream: tool call %q was cut off before it finished", curTool.Name)
 	}
 	return &Response{
-		Message: Message{Role: RoleAssistant, Content: content.String(), ToolCalls: toolCalls},
-		Usage:   usage,
+		Message:    Message{Role: RoleAssistant, Content: content.String(), ToolCalls: toolCalls},
+		Usage:      usage,
+		StopReason: anthropicStop(stopReason),
 	}, nil
 }
 

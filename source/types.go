@@ -45,6 +45,10 @@ const (
 	// provider's message. It lets a client show "provider busy, retrying" instead of a
 	// frozen spinner. It is not stored and has no replay.
 	EventRetry EventType = "retry"
+	// EventTruncated reports that the provider cut the final answer off at the output
+	// limit (0.48+). It comes just before EventDone, which still follows; the partial
+	// answer is the result. Nothing is re-requested: a container decides what to do.
+	EventTruncated EventType = "truncated"
 )
 
 // CompactInfo is one history compaction's numbers, set on EventCompact.
@@ -99,7 +103,14 @@ const (
 	// CodeProviderMidStream is a provider failure after text had reached the user.
 	// It is never retried: a retry would show the answer twice.
 	CodeProviderMidStream Code = "provider_mid_stream"
-	CodeToolPanic       Code = "tool_panic"
+	// CodeProviderBusy is a 429 that outlasted the retries.
+	CodeProviderBusy Code = "provider_busy"
+	// CodeRequestRejected is a 4xx that names the request itself: an unknown parameter,
+	// a context overflow, an invalid tool schema. The provider's text is in Err.
+	CodeRequestRejected Code = "request_rejected"
+	// CodeAuth is a 401 or 403.
+	CodeAuth      Code = "auth"
+	CodeToolPanic Code = "tool_panic"
 )
 
 // RunResult is the authoritative outcome of a Run (from Wait).
@@ -111,6 +122,9 @@ type RunResult struct {
 	Usage  *Usage
 	Err    string
 	Code   Code // set on error/cancelled when classifiable (0.7+)
+	// Truncated is true when the provider cut the final answer off at the output limit
+	// (0.48+). The run still finished and Result is the partial answer.
+	Truncated bool
 	// LastRequestAt is when the run's most recent model request completed
 	// (0.43+). Zero when the run never reached the provider. A client uses it
 	// with a TTL it knows to draw a cache countdown; the SDK does not know any

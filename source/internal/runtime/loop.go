@@ -110,14 +110,17 @@ const reasoningFlushChars = 200
 
 // Result is the terminal run result.
 type Result struct {
-	ID       string
-	Status   string
-	Result   string
-	Steps    int
-	Usage    *llm.Usage
-	Err      string
-	Code     string
-	Messages []llm.Message // full conversation incl. system prompt
+	ID     string
+	Status string
+	Result string
+	Steps  int
+	Usage  *llm.Usage
+	Err    string
+	Code   string
+	// Truncated is true when the provider cut the final answer off at the output limit
+	// (0.48+). The run still finishes; nothing is re-requested.
+	Truncated bool
+	Messages  []llm.Message // full conversation incl. system prompt
 	// LastRequestAt is when the most recent model request completed; zero when
 	// none did.
 	LastRequestAt time.Time
@@ -147,6 +150,8 @@ type Config struct {
 	PromptCache bool
 	// Effort is sent on every request of the run (0.48+). Empty sends nothing.
 	Effort llm.Effort
+	// MaxOutputTokens caps an answer; zero sends nothing.
+	MaxOutputTokens int
 	// Sink, if set, receives each conversation message as it is appended
 	// (user, assistant, tool) so callers can persist them durably.
 	Sink func(llm.Message)
@@ -251,7 +256,7 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 		callCtx := llm.WithRetryObserver(ctx, func(info llm.RetryInfo) {
 			emit(Event{Type: "retry", Attempt: info.Attempt, Delay: info.Delay, Text: info.Message})
 		})
-		req := llm.Request{Model: cfg.Model, Messages: messages, Tools: toolDefs, PromptCache: cfg.PromptCache, Effort: cfg.Effort}
+		req := llm.Request{Model: cfg.Model, Messages: messages, Tools: toolDefs, PromptCache: cfg.PromptCache, Effort: cfg.Effort, MaxOutputTokens: cfg.MaxOutputTokens}
 		if sc, ok := completer.(llm.StreamCompleter); ok {
 			// Reasoning is accumulated and flushed in batches rather than per
 			// chunk. A reasoner emits several times the tokens of its answer,
@@ -297,8 +302,11 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 			}
 			msg := err.Error()
 			code := CodeProvider
-			if llm.IsMidStream(err) {
+			switch {
+			case llm.IsMidStream(err):
 				code = CodeProviderMidStream
+			case llm.KindOf(err) != llm.KindUnknown:
+				code = llm.KindCode(llm.KindOf(err))
 			}
 			emit(Event{Type: "error", Text: msg, Code: code, Usage: usageAcc, LastRequestAt: lastRequestAt})
 			return Result{ID: runID, Status: "error", Steps: step, Usage: usageAcc, Err: msg, Code: code, Messages: messages, LastRequestAt: lastRequestAt}
@@ -326,6 +334,12 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 		sink(assistant)
 
 		if len(assistant.ToolCalls) == 0 {
+			// The provider cut the answer off at the output limit. Say so and stop: an
+			// automatic continuation would be a second completion nobody budgeted for.
+			truncated := resp.StopReason == llm.StopLength
+			if truncated {
+				emit(Event{Type: "truncated", Text: assistant.Content})
+			}
 			emit(Event{Type: "done", Text: assistant.Content, Usage: usageAcc, LastRequestAt: lastRequestAt})
 			return Result{
 				ID:            runID,
@@ -333,6 +347,7 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 				Result:        assistant.Content,
 				Steps:         step + 1,
 				Usage:         usageAcc,
+				Truncated:     truncated,
 				Messages:      messages,
 				LastRequestAt: lastRequestAt,
 			}

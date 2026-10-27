@@ -107,7 +107,8 @@ func TestRunWithRetryOffFailsOnFirst429(t *testing.T) {
 	defer a.Close()
 	run, _ := a.Send(context.Background(), "go")
 	res, _ := run.Wait(context.Background())
-	if res.Status != StatusError || res.Code != CodeProvider || requests.Load() != 1 {
+	// A 429 that is not retried is still a busy provider, not a generic failure.
+	if res.Status != StatusError || res.Code != CodeProviderBusy || requests.Load() != 1 {
 		t.Fatalf("res=%+v requests=%d", res, requests.Load())
 	}
 }

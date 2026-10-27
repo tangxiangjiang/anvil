@@ -39,6 +39,10 @@ func behaviourCases() []evalCase {
 	var cases []evalCase
 	for _, task := range fixtures() {
 		gated := behaviourGate
+		if task.Name == "effort_rejected" {
+			// A rejected request is a clean error, never retried: zero retries exactly.
+			gated = append(append([]string(nil), behaviourGate...), "retries=")
+		}
 		if task.Name == "retry_429_then_ok" {
 			// One 429 then a 200 is exactly one retry: more means a duplicate, fewer a lost one.
 			gated = append(append([]string(nil), behaviourGate...), "retries=")

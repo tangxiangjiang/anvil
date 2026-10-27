@@ -97,9 +97,10 @@ func (u *anthropicUsageWire) usage() *Usage {
 }
 
 type anthropicResponse struct {
-	Content []json.RawMessage   `json:"content"`
-	Usage   *anthropicUsageWire `json:"usage"`
-	Error   *struct {
+	StopReason string              `json:"stop_reason"`
+	Content    []json.RawMessage   `json:"content"`
+	Usage      *anthropicUsageWire `json:"usage"`
+	Error      *struct {
 		Type    string `json:"type"`
 		Message string `json:"message"`
 	} `json:"error"`
@@ -108,7 +109,7 @@ type anthropicResponse struct {
 // Complete implements Completer.
 func (c *Anthropic) Complete(ctx context.Context, req Request) (*Response, error) {
 	if c.cfg.APIKey == "" {
-		return nil, &HTTPError{Status: 401, Message: "missing API key", Retryable: false}
+		return nil, NewHTTPError(401, "missing API key")
 	}
 	system, messages, err := toAnthropicMessages(req.Messages, req.PromptCache)
 	if err != nil {
@@ -116,7 +117,7 @@ func (c *Anthropic) Complete(ctx context.Context, req Request) (*Response, error
 	}
 	body := anthropicRequest{
 		Model:     firstNonEmpty(req.Model, c.cfg.Model),
-		MaxTokens: anthropicMaxTokens(req.Effort),
+		MaxTokens: anthropicMaxTokens(req.Effort, req.MaxOutputTokens),
 		System:    system,
 		Messages:  messages,
 		Tools:     toAnthropicTools(req.Tools),
@@ -137,7 +138,7 @@ func (c *Anthropic) Complete(ctx context.Context, req Request) (*Response, error
 
 	httpResp, err := c.client.Do(httpReq)
 	if err != nil {
-		return nil, &HTTPError{Status: 0, Message: "anthropic request failed", Retryable: true, Cause: err}
+		return nil, newTransportError("anthropic request failed", err)
 	}
 	defer httpResp.Body.Close()
 	respBody, err := io.ReadAll(io.LimitReader(httpResp.Body, 8<<20))
@@ -152,13 +153,13 @@ func (c *Anthropic) Complete(ctx context.Context, req Request) (*Response, error
 		return nil, fmt.Errorf("decode anthropic response: %w", err)
 	}
 	if parsed.Error != nil {
-		return nil, &HTTPError{Status: httpResp.StatusCode, Message: parsed.Error.Message, Retryable: false}
+		return nil, NewHTTPError(httpResp.StatusCode, parsed.Error.Message)
 	}
 	msg, err := fromAnthropicContent(parsed.Content)
 	if err != nil {
 		return nil, err
 	}
-	out := &Response{Message: msg, Usage: parsed.Usage.usage()}
+	out := &Response{Message: msg, Usage: parsed.Usage.usage(), StopReason: anthropicStop(parsed.StopReason)}
 	return out, nil
 }
 

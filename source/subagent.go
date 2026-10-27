@@ -386,6 +386,7 @@ func (a *Agent) childOptions(in spawnParams, selectors []string, depth int) Opti
 		MaxWallTime:      a.opts.MaxWallTime,
 		Effort:           a.opts.Effort,
 		Retry:            a.opts.Retry,
+		MaxOutputTokens:  a.opts.MaxOutputTokens,
 		Permission:       a.opts.Permission,
 		PermissionGroups: append([]string(nil), a.opts.PermissionGroups...),
 		PermissionRules:  append([]PermissionRule(nil), a.opts.PermissionRules...),

@@ -102,3 +102,76 @@ func TestEmptyEffortReachesRequestsEmpty(t *testing.T) {
 		t.Fatalf("effort=%q, want empty", got)
 	}
 }
+
+// MaxOutputTokens and a cut answer reach the caller through the public surface: the
+// option is sent on every request, a child inherits it, and a length stop ends the run
+// finished with Truncated set, one truncated event, and no second request.
+func TestMaxOutputTokensAndTruncationReachTheCaller(t *testing.T) {
+	var mu sync.Mutex
+	var limits []int
+	requests := 0
+	a, err := Create(context.Background(), Options{
+		APIKey: "k", Model: Model{ID: "m"}, MaxOutputTokens: 1234, Local: LocalOptions{CWD: t.TempDir()},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	a.complete = completerFunc(func(_ context.Context, req llm.Request) (*llm.Response, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		requests++
+		limits = append(limits, req.MaxOutputTokens)
+		return &llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Content: "partial"}, StopReason: llm.StopLength}, nil
+	})
+	run, err := a.Send(context.Background(), "go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var types []EventType
+	for ev := range run.Stream(context.Background()) {
+		types = append(types, ev.Type)
+	}
+	res, err := run.Wait(context.Background())
+	if err != nil || res.Status != StatusFinished || !res.Truncated || res.Result != "partial" {
+		t.Fatalf("res=%+v err=%v", res, err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if requests != 1 || len(limits) != 1 || limits[0] != 1234 {
+		t.Fatalf("requests=%d limits=%v", requests, limits)
+	}
+	truncated, done := -1, -1
+	for i, typ := range types {
+		switch typ {
+		case EventTruncated:
+			truncated = i
+		case EventDone:
+			done = i
+		}
+	}
+	if truncated < 0 || done < 0 || truncated > done {
+		t.Fatalf("want a truncated event before done, got %v", types)
+	}
+}
+
+func TestProviderCodesReachRunResult(t *testing.T) {
+	cases := map[int]Code{429: CodeProviderBusy, 400: CodeRequestRejected, 401: CodeAuth, 500: CodeProvider}
+	for status, want := range cases {
+		a, err := Create(context.Background(), Options{
+			APIKey: "k", Model: Model{ID: "m"}, Local: LocalOptions{CWD: t.TempDir()},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		a.complete = completerFunc(func(context.Context, llm.Request) (*llm.Response, error) {
+			return nil, llm.NewHTTPError(status, "provider error: unknown parameter reasoning_effort")
+		})
+		run, _ := a.Send(context.Background(), "go")
+		res, _ := run.Wait(context.Background())
+		a.Close()
+		if res.Status != StatusError || res.Code != want || !strings.Contains(res.Err, "reasoning_effort") {
+			t.Fatalf("status %d: res=%+v, want code %q with the provider text", status, res, want)
+		}
+	}
+}

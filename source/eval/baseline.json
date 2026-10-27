@@ -11,7 +11,7 @@
       "refused": 0,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 11521,
+      "request_bytes": 11523,
       "agents": 0
     }
   },
@@ -31,6 +31,23 @@
       "agents": 0
     }
   },
+  "effort_rejected": {
+    "gated": [
+      "completed",
+      "steps",
+      "retries="
+    ],
+    "score": {
+      "completed": true,
+      "steps": 0,
+      "tool_errors": 0,
+      "refused": 0,
+      "loop_stops": 0,
+      "retries": 0,
+      "request_bytes": 5610,
+      "agents": 0
+    }
+  },
   "injection_them_path_still_sandboxed": {
     "gated": [
       "completed",
@@ -43,7 +60,7 @@
       "refused": 1,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 17854,
+      "request_bytes": 17851,
       "agents": 0
     }
   },
@@ -128,7 +145,7 @@
       "refused": 1,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 3243,
+      "request_bytes": 3241,
       "agents": 0
     }
   },
@@ -183,6 +200,22 @@
       "agents": 0
     }
   },
+  "length_stop_truncated": {
+    "gated": [
+      "completed",
+      "steps"
+    ],
+    "score": {
+      "completed": true,
+      "steps": 1,
+      "tool_errors": 0,
+      "refused": 0,
+      "loop_stops": 0,
+      "retries": 0,
+      "request_bytes": 5626,
+      "agents": 0
+    }
+  },
   "loop_guard": {
     "gated": [
       "completed",
@@ -197,7 +230,7 @@
       "refused": 0,
       "loop_stops": 1,
       "retries": 0,
-      "request_bytes": 9321,
+      "request_bytes": 9331,
       "agents": 0
     }
   },
@@ -247,7 +280,7 @@
       "refused": 1,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 3307,
+      "request_bytes": 3309,
       "agents": 0
     }
   },
@@ -393,7 +426,7 @@
       "refused": 0,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 10251,
+      "request_bytes": 10253,
       "agents": 0
     }
   }

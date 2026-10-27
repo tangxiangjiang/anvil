@@ -26,6 +26,11 @@ type Task struct {
 	Recording string
 	MaxSteps  int // 0 = 8 for normal fixtures
 	Check     func(dir string, res runtime.Result) error
+	// ExpectProviderError, when set, names the one upstream failure this task is about:
+	// the scripted provider returns it, the run is expected to end on it, and Check
+	// judges the result. Any other upstream failure is still a harness error, so a
+	// swallowed auxiliary-call error cannot hide behind this field.
+	ExpectProviderError func(error) bool
 }
 
 type Outcome struct {
@@ -76,6 +81,9 @@ func ExecuteScript(ctx context.Context, dir string, task Task) (Outcome, error) 
 		CWD: dir, Model: "eval", UserMsg: task.UserMsg, MaxSteps: task.maxSteps(),
 	}, score.observe)
 	bytes, err := meter.totals()
+	if err != nil && task.ExpectProviderError != nil && task.ExpectProviderError(err) {
+		err = nil
+	}
 	if err == nil {
 		err = script.Err()
 	}

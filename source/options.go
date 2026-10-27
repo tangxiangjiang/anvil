@@ -75,6 +75,11 @@ type Options struct {
 	// that has already shown text is not. MaxAttempts 1 restores a single attempt.
 	Retry RetryPolicy
 
+	// MaxOutputTokens caps the length of an answer (0.48+). Zero sends nothing and the
+	// provider's own limit applies. With Effort set on Anthropic the limit is never sent
+	// below what the thinking budget needs. A cut answer ends the run with Truncated set.
+	MaxOutputTokens int
+
 	// Tools are caller-registered tools merged with built-ins (0.3+).
 	Tools []ToolSpec
 

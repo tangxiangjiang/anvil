@@ -231,6 +231,37 @@ func fixtures() []Task {
 			return nil
 		},
 	})
+	// A cut answer finishes the run, says so, and is not re-requested (chapter 48 section 5).
+	// The script has exactly one reply: a second request would be answered with "end" by the
+	// exhausted script, so Steps == 1 is what proves no continuation was asked for.
+	tasks = append(tasks, Task{
+		Name:    "length_stop_truncated",
+		UserMsg: "write something long",
+		Script: []Reply{{Message: llm.Message{Role: llm.RoleAssistant, Content: "the answer was cut o"},
+			StopReason: llm.StopLength}},
+		Check: func(_ string, res runtime.Result) error {
+			if res.Status != "finished" || !res.Truncated || res.Result != "the answer was cut o" || res.Steps != 1 {
+				return fmt.Errorf("status=%s truncated=%v steps=%d result=%q", res.Status, res.Truncated, res.Steps, res.Result)
+			}
+			return nil
+		},
+	})
+	// A provider that rejects effort is reported, once, as request_rejected with its own
+	// text. The 400 is not retried (Retries stays 0) and the field is not stripped.
+	tasks = append(tasks, Task{
+		Name:    "effort_rejected",
+		UserMsg: "think hard",
+		Script:  []Reply{{Fail: llm.NewHTTPError(400, "provider error: unknown parameter: reasoning_effort")}},
+		ExpectProviderError: func(err error) bool {
+			return llm.KindOf(err) == llm.KindRejected && strings.Contains(err.Error(), "reasoning_effort")
+		},
+		Check: func(_ string, res runtime.Result) error {
+			if res.Status != "error" || res.Code != runtime.CodeRequestRejected || !strings.Contains(res.Err, "reasoning_effort") {
+				return fmt.Errorf("status=%s code=%q err=%q", res.Status, res.Code, res.Err)
+			}
+			return nil
+		},
+	})
 	tasks[0].Script[0].Expect = func(req llm.Request) error {
 		// Effort is empty unless a container configures it, so a request that carries a
 		// level here means a default changed (chapter 48).

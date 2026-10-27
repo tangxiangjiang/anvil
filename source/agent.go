@@ -1306,6 +1306,7 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 		},
 		PromptCache:      promptCacheEnabled(a.opts),
 		Effort:           llm.Effort(a.opts.Effort),
+		MaxOutputTokens:  a.opts.MaxOutputTokens,
 		SystemPrompt:     sysPrompt,
 		ParallelTools:    a.opts.ParallelTools,
 		ParallelToolsMax: a.opts.ParallelToolsMax,
@@ -1364,6 +1365,7 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 		Usage:         usageInfo(result.Usage),
 		Err:           result.Err,
 		Code:          Code(result.Code),
+		Truncated:     result.Truncated,
 		LastRequestAt: result.LastRequestAt,
 	}
 	if rr.ID == "" {

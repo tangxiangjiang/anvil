@@ -67,6 +67,10 @@ type Request struct {
 	// number: OpenAI-compatible providers take a level, Anthropic takes a token
 	// budget, and each adapter converts. It is never the model's own thinking text.
 	Effort Effort `json:",omitempty"`
+	// MaxOutputTokens caps the answer. Zero sends nothing, so the body is what it was
+	// before this field existed. Anthropic never sends less than its effort floor, so the
+	// thinking budget always fits.
+	MaxOutputTokens int `json:",omitempty"`
 }
 
 // Effort is how hard a model is asked to think before it answers.
@@ -105,12 +109,23 @@ func anthropicThinking(e Effort) (budget int, ok bool) {
 // anthropicMaxTokens is the output limit sent with a request. The provider needs
 // it to exceed the thinking budget, and an answer keeps the room it had without
 // thinking, so a budget raises the limit by the same fixed amount.
-func anthropicMaxTokens(e Effort) int {
+func anthropicMaxTokens(e Effort, ceiling int) int {
 	const base = 8192
+	floor := base
+	_, thinking := anthropicThinking(e)
 	if budget, ok := anthropicThinking(e); ok && budget >= base {
-		return budget + base
+		floor = budget + base
 	}
-	return base
+	if ceiling <= 0 {
+		return floor
+	}
+	// A ceiling is a ceiling: with no thinking it is sent as given, so a caller can lower
+	// it below the default. With thinking on, the provider refuses a limit that does not
+	// exceed the budget, so the effort's own default is the least that is sent.
+	if thinking && ceiling < floor {
+		return floor
+	}
+	return ceiling
 }
 
 // Usage is token usage when available.
@@ -131,6 +146,43 @@ type Usage struct {
 type Response struct {
 	Message Message
 	Usage   *Usage
+	// StopReason says why the completion ended. A response that names none is
+	// StopOther, never StopEnd: "the provider said nothing" is not "the answer finished".
+	StopReason StopReason `json:",omitempty"`
+}
+
+// StopReason is why a completion ended, projected from each provider's own word.
+type StopReason string
+
+const (
+	StopEnd    StopReason = "end"    // stop / end_turn
+	StopTool   StopReason = "tool"   // tool_calls / tool_use
+	StopLength StopReason = "length" // length / max_tokens: the answer was cut off
+	StopOther  StopReason = "other"  // anything else, or absent
+)
+
+func openAIStop(finish string) StopReason {
+	switch finish {
+	case "stop":
+		return StopEnd
+	case "tool_calls", "function_call":
+		return StopTool
+	case "length":
+		return StopLength
+	}
+	return StopOther
+}
+
+func anthropicStop(reason string) StopReason {
+	switch reason {
+	case "end_turn", "stop_sequence":
+		return StopEnd
+	case "tool_use":
+		return StopTool
+	case "max_tokens":
+		return StopLength
+	}
+	return StopOther
 }
 
 // Completer is the LLM adapter interface.
