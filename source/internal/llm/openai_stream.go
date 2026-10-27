@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -67,7 +68,7 @@ func (c *OpenAI) CompleteStream(ctx context.Context, req Request, onDelta func(D
 	defer httpResp.Body.Close()
 	if httpResp.StatusCode >= 400 {
 		respBody, _ := io.ReadAll(io.LimitReader(httpResp.Body, 1<<20))
-		return nil, mapHTTPStatus(httpResp.StatusCode, string(respBody))
+		return nil, withRetryAfter(mapHTTPStatus(httpResp.StatusCode, string(respBody)), httpResp.Header)
 	}
 
 	var content strings.Builder
@@ -119,7 +120,10 @@ func (c *OpenAI) CompleteStream(ctx context.Context, req Request, onDelta func(D
 			} `json:"error"`
 		}
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-			continue
+			// A frame that does not decode may have carried text or a tool-call
+			// fragment. Skipping it would return a truncated answer as a success
+			// (audit #16 fixed this for Anthropic; this is the same defect).
+			return nil, fmt.Errorf("openai stream: malformed chunk: %w", err)
 		}
 		if chunk.Error != nil {
 			return nil, &HTTPError{Status: httpResp.StatusCode, Message: chunk.Error.Message, Retryable: false}

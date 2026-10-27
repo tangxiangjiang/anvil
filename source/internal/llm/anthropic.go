@@ -145,7 +145,7 @@ func (c *Anthropic) Complete(ctx context.Context, req Request) (*Response, error
 		return nil, err
 	}
 	if httpResp.StatusCode >= 400 {
-		return nil, mapHTTPStatus(httpResp.StatusCode, string(respBody))
+		return nil, withRetryAfter(mapHTTPStatus(httpResp.StatusCode, string(respBody)), httpResp.Header)
 	}
 	var parsed anthropicResponse
 	if err := json.Unmarshal(respBody, &parsed); err != nil {

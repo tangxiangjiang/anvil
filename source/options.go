@@ -13,6 +13,13 @@ import (
 )
 
 // Provider selects the LLM wire protocol.
+// RetryPolicy bounds provider retries. See Options.Retry.
+type RetryPolicy struct {
+	MaxAttempts int           // 0 means 3; 1 means no retry
+	BaseDelay   time.Duration // 0 means 500ms
+	MaxDelay    time.Duration // 0 means 8s
+}
+
 // Effort is how hard a model is asked to think before it answers (0.48+). Three
 // named levels and an empty default, not a number: the providers spell effort in
 // different units, and each adapter converts the level to its own.
@@ -61,6 +68,12 @@ type Options struct {
 	// table of which model accepts which level: the container that knows the model sets
 	// this, and a provider that rejects the field reports it as an error.
 	Effort Effort
+
+	// Retry bounds how a failed provider call is retried (0.48+). The zero value is on:
+	// three attempts with exponential backoff and jitter, honouring Retry-After. A
+	// transport error, a 429 or a 5xx is retried; any other 4xx is not, and a stream
+	// that has already shown text is not. MaxAttempts 1 restores a single attempt.
+	Retry RetryPolicy
 
 	// Tools are caller-registered tools merged with built-ins (0.3+).
 	Tools []ToolSpec

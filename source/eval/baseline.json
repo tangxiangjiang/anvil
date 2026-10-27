@@ -11,7 +11,7 @@
       "refused": 0,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 11523,
+      "request_bytes": 11521,
       "agents": 0
     }
   },
@@ -94,7 +94,7 @@
       "refused": 0,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 7803,
+      "request_bytes": 7801,
       "agents": 0
     }
   },
@@ -162,7 +162,7 @@
       "refused": 0,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 3345,
+      "request_bytes": 3347,
       "agents": 0
     }
   },
@@ -197,7 +197,7 @@
       "refused": 0,
       "loop_stops": 1,
       "retries": 0,
-      "request_bytes": 9331,
+      "request_bytes": 9321,
       "agents": 0
     }
   },
@@ -213,7 +213,7 @@
       "refused": 0,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 11470,
+      "request_bytes": 11472,
       "agents": 0
     }
   },
@@ -229,7 +229,7 @@
       "refused": 0,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 17782,
+      "request_bytes": 17779,
       "agents": 0
     }
   },
@@ -247,7 +247,7 @@
       "refused": 1,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 3309,
+      "request_bytes": 3307,
       "agents": 0
     }
   },
@@ -316,6 +316,23 @@
       "agents": 0
     }
   },
+  "retry_429_then_ok": {
+    "gated": [
+      "completed",
+      "steps",
+      "retries="
+    ],
+    "score": {
+      "completed": true,
+      "steps": 1,
+      "tool_errors": 0,
+      "refused": 0,
+      "loop_stops": 0,
+      "retries": 1,
+      "request_bytes": 5613,
+      "agents": 0
+    }
+  },
   "sandbox_escape_denied": {
     "gated": [
       "completed",
@@ -328,7 +345,7 @@
       "refused": 1,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 11513,
+      "request_bytes": 11511,
       "agents": 0
     }
   },
@@ -344,7 +361,7 @@
       "refused": 0,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 7853,
+      "request_bytes": 7855,
       "agents": 0
     }
   },
@@ -376,7 +393,7 @@
       "refused": 0,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 10253,
+      "request_bytes": 10251,
       "agents": 0
     }
   }

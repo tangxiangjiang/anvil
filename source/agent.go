@@ -1322,6 +1322,8 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 			Step:          ev.Step,
 			MaxSteps:      ev.MaxSteps,
 			Code:          Code(ev.Code),
+			Attempt:       ev.Attempt,
+			Delay:         ev.Delay,
 			Rule:          permissionRuleMatch(ev.Rule),
 			Protected:     ev.Protected,
 			Usage:         usageInfo(ev.Usage),
@@ -1628,10 +1630,18 @@ func newCompleter(opts Options) (llm.Completer, error) {
 		BaseURL: opts.BaseURL,
 		Model:   opts.Model.ID,
 	}
+	var inner llm.Completer
 	switch opts.Provider {
 	case ProviderAnthropic:
-		return llm.NewAnthropic(cfg), nil
+		inner = llm.NewAnthropic(cfg)
 	default:
-		return llm.NewOpenAI(cfg), nil
+		inner = llm.NewOpenAI(cfg)
 	}
+	// Wrapped once, here: a child agent reuses its parent's completer (Options.completer),
+	// so a retry under a subagent is not multiplied.
+	return llm.WithRetry(inner, llm.RetryPolicy{
+		MaxAttempts: opts.Retry.MaxAttempts,
+		BaseDelay:   opts.Retry.BaseDelay,
+		MaxDelay:    opts.Retry.MaxDelay,
+	}), nil
 }

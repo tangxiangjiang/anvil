@@ -38,7 +38,12 @@ type evalCase struct {
 func behaviourCases() []evalCase {
 	var cases []evalCase
 	for _, task := range fixtures() {
-		cases = append(cases, evalCase{name: task.Name, gated: behaviourGate, run: func(t *testing.T) (Score, error) {
+		gated := behaviourGate
+		if task.Name == "retry_429_then_ok" {
+			// One 429 then a 200 is exactly one retry: more means a duplicate, fewer a lost one.
+			gated = append(append([]string(nil), behaviourGate...), "retries=")
+		}
+		cases = append(cases, evalCase{name: task.Name, gated: gated, run: func(t *testing.T) (Score, error) {
 			out, err := ExecuteScript(t.Context(), t.TempDir(), task)
 			return out.Score, err
 		}})

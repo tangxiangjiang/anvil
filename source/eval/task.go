@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/anvil-dev/anvil/internal/llm"
 	"github.com/anvil-dev/anvil/internal/runtime"
@@ -66,7 +67,10 @@ func ExecuteScript(ctx context.Context, dir string, task Task) (Outcome, error) 
 		}
 	}
 	script := NewScript(task.Script)
-	meter := &measuredCompleter{upstream: script}
+	// The wrapper the SDK puts around a real client, on a fast clock, so a scripted
+	// 429 is retried as a real one is and shows up as a retry event.
+	retrying := llm.WithRetry(script, llm.RetryPolicy{MaxAttempts: 3, BaseDelay: time.Millisecond, MaxDelay: 2 * time.Millisecond})
+	meter := &measuredCompleter{upstream: retrying}
 	score := &scorer{}
 	result := runtime.Loop(ctx, meter, tools.NewRegistry(dir, false), runtime.Config{
 		CWD: dir, Model: "eval", UserMsg: task.UserMsg, MaxSteps: task.maxSteps(),

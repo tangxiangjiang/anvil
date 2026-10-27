@@ -16,6 +16,10 @@ import (
 type Reply struct {
 	Message llm.Message
 	Expect  func(llm.Request) error
+	// Fail, when non-nil, is returned instead of Message: the scripted provider
+	// fails this call. It consumes the reply like any other, so a retried call sees
+	// the next one.
+	Fail error
 }
 
 // Replies keeps fixtures that need no predicates concise.
@@ -48,6 +52,7 @@ func NewScript(replies []Reply) *ScriptCompleter {
 			break
 		}
 		s.replies[i].Expect = reply.Expect
+		s.replies[i].Fail = reply.Fail
 	}
 	return s
 }
@@ -81,6 +86,9 @@ func (s *ScriptCompleter) Complete(ctx context.Context, req llm.Request) (*llm.R
 			s.err = fmt.Errorf("script reply %d: %w\nrequest=%s", s.n, err, body)
 			return nil, s.err
 		}
+	}
+	if reply.Fail != nil {
+		return nil, reply.Fail
 	}
 	body, err := json.Marshal(llm.Response{Message: reply.Message})
 	if err != nil {

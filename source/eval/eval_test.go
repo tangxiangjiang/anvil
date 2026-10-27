@@ -214,6 +214,23 @@ func fixtures() []Task {
 			},
 		},
 	}
+	// A provider that answers 429 once and then succeeds is one finished run with one
+	// retry (chapter 48 section 4). The scripted completer sits behind the same retrying
+	// wrapper the SDK uses, so this fixes the count the scorer reports.
+	tasks = append(tasks, Task{
+		Name:    "retry_429_then_ok",
+		UserMsg: "answer once",
+		Script: []Reply{
+			{Fail: &llm.HTTPError{Status: 429, Message: "provider error: slow down", Retryable: true}},
+			{Message: llm.Message{Role: llm.RoleAssistant, Content: "answered"}},
+		},
+		Check: func(_ string, res runtime.Result) error {
+			if res.Status != "finished" || res.Result != "answered" {
+				return fmt.Errorf("status=%s result=%q err=%s", res.Status, res.Result, res.Err)
+			}
+			return nil
+		},
+	})
 	tasks[0].Script[0].Expect = func(req llm.Request) error {
 		// Effort is empty unless a container configures it, so a request that carries a
 		// level here means a default changed (chapter 48).

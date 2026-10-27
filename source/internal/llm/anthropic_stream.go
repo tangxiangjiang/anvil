@@ -66,7 +66,7 @@ func (c *Anthropic) CompleteStream(ctx context.Context, req Request, onDelta fun
 	defer httpResp.Body.Close()
 	if httpResp.StatusCode >= 400 {
 		respBody, _ := io.ReadAll(io.LimitReader(httpResp.Body, 1<<20))
-		return nil, mapHTTPStatus(httpResp.StatusCode, string(respBody))
+		return nil, withRetryAfter(mapHTTPStatus(httpResp.StatusCode, string(respBody)), httpResp.Header)
 	}
 
 	var content strings.Builder

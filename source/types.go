@@ -40,6 +40,11 @@ const (
 	// the estimate on either side. The summary itself is stored, so a replayed
 	// conversation draws the same boundary without this event.
 	EventCompact EventType = "compact"
+	// EventRetry reports that a provider call failed and will be tried again (0.48+).
+	// Attempt is the attempt that failed, Delay the wait before the next, Text the
+	// provider's message. It lets a client show "provider busy, retrying" instead of a
+	// frozen spinner. It is not stored and has no replay.
+	EventRetry EventType = "retry"
 )
 
 // CompactInfo is one history compaction's numbers, set on EventCompact.
@@ -91,6 +96,9 @@ const (
 	CodeContextDeadline Code = "context_deadline"
 	CodeMaxWallTime     Code = "max_wall_time"
 	CodeProvider        Code = "provider"
+	// CodeProviderMidStream is a provider failure after text had reached the user.
+	// It is never retried: a retry would show the answer twice.
+	CodeProviderMidStream Code = "provider_mid_stream"
 	CodeToolPanic       Code = "tool_panic"
 )
 
@@ -122,6 +130,10 @@ type Event struct {
 	Step       int  // 1-based LLM round; set on EventProgress
 	MaxSteps   int  // configured limit; set on EventProgress
 	Code       Code // set on EventError when classifiable (0.7+)
+	// Attempt and Delay are set on EventRetry (0.48+): the attempt that failed and the
+	// wait before the next one.
+	Attempt int
+	Delay   time.Duration
 	// Usage is the run's token usage so far, set on the terminal event (done or
 	// error) when the provider reported any (0.40.8+). It is absent from every
 	// other event and from a run whose provider sent no counts: nil means

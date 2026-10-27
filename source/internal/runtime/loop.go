@@ -32,6 +32,10 @@ type Event struct {
 	Step       int
 	MaxSteps   int // 0 = unlimited
 	Code       string
+	// Attempt and Delay describe a `retry` event (0.48+): the attempt that just
+	// failed (1-based) and how long the wrapper waits before the next one.
+	Attempt int
+	Delay   time.Duration
 	// Usage is what the run has consumed so far, set on the terminal event
 	// (done or error) when the provider reported any counts. It is absent on
 	// every other event: a token count is a fact about a completed exchange,
@@ -242,6 +246,11 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 		streamed := false
 		var resp *llm.Response
 		var err error
+		// The retrying completer reports through the context, so the Completer
+		// interface keeps its shape and the runtime still knows nothing about HTTP.
+		callCtx := llm.WithRetryObserver(ctx, func(info llm.RetryInfo) {
+			emit(Event{Type: "retry", Attempt: info.Attempt, Delay: info.Delay, Text: info.Message})
+		})
 		req := llm.Request{Model: cfg.Model, Messages: messages, Tools: toolDefs, PromptCache: cfg.PromptCache, Effort: cfg.Effort}
 		if sc, ok := completer.(llm.StreamCompleter); ok {
 			// Reasoning is accumulated and flushed in batches rather than per
@@ -260,7 +269,7 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 				emit(Event{Type: "reasoning", Text: reasoning.String()})
 				reasoning.Reset()
 			}
-			resp, err = sc.CompleteStream(ctx, req, func(d llm.Delta) {
+			resp, err = sc.CompleteStream(callCtx, req, func(d llm.Delta) {
 				if d.Reasoning != "" {
 					reasoning.WriteString(d.Reasoning)
 					if reasoning.Len() >= reasoningFlushChars {
@@ -280,15 +289,19 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 			})
 			flushReasoning() // the round boundary
 		} else {
-			resp, err = completer.Complete(ctx, req)
+			resp, err = completer.Complete(callCtx, req)
 		}
 		if err != nil {
 			if ctx.Err() != nil {
 				return cancelledResult(ctx, runID, step, usageAcc, messages, ctx.Err(), lastRequestAt, emit)
 			}
 			msg := err.Error()
-			emit(Event{Type: "error", Text: msg, Code: CodeProvider, Usage: usageAcc, LastRequestAt: lastRequestAt})
-			return Result{ID: runID, Status: "error", Steps: step, Usage: usageAcc, Err: msg, Code: CodeProvider, Messages: messages, LastRequestAt: lastRequestAt}
+			code := CodeProvider
+			if llm.IsMidStream(err) {
+				code = CodeProviderMidStream
+			}
+			emit(Event{Type: "error", Text: msg, Code: code, Usage: usageAcc, LastRequestAt: lastRequestAt})
+			return Result{ID: runID, Status: "error", Steps: step, Usage: usageAcc, Err: msg, Code: code, Messages: messages, LastRequestAt: lastRequestAt}
 		}
 		lastRequestAt = time.Now()
 		if resp.Usage != nil {
