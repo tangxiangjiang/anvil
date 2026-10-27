@@ -79,6 +79,9 @@ type Agent struct {
 	plugins      *plugin.Manager
 	lsp          *lsp.Supervisor
 	systemPrompt string
+	// promptSpec is the layers systemPrompt was composed from; a run composes again from
+	// it to add its matched skills and directive before the closing line.
+	promptSpec prompt.Spec
 	hookFile     *hooks.File
 }
 
@@ -161,7 +164,7 @@ func createAgent(ctx context.Context, opts Options, ident subagentIdentity) (*Ag
 		cleanupRegistry(sessions, plugMgr, lspSup)
 		return nil, newError("persist agent meta", false, err)
 	}
-	sysPrompt, err := buildSystemPrompt(cwd, opts)
+	spec, err := buildPromptSpec(cwd, opts)
 	if err != nil {
 		// The meta record is already on disk. A session that failed to start must
 		// not stay behind as a meta-only entry that lists as a session with no runs
@@ -188,7 +191,8 @@ func createAgent(ctx context.Context, opts Options, ident subagentIdentity) (*Ag
 		plugins:      plugMgr,
 		lsp:          lspSup,
 		history:      nil,
-		systemPrompt: sysPrompt,
+		systemPrompt: prompt.Compose(spec),
+			promptSpec:   spec,
 		hookFile:     hookFile,
 	}, nil
 }
@@ -274,7 +278,7 @@ func Resume(ctx context.Context, agentID string, opts Options) (*Agent, error) {
 		}
 		return nil, newError("lock agent store", false, err)
 	}
-	sysPrompt, err := buildSystemPrompt(cwd, opts)
+	spec, err := buildPromptSpec(cwd, opts)
 	if err != nil {
 		_ = lock.Release()
 		_ = st.Close()
@@ -300,12 +304,27 @@ func Resume(ctx context.Context, agentID string, opts Options) (*Agent, error) {
 		plugins:      plugMgr,
 		lsp:          lspSup,
 		history:      historyFromRecords(records),
-		systemPrompt: sysPrompt,
+		systemPrompt: prompt.Compose(spec),
+			promptSpec:   spec,
 		hookFile:     hookFile,
 	}, nil
 }
 
+// buildSystemPrompt composes the agent's system prompt. It is the one place a prompt
+// is built: the safety layer is prepended here for every agent, whatever Role and
+// SystemPrompt say (chapter 49).
 func buildSystemPrompt(cwd string, opts Options) (string, error) {
+	spec, err := buildPromptSpec(cwd, opts)
+	if err != nil {
+		return "", err
+	}
+	return prompt.Compose(spec), nil
+}
+
+// buildPromptSpec assembles the layers that last as long as the agent: role, project
+// rules, session notes, plugin hints and always-on skills. A run adds its matched
+// skills and directive to a copy of it.
+func buildPromptSpec(cwd string, opts Options) (prompt.Spec, error) {
 	loadProject := opts.Local.LoadRules
 	loadCursor := opts.Local.LoadCursorRules || opts.Local.HasSettingSource(SettingSourceProject)
 	rulesText := ""
@@ -316,31 +335,31 @@ func buildSystemPrompt(cwd string, opts Options) (string, error) {
 			LoadCursor:  loadCursor,
 		})
 		if err != nil {
-			return "", err
+			return prompt.Spec{}, err
 		}
 	}
-	var base string
-	if opts.SystemPrompt != "" {
-		if rulesText == "" {
-			base = opts.SystemPrompt
-		} else {
-			base = opts.SystemPrompt + "\n\n# Project rules\n" + rulesText
-		}
-	} else {
-		base = prompt.SystemWithOptions(cwd, rulesText, prompt.Options{
-			AllowShell: opts.Local.AllowShellEnabled(),
-		})
+	// L2 in today's order. SystemPrompt replaces the role text (L1) only; the safety
+	// layer is prepended by Compose.
+	var project []string
+	if rulesText != "" {
+		project = append(project, "# Project rules\n"+rulesText)
 	}
 	if notes := sessionStartNotes(cwd, opts); notes != "" {
-		base += "\n\n# Session notes\n" + notes
+		project = append(project, "# Session notes\n"+notes)
 	}
 	if pluginNotes := pluginSessionHints(opts); pluginNotes != "" {
-		base += "\n\n# Plugins\n" + pluginNotes
+		project = append(project, "# Plugins\n"+pluginNotes)
 	}
 	if always := alwaysSkillsText(cwd, opts); always != "" {
-		base += "\n\n# Skills (always)\n" + always
+		project = append(project, "# Skills (always)\n"+always)
 	}
-	return base, nil
+	return prompt.Spec{
+		CWD:        cwd,
+		AllowShell: opts.Local.AllowShellEnabled(),
+		Role:       prompt.Role(opts.Role),
+		RoleText:   opts.SystemPrompt,
+		Project:    strings.Join(project, "\n\n"),
+	}, nil
 }
 
 func pluginSessionHints(opts Options) string {
@@ -1091,7 +1110,7 @@ func (a *Agent) Send(ctx context.Context, message string, opts ...SendOption) (*
 	a.activeRun = run
 	a.mu.Unlock()
 
-	go a.executeRun(runCtx, cancelCause, wall, run, message, historyCopy, parts)
+	go a.executeRun(runCtx, cancelCause, wall, run, message, cfg.Directive, historyCopy, parts)
 	return run, nil
 }
 
@@ -1126,7 +1145,7 @@ func (a *Agent) Reload(ctx context.Context) error {
 		cleanupRegistry(sessions, plugMgr, lspSup)
 		return err
 	}
-	sysPrompt, err := buildSystemPrompt(cwd, opts)
+	spec, err := buildPromptSpec(cwd, opts)
 	if err != nil {
 		cleanupRegistry(sessions, plugMgr, lspSup)
 		return newError("load project rules", false, err)
@@ -1157,7 +1176,8 @@ func (a *Agent) Reload(ctx context.Context) error {
 	}
 	a.plugins = plugMgr
 	a.lsp = lspSup
-	a.systemPrompt = sysPrompt
+	a.systemPrompt = prompt.Compose(spec)
+	a.promptSpec = spec
 	a.hookFile = hookFile
 	return nil
 }
@@ -1257,7 +1277,7 @@ func compactInfo(in *runtime.CompactInfo) *CompactInfo {
 	}
 }
 
-func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseFunc, wall time.Duration, run *Run, message string, history []llm.Message, userParts []llm.ContentPart) {
+func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseFunc, wall time.Duration, run *Run, message, directive string, history []llm.Message, userParts []llm.ContentPart) {
 	defer func() {
 		// The run is over, so its pre-images stop being written: a tool call made
 		// outside a run — a resumed tab replaying, a direct Execute — belongs to no
@@ -1284,8 +1304,19 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 	a.persist(store.Record{Type: store.TypeRunStart, RunID: run.id})
 
 	sysPrompt := a.systemPrompt
-	if routed := routerSkillsText(a.cwd, a.opts, message); routed != "" {
-		sysPrompt += "\n\n# Skills (matched)\n" + routed
+	routed := routerSkillsText(a.cwd, a.opts, message)
+	if routed != "" || directive != "" {
+		// Matched skills and the directive belong before the closing line, so the run's
+		// prompt is composed again from the agent's layers rather than appended to.
+		spec := a.promptSpec
+		if routed != "" {
+			if spec.Project != "" {
+				spec.Project += "\n\n"
+			}
+			spec.Project += "# Skills (matched)\n" + routed
+		}
+		spec.Directive = directive
+		sysPrompt = prompt.Compose(spec)
 	}
 
 	a.registry.SetRunContext(a.id, run.id)
@@ -1577,6 +1608,9 @@ func normalizeOptions(opts Options) (Options, string, error) {
 	}
 	if !llm.Effort(opts.Effort).Valid() {
 		return opts, "", newError("unsupported effort: "+string(opts.Effort)+" (use low, medium or high, or leave it empty)", false, nil)
+	}
+	if !prompt.Role(opts.Role).Valid() {
+		return opts, "", newError("unsupported role: "+string(opts.Role), false, nil)
 	}
 	if opts.APIKey == "" {
 		opts.APIKey = os.Getenv("ANVIL_API_KEY")

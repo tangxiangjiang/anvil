@@ -61,14 +61,16 @@ func CanonicalRequest(req llm.Request) ([]byte, error) {
 		if m.Role != llm.RoleSystem {
 			continue
 		}
-		if strings.HasPrefix(m.Content, systemIntro) {
-			rest := strings.TrimPrefix(m.Content, systemIntro)
-			if end := strings.IndexByte(rest, '\n'); end >= 0 && end > 0 {
+		// The Safety layer leads the prompt (chapter 49), so the cwd line is found
+		// wherever the role text starts, not only at the front.
+		if at := strings.Index(m.Content, systemIntro); at >= 0 {
+			head, rest := m.Content[:at], m.Content[at+len(systemIntro):]
+			if end := strings.IndexByte(rest, '\n'); end > 0 {
 				cwd := rest[:end]
 				if temporaryWorkspace(cwd) {
 					roots = append(roots, cwd)
 				}
-				m.Content = systemIntro + "<workspace>" + rest[end:]
+				m.Content = head + systemIntro + "<workspace>" + rest[end:]
 			}
 		}
 		m.Content = normalizeNotes(m.Content)

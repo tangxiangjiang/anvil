@@ -6,6 +6,7 @@ package anvil
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/anvil-dev/anvil/internal/llm"
@@ -31,6 +32,18 @@ const (
 	EffortLow     Effort = "low"
 	EffortMedium  Effort = "medium"
 	EffortHigh    Effort = "high"
+)
+
+// Role names the system prompt's role layer (0.49+). A role changes the prompt and
+// nothing else: tools, permissions, budget and model are Options fields of their own.
+type Role string
+
+const (
+	RoleMain     Role = ""         // the default agent
+	RoleSubagent Role = "subagent" // a child answering its parent
+	RoleWorker   Role = "worker"   // a child executing a brief
+	RoleDecision Role = "decision" // the first stage of a staged run
+	RoleAnalyze  Role = "analyze"  // the second stage of a staged run
 )
 
 type Provider string
@@ -146,6 +159,11 @@ type Options struct {
 	// SystemPrompt replaces Anvil's default main system text when non-empty (0.10+).
 	// Project rules (when enabled) are still appended. Not persisted across Resume unless passed again.
 	SystemPrompt string
+
+	// Role selects the role layer of the system prompt (0.49+). Empty is the main
+	// agent. An unknown role is refused by Create. SystemPrompt, when set, replaces the
+	// role's text; the safety layer is prepended to either.
+	Role Role
 
 	// BuiltinTools, when non-empty, is an allow-list of built-in tool names or groups (0.10+).
 	// Groups: shell, read, write, edit, search, skills, web, lsp, git, verify, vision, mcp. Custom Tools entries are never filtered out.
@@ -539,6 +557,14 @@ type SendOption func(*sendConfig)
 type sendConfig struct {
 	Force       bool
 	Attachments []ImageAttachment
+	Directive   string
+}
+
+// WithDirective adds a per-run instruction to the end of this run's system prompt,
+// after the project layer and before the closing safety line (0.49+). It does not
+// displace the safety layer and is not persisted; the next Send starts without it.
+func WithDirective(text string) SendOption {
+	return func(c *sendConfig) { c.Directive = strings.TrimSpace(text) }
 }
 
 // WithForce cancels an in-flight run (if any) before accepting the new Send (0.10+).

@@ -16,14 +16,6 @@ import (
 	"github.com/anvil-dev/anvil/internal/tools"
 )
 
-// subagentBrief is the system prompt every child agent gets instead of the main
-// agent's. It is deliberately short: a child's job is the task it was handed,
-// and its answer is read by the agent that called it, not by a person.
-const subagentBrief = `You are a subagent. The agent that created you gave you one task and is waiting for \
-your answer. Work with the tools you have. Do not ask a question and stop; if something is missing, \
-say what you could not determine. Your final message is the entire result: write it for the agent \
-that called you, not for a person, and do not repeat the task.`
-
 // subagentIdentity is what Create stamps onto a child's meta record. A top-level
 // session passes the zero value and writes exactly the record it wrote before.
 type subagentIdentity struct {
@@ -396,7 +388,7 @@ func (a *Agent) childOptions(in spawnParams, selectors []string, depth int) Opti
 		// A command hook that denies in the parent denies in the child too, so the child
 		// must carry the same switch that lets command hooks run (audit #25).
 		AllowHookCommands: a.opts.AllowHookCommands,
-		SystemPrompt:      subagentBrief,
+		Role:              RoleSubagent,
 		BuiltinTools:      selectors,
 		DisallowedTools:   append([]string(nil), a.opts.DisallowedTools...),
 		Subagents:         a.opts.Subagents,

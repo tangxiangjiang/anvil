@@ -11,7 +11,7 @@
       "refused": 0,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 11523,
+      "request_bytes": 11711,
       "agents": 0
     }
   },
@@ -27,7 +27,7 @@
       "refused": 0,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 11518,
+      "request_bytes": 11706,
       "agents": 0
     }
   },
@@ -44,7 +44,7 @@
       "refused": 0,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 5610,
+      "request_bytes": 5705,
       "agents": 0
     }
   },
@@ -60,7 +60,7 @@
       "refused": 1,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 17851,
+      "request_bytes": 18136,
       "agents": 0
     }
   },
@@ -77,7 +77,7 @@
       "refused": 0,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 5496,
+      "request_bytes": 5769,
       "agents": 0
     }
   },
@@ -94,7 +94,7 @@
       "refused": 0,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 8265,
+      "request_bytes": 9491,
       "agents": 0
     }
   },
@@ -111,7 +111,7 @@
       "refused": 0,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 7801,
+      "request_bytes": 9029,
       "agents": 0
     }
   },
@@ -128,7 +128,7 @@
       "refused": 0,
       "loop_stops": 1,
       "retries": 0,
-      "request_bytes": 8727,
+      "request_bytes": 9083,
       "agents": 0
     }
   },
@@ -145,7 +145,7 @@
       "refused": 1,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 3241,
+      "request_bytes": 3427,
       "agents": 0
     }
   },
@@ -162,7 +162,7 @@
       "refused": 1,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 3280,
+      "request_bytes": 3462,
       "agents": 0
     }
   },
@@ -179,7 +179,7 @@
       "refused": 0,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 3347,
+      "request_bytes": 3531,
       "agents": 0
     }
   },
@@ -196,7 +196,7 @@
       "refused": 1,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 3311,
+      "request_bytes": 3493,
       "agents": 0
     }
   },
@@ -212,7 +212,7 @@
       "refused": 0,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 5626,
+      "request_bytes": 5721,
       "agents": 0
     }
   },
@@ -230,7 +230,7 @@
       "refused": 0,
       "loop_stops": 1,
       "retries": 0,
-      "request_bytes": 9331,
+      "request_bytes": 9697,
       "agents": 0
     }
   },
@@ -246,7 +246,7 @@
       "refused": 0,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 11472,
+      "request_bytes": 11660,
       "agents": 0
     }
   },
@@ -262,7 +262,7 @@
       "refused": 0,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 17779,
+      "request_bytes": 18064,
       "agents": 0
     }
   },
@@ -280,7 +280,7 @@
       "refused": 1,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 3309,
+      "request_bytes": 3497,
       "agents": 0
     }
   },
@@ -297,7 +297,7 @@
       "refused": 1,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 3238,
+      "request_bytes": 3428,
       "agents": 0
     }
   },
@@ -308,12 +308,12 @@
     ],
     "score": {
       "completed": true,
-      "steps": 2,
-      "tool_errors": 0,
+      "steps": 3,
+      "tool_errors": 2,
       "refused": 0,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 17571,
+      "request_bytes": 38631,
       "agents": 0
     }
   },
@@ -324,12 +324,12 @@
     ],
     "score": {
       "completed": true,
-      "steps": 7,
-      "tool_errors": 3,
+      "steps": 5,
+      "tool_errors": 1,
       "refused": 0,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 22014,
+      "request_bytes": 14022,
       "agents": 0
     }
   },
@@ -345,7 +345,7 @@
       "refused": 0,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 16731,
+      "request_bytes": 16469,
       "agents": 0
     }
   },
@@ -362,7 +362,7 @@
       "refused": 0,
       "loop_stops": 0,
       "retries": 1,
-      "request_bytes": 5613,
+      "request_bytes": 5708,
       "agents": 0
     }
   },
@@ -378,7 +378,7 @@
       "refused": 1,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 11511,
+      "request_bytes": 11699,
       "agents": 0
     }
   },
@@ -394,7 +394,7 @@
       "refused": 0,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 7855,
+      "request_bytes": 9085,
       "agents": 0
     }
   },
@@ -410,7 +410,7 @@
       "refused": 0,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 9792,
+      "request_bytes": 10168,
       "agents": 0
     }
   },
@@ -426,7 +426,7 @@
       "refused": 0,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 10253,
+      "request_bytes": 11483,
       "agents": 0
     }
   }
