@@ -43,6 +43,22 @@ type anthropicRequest struct {
 	System    any                `json:"system,omitempty"`
 	Messages  []anthropicMessage `json:"messages"`
 	Tools     []anthropicTool    `json:"tools,omitempty"`
+	Thinking  *anthropicThink    `json:"thinking,omitempty"`
+}
+
+// anthropicThink is the request-side thinking switch. It carries a token budget,
+// never any thinking text.
+type anthropicThink struct {
+	Type         string `json:"type"`
+	BudgetTokens int    `json:"budget_tokens"`
+}
+
+func thinkingFor(e Effort) *anthropicThink {
+	budget, ok := anthropicThinking(e)
+	if !ok {
+		return nil
+	}
+	return &anthropicThink{Type: "enabled", BudgetTokens: budget}
 }
 
 type anthropicMessage struct {
@@ -100,10 +116,11 @@ func (c *Anthropic) Complete(ctx context.Context, req Request) (*Response, error
 	}
 	body := anthropicRequest{
 		Model:     firstNonEmpty(req.Model, c.cfg.Model),
-		MaxTokens: 8192,
+		MaxTokens: anthropicMaxTokens(req.Effort),
 		System:    system,
 		Messages:  messages,
 		Tools:     toAnthropicTools(req.Tools),
+		Thinking:  thinkingFor(req.Effort),
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {

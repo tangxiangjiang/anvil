@@ -131,7 +131,8 @@ it as narrow as the protocol allows:
   `ProviderState` is encoded as the provider's own block type, which the test asserts carries a
   signature and is only ever the provider's own bytes.
 
-**待定.** The exact wire requirement is to be confirmed against the provider's current
+**待定（p_0.48.1 未关闭此项）.** `ProviderState` has not been added and nothing has been captured.
+The exact wire requirement is to be confirmed against the provider's current
 documentation before p_0.48.1 is marked done. If the provider has dropped the requirement, the
 `ProviderState` field is not added and this section is reduced to a note saying so. What is
 needed: one request/response pair from the live tier (chapter [47](47-evaluation.md) §4.3)

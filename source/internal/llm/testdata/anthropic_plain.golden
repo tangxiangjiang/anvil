@@ -1,0 +1,56 @@
+{
+  "model": "m",
+  "max_tokens": 8192,
+  "system": "You are a test agent.",
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "text": "read a.txt",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "id": "call-1",
+          "input": {
+            "path": "a.txt"
+          },
+          "name": "read_file",
+          "type": "tool_use"
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "content": "hello",
+          "tool_use_id": "call-1",
+          "type": "tool_result"
+        }
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "read_file",
+      "description": "Read a file.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ]
+      }
+    }
+  ]
+}

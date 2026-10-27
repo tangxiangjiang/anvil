@@ -27,6 +27,8 @@ type openAIStreamRequest struct {
 	Tools         []openAITool         `json:"tools,omitempty"`
 	Stream        bool                 `json:"stream"`
 	StreamOptions *openAIStreamOptions `json:"stream_options,omitempty"`
+	// ReasoningEffort is a request parameter (a level word), not reasoning text.
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 }
 
 // CompleteStream implements StreamCompleter for OpenAI-compatible SSE.
@@ -44,6 +46,7 @@ func (c *OpenAI) CompleteStream(ctx context.Context, req Request, onDelta func(D
 		Stream:        true,
 		StreamOptions: &openAIStreamOptions{IncludeUsage: true},
 	}
+	body.ReasoningEffort = string(req.Effort)
 	raw, err := json.Marshal(body)
 	if err != nil {
 		return nil, err

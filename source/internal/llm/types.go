@@ -62,6 +62,55 @@ type Request struct {
 	// supports them. Only the Anthropic adapter acts on it; OpenAI-compatible
 	// providers cache on their own and ignore the flag.
 	PromptCache bool
+	// Effort is how hard the model is asked to think. Empty sends nothing, so the
+	// request is exactly what it was before effort existed. It is a word, not a
+	// number: OpenAI-compatible providers take a level, Anthropic takes a token
+	// budget, and each adapter converts. It is never the model's own thinking text.
+	Effort Effort `json:",omitempty"`
+}
+
+// Effort is how hard a model is asked to think before it answers.
+type Effort string
+
+const (
+	EffortDefault Effort = ""
+	EffortLow     Effort = "low"
+	EffortMedium  Effort = "medium"
+	EffortHigh    Effort = "high"
+)
+
+// Valid reports whether e is one of the named levels or empty.
+func (e Effort) Valid() bool {
+	switch e {
+	case EffortDefault, EffortLow, EffortMedium, EffortHigh:
+		return true
+	}
+	return false
+}
+
+// anthropicThinking is the Anthropic spelling of an effort level. The budgets are
+// the adapter's, not the caller's: they live here so one place defines them.
+func anthropicThinking(e Effort) (budget int, ok bool) {
+	switch e {
+	case EffortLow:
+		return 1024, true
+	case EffortMedium:
+		return 4096, true
+	case EffortHigh:
+		return 16384, true
+	}
+	return 0, false
+}
+
+// anthropicMaxTokens is the output limit sent with a request. The provider needs
+// it to exceed the thinking budget, and an answer keeps the room it had without
+// thinking, so a budget raises the limit by the same fixed amount.
+func anthropicMaxTokens(e Effort) int {
+	const base = 8192
+	if budget, ok := anthropicThinking(e); ok && budget >= base {
+		return budget + base
+	}
+	return base
 }
 
 // Usage is token usage when available.

@@ -1,0 +1,57 @@
+{
+  "model": "m",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are a test agent."
+    },
+    {
+      "role": "user",
+      "content": "read a.txt"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+        {
+          "id": "call-1",
+          "type": "function",
+          "function": {
+            "name": "read_file",
+            "arguments": "{\"path\":\"a.txt\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "hello",
+      "tool_call_id": "call-1",
+      "name": "read_file"
+    }
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "description": "Read a file.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ],
+  "stream": true,
+  "stream_options": {
+    "include_usage": true
+  }
+}

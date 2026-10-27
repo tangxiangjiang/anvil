@@ -41,6 +41,8 @@ type openAIRequest struct {
 	Model    string          `json:"model"`
 	Messages []openAIMessage `json:"messages"`
 	Tools    []openAITool    `json:"tools,omitempty"`
+	// ReasoningEffort is a request parameter (a level word), not reasoning text.
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 }
 
 type openAIMessage struct {
@@ -124,6 +126,7 @@ func (c *OpenAI) Complete(ctx context.Context, req Request) (*Response, error) {
 		Messages: toOpenAIMessages(req.Messages),
 		Tools:    toOpenAITools(req.Tools),
 	}
+	body.ReasoningEffort = string(req.Effort)
 	raw, err := json.Marshal(body)
 	if err != nil {
 		return nil, err

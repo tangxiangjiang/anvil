@@ -21,6 +21,7 @@ type anthropicStreamRequest struct {
 	Messages  []anthropicMessage `json:"messages"`
 	Tools     []anthropicTool    `json:"tools,omitempty"`
 	Stream    bool               `json:"stream"`
+	Thinking  *anthropicThink    `json:"thinking,omitempty"`
 }
 
 // CompleteStream implements StreamCompleter for Anthropic SSE.
@@ -37,11 +38,12 @@ func (c *Anthropic) CompleteStream(ctx context.Context, req Request, onDelta fun
 	}
 	body := anthropicStreamRequest{
 		Model:     firstNonEmpty(req.Model, c.cfg.Model),
-		MaxTokens: 8192,
+		MaxTokens: anthropicMaxTokens(req.Effort),
 		System:    system,
 		Messages:  messages,
 		Tools:     toAnthropicTools(req.Tools),
 		Stream:    true,
+		Thinking:  thinkingFor(req.Effort),
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {

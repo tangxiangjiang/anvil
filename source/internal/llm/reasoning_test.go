@@ -5,7 +5,6 @@ package llm_test
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -102,36 +101,9 @@ func TestOpenAIStreamWithoutReasoningIsUnchanged(t *testing.T) {
 	}
 }
 
-// Insurance against a future field-by-field refactor of the encoder: the moment
-// a reasoning field is added to a struct shared with toOpenAIMessages, model
-// chain-of-thought starts being sent back upstream. The request must not carry
-// it in any spelling.
-func TestOpenAIStreamRequestCarriesNoReasoning(t *testing.T) {
-	srv, sent := reasoningServer(t, `{"choices":[{"delta":{"content":"ok"}}]}`)
-	streamReasoning(t, srv)
-
-	var body map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(*sent), &body); err != nil {
-		t.Fatalf("request body: %v (%s)", err, *sent)
-	}
-	for _, key := range []string{"reasoning", "reasoning_content", "reasoning_effort", "include_reasoning", "thinking"} {
-		if _, ok := body[key]; ok {
-			t.Fatalf("request body carries %q: %s", key, *sent)
-		}
-	}
-	// Nor nested in a message, which is where it would actually leak.
-	var msgs []map[string]json.RawMessage
-	if err := json.Unmarshal(body["messages"], &msgs); err != nil {
-		t.Fatalf("messages: %v", err)
-	}
-	for i, m := range msgs {
-		for _, key := range []string{"reasoning", "reasoning_content", "thinking"} {
-			if _, ok := m[key]; ok {
-				t.Fatalf("messages[%d] carries %q: %s", i, key, *sent)
-			}
-		}
-	}
-}
+// The request-side guard that used to live here is now TestRequestNeverEchoesReasoning
+// in effort_test.go. It bundled two unrelated things: the model's thinking text (never
+// sent back) and the effort parameter (sent when configured). See chapter 48 section 2.
 
 // reasoningStream emits reasoning deltas and (optionally) text deltas, and
 // reports the full answer in the Response the way a real adapter does.

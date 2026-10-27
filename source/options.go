@@ -13,6 +13,19 @@ import (
 )
 
 // Provider selects the LLM wire protocol.
+// Effort is how hard a model is asked to think before it answers (0.48+). Three
+// named levels and an empty default, not a number: the providers spell effort in
+// different units, and each adapter converts the level to its own.
+type Effort string
+
+const (
+	// EffortDefault sends nothing; the provider uses its own default.
+	EffortDefault Effort = ""
+	EffortLow     Effort = "low"
+	EffortMedium  Effort = "medium"
+	EffortHigh    Effort = "high"
+)
+
 type Provider string
 
 const (
@@ -42,6 +55,12 @@ type Options struct {
 	// When exceeded, the run ends with StatusCancelled and CodeMaxWallTime.
 	// Parent context deadline → CodeContextDeadline; explicit Cancel → CodeCancelled.
 	MaxWallTime time.Duration
+
+	// Effort is how hard the model is asked to think (0.48+). Empty sends nothing and
+	// the request is exactly what it was before this option existed. The SDK holds no
+	// table of which model accepts which level: the container that knows the model sets
+	// this, and a provider that rejects the field reports it as an error.
+	Effort Effort
 
 	// Tools are caller-registered tools merged with built-ins (0.3+).
 	Tools []ToolSpec

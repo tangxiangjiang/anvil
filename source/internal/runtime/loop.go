@@ -141,6 +141,8 @@ type Config struct {
 	// PromptCache asks the adapter to place provider cache breakpoints (0.43+).
 	// Only Anthropic acts on it.
 	PromptCache bool
+	// Effort is sent on every request of the run (0.48+). Empty sends nothing.
+	Effort llm.Effort
 	// Sink, if set, receives each conversation message as it is appended
 	// (user, assistant, tool) so callers can persist them durably.
 	Sink func(llm.Message)
@@ -240,7 +242,7 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 		streamed := false
 		var resp *llm.Response
 		var err error
-		req := llm.Request{Model: cfg.Model, Messages: messages, Tools: toolDefs, PromptCache: cfg.PromptCache}
+		req := llm.Request{Model: cfg.Model, Messages: messages, Tools: toolDefs, PromptCache: cfg.PromptCache, Effort: cfg.Effort}
 		if sc, ok := completer.(llm.StreamCompleter); ok {
 			// Reasoning is accumulated and flushed in batches rather than per
 			// chunk. A reasoner emits several times the tokens of its answer,

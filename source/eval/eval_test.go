@@ -214,7 +214,14 @@ func fixtures() []Task {
 			},
 		},
 	}
-	tasks[0].Script[0].Expect = RequestPredicate("edit_file")
+	tasks[0].Script[0].Expect = func(req llm.Request) error {
+		// Effort is empty unless a container configures it, so a request that carries a
+		// level here means a default changed (chapter 48).
+		if req.Effort != llm.EffortDefault {
+			return fmt.Errorf("request carries effort %q with none configured", req.Effort)
+		}
+		return RequestPredicate("edit_file")(req)
+	}
 	tasks[1].Script[0].Expect = func(req llm.Request) error {
 		for _, message := range req.Messages {
 			if message.Role == llm.RoleSystem && strings.Contains(message.Content,
