@@ -205,6 +205,8 @@ type SubagentOptions struct {
 	MaxAgents int
 	// MaxBackground bounds concurrent background tasks in the tree. 0 means 4.
 	MaxBackground int
+	// Profiles are named child defaults advertised to the parent model.
+	Profiles []SubagentProfile
 	// OnEvent, when set, receives every event a child emits, tagged with the
 	// parent's identity and the spawn call so a client can draw it under the
 	// card that started it.
@@ -212,6 +214,16 @@ type SubagentOptions struct {
 	// OnTask, when set, is called when a task starts and when it ends. It is a
 	// table-change callback, not a progress stream.
 	OnTask func(TaskInfo)
+}
+
+// SubagentProfile is one named specialization a parent can select.
+type SubagentProfile struct {
+	ID           string   `json:"id"`
+	Description  string   `json:"description"`
+	Instructions string   `json:"instructions"`
+	Model        string   `json:"model,omitempty"`
+	Tools        []string `json:"tools,omitempty"`
+	MaxSteps     int      `json:"max_steps,omitempty"`
 }
 
 // SubagentEvent is one event a child agent emitted, with the identity needed to

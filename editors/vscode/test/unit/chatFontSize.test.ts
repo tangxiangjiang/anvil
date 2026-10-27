@@ -16,6 +16,7 @@ import { strict as assert } from 'node:assert';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { configurationProperties } from '../helpers/package';
 
 const ROOT = join(__dirname, '..', '..', '..');
 const read = (...parts: string[]): string => readFileSync(join(ROOT, ...parts), 'utf8');
@@ -30,7 +31,7 @@ const EXTENSION = read('src', 'extension.ts');
 const CHAT_JS = read('media', 'chat.js');
 
 test('the size is a setting with a range and a default two larger than the UI font', () => {
-  const setting = PACKAGE.contributes.configuration.properties['anvil.chatFontSize'];
+  const setting = configurationProperties(PACKAGE)['anvil.chatFontSize'];
   assert.ok(setting, 'anvil.chatFontSize is declared');
   assert.equal(setting.type, 'number');
   assert.equal(setting.default, 15);

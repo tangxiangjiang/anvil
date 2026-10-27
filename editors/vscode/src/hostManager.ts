@@ -53,6 +53,8 @@ import {
   SessionTranscriptParams,
   SessionTranscriptResult,
   SkillEntry,
+  SubagentProfile,
+  SubagentsResult,
   TaskInfo,
   TasksCancelParams,
   TasksCancelResult,
@@ -582,6 +584,21 @@ export class HostManager {
       base_url: options.base_url ?? settings.session.base_url,
     });
     return result.models ?? [];
+  }
+
+  async subagentProfiles(): Promise<SubagentsResult> {
+    const client = await this.startClient();
+    return client.request<SubagentsResult>(Method.SubagentsGet, {});
+  }
+
+  async upsertSubagentProfile(profile: SubagentProfile): Promise<SubagentsResult> {
+    const client = await this.startClient();
+    return client.request<SubagentsResult>(Method.SubagentsUpsert, { profile });
+  }
+
+  async removeSubagentProfile(id: string): Promise<SubagentsResult> {
+    const client = await this.startClient();
+    return client.request<SubagentsResult>(Method.SubagentsRemove, { id });
   }
 
   /**

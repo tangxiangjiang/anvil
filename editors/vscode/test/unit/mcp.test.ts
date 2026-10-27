@@ -12,6 +12,7 @@ import { strict as assert } from 'node:assert';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { configurationProperties } from '../helpers/package';
 import {
   cardServer,
   hasRuntime,
@@ -210,8 +211,9 @@ test('the manager sends the sources it was given', () => {
 });
 
 test('the settings default the project file on and the user file off', () => {
-  const project = PACKAGE.contributes.configuration.properties['anvil.mcp.project'];
-  const user = PACKAGE.contributes.configuration.properties['anvil.mcp.user'];
+  const properties = configurationProperties(PACKAGE);
+  const project = properties['anvil.mcp.project'];
+  const user = properties['anvil.mcp.user'];
   assert.equal(project.type, 'boolean');
   assert.equal(project.default, true);
   assert.equal(user.type, 'boolean');

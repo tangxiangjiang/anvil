@@ -196,6 +196,12 @@ func (s *Server) dispatch(ctx context.Context, req *Request) (any, *RPCError) {
 		return s.handleCancel(ctx, req.Params)
 	case MethodModelsList:
 		return s.handleModelsList(ctx, req.Params)
+	case MethodSubagentsGet:
+		return s.handleSubagentsGet(req.Params)
+	case MethodSubagentsUpsert:
+		return s.handleSubagentsUpsert(req.Params)
+	case MethodSubagentsRemove:
+		return s.handleSubagentsRemove(req.Params)
 	case MethodSkillsList:
 		return s.handleSkillsList(ctx, req.Params)
 	case MethodRulesList:
@@ -1010,6 +1016,62 @@ func (s *Server) handleModelsList(ctx context.Context, params json.RawMessage) (
 	return out, nil
 }
 
+func (s *Server) handleSubagentsGet(params json.RawMessage) (any, *RPCError) {
+	if _, err := decode[struct{}](params); err != nil {
+		return nil, errInvalidParams("subagents.get: " + err.Error())
+	}
+	return subagentsResult(anvil.LoadSubagentProfiles(s.cwdPath())), nil
+}
+
+func (s *Server) handleSubagentsUpsert(params json.RawMessage) (any, *RPCError) {
+	p, err := decode[SubagentsUpsertParams](params)
+	if err != nil {
+		return nil, errInvalidParams("subagents.upsert: " + err.Error())
+	}
+	state, saveErr := anvil.UpsertSubagentProfile(s.cwdPath(), profileFromWire(p.Profile))
+	if saveErr != nil {
+		return nil, errInvalidParams("subagents.upsert: " + saveErr.Error())
+	}
+	return subagentsResult(state), nil
+}
+
+func (s *Server) handleSubagentsRemove(params json.RawMessage) (any, *RPCError) {
+	p, err := decode[SubagentsRemoveParams](params)
+	if err != nil {
+		return nil, errInvalidParams("subagents.remove: " + err.Error())
+	}
+	if strings.TrimSpace(p.ID) == "" {
+		return nil, errInvalidParams("subagents.remove: id is required")
+	}
+	state, saveErr := anvil.RemoveSubagentProfile(s.cwdPath(), p.ID)
+	if saveErr != nil {
+		return nil, errInvalidParams("subagents.remove: " + saveErr.Error())
+	}
+	return subagentsResult(state), nil
+}
+
+func profileFromWire(p SubagentProfileEntry) anvil.SubagentProfile {
+	return anvil.SubagentProfile{
+		ID: p.ID, Description: p.Description, Instructions: p.Instructions,
+		Model: p.Model, Tools: p.Tools, MaxSteps: p.MaxSteps,
+	}
+}
+
+func subagentsResult(state anvil.SubagentProfileState) SubagentsResult {
+	result := SubagentsResult{
+		Path: state.Path, Exists: state.Exists, Problem: state.Problem,
+		Profiles: []SubagentProfileEntry{}, ToolGroups: anvil.SubagentToolGroups(),
+		DefaultTools: []string{"read", "search", "skills", "git", "vision"},
+	}
+	for _, p := range state.Profiles {
+		result.Profiles = append(result.Profiles, SubagentProfileEntry{
+			ID: p.ID, Description: p.Description, Instructions: p.Instructions,
+			Model: p.Model, Tools: p.Tools, MaxSteps: p.MaxSteps,
+		})
+	}
+	return result
+}
+
 // ---------------------------------------------------------------------------
 // skills / rules
 // ---------------------------------------------------------------------------
@@ -1451,10 +1513,12 @@ func (s *Server) buildOptions(ctx context.Context, p SessionParams, sess *sessio
 	// installed before the agent exists, and every child in the tree — however
 	// deep — reports through the same options.
 	if boolOr(p.Subagents, true) {
+		profileState := anvil.LoadSubagentProfiles(s.cwdPath())
 		opts.Subagents = anvil.SubagentOptions{
-			Enabled: true,
-			OnEvent: func(ev anvil.SubagentEvent) { s.forwardSubagentEvent(sess, ev) },
-			OnTask:  func(info anvil.TaskInfo) { s.forwardTask(sess, info) },
+			Enabled:  true,
+			Profiles: profileState.Profiles,
+			OnEvent:  func(ev anvil.SubagentEvent) { s.forwardSubagentEvent(sess, ev) },
+			OnTask:   func(info anvil.TaskInfo) { s.forwardTask(sess, info) },
 		}
 	}
 	if len(p.TestCommand) > 0 {

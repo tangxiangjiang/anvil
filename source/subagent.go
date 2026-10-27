@@ -149,35 +149,73 @@ var defaultSubagentTools = []string{"read", "search", "skills", "git", "vision"}
 type spawnParams struct {
 	Prompt      string   `json:"prompt"`
 	Description string   `json:"description"`
+	Profile     string   `json:"profile"`
 	Tools       []string `json:"tools"`
 	Model       string   `json:"model"`
 	MaxSteps    int      `json:"max_steps"`
 	Background  bool     `json:"background"`
+	toolsSet    bool
+	modelSet    bool
+	maxStepsSet bool
+}
+
+func (p *spawnParams) UnmarshalJSON(data []byte) error {
+	type plain spawnParams
+	var value plain
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	*p = spawnParams(value)
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	_, p.toolsSet = fields["tools"]
+	_, p.modelSet = fields["model"]
+	_, p.maxStepsSet = fields["max_steps"]
+	return nil
 }
 
 // subagentTool builds the spawn_agent FuncTool. It is a closure over the
 // parent's registry so the selector can be checked against the tools this
 // session actually has, not against a list compiled in here.
-func subagentTool(reg *tools.Registry) *tools.FuncTool {
+func subagentTool(reg *tools.Registry, profiles []SubagentProfile) *tools.FuncTool {
+	description := "Hand one task to a subagent and read its final answer. " +
+		"The subagent runs in this workspace with the tools you list (an omitted list is read-only), " +
+		"and its conversation does not enter yours: you learn only what it reports. " +
+		"Use it for work that would otherwise fill your context with searching, or for a second opinion."
+	profileProperty := map[string]any{
+		"type":        "string",
+		"description": "Optional configured specialization. Omit it for the normal inherited subagent.",
+	}
+	if len(profiles) > 0 {
+		ids := make([]string, 0, len(profiles))
+		details := make([]string, 0, len(profiles))
+		for _, profile := range profiles {
+			ids = append(ids, profile.ID)
+			details = append(details, profile.ID+": "+profile.Description)
+		}
+		profileProperty["enum"] = ids
+		profileProperty["description"] = "Optional configured specialization. Choose it by task: " + strings.Join(details, "; ")
+	}
+	schema, _ := json.Marshal(map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"prompt":      map[string]any{"type": "string", "description": "The whole task. The subagent sees nothing else from this conversation."},
+			"description": map[string]any{"type": "string", "description": "A short name for the task, shown on its card. Not sent to the subagent."},
+			"profile":     profileProperty,
+			"tools":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Group or tool names the subagent may use. An explicit value overrides the profile."},
+			"model":       map[string]any{"type": "string", "description": "Model id. An explicit value overrides the profile; empty inherits this session's model."},
+			"max_steps":   map[string]any{"type": "integer", "minimum": 0, "description": "Optional step ceiling. An explicit value overrides the profile; zero inherits this session's limit."},
+			"background":  map[string]any{"type": "boolean", "description": "Return a task id immediately instead of waiting."},
+		},
+		"required": []string{"prompt", "description"},
+	})
 	return &tools.FuncTool{
-		Name:    "spawn_agent",
-		Builtin: true,
-		Description: "Hand one task to a subagent and read its final answer. " +
-			"The subagent runs in this workspace with the tools you list (an omitted list is read-only), " +
-			"and its conversation does not enter yours: you learn only what it reports. " +
-			"Use it for work that would otherwise fill your context with searching, or for a second opinion.",
-		Parameters: json.RawMessage(`{
-			"type":"object",
-			"properties":{
-				"prompt":{"type":"string","description":"The whole task. The subagent sees nothing else from this conversation."},
-				"description":{"type":"string","description":"A short name for the task, shown on its card. Not sent to the subagent."},
-				"tools":{"type":"array","items":{"type":"string"},"description":"Group or tool names the subagent may use: read, search, write, edit, shell, verify, web, lsp, git, vision, mcp. Default: read, search, skills, git, vision."},
-				"model":{"type":"string","description":"Model id. Empty uses this session's model."},
-				"max_steps":{"type":"integer","minimum":0,"description":"Optional step ceiling for the subagent; it can never exceed this session's own."},
-				"background":{"type":"boolean","description":"Return a task id immediately instead of waiting."}
-			},
-			"required":["prompt","description"]
-		}`),
+		Name:        "spawn_agent",
+		Builtin:     true,
+		Description: description,
+		Parameters:  schema,
 		Handler: func(ctx context.Context, raw json.RawMessage) (string, error) {
 			return spawnAgent(ctx, reg, raw)
 		},
@@ -199,8 +237,13 @@ func spawnAgent(ctx context.Context, reg *tools.Registry, raw json.RawMessage) (
 	if strings.TrimSpace(in.Description) == "" {
 		return "", errors.New("description is required")
 	}
+	resolved, profileInstructions, err := resolveSubagentProfile(parent.opts.Subagents.Profiles, in)
+	if err != nil {
+		return "", err
+	}
+	in = resolved
 	if in.Background {
-		return spawnBackground(ctx, reg, parent, in)
+		return spawnBackground(ctx, reg, parent, in, profileInstructions)
 	}
 	selectors, err := resolveSubagentSelectors(reg, in.Tools)
 	if err != nil {
@@ -211,7 +254,7 @@ func spawnAgent(ctx context.Context, reg *tools.Registry, raw json.RawMessage) (
 	}
 
 	depth := parent.depth + 1
-	opts := parent.childOptions(in, selectors, depth)
+	opts := parent.childOptions(in, selectors, depth, profileInstructions)
 	ident := subagentIdentity{
 		ParentAgentID:    parent.id,
 		ParentRunID:      parent.currentRunID(),
@@ -255,7 +298,7 @@ func spawnAgent(ctx context.Context, reg *tools.Registry, raw json.RawMessage) (
 // it to the tree's task table and returns at once. The child is not tied to the
 // parent run's context: stopping the turn leaves it working, and only
 // task_cancel (or closing the session) stops it.
-func spawnBackground(ctx context.Context, reg *tools.Registry, parent *Agent, in spawnParams) (string, error) {
+func spawnBackground(ctx context.Context, reg *tools.Registry, parent *Agent, in spawnParams, profileInstructions string) (string, error) {
 	mgr := reg.TaskManager()
 	if mgr == nil {
 		return "", errors.New("background tasks are not available in this session")
@@ -268,7 +311,7 @@ func spawnBackground(ctx context.Context, reg *tools.Registry, parent *Agent, in
 		return "", err
 	}
 	depth := parent.depth + 1
-	opts := parent.childOptions(in, selectors, depth)
+	opts := parent.childOptions(in, selectors, depth, profileInstructions)
 	ident := subagentIdentity{
 		ParentAgentID:    parent.id,
 		ParentRunID:      parent.currentRunID(),
@@ -323,14 +366,47 @@ func spawnBackground(ctx context.Context, reg *tools.Registry, parent *Agent, in
 		info.ID, ident.TaskTitle), nil
 }
 
+func resolveSubagentProfile(profiles []SubagentProfile, in spawnParams) (spawnParams, string, error) {
+	if strings.TrimSpace(in.Profile) == "" {
+		return in, "", nil
+	}
+	var selected *SubagentProfile
+	for i := range profiles {
+		if profiles[i].ID == in.Profile {
+			selected = &profiles[i]
+			break
+		}
+	}
+	if selected == nil {
+		return in, "", fmt.Errorf("unknown subagent profile %q", in.Profile)
+	}
+	if err := ValidateSubagentProfiles([]SubagentProfile{*selected}); err != nil {
+		return in, "", err
+	}
+	if !in.modelSet {
+		in.Model = selected.Model
+	}
+	if !in.toolsSet {
+		in.Tools = append([]string(nil), selected.Tools...)
+	}
+	if !in.maxStepsSet {
+		in.MaxSteps = selected.MaxSteps
+	}
+	return in, selected.Instructions, nil
+}
+
+func subagentSystemPrompt(profileInstructions []string) string {
+	if len(profileInstructions) == 0 || strings.TrimSpace(profileInstructions[0]) == "" {
+		return subagentBrief
+	}
+	return subagentBrief + "\n\nProfile instructions:\n" + strings.TrimSpace(profileInstructions[0])
+}
+
 // resolveSubagentSelectors validates the caller's tool list against the session
 // and returns the selectors to hand the child. Empty means the read-only
 // default. A selector that names no group and no tool this session has is an
 // error rather than a silently narrower child.
 func resolveSubagentSelectors(reg *tools.Registry, requested []string) ([]string, error) {
-	if len(requested) == 0 {
-		return append([]string(nil), defaultSubagentTools...), nil
-	}
 	groups := map[string]bool{}
 	for _, g := range tools.GroupNames() {
 		groups[g] = true
@@ -341,6 +417,21 @@ func resolveSubagentSelectors(reg *tools.Registry, requested []string) ([]string
 			available[name] = true
 		}
 	}
+	if len(requested) == 0 {
+		defaults := make([]string, 0, len(defaultSubagentTools))
+		for _, selector := range defaultSubagentTools {
+			for name := range tools.ExpandToolSelectors([]string{selector}) {
+				if available[name] {
+					defaults = append(defaults, selector)
+					break
+				}
+			}
+		}
+		if len(defaults) == 0 {
+			return nil, errors.New("no safe default tools are available to the parent agent")
+		}
+		return defaults, nil
+	}
 	out := make([]string, 0, len(requested))
 	seen := map[string]bool{}
 	for _, raw := range requested {
@@ -348,7 +439,26 @@ func resolveSubagentSelectors(reg *tools.Registry, requested []string) ([]string
 		if sel == "" {
 			continue
 		}
-		if !groups[sel] {
+		if groups[sel] {
+			found := false
+			for name := range tools.ExpandToolSelectors([]string{sel}) {
+				if available[name] || (sel == "mcp" && strings.HasPrefix(name, "mcp_")) {
+					found = true
+					break
+				}
+			}
+			if sel == "mcp" {
+				for name := range available {
+					if strings.HasPrefix(name, "mcp_") {
+						found = true
+						break
+					}
+				}
+			}
+			if !found {
+				return nil, fmt.Errorf("tools: %q is not available to the parent agent", raw)
+			}
+		} else {
 			expanded := tools.ExpandToolSelectors([]string{sel})
 			found := false
 			for name := range expanded {
@@ -371,14 +481,14 @@ func resolveSubagentSelectors(reg *tools.Registry, requested []string) ([]string
 		out = append(out, sel)
 	}
 	if len(out) == 0 {
-		return append([]string(nil), defaultSubagentTools...), nil
+		return resolveSubagentSelectors(reg, nil)
 	}
 	return out, nil
 }
 
 // childOptions builds the child's Options from a whitelist of the parent's. See
 // doc/design/v0.x/41-subagents-and-tasks.md — the exclusions are deliberate.
-func (a *Agent) childOptions(in spawnParams, selectors []string, depth int) Options {
+func (a *Agent) childOptions(in spawnParams, selectors []string, depth int, profileInstructions ...string) Options {
 	sel := tools.ExpandToolSelectors(selectors)
 	opts := Options{
 		Provider:         a.opts.Provider,
@@ -396,7 +506,7 @@ func (a *Agent) childOptions(in spawnParams, selectors []string, depth int) Opti
 		// A command hook that denies in the parent denies in the child too, so the child
 		// must carry the same switch that lets command hooks run (audit #25).
 		AllowHookCommands: a.opts.AllowHookCommands,
-		SystemPrompt:      subagentBrief,
+		SystemPrompt:      subagentSystemPrompt(profileInstructions),
 		RequireFinishTask: a.opts.RequireFinishTask,
 		BuiltinTools:      selectors,
 		DisallowedTools:   append([]string(nil), a.opts.DisallowedTools...),

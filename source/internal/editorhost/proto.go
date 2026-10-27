@@ -27,7 +27,7 @@ const ProtocolVersion = 1
 // product line, not the protocol revision (that is ProtocolVersion): the
 // extension compares the dotted minor it packaged with against this string and
 // warns on a mismatch, so the two have to be released together (0.46).
-var Version = "0.46.49"
+var Version = "0.46.54"
 
 // Client to host request methods.
 const (
@@ -70,6 +70,9 @@ const (
 	MethodPrompt            = "prompt"
 	MethodCancel            = "cancel"
 	MethodModelsList        = "models.list"
+	MethodSubagentsGet      = "subagents.get"
+	MethodSubagentsUpsert   = "subagents.upsert"
+	MethodSubagentsRemove   = "subagents.remove"
 	MethodSkillsList        = "skills.list"
 	MethodRulesList         = "rules.list"
 	// MethodMCPList reports the MCP servers the selected file layers declare,
@@ -1366,6 +1369,33 @@ type ModelEntry struct {
 // ModelsResult is the catalog listing.
 type ModelsResult struct {
 	Models []ModelEntry `json:"models"`
+}
+
+// SubagentProfileEntry is one workspace-shared child specialization.
+type SubagentProfileEntry struct {
+	ID           string   `json:"id"`
+	Description  string   `json:"description"`
+	Instructions string   `json:"instructions"`
+	Model        string   `json:"model,omitempty"`
+	Tools        []string `json:"tools,omitempty"`
+	MaxSteps     int      `json:"max_steps,omitempty"`
+}
+
+type SubagentsUpsertParams struct {
+	Profile SubagentProfileEntry `json:"profile"`
+}
+
+type SubagentsRemoveParams struct {
+	ID string `json:"id"`
+}
+
+type SubagentsResult struct {
+	Path         string                 `json:"path"`
+	Exists       bool                   `json:"exists"`
+	Profiles     []SubagentProfileEntry `json:"profiles"`
+	ToolGroups   []string               `json:"tool_groups"`
+	DefaultTools []string               `json:"default_tools"`
+	Problem      string                 `json:"problem,omitempty"`
 }
 
 // ---------------------------------------------------------------------------

@@ -73,17 +73,14 @@ test('the assertive region carries approvals and errors, and only those', () => 
 });
 
 test('an approval request takes focus, and a decision gives it back', () => {
-  // The composer is disabled while a turn runs, so nothing else owns the
-  // keyboard when the card appears; tabbing through the transcript is not a
-  // path a blocking question can depend on.
   assert.match(CHAT_JS, /const first = buttons\.querySelector\('button'\);[\s\S]{0,80}first\.focus\(\);/);
   // The pressed button is disabled by the answer; focus goes somewhere that
   // still does something rather than to the document.
   assert.match(CHAT_JS, /const hadFocus = card\.contains\(document\.activeElement\);/);
   assert.match(CHAT_JS, /function refocusAfter\(hadFocus\)[\s\S]{0,80}sendButton\.focus\(\)/);
-  // A turn starting disables the textarea; focus moves to the stop control.
-  assert.match(CHAT_JS, /const hadInputFocus = document\.activeElement === input;/);
-  assert.match(CHAT_JS, /if \(running && hadInputFocus\) sendButton\.focus\(\);/);
+  // Starting a turn leaves the composer usable for queued and priority sends.
+  assert.doesNotMatch(CHAT_JS, /input\.disabled\s*=\s*running/);
+  assert.match(CHAT_PANEL, /id="stop"[^>]*aria-label="Stop current response"/);
 });
 
 test('every icon-only control has a name that is not a tooltip', () => {
@@ -93,8 +90,10 @@ test('every icon-only control has a name that is not a tooltip', () => {
   assert.match(CHAT_JS, /dismiss\.setAttribute\('aria-label', 'Dismiss'\);/);
   // The plus is an SVG and names the menu it controls.
   assert.match(CHAT_PANEL, /id="attach"[^>]*aria-label="Add to prompt"[^>]*aria-controls="actionMenu"/);
-  // Send is an SVG; its label changes with what the button does.
-  assert.match(CHAT_JS, /sendButton\.setAttribute\('aria-label', running \? 'Stop' : 'Send'\);/);
+  // Send becomes a named Enqueue control while running; Stop has its own name.
+  assert.match(CHAT_JS, /sendButton\.setAttribute\('aria-label', running \? 'Enqueue after current response' : 'Send'\);/);
+  assert.match(CHAT_PANEL, /id="prioritySend"[^>]*aria-label="Interrupt and send now"/);
+  assert.match(CHAT_PANEL, /id="stop"[^>]*aria-label="Stop current response"/);
 });
 
 test('approval controls are a group named by the question above them', () => {

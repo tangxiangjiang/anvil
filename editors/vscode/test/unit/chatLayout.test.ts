@@ -33,6 +33,7 @@ import { test } from 'node:test';
 const EXTENSION_ROOT = join(__dirname, '..', '..', '..');
 const CSS = readFileSync(join(EXTENSION_ROOT, 'media', 'chat.css'), 'utf8');
 const JS = readFileSync(join(EXTENSION_ROOT, 'media', 'chat.js'), 'utf8');
+const PANEL = readFileSync(join(EXTENSION_ROOT, 'src', 'chatPanel.ts'), 'utf8');
 
 /** The stylesheet with its comments dropped, so prose cannot look like a rule. */
 const SOURCE = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
@@ -169,6 +170,40 @@ test('a floating latest-message button returns the transcript to its bottom', ()
   assert.equal(valueOf('.scroll-bottom', 'position'), 'absolute');
   assert.match(valueOf('.scroll-bottom', 'bottom') ?? '', /100%/);
   assert.equal(valueOf('.scroll-bottom[hidden]', 'display'), 'none');
+});
+
+test('auto-scroll is an explicit persistent preference that can preserve review position', () => {
+  assert.match(PANEL, /id="autoScroll"[^>]*aria-pressed="true"/);
+  assert.match(JS, /const autoScrollButton = document\.getElementById\('autoScroll'\)/);
+  assert.match(JS, /restoredDocumentState\.autoScroll === false/);
+  assert.match(JS, /remember\(\{ autoScroll \}\)/);
+  assert.match(
+    JS,
+    /autoScrollButton\.addEventListener\('click', \(\) => setAutoScroll\(!autoScroll\)\)/,
+  );
+  // On means every layout write follows. Off falls back to the old pinned
+  // behavior, so a reader already upstream keeps that exact review position.
+  assert.match(
+    JS,
+    /function scrollIfPinned\(wasPinned\) \{\s*if \(autoScroll \|\| wasPinned\) transcript\.scrollTop = transcript\.scrollHeight;/,
+  );
+  // Re-enabling is immediate rather than waiting for the next model chunk.
+  assert.match(JS, /if \(autoScroll\) scrollConversationToBottom\(\)/);
+
+  assert.equal(valueOf('.auto-scroll', 'position'), 'absolute');
+  assert.match(bodiesOf('.auto-scroll').join(';'), /right:\s*max\([^;]*40px/);
+  assert.match(valueOf(".auto-scroll[aria-pressed='true']", 'border-color') ?? '', /focusBorder/);
+});
+
+test('the running composer stays editable and offers queue, priority, and stop actions', () => {
+  assert.match(PANEL, /id="prioritySend"[^>]*title="Interrupt the current response and send now"/);
+  assert.match(PANEL, /id="stop"[^>]*aria-label="Stop current response"/);
+  assert.match(PANEL, /id="sendLabel"[^>]*>Enqueue</);
+  assert.doesNotMatch(JS, /input\.disabled\s*=\s*running/);
+  assert.doesNotMatch(JS, /attachButton\.disabled\s*=\s*running/);
+  assert.match(JS, /const type = running \? 'enqueue' : 'send'/);
+  assert.match(JS, /type:\s*'sendPriority'/);
+  assert.match(JS, /case 'dispatchQueued':\s*dispatchQueued\(msg\)/);
 });
 
 test('the transcript reserves the composer height, and the script measures it', () => {

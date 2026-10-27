@@ -19,6 +19,7 @@ import { test } from 'node:test';
 import { SessionInfo, TaskInfo } from '../../src/protocol';
 import { SessionNode, SessionRow, buildSessionView } from '../../src/sessionList';
 import { transcriptFor } from '../../src/taskList';
+import { configurationProperties } from '../helpers/package';
 
 const EXTENSION_ROOT = join(__dirname, '..', '..', '..');
 const ROOT = join(EXTENSION_ROOT, '..', '..');
@@ -250,11 +251,11 @@ test('/tasks opens the table instead of becoming a prompt', () => {
   assert.ok(submit, 'the submit handler is in chat.js');
   const body = submit[0];
   const command = body.indexOf("if (text === '/tasks')");
-  const running = body.indexOf("if (text === '' || running) return;");
+  const empty = body.indexOf("if (text === '') return;");
   assert.ok(command >= 0, 'the composer intercepts exactly /tasks');
-  // Before the running guard: the table is most useful during a turn.
-  assert.ok(running > command, '/tasks is checked before the running guard');
-  const block = body.slice(command, running);
+  // Before prompt validation: the table is most useful during a turn.
+  assert.ok(empty > command, '/tasks is checked before prompt validation');
+  const block = body.slice(command, empty);
   assert.match(block, /vscode\.postMessage\(\{ type: 'openTasks' \}\)/);
   // The text is consumed, but nothing is echoed, recorded, or sent: it is a
   // command, so it must not become a turn in the transcript or the history.
@@ -318,7 +319,7 @@ test('the task panel and the spawn card render output as text only', () => {
 test('the setting and the command exist for the two new surfaces', () => {
   const commands = PACKAGE_JSON.contributes.commands.map((entry) => entry.command);
   assert.ok(commands.includes('anvil.openTasks'));
-  const subagents = PACKAGE_JSON.contributes.configuration.properties['anvil.subagents'];
+  const subagents = configurationProperties(PACKAGE_JSON)['anvil.subagents'];
   assert.ok(subagents, 'anvil.subagents is a setting');
   assert.equal(subagents.default, false);
 });

@@ -120,6 +120,28 @@ configuration cannot disagree.
   itself more rounds by spawning.
 - `background` — see *Background tasks*.
 
+### Workspace subagent profiles
+
+The optional `{cwd}/.anvil/subagents.json` file gives the parent model a small,
+workspace-shared catalogue of specializations. A profile has a stable `id`, a
+short `description` used in the `spawn_agent` schema, private child
+`instructions`, and optional defaults for `model`, `tools`, and `max_steps`.
+The parent still makes the routing decision as an ordinary tool call; there is
+no scheduler or hidden classifier.
+
+`spawn_agent.profile` selects one profile. Resolution order is parent defaults,
+profile defaults, explicitly present call fields, then the existing tool and
+step safety clamps. Explicit empty model/tools and zero steps therefore restore
+the inherited defaults. Profile instructions are appended to the fixed
+`subagentBrief`; they never replace its role or safety boundary. Unknown
+profiles and invalid tool selectors fail before consuming the run's agent
+budget, and foreground and background spawns use the same resolver.
+
+The editor host owns strict version-1 parsing and atomic CRUD for this file.
+Malformed files remain visible to the manager but are never overwritten.
+Profiles can narrow the parent's tools and limits; they cannot widen
+permissions, workspace, provider credentials, base URL, or API key.
+
 Foreground result (the tool result the parent's model reads):
 
 ```text
@@ -556,6 +578,7 @@ them:
 - A persistent task queue that survives `anvil-host` exiting; tasks live in the host process.
 - Cross-session task visibility, scheduling tasks at a time, or retrying a failed task
   automatically.
-- A model-driven agent router ("choose a subagent for me"); the parent's model chooses by calling
-  the tool, which is the same decision every other tool call is.
+- A scheduler-driven or classifier-driven agent router. The parent's model may choose a named
+  workspace profile while calling `spawn_agent`, which remains the same decision as every other
+  tool call.
 - Subagent-specific permission modes. A session has one mode; its children run in it.

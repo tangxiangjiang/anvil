@@ -13,6 +13,7 @@ import { strict as assert } from 'node:assert';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { configurationProperties } from '../helpers/package';
 
 const EXTENSION_ROOT = join(__dirname, '..', '..', '..');
 const METER_PATH = join(EXTENSION_ROOT, 'media', 'meter.js');
@@ -215,7 +216,7 @@ test('the panel tells the document how to measure, then asks the session', () =>
 });
 
 test('the setting has a conservative default and keeps zero as an opt-out', () => {
-  const property = PACKAGE.contributes.configuration.properties['anvil.contextWindow'];
+  const property = configurationProperties(PACKAGE)['anvil.contextWindow'];
   assert.equal(property.type, 'number');
   assert.equal(property.default, 128000);
   assert.equal(property.minimum, 0);
@@ -226,17 +227,17 @@ test('the setting has a conservative default and keeps zero as an opt-out', () =
 });
 
 test('the budget travels only with a window, and the three settings are resolved', () => {
-  const auto = PACKAGE.contributes.configuration.properties['anvil.autoCompactAt'];
+  const auto = configurationProperties(PACKAGE)['anvil.autoCompactAt'];
   assert.equal(auto.type, 'number');
   assert.equal(auto.default, 0.8);
   assert.equal(auto.minimum, 0.1);
   assert.equal(auto.maximum, 1);
 
-  const keep = PACKAGE.contributes.configuration.properties['anvil.contextKeepRecent'];
+  const keep = configurationProperties(PACKAGE)['anvil.contextKeepRecent'];
   assert.equal(keep.default, 8);
   assert.equal(keep.minimum, 2);
 
-  const ttl = PACKAGE.contributes.configuration.properties['anvil.cacheTtlSeconds'];
+  const ttl = configurationProperties(PACKAGE)['anvil.cacheTtlSeconds'];
   assert.equal(ttl.default, 0);
   assert.equal(ttl.minimum, 0);
   assert.match(ttl.markdownDescription, /300 seconds for Anthropic/);

@@ -74,17 +74,26 @@ import { readSettings, readWebSearchKey } from './settings';
 import { webSearchNeedsKey } from './webSearch';
 import { mediaAsset } from './webviewAsset';
 import { AgentMapState, buildAgentMap } from './agentMap';
+import { TurnQueue } from './turnQueue';
+
+interface TurnPayload {
+  text: string;
+  mentions?: string[];
+  images?: string[];
+  quotes?: Array<{ role: 'user' | 'assistant'; text: string }>;
+}
+
+interface QueuedTurn {
+  text: string;
+  mentions: string[];
+  images: string[];
+  quotes: Array<{ role: 'user' | 'assistant'; text: string }>;
+}
 
 /** A message from the webview. */
 type Inbound =
   | { type: 'ready' }
-  | {
-      type: 'send';
-      text: string;
-      mentions?: string[];
-      images?: string[];
-      quotes?: Array<{ role: 'user' | 'assistant'; text: string }>;
-    }
+  | ({ type: 'send' | 'enqueue' | 'sendPriority' } & TurnPayload)
   | { type: 'cancel' }
   | { type: 'answer'; requestId: string; decision: Decision; scope?: string }
   /**
@@ -97,6 +106,7 @@ type Inbound =
   | { type: 'pickMention' }
   | { type: 'commands' }
   | { type: 'mode'; mode: string }
+  | { type: 'selectModel'; model: string }
   | { type: 'collaboration'; mode: 'single' | 'multi' }
   | { type: 'agentMap' }
   | { type: 'agentDetail'; agentId: string }
@@ -222,6 +232,8 @@ type Outbound =
       error?: string;
     }
   | { type: 'done'; done: DoneParams; failure: RunFailure }
+  | { type: 'queue'; count: number; interrupting: boolean }
+  | ({ type: 'dispatchQueued' } & TurnPayload)
   | { type: 'mentions'; paths: string[] }
   /**
    * Images the picker read, as data URLs — the same shape a paste leaves in
@@ -236,6 +248,7 @@ type Outbound =
    * resizes without a reload.
    */
   | { type: 'fontSize'; size: number }
+  | { type: 'models'; available: string[]; current: string; defaultModel: string }
   /**
    * The token meter's inputs. The window is display arithmetic only and never
    * travels to the host; `info` is the live session's own estimate, present
@@ -484,6 +497,10 @@ export class ChatPanel implements HostListener {
    * agent). A crash drops it; the agent id below is what brings it back.
    */
   private session: ChatSession | undefined;
+  /** Prompts waiting behind the active run, scoped to this conversation tab. */
+  private readonly turnQueue = new TurnQueue<QueuedTurn>();
+  /** Prevents two terminal notifications from starting two queued prompts. */
+  private dispatchingTurn = false;
   /** A session being built, so two messages sent at once cannot build two. */
   private opening: Promise<ChatSession> | undefined;
   /**
@@ -505,6 +522,8 @@ export class ChatPanel implements HostListener {
   private overrides: Partial<SessionConfig> = {};
   /** The mode the live session resolved, which is not always the one asked for. */
   private resolvedMode: ResolvedMode | undefined;
+  /** The model the live host resolved, for the compact composer selector. */
+  private resolvedModel: string | undefined;
   /** Whether this is the tab in front, for the one command that means "this one". */
   private active = false;
   private disposed = false;
@@ -783,12 +802,25 @@ export class ChatPanel implements HostListener {
    * use, and opening a session to hold it would be work nobody asked for.
    */
   private async applyOptions(changes: Partial<SessionConfig>): Promise<boolean> {
-    this.overrides = { ...this.overrides, ...changes };
+    const previous = this.overrides;
+    const next = { ...previous, ...changes };
     const session = this.session;
-    if (!session) return false;
-    const result = await session.reopen(changes);
-    if (result) this.noteResolvedMode(result);
-    return true;
+    if (!session) {
+      this.overrides = next;
+      return false;
+    }
+    try {
+      const result = await session.reopen(changes);
+      this.overrides = next;
+      if (result) {
+        this.noteResolvedMode(result);
+        this.resolvedModel = result.model;
+      }
+      return true;
+    } catch (err) {
+      this.overrides = previous;
+      throw err;
+    }
   }
 
   /** Turns a skill on for this conversation. False when it was already on. */
@@ -832,6 +864,8 @@ export class ChatPanel implements HostListener {
       this.postRoot();
       this.postMode();
       this.postCollaboration();
+      this.postModels();
+      this.postQueue();
       if (this.rules.length > 0) this.post({ type: 'rules', files: this.rules });
       this.postState();
       for (const request of this.pendingApprovals()) {
@@ -864,6 +898,12 @@ export class ChatPanel implements HostListener {
       case 'send':
         await this.sendTurn(msg.text, msg.mentions ?? [], msg.images ?? [], msg.quotes ?? []);
         return;
+      case 'enqueue':
+        await this.enqueueTurn(this.turnPayload(msg));
+        return;
+      case 'sendPriority':
+        await this.sendPriority(this.turnPayload(msg));
+        return;
       case 'cancel':
         // Nothing running is nothing to cancel: a Stop on an idle tab is not a
         // reason to start a host.
@@ -888,6 +928,9 @@ export class ChatPanel implements HostListener {
         return;
       case 'mode':
         await this.setMode(msg.mode);
+        return;
+      case 'selectModel':
+        await this.setModel(msg.model);
         return;
       case 'collaboration':
         await this.setCollaboration(msg.mode);
@@ -1159,6 +1202,83 @@ export class ChatPanel implements HostListener {
 
   // --- commands ---------------------------------------------------------------
 
+  private turnPayload(payload: TurnPayload): QueuedTurn {
+    return {
+      text: payload.text,
+      mentions: [...(payload.mentions ?? [])],
+      images: [...(payload.images ?? [])],
+      quotes: (payload.quotes ?? []).map((quote) => ({ ...quote })),
+    };
+  }
+
+  private postQueue(): void {
+    this.post({
+      type: 'queue',
+      count: this.turnQueue.count,
+      interrupting: this.turnQueue.interrupting,
+    });
+  }
+
+  private clearTurnQueue(): void {
+    this.turnQueue.clear();
+    this.dispatchingTurn = false;
+    this.postQueue();
+  }
+
+  private async enqueueTurn(turn: QueuedTurn): Promise<void> {
+    if (!this.busy && !this.dispatchingTurn && this.turnQueue.count === 0) {
+      this.post({ type: 'dispatchQueued', ...turn });
+      await this.sendTurn(turn.text, turn.mentions, turn.images, turn.quotes);
+      return;
+    }
+    this.turnQueue.enqueue(turn);
+    this.postQueue();
+  }
+
+  /**
+   * Interrupts the active run, but never races a replacement prompt against
+   * session cleanup. The terminal notification is the hand-off point.
+   */
+  private async sendPriority(turn: QueuedTurn): Promise<void> {
+    if (!this.busy && !this.dispatchingTurn) {
+      this.post({ type: 'dispatchQueued', ...turn });
+      await this.sendTurn(turn.text, turn.mentions, turn.images, turn.quotes);
+      return;
+    }
+    this.turnQueue.prioritize(turn);
+    this.postQueue();
+    try {
+      await this.session?.cancel();
+    } catch (err) {
+      this.post({ type: 'notice', level: 'error', message: `Could not interrupt the turn: ${(err as Error).message}` });
+      // Keep the message: if the run ends naturally, it is still next.
+      this.turnQueue.next();
+      this.turnQueue.prioritize(turn);
+      this.postQueue();
+      void this.dispatchNextTurn();
+    }
+  }
+
+  private async dispatchNextTurn(): Promise<void> {
+    if (this.disposed || this.dispatchingTurn || this.busy) return;
+    const turn = this.turnQueue.next();
+    if (!turn) {
+      this.postQueue();
+      return;
+    }
+    this.dispatchingTurn = true;
+    this.postQueue();
+    this.post({ type: 'dispatchQueued', ...turn });
+    try {
+      await this.sendTurn(turn.text, turn.mentions, turn.images, turn.quotes);
+    } finally {
+      this.dispatchingTurn = false;
+      if (!this.busy && this.turnQueue.count > 0) {
+        void this.dispatchNextTurn();
+      }
+    }
+  }
+
   /** The catalogue, fetched once per host by the hub. */
   private commandCatalogue(): Promise<SlashCommand[]> {
     return this.hub.commandCatalogue();
@@ -1221,6 +1341,69 @@ export class ChatPanel implements HostListener {
     this.postMode();
     this.postState();
     this.post({ type: 'notice', level: chosen === 'bypass' ? 'warn' : 'info', message: modeNotice(chosen) });
+  }
+
+  private postModels(): void {
+    const settings = readSettings().models;
+    const current = this.overrides.model ?? this.resolvedModel ?? settings.defaultModel;
+    const available = [...settings.available];
+    for (const id of [settings.defaultModel, current]) {
+      if (id && !available.includes(id)) available.push(id);
+    }
+    this.post({
+      type: 'models',
+      available,
+      current: current ?? '',
+      defaultModel: settings.defaultModel,
+    });
+  }
+
+  /** Native settings or the manager changed the curated list. */
+  modelsChanged(): void {
+    this.postModels();
+  }
+
+  private async setModel(model: string): Promise<void> {
+    if (this.session?.currentState === 'running') {
+      this.post({ type: 'notice', level: 'warn', message: 'Stop the turn before changing the model.' });
+      this.postModels();
+      return;
+    }
+    const settings = readSettings().models;
+    if (model !== '' && !settings.available.includes(model) && model !== settings.defaultModel) {
+      this.post({ type: 'notice', level: 'warn', message: `${model} is not in the available model list.` });
+      this.postModels();
+      return;
+    }
+    try {
+      const previous = this.overrides;
+      const next = { ...previous };
+      if (model === '') delete next.model;
+      else next.model = model;
+      const configured = model === '' ? settings.defaultModel || undefined : model;
+      const session = this.session;
+      let reopened = false;
+      if (!session) {
+        this.overrides = next;
+      } else {
+        const result = await session.reopen({ model: configured });
+        this.overrides = next;
+        reopened = result !== undefined;
+        if (result) this.resolvedModel = result.model;
+      }
+      if (!reopened) this.resolvedModel = model === '' ? settings.defaultModel || undefined : model;
+      this.postModels();
+      this.post({
+        type: 'notice',
+        level: 'info',
+        message: model === '' ? 'Model: workspace default.' : `Model: ${model}. The conversation continues.`,
+      });
+      this.postState();
+    } catch (err) {
+      this.post({ type: 'notice', level: 'error', message: `Could not change model: ${(err as Error).message}` });
+      this.postModels();
+      this.postState();
+    }
   }
 
   private postCollaboration(): void {
@@ -1335,6 +1518,7 @@ export class ChatPanel implements HostListener {
 
   /** Ends this tab's conversation. The host stays up; the next prompt starts fresh. */
   private async clearConversation(): Promise<void> {
+    this.clearTurnQueue();
     const session = this.session;
     if (session) await session.reset();
     await this.forgetAgent();
@@ -1783,41 +1967,38 @@ export class ChatPanel implements HostListener {
   private async pickModel(given: string): Promise<void> {
     let model = given;
     if (model === '') {
-      let entries: Awaited<ReturnType<Hub['listModels']>> = [];
-      try {
-        // This tab's provider, not the window's: a conversation pointed at one
-        // endpoint should list that endpoint's models.
-        entries = await this.hub.listModels({
-          provider: this.overrides.provider,
-          base_url: this.overrides.base_url,
-        });
-      } catch (err) {
-        this.post({
-          type: 'notice',
-          level: 'error',
-          message: `Could not list models: ${(err as Error).message} (check anvil.baseUrl)`,
-        });
-        return;
-      }
-      if (entries.length === 0) {
-        this.post({ type: 'notice', level: 'info', message: 'The provider reported no models.' });
+      const settings = readSettings().models;
+      if (settings.available.length === 0) {
+        this.post({ type: 'notice', level: 'info', message: 'No models are available. Run Anvil: Manage Models first.' });
         return;
       }
       const picked = await vscode.window.showQuickPick(
-        entries.map((entry) => ({
-          label: entry.id,
-          description: [entry.provider, entry.vision ? 'vision' : ''].filter(Boolean).join(' · '),
-          detail: entry.owned_by,
-          id: entry.id,
-        })),
+        [
+          { label: 'Workspace default', description: settings.defaultModel || 'Host default', id: '' },
+          ...settings.available.map((id) => ({ label: id, id })),
+        ],
         { title: 'Model', placeHolder: 'The model this conversation uses' },
       );
       if (!picked) return;
       model = picked.id;
     }
-    await this.applyOptions({ model });
-    this.post({ type: 'notice', level: 'info', message: `Model: ${model}. The conversation continues.` });
-    this.postState();
+    if (given !== '' && !readSettings().models.available.includes(model)) {
+      // Preserve the long-standing direct command: power users can test an id
+      // before curating it, while every picker remains the available list.
+      try {
+        await this.applyOptions({ model });
+        this.resolvedModel = model;
+        this.postModels();
+        this.post({ type: 'notice', level: 'info', message: `Model: ${model}. The conversation continues.` });
+        this.postState();
+      } catch (err) {
+        this.post({ type: 'notice', level: 'error', message: `Could not change model: ${(err as Error).message}` });
+        this.postModels();
+        this.postState();
+      }
+      return;
+    }
+    await this.setModel(model);
   }
 
   /** One ordinary turn, with the context the editor has. */
@@ -2444,6 +2625,7 @@ export class ChatPanel implements HostListener {
     // updated_at — so the sidebar's copy of it is stale from here on.
     this.hub.notifySessions();
     this.hub.notifyRunning();
+    void this.dispatchNextTurn();
   };
 
   onState = (): void => {
@@ -2461,7 +2643,9 @@ export class ChatPanel implements HostListener {
   onSession = (result: SessionResult): void => {
     this.rememberAgent(result.agent_id);
     this.noteResolvedMode(result);
+    this.resolvedModel = result.model;
     this.postMode();
+    this.postModels();
     // The root is a fact about the session only after the host exists, which is
     // why the header learns it here in a multi-root window rather than at ready.
     this.postRoot();
@@ -2955,8 +3139,13 @@ export class ChatPanel implements HostListener {
     this.session = undefined;
     this.opening = undefined;
     this.resolvedMode = undefined;
+    this.resolvedModel = undefined;
+    this.turnQueue.clear();
+    this.dispatchingTurn = false;
+    this.postQueue();
     this.postState();
     this.postMode();
+    this.postModels();
   }
 
   async dispose(): Promise<void> {
@@ -2969,6 +3158,8 @@ export class ChatPanel implements HostListener {
     this.panel = undefined;
     this.listening = false;
     this.pending = [];
+    this.turnQueue.clear();
+    this.dispatchingTurn = false;
     this.partialReviews.dispose();
     this.mcpStatusSub?.dispose();
     this.mcpStatusSub = undefined;
@@ -3048,6 +3239,13 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri, focus = f
     --anvil-composer-h, which is what the transcript reserves at its bottom.
   -->
   <div id="composerDock" class="dock">
+    <button id="autoScroll" type="button" class="auto-scroll" aria-label="Disable auto-scroll" aria-pressed="true" title="Auto-scroll is on">
+      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M10 3v10"/>
+        <path d="m6.5 9.5 3.5 3.5 3.5-3.5"/>
+        <path d="M5 16h10"/>
+      </svg>
+    </button>
     <button id="scrollBottom" type="button" class="scroll-bottom" aria-label="Scroll conversation to bottom" title="Go to latest message" hidden>
       <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="m6 7.5 4 4 4-4"/>
@@ -3176,6 +3374,12 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri, focus = f
             </svg>
           </button>
         </div>
+        <label class="composer-model" title="Model for this conversation">
+          <span class="sr-only">Model</span>
+          <select id="modelSelect" aria-label="Model for this conversation">
+            <option value="">Default</option>
+          </select>
+        </label>
         <span class="spacer"></span>
         <button id="mode" type="button" class="mode-trigger" aria-label="Agent mode" aria-expanded="false" aria-controls="modeMenu" title="Choose how the agent may act">
           <svg class="mode-trigger-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true">
@@ -3186,19 +3390,24 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri, focus = f
             <path d="m5 6.5 3 3 3-3"/>
           </svg>
         </button>
-        <!--
-          One control for both ends of a turn: a paper plane sends, and the same
-          button becomes a stop square while a turn runs. A separate Stop button
-          would appear only at the moment Send stops being useful.
-        -->
+        <button id="prioritySend" type="button" class="secondary run-action" aria-label="Interrupt and send now" title="Interrupt the current response and send now" hidden>
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true">
+            <path d="m11.5 2.8-6 8h4l-1 6.4 6-8h-4z"/>
+          </svg>
+          <span>Send now</span>
+        </button>
+        <button id="stop" type="button" class="secondary icon run-stop" aria-label="Stop current response" title="Stop current response" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="7" y="7" width="10" height="10" rx="1.5" fill="currentColor"/>
+          </svg>
+        </button>
         <button id="send" type="button" class="primary icon" aria-label="Send" title="Send">
           <svg class="icon-send" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M22 2 11 13"/>
             <path d="m22 2-7 20-4-9-9-4 20-7z"/>
           </svg>
-          <svg class="icon-stop" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true">
-            <rect x="7" y="7" width="10" height="10" rx="1.5" fill="currentColor"/>
-          </svg>
+          <span id="sendLabel" class="send-label">Enqueue</span>
+          <span id="queueCount" class="queue-count" hidden></span>
         </button>
       </div>
     </form>

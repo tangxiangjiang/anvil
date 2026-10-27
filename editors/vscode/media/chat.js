@@ -22,6 +22,9 @@
   const composer = document.getElementById('composer');
   const input = document.getElementById('input');
   const sendButton = document.getElementById('send');
+  const queueCount = document.getElementById('queueCount');
+  const prioritySendButton = document.getElementById('prioritySend');
+  const stopButton = document.getElementById('stop');
   const statusLine = document.getElementById('status');
   /**
    * The entry inside the transcript that holds the run's line and the root's.
@@ -52,6 +55,7 @@
     ? Array.from(collaborationMenu.querySelectorAll('.collaboration-row:not(:disabled)'))
     : [];
   const agentMapButton = document.getElementById('agentMap');
+  const modelSelect = document.getElementById('modelSelect');
   const bypassStrip = document.getElementById('bypass');
   const dontAskStrip = document.getElementById('dontAsk');
   const rootLine = document.getElementById('root');
@@ -60,6 +64,7 @@
   const focusButton = document.getElementById('focus');
   const palette = document.getElementById('palette');
   const dock = document.getElementById('composerDock');
+  const autoScrollButton = document.getElementById('autoScroll');
   const scrollBottomButton = document.getElementById('scrollBottom');
   const meter = document.getElementById('meter');
   /**
@@ -727,13 +732,29 @@
     scrollBottomButton.hidden = atBottom();
   }
 
+  function syncAutoScrollButton() {
+    if (!autoScrollButton) return;
+    autoScrollButton.setAttribute('aria-pressed', autoScroll ? 'true' : 'false');
+    autoScrollButton.setAttribute('aria-label', autoScroll ? 'Disable auto-scroll' : 'Enable auto-scroll');
+    autoScrollButton.title = autoScroll
+      ? 'Auto-scroll is on'
+      : 'Auto-scroll is off — review position is preserved';
+  }
+
   function scrollConversationToBottom() {
     transcript.scrollTop = transcript.scrollHeight;
     syncScrollBottomButton();
   }
 
+  function setAutoScroll(on) {
+    autoScroll = Boolean(on);
+    syncAutoScrollButton();
+    remember({ autoScroll });
+    if (autoScroll) scrollConversationToBottom();
+  }
+
   function scrollIfPinned(wasPinned) {
-    if (wasPinned) transcript.scrollTop = transcript.scrollHeight;
+    if (autoScroll || wasPinned) transcript.scrollTop = transcript.scrollHeight;
     syncScrollBottomButton();
   }
 
@@ -808,6 +829,12 @@
    * the page with it; a reload therefore comes back in the same view.
    */
   let focusView = document.body.classList.contains('focus-view');
+  const restoredDocumentState = vscode.getState();
+  let autoScroll = !(
+    restoredDocumentState &&
+    typeof restoredDocumentState === 'object' &&
+    restoredDocumentState.autoScroll === false
+  );
 
   /** The first block at or below the top of the visible transcript. */
   function firstVisibleBlock(skipHidden) {
@@ -846,7 +873,7 @@
    */
   function setFocus(on) {
     if (focusView === on) return;
-    const pinned = atBottom();
+    const pinned = autoScroll || atBottom();
     const anchor = pinned ? null : firstVisibleBlock(on);
     const top = anchor ? anchor.getBoundingClientRect().top : 0;
     focusView = on;
@@ -4999,36 +5026,85 @@
 
 
   function setRunning(next) {
-    // Disabling the textarea takes focus out of the document, and a keyboard
-    // user is then one Tab away from restarting at the top of the transcript.
-    // The field they were in becomes a control that still does something — the
-    // stop button — so focus moves there instead of nowhere.
-    const hadInputFocus = document.activeElement === input;
     running = next;
     // The line says what is happening for exactly as long as something is:
     // starting it here rather than on the first event also covers a turn that a
     // reopened tab found already in flight.
     if (running) startWorking();
     else stopWorking();
-    // One button: a paper plane sends, and the same control stops a turn that
-    // is already running. It stays enabled either way — disabling it while a
-    // turn runs would take the stop away.
     sendButton.classList.toggle('running', running);
-    sendButton.setAttribute('aria-label', running ? 'Stop' : 'Send');
-    sendButton.title = running ? 'Stop' : 'Send';
-    input.disabled = running;
-    if (running && hadInputFocus) sendButton.focus();
-    attachButton.disabled = running;
-    if (imageButton) imageButton.disabled = running;
-    if (running) closeActionMenu(false);
+    sendButton.setAttribute('aria-label', running ? 'Enqueue after current response' : 'Send');
+    sendButton.title = running ? 'Queue after current response' : 'Send';
+    if (prioritySendButton) {
+      prioritySendButton.hidden = !running;
+      prioritySendButton.disabled = false;
+    }
+    if (stopButton) {
+      stopButton.hidden = !running;
+      stopButton.disabled = false;
+    }
     // The mode is a session option, so the extension refuses a change mid-turn
     // rather than applying it half way. Saying so by disabling is honest about
     // that; the extension's own check is what enforces it.
     if (modeButton) modeButton.disabled = running;
     if (running) closeModeMenu(false);
     if (collaborationButton) collaborationButton.disabled = running;
+    if (modelSelect) modelSelect.disabled = running;
     if (running) closeCollaborationMenu(false);
-    if (!running) input.focus();
+    input.focus();
+  }
+
+  function showQueue(msg) {
+    const count = Number.isFinite(msg.count) ? Math.max(0, Math.floor(msg.count)) : 0;
+    if (queueCount) {
+      queueCount.textContent = String(count);
+      queueCount.hidden = count === 0;
+    }
+    const suffix = count > 0 ? ' · ' + count + ' queued' : '';
+    sendButton.title = running ? 'Queue after current response' + suffix : 'Send';
+    if (prioritySendButton) {
+      prioritySendButton.title = msg.interrupting
+        ? 'A priority message will send as soon as the current response stops'
+        : 'Interrupt the current response and send now';
+    }
+  }
+
+  function showModels(msg) {
+    if (!modelSelect) return;
+    const available = Array.isArray(msg.available) ? msg.available : [];
+    modelSelect.replaceChildren();
+    const fallback = el(
+      'option',
+      '',
+      msg.defaultModel ? 'Default · ' + msg.defaultModel : 'Default · Host',
+    );
+    fallback.value = '';
+    modelSelect.appendChild(fallback);
+    for (const id of available) {
+      if (typeof id !== 'string' || id === '') continue;
+      const option = el('option', '', id);
+      option.value = id;
+      modelSelect.appendChild(option);
+    }
+    const current = typeof msg.current === 'string' ? msg.current : '';
+    modelSelect.value = current === msg.defaultModel ? '' : current;
+    if (modelSelect.value === '' && current && current !== msg.defaultModel) {
+      const option = el('option', '', current);
+      option.value = current;
+      modelSelect.appendChild(option);
+      modelSelect.value = current;
+    }
+    modelSelect.title = current ? 'Model: ' + current : 'Model: host default';
+  }
+
+  function dispatchQueued(msg) {
+    const sentMentions = Array.isArray(msg.mentions) ? msg.mentions : [];
+    const sentImages = Array.isArray(msg.images) ? msg.images : [];
+    const sentQuotes = Array.isArray(msg.quotes) ? msg.quotes : [];
+    addUser(msg.text || '', sentMentions, sentImages, sentQuotes);
+    setStatus('');
+    todoEpoch += 1;
+    setRunning(true);
   }
 
   /**
@@ -5696,7 +5772,7 @@
       openQuotePicker();
       return;
     }
-    if (text === '' || running) return;
+    if (text === '') return;
     // The composer is emptied here but the turn keeps what was sent, so the
     // optimistic echo below is the record of it either way.
     const sentMentions = mentions.slice();
@@ -5713,16 +5789,18 @@
     images = [];
     closePalette();
     renderChips();
-    addUser(text, sentMentions, sentImages, sentQuotes);
-    // Optimistic: the host's `state` notification confirms it a moment later,
-    // but the composer must lock immediately or a double Enter sends twice.
-    setRunning(true);
-    setStatus('');
-    // A new turn: a plan the reader closed last time is allowed to appear
-    // again, even if the model repeats it word for word.
-    todoEpoch += 1;
+    const type = running ? 'enqueue' : 'send';
+    if (!running) {
+      addUser(text, sentMentions, sentImages, sentQuotes);
+      // Optimistic: the host's `state` notification confirms it a moment later.
+      setRunning(true);
+      setStatus('');
+      // A new turn: a plan the reader closed last time is allowed to appear
+      // again, even if the model repeats it word for word.
+      todoEpoch += 1;
+    }
     vscode.postMessage({
-      type: 'send',
+      type,
       text,
       mentions: sentMentions,
       images: sentImages,
@@ -5873,6 +5951,12 @@
     window.addEventListener('blur', () => closeModeMenu(false));
   }
 
+  if (modelSelect) {
+    modelSelect.addEventListener('change', () => {
+      vscode.postMessage({ type: 'selectModel', model: modelSelect.value });
+    });
+  }
+
   if (collaborationButton && collaborationMenu) {
     collaborationButton.addEventListener('click', (event) => {
       if (collaborationMenu.hidden) openCollaborationMenu(event.detail === 0);
@@ -5981,6 +6065,10 @@
   }
 
   transcript.addEventListener('scroll', syncScrollBottomButton, { passive: true });
+  if (autoScrollButton) {
+    autoScrollButton.addEventListener('click', () => setAutoScroll(!autoScroll));
+    syncAutoScrollButton();
+  }
   if (scrollBottomButton) {
     scrollBottomButton.addEventListener('click', scrollConversationToBottom);
   }
@@ -6037,7 +6125,7 @@
    * stop button while a turn runs — and Escape, so the two cannot drift.
    */
   function requestStop() {
-    sendButton.disabled = true;
+    if (stopButton) stopButton.disabled = true;
     vscode.postMessage({ type: 'cancel' });
   }
 
@@ -6071,7 +6159,7 @@
     // Only a file drag is ours. Preventing the default for everything would
     // swallow a text selection dropped on the transcript, which has no meaning
     // here but should still not look accepted.
-    if (!carriesFiles(event) || running) return;
+    if (!carriesFiles(event)) return;
     event.preventDefault();
     if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
     document.body.classList.add('drop-target');
@@ -6085,7 +6173,7 @@
 
   document.addEventListener('drop', (event) => {
     document.body.classList.remove('drop-target');
-    if (!carriesFiles(event) || running) return;
+    if (!carriesFiles(event)) return;
     event.preventDefault();
     const transfer = event.dataTransfer;
     if (!transfer) return;
@@ -6119,16 +6207,36 @@
     }
   });
 
-  // The send button is also the stop button: one control, because the two
-  // states are exclusive and a second button only appears when the first one
-  // has just stopped being the thing you want.
   sendButton.addEventListener('click', () => {
-    if (running) {
-      requestStop();
-      return;
-    }
     composer.dispatchEvent(new Event('submit', { cancelable: true }));
   });
+  if (stopButton) stopButton.addEventListener('click', requestStop);
+  if (prioritySendButton) {
+    prioritySendButton.addEventListener('click', () => {
+      const text = input.value.trim();
+      if (text === '') return;
+      const sentMentions = mentions.slice();
+      const sentImages = images.slice();
+      const sentQuotes = quotes.slice();
+      historyMath.record(history, text);
+      placed = null;
+      input.value = '';
+      growInput();
+      mentions = [];
+      quotes = [];
+      images = [];
+      closePalette();
+      renderChips();
+      prioritySendButton.disabled = true;
+      vscode.postMessage({
+        type: 'sendPriority',
+        text,
+        mentions: sentMentions,
+        images: sentImages,
+        quotes: sentQuotes.map((quote) => ({ role: quote.role, text: quote.text })),
+      });
+    });
+  }
 
   /**
    * Draws one event on whichever scope is active.
@@ -6217,6 +6325,12 @@
       case 'state':
         sendButton.disabled = false;
         setRunning(msg.state === 'running');
+        return;
+      case 'queue':
+        showQueue(msg);
+        return;
+      case 'dispatchQueued':
+        dispatchQueued(msg);
         return;
       case 'root':
         renderRoot(msg);
@@ -6308,6 +6422,9 @@
         return;
       case 'mode':
         showMode(msg);
+        return;
+      case 'models':
+        showModels(msg);
         return;
       case 'collaboration':
         showCollaboration(msg);

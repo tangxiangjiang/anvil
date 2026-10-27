@@ -2453,7 +2453,8 @@ body.drop-target {
   flex: 0 0 auto;
 }
 
-.scroll-bottom {
+.scroll-bottom,
+.auto-scroll {
   position: absolute;
   right: max(calc(var(--anvil-gap) + 4px), calc((100% - var(--anvil-read-width)) / 2 + 4px));
   bottom: calc(100% + 6px);
@@ -2472,18 +2473,32 @@ body.drop-target {
   transition: opacity 120ms ease, color 120ms ease, background-color 120ms ease;
 }
 
+.auto-scroll {
+  right: max(calc(var(--anvil-gap) + 40px), calc((100% - var(--anvil-read-width)) / 2 + 40px));
+}
+
 .scroll-bottom[hidden] {
   display: none;
 }
 
 .scroll-bottom:hover,
-.scroll-bottom:focus-visible {
+.scroll-bottom:focus-visible,
+.auto-scroll:hover,
+.auto-scroll:focus-visible {
   opacity: 1;
   color: var(--vscode-foreground);
   background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground));
 }
 
-.scroll-bottom svg {
+.auto-scroll[aria-pressed='true'] {
+  opacity: 1;
+  color: var(--vscode-foreground);
+  border-color: var(--vscode-focusBorder);
+  background: var(--vscode-toolbar-activeBackground, var(--vscode-toolbar-hoverBackground));
+}
+
+.scroll-bottom svg,
+.auto-scroll svg {
   width: 17px;
   height: 17px;
 }
@@ -2585,6 +2600,39 @@ body.drop-target {
   height: 17px;
 }
 
+.composer-model {
+  min-width: 0;
+  max-width: 150px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.composer-model select {
+  min-width: 72px;
+  max-width: 150px;
+  height: 26px;
+  padding: 0 20px 0 7px;
+  overflow: hidden;
+  color: var(--vscode-descriptionForeground);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  font-size: 0.78em;
+  text-overflow: ellipsis;
+}
+
+.composer-model select:hover:not(:disabled),
+.composer-model select:focus {
+  color: var(--vscode-foreground);
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.14));
+}
+
+.composer-model select:focus {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
 .action-menu {
   position: absolute;
   z-index: 4;
@@ -2681,13 +2729,60 @@ span.action-menu-icon {
   height: 16px;
 }
 
-.composer button.icon .icon-stop,
+.composer button.icon.running {
+  width: auto;
+  min-width: 28px;
+  padding: 0 9px;
+  gap: 5px;
+}
+
 .composer button.icon.running .icon-send {
   display: none;
 }
 
-.composer button.icon.running .icon-stop {
-  display: block;
+.composer .send-label,
+.composer .queue-count {
+  display: none;
+  font-size: 0.82em;
+  line-height: 1;
+}
+
+.composer button.icon.running .send-label,
+.composer button.icon.running .queue-count:not([hidden]) {
+  display: inline;
+}
+
+.composer .queue-count {
+  min-width: 1.4em;
+  padding: 2px 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--vscode-button-foreground) 16%, transparent);
+  font-variant-numeric: tabular-nums;
+}
+
+.composer .run-action {
+  height: 28px;
+  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 7px;
+  font-size: 0.8em;
+  white-space: nowrap;
+}
+
+.composer .run-action svg {
+  width: 14px;
+  height: 14px;
+}
+
+.composer .run-stop {
+  margin-left: 0;
+}
+
+.composer .run-action[hidden],
+.composer .run-stop[hidden] {
+  display: none;
 }
 
 kbd {

@@ -2,7 +2,7 @@
   "name": "anvil-vscode",
   "displayName": "Anvil",
   "description": "Anvil agent in VS Code: streaming chat, tool cards, per-call approvals.",
-  "version": "0.46.49",
+  "version": "0.46.54",
   "publisher": "anvil-dev",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -162,6 +162,16 @@
         "category": "Anvil"
       },
       {
+        "command": "anvil.openModels",
+        "title": "Anvil: Manage Models",
+        "category": "Anvil"
+      },
+      {
+        "command": "anvil.selectDefaultModel",
+        "title": "Anvil: Select Default Model",
+        "category": "Anvil"
+      },
+      {
         "command": "anvil.openMcpFile",
         "title": "Anvil: Open mcp.json",
         "category": "Anvil"
@@ -270,14 +280,20 @@
         }
       ]
     },
-    "configuration": {
-      "title": "Anvil",
+    "configuration": [
+      {
+      "title": "Anvil: Runtime",
       "properties": {
         "anvil.hostPath": {
           "type": "string",
           "default": "",
           "markdownDescription": "Path to the `anvil-host` sidecar binary. Empty uses the binary bundled in the extension, then `anvil-host` on `PATH`. A relative path is resolved against the workspace folder. Set this only to run a host you built yourself."
-        },
+        }
+      }
+      },
+      {
+      "title": "Anvil: Models",
+      "properties": {
         "anvil.provider": {
           "type": "string",
           "enum": [
@@ -287,16 +303,32 @@
           "default": "openai",
           "description": "Model provider. Sent in session.new, not through the environment."
         },
-        "anvil.model": {
-          "type": "string",
-          "default": "",
-          "markdownDescription": "Model id (for example `gpt-5.2`). Empty means the host's default."
-        },
         "anvil.baseUrl": {
           "type": "string",
           "default": "",
           "markdownDescription": "OpenAI-compatible base URL, for example `https://api.openai.com/v1`. Empty means the provider default."
         },
+        "anvil.modelCatalogUrl": {
+          "type": "string",
+          "scope": "resource",
+          "default": "https://athenai.mihoyo.com/v1/models",
+          "markdownDescription": "Exact OpenAI-compatible model catalog endpoint. [Open Model Manager](command:anvil.openModels) to fetch it with the stored Anvil API key."
+        },
+        "anvil.availableModels": {
+          "type": "array",
+          "scope": "resource",
+          "default": [],
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          },
+          "markdownDescription": "Curated model ids shown in chat. [Open Model Manager](command:anvil.openModels) to edit this list, or [Select Default Model](command:anvil.selectDefaultModel)."
+        }
+      }
+      },
+      {
+      "title": "Anvil: Agent and Context",
+      "properties": {
         "anvil.maxSteps": {
           "type": "number",
           "default": 0,
@@ -327,14 +359,24 @@
           "default": 0,
           "minimum": 0,
           "markdownDescription": "How long the provider keeps its prompt cache, in seconds, for the meter's countdown. 0 means the provider's default: 300 seconds for Anthropic, and no countdown for a provider whose cache lifetime is unknown. The countdown appears only after a run reports cached tokens."
-        },
+        }
+      }
+      },
+      {
+      "title": "Anvil: Editor",
+      "properties": {
         "anvil.chatFontSize": {
           "type": "number",
           "default": 15,
           "minimum": 10,
           "maximum": 24,
           "markdownDescription": "The chat view's base text size, in pixels. Display only: changing it updates open conversations immediately and does not restart the agent. The default is two pixels larger than the editor's usual 13px UI font."
-        },
+        }
+      }
+      },
+      {
+      "title": "Anvil: Sessions and Tools",
+      "properties": {
         "anvil.store": {
           "type": "string",
           "enum": [
@@ -460,7 +502,8 @@
           "description": "Results per search, 1–10. 0 uses the provider default (5)."
         }
       }
-    }
+      }
+    ]
   },
   "scripts": {
     "compile": "tsc -p .",

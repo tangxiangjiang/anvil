@@ -240,12 +240,24 @@ export class ChatSession {
     if (this.state === 'running') {
       throw new Error('the session cannot change while a turn is running');
     }
-    this.config = { ...this.config, ...changes };
+    const previous = this.config;
+    this.config = { ...previous, ...changes };
     if (!this.result) return undefined;
     const conversation = this.conversation;
     await this.close();
     this.conversation = conversation;
-    return this.open();
+    try {
+      return await this.open();
+    } catch (err) {
+      // A rejected model or option must not become the configuration of a later
+      // prompt. Restore the previous live session when possible, and always
+      // restore the config even when the transport cannot reopen it.
+      this.config = previous;
+      await this.open().catch((restore: unknown) => {
+        this.handlers.onLog?.(`session rollback failed: ${(restore as Error).message}`);
+      });
+      throw err;
+    }
   }
 
   /**

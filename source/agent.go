@@ -641,7 +641,7 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 	if opts.Subagents.Enabled && opts.depth+1 < subagentMaxDepth(opts.Subagents) {
 		// run_workflow orchestrates the same children spawn_agent creates, so it
 		// shares the depth rule: a workflow cannot be used to get around it.
-		for _, tool := range []*tools.FuncTool{subagentTool(reg), workflowTool(reg)} {
+		for _, tool := range []*tools.FuncTool{subagentTool(reg, opts.Subagents.Profiles), workflowTool(reg)} {
 			if err := reg.Register(tool); err != nil {
 				if lspSup != nil {
 					lspSup.Close()

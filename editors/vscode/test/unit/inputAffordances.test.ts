@@ -42,10 +42,10 @@ test('Escape interrupts only when a turn is running', () => {
   // Nothing in that handler touches the composer: an idle Escape belongs to the
   // palette and to the draft.
   assert.doesNotMatch(body, /input\.value/);
-  // The send button — the same control that stops a running turn — and Escape
-  // are one action, so the two paths cannot drift.
-  assert.match(CHAT_JS, /sendButton\.addEventListener\('click', \(\) => \{[\s\S]*?if \(running\) \{[\s\S]*?requestStop\(\)/);
-  assert.match(CHAT_JS, /function requestStop\(\) \{\s*sendButton\.disabled = true;\s*vscode\.postMessage\(\{ type: 'cancel' \}\)/);
+  // The explicit Stop button and Escape share one action, so the two paths
+  // cannot drift while Send remains available as Enqueue.
+  assert.match(CHAT_JS, /stopButton\.addEventListener\('click', requestStop\)/);
+  assert.match(CHAT_JS, /function requestStop\(\) \{\s*if \(stopButton\) stopButton\.disabled = true;\s*vscode\.postMessage\(\{ type: 'cancel' \}\)/);
   assert.match(CHAT_JS, /vscode\.postMessage\(\{ type: 'cancel' \}\)/);
 });
 

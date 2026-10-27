@@ -65,6 +65,9 @@ export const Method = {
   Prompt: 'prompt',
   Cancel: 'cancel',
   ModelsList: 'models.list',
+  SubagentsGet: 'subagents.get',
+  SubagentsUpsert: 'subagents.upsert',
+  SubagentsRemove: 'subagents.remove',
   SkillsList: 'skills.list',
   RulesList: 'rules.list',
   /**
@@ -1172,6 +1175,24 @@ export interface ModelEntry {
   provider?: string;
   upstream_model?: string;
   vision?: boolean;
+}
+
+export interface SubagentProfile {
+  id: string;
+  description: string;
+  instructions: string;
+  model?: string;
+  tools?: string[];
+  max_steps?: number;
+}
+
+export interface SubagentsResult {
+  path: string;
+  exists: boolean;
+  profiles: SubagentProfile[];
+  tool_groups: string[];
+  default_tools: string[];
+  problem?: string;
 }
 
 // --- event / done ------------------------------------------------------------
