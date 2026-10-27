@@ -125,18 +125,50 @@ type subagentOrigin struct {
 	parentAgentID string
 	parentRunID   string
 	toolCallID    string
+	// rootAgentID and rootRunID are the root of the tree this child belongs to: the
+	// agent whose Send started it all and that Send's run. Checkpoints are filed there.
+	rootAgentID string
+	rootRunID   string
 }
 
 type subagentOriginKey struct{}
 
 // withSubagentOrigin tags the context a child's run derives from with where it
 // came from. The child's executeRun reads it to build SubagentEvent envelopes.
-func withSubagentOrigin(ctx context.Context, parentAgentID, parentRunID, toolCallID string) context.Context {
+func withSubagentOrigin(ctx context.Context, parent *Agent, parentRunID, toolCallID string) context.Context {
+	rootAgent, rootRun := parent.treeRoot()
 	return context.WithValue(ctx, subagentOriginKey{}, subagentOrigin{
-		parentAgentID: parentAgentID,
+		parentAgentID: parent.id,
 		parentRunID:   parentRunID,
 		toolCallID:    toolCallID,
+		rootAgentID:   rootAgent,
+		rootRunID:     rootRun,
 	})
+}
+
+// treeRoot is the root of the tree this agent belongs to. A top-level agent is its own
+// root, and the run in progress is the root run; a child carries what its own run was
+// started with.
+func (a *Agent) treeRoot() (agentID, runID string) {
+	if a.depth == 0 {
+		return a.id, a.currentRunID()
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.rootAgentID, a.rootRunID
+}
+
+// adoptTreeRoot is called when a run starts: a child files its captures under the root's
+// run (as its origin says), a top-level agent under its own.
+func (a *Agent) adoptTreeRoot(ctx context.Context) {
+	if origin, ok := subagentOriginFromContext(ctx); ok && a.depth > 0 && origin.rootAgentID != "" && origin.rootRunID != "" {
+		a.mu.Lock()
+		a.rootAgentID, a.rootRunID = origin.rootAgentID, origin.rootRunID
+		a.mu.Unlock()
+		a.registry.SetCheckpointRoot(origin.rootAgentID, origin.rootRunID)
+		return
+	}
+	a.registry.SetCheckpointRoot("", "")
 }
 
 func subagentOriginFromContext(ctx context.Context) (subagentOrigin, bool) {
@@ -225,7 +257,7 @@ func spawnAgent(ctx context.Context, reg *tools.Registry, raw json.RawMessage) (
 		TaskTitle:        strings.TrimSpace(in.Description),
 		Depth:            depth,
 	}
-	callCtx := withSubagentOrigin(ctx, parent.id, ident.ParentRunID, ident.ParentToolCallID)
+	callCtx := withSubagentOrigin(ctx, parent, ident.ParentRunID, ident.ParentToolCallID)
 	child, err := createSubagent(callCtx, opts, ident)
 	if err != nil {
 		return "", fmt.Errorf("start subagent: %w", err)
@@ -287,7 +319,7 @@ func spawnBackground(ctx context.Context, reg *tools.Registry, parent *Agent, in
 		Title:   "subagent " + ident.TaskTitle,
 		AgentID: parent.id,
 		Run: func(taskCtx context.Context) (string, string, error) {
-			callCtx := withSubagentOrigin(taskCtx, ident.ParentAgentID, ident.ParentRunID, ident.ParentToolCallID)
+			callCtx := withSubagentOrigin(taskCtx, parent, ident.ParentRunID, ident.ParentToolCallID)
 			child, err := createSubagent(callCtx, opts, ident)
 			if err != nil {
 				parent.budget.give()

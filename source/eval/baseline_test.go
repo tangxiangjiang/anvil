@@ -123,6 +123,17 @@ func invariantCase(name string, task Task, opts anvil.Options, answer fixtureCom
 	}}
 }
 
+// modes are the three ways a session divides its work. Every invariant is proven under
+// each (chapter 50 section 6): a higher mode adds structure, it never removes a capability.
+var modes = []anvil.Mode{anvil.ModeSingle, anvil.ModeMulti, anvil.ModeComplex}
+
+func modeName(m anvil.Mode) string {
+	if m == anvil.ModeSingle {
+		return "single"
+	}
+	return string(m)
+}
+
 func finishedOnly(_ string, result runtime.Result) error {
 	if result.Status != "finished" {
 		return fmt.Errorf("status=%s error=%s", result.Status, result.Err)
@@ -354,15 +365,63 @@ func contains(list []string, name string) bool {
 
 // TestBaseline compares every behaviour and invariant task with baseline.json.
 func TestBaseline(t *testing.T) {
-	compareCases(t, append(behaviourCases(), invariantCases()...), true)
+	// Every invariant in every mode: a baseline entry with no task is stale, and the
+	// mode-keyed entries are tasks like the rest. A partial --mode run is a TestInvariants
+	// run, which does not check for stale entries.
+	t.Setenv("ANVIL_EVAL_MODES", "")
+	compareCases(t, append(behaviourCases(), invariantCasesForModes(t, invariantCases())...), true)
 }
 
 // TestInvariants is the suite every later phase's gate runs; it must stay at
 // 100% with refused and loop_stops equal to the baseline.
 func TestInvariants(t *testing.T) {
-	cases := invariantCases()
-	if len(cases) != 8 {
-		t.Fatalf("invariants suite has %d tasks, want the eight of chapter 47 section 6.1", len(cases))
+	single := invariantCases()
+	if len(single) != 8 {
+		t.Fatalf("invariants suite has %d tasks, want the eight of chapter 47 section 6.1", len(single))
 	}
+	cases := invariantCasesForModes(t, single)
 	compareCases(t, cases, false)
+}
+
+// invariantModes reads ANVIL_EVAL_MODES (set by scripts/eval.sh --mode), a comma list of
+// single, multi and complex. Unset means all three.
+func invariantModes(t *testing.T) []anvil.Mode {
+	t.Helper()
+	raw := strings.TrimSpace(os.Getenv("ANVIL_EVAL_MODES"))
+	if raw == "" {
+		return modes
+	}
+	var out []anvil.Mode
+	for _, name := range strings.Split(raw, ",") {
+		switch strings.TrimSpace(name) {
+		case "single":
+			out = append(out, anvil.ModeSingle)
+		case "multi":
+			out = append(out, anvil.ModeMulti)
+		case "complex":
+			out = append(out, anvil.ModeComplex)
+		default:
+			t.Fatalf("unknown mode %q in ANVIL_EVAL_MODES (single, multi, complex)", name)
+		}
+	}
+	return out
+}
+
+// invariantCasesForModes is the eight invariants once per selected mode: 24 in all. A
+// Single case keeps the name it has always had in the baseline; the others are
+// task@mode.
+func invariantCasesForModes(t *testing.T, single []evalCase) []evalCase {
+	t.Helper()
+	var out []evalCase
+	for _, mode := range invariantModes(t) {
+		switch mode {
+		case anvil.ModeSingle:
+			out = append(out, single...)
+		case anvil.ModeMulti:
+			out = append(out, multiInvariants()...)
+		case anvil.ModeComplex:
+			out = append(out, complexInvariants()...)
+		}
+	}
+	return out
 }

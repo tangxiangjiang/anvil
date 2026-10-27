@@ -57,7 +57,7 @@ The shipped VSIX and host version remains **0.47.0**; it is not the milestone st
 | 0.47 | Evaluation baseline and audit | done | [m_0.47_evaluation_and_audit.md](m_0.47_evaluation_and_audit.md) | [47](../../design/v0.x/47-evaluation.md) |
 | 0.48 | LLM calls: effort, retry, stop reasons | in_progress | [m_0.48_llm_calls.md](m_0.48_llm_calls.md) | [48](../../design/v0.x/48-llm-effort-and-retry.md) |
 | 0.49 | Roles and prompts | done | [m_0.49_roles_and_prompts.md](m_0.49_roles_and_prompts.md) | [49](../../design/v0.x/49-roles-and-prompts.md) |
-| 0.50 | Agent modes | in_progress | [m_0.50_agent_modes.md](m_0.50_agent_modes.md) | [50](../../design/v0.x/50-agent-modes.md) |
+| 0.50 | Agent modes | done | [m_0.50_agent_modes.md](m_0.50_agent_modes.md) | [50](../../design/v0.x/50-agent-modes.md) |
 
 ## Naming
 

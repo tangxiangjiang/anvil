@@ -989,7 +989,7 @@ func (w *workflowRun) runChild(ctx context.Context, stepIndex, itemIndex int, pr
 		Depth:            w.depth,
 		Brief:            worker,
 	}
-	callCtx := withSubagentOrigin(ctx, ident.ParentAgentID, ident.ParentRunID, ident.ParentToolCallID)
+	callCtx := withSubagentOrigin(ctx, w.parent, ident.ParentRunID, ident.ParentToolCallID)
 	child, err := createSubagent(callCtx, opts, ident)
 	if err != nil {
 		out.status = workflowFailed

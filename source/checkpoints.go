@@ -28,6 +28,10 @@ type CheckpointFile struct {
 	// Existed false means the run created the file; restoring deletes it.
 	Existed bool
 	Size    int64
+	// AgentID names the child agent that captured the path when it was not the run's own
+	// agent (0.50+): a worker's edits are filed under the root run of its tree. Empty
+	// means the run's own agent captured it.
+	AgentID string
 }
 
 // RestoredFile is one path a restore put back.
@@ -86,7 +90,7 @@ func ListCheckpoints(cwd, agentID string, opts CheckpointOptions) ([]CheckpointR
 	for _, run := range runs {
 		files := make([]CheckpointFile, 0, len(run.Files))
 		for _, entry := range run.Files {
-			files = append(files, CheckpointFile{Path: entry.Path, Existed: entry.Existed, Size: entry.Size})
+			files = append(files, CheckpointFile{Path: entry.Path, Existed: entry.Existed, Size: entry.Size, AgentID: entry.AgentID})
 		}
 		out = append(out, CheckpointRun{RunID: run.RunID, CreatedAt: run.CreatedAt, Files: files})
 	}

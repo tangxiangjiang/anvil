@@ -253,7 +253,7 @@ func delegate(ctx context.Context, reg *tools.Registry, raw json.RawMessage) (st
 		Depth:            depth,
 		Brief:            &b,
 	}
-	callCtx := withSubagentOrigin(ctx, parent.id, ident.ParentRunID, ident.ParentToolCallID)
+	callCtx := withSubagentOrigin(ctx, parent, ident.ParentRunID, ident.ParentToolCallID)
 	child, err := createSubagent(callCtx, opts, ident)
 	if err != nil {
 		parent.budget.give()
@@ -292,13 +292,27 @@ func (a *Agent) changedFiles() (files []string, recorded bool) {
 	if a.opts.Checkpoints == nil {
 		return nil, false
 	}
-	runs, err := ListCheckpoints(a.cwd, a.id, *a.opts.Checkpoints)
+	// A child's captures live in the root run of its tree, each entry naming the child that
+	// made it; a top-level agent's live in its own runs with no child named.
+	rootAgent, rootRun := a.id, ""
+	a.mu.Lock()
+	if a.rootAgentID != "" {
+		rootAgent, rootRun = a.rootAgentID, a.rootRunID
+	}
+	a.mu.Unlock()
+	runs, err := ListCheckpoints(a.cwd, rootAgent, *a.opts.Checkpoints)
 	if err != nil {
 		return nil, false
 	}
 	seen := map[string]bool{}
 	for _, run := range runs {
+		if rootRun != "" && run.RunID != rootRun {
+			continue
+		}
 		for _, f := range run.Files {
+			if rootRun != "" && f.AgentID != a.id {
+				continue
+			}
 			if !seen[f.Path] {
 				seen[f.Path] = true
 				files = append(files, f.Path)

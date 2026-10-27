@@ -2,6 +2,7 @@
 # Evaluation harness entry point (run from Git Bash or Linux).
 #   scripts/eval.sh                  compare every task with source/eval/baseline.json
 #   scripts/eval.sh --suite invariants
+#   scripts/eval.sh --suite invariants --mode single,multi,complex   (default: all three)
 #   scripts/eval.sh --update         record scores (refused under CI=1)
 #   scripts/eval.sh --live           add the opt-in live report (needs ANVIL_EVAL_LIVE=1 and a configured model)
 set -euo pipefail
@@ -9,10 +10,19 @@ cd "$(dirname "$0")/../source"
 
 run='TestBaseline|TestInvariants|TestFixtures|TestReplay|TestCheckTask|TestBaselineRoundTrip'
 args=()
+modes=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --update) args+=(-update) ;;
     --live) args+=(-live) ;;
+    --mode)
+      shift
+      modes="${1:-}"
+      [ -n "$modes" ] || { echo "--mode needs a list: single,multi,complex" >&2; exit 2; }
+      IFS=, read -ra picked <<<"$modes"
+      for m in "${picked[@]}"; do
+        case "$m" in single|multi|complex) ;; *) echo "unknown mode: $m (single, multi, complex)" >&2; exit 2 ;; esac
+      done ;;
     --suite)
       shift
       [ "${1:-}" = invariants ] || { echo "unknown suite: ${1:-}" >&2; exit 2; }
@@ -21,6 +31,8 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+# --mode only selects which modes the invariants suite runs; every mode runs by default.
+[ -z "$modes" ] || export ANVIL_EVAL_MODES="$modes"
 if [ "${#args[@]}" -gt 0 ] && [[ " ${args[*]} " == *" -live "* ]]; then run="$run|TestLive"; fi
 
 out=$(mktemp)

@@ -79,6 +79,9 @@ type Agent struct {
 	plugins      *plugin.Manager
 	lsp          *lsp.Supervisor
 	systemPrompt string
+	// rootAgentID and rootRunID are a child's tree root, set when its run starts (0.50+).
+	rootAgentID string
+	rootRunID   string
 	// promptSpec is the layers systemPrompt was composed from; a run composes again from
 	// it to add its matched skills and directive before the closing line.
 	promptSpec prompt.Spec
@@ -1353,6 +1356,7 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 	}
 
 	a.registry.SetRunContext(a.id, run.id)
+	a.adoptTreeRoot(loopCtx)
 	result := runtime.Loop(loopCtx, a.complete, a.registry, runtime.Config{
 		CWD:               a.cwd,
 		Model:             a.opts.Model.ID,
