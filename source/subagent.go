@@ -74,6 +74,16 @@ func (b *subagentBudget) give() {
 	}
 }
 
+// remaining is how many more agents the tree may create; negative means unbounded.
+func (b *subagentBudget) remaining() int {
+	if b == nil {
+		return -1
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.max - b.used
+}
+
 // reset starts a new root run's tree budget.
 func (b *subagentBudget) reset() {
 	if b == nil {

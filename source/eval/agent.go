@@ -49,6 +49,7 @@ func ExecuteAgent(ctx context.Context, dir string, task Task, upstream llm.Compl
 	score := &scorer{}
 	childCallback := opts.Subagents.OnEvent
 	opts.Subagents.OnEvent = func(ev anvil.SubagentEvent) {
+		score.noteAgent(ev.AgentID)
 		score.observe(runtimeEvent(ev.Event))
 		if ev.Event.Type == anvil.EventError && string(ev.Event.Code) == runtime.CodeLoopDetected {
 			score.mu.Lock()

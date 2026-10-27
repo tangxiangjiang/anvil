@@ -1082,6 +1082,16 @@ func (a *Agent) Send(ctx context.Context, message string, opts ...SendOption) (*
 			opt(&cfg)
 		}
 	}
+	if a.opts.Mode == ModeComplex {
+		// Refused before anything is created or sent: no stage starts for a run that
+		// cannot finish.
+		if why := a.complexRefusal(); why != "" {
+			return nil, newError(why, false, nil)
+		}
+		if len(cfg.Attachments) > 0 {
+			return nil, newError("mode complex does not take image attachments: the stages work from the message and the workspace", false, nil)
+		}
+	}
 
 	if cfg.Force {
 		a.mu.Lock()
@@ -1129,6 +1139,10 @@ func (a *Agent) Send(ctx context.Context, message string, opts ...SendOption) (*
 	a.activeRun = run
 	a.mu.Unlock()
 
+	if a.opts.Mode == ModeComplex {
+		go a.executeComplex(runCtx, cancelCause, wall, run, message)
+		return run, nil
+	}
 	go a.executeRun(runCtx, cancelCause, wall, run, message, cfg.Directive, historyCopy, parts)
 	return run, nil
 }
@@ -1635,9 +1649,15 @@ func normalizeOptions(opts Options) (Options, string, error) {
 			return opts, "", newError("mode multi needs Subagents.Enabled: delegate creates a child agent", false, nil)
 		}
 	case ModeComplex:
-		return opts, "", newError("mode complex is not available yet", false, nil)
+		if !opts.Subagents.Enabled {
+			return opts, "", newError("mode complex needs Subagents.Enabled: its stages are child agents", false, nil)
+		}
+		c := opts.Complex
+		if !llm.Effort(c.Decision.Effort).Valid() || !llm.Effort(c.Analyze.Effort).Valid() || !llm.Effort(c.Worker.Effort).Valid() {
+			return opts, "", newError("complex stage effort must be low, medium or high, or empty", false, nil)
+		}
 	default:
-		return opts, "", newError("unsupported mode: "+string(opts.Mode)+" (use multi, or leave it empty)", false, nil)
+		return opts, "", newError("unsupported mode: "+string(opts.Mode)+" (use multi or complex, or leave it empty)", false, nil)
 	}
 	if !prompt.Role(opts.Role).Valid() {
 		return opts, "", newError("unsupported role: "+string(opts.Role), false, nil)

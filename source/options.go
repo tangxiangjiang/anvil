@@ -57,7 +57,7 @@ type Mode string
 const (
 	ModeSingle  Mode = ""
 	ModeMulti   Mode = "multi"
-	ModeComplex Mode = "complex" // reserved: refused until the staged run lands (p_0.50.2)
+	ModeComplex Mode = "complex"
 )
 
 type Provider string
@@ -177,6 +177,10 @@ type Options struct {
 	// Mode selects Single (default) or Multi (0.50+). Multi needs Subagents.Enabled and
 	// registers the delegate tool. An unknown mode is refused by Create and Resume.
 	Mode Mode
+
+	// Complex configures the stages of Mode == ModeComplex (0.50+): per-stage model,
+	// effort, tools and step ceiling. The container fills it from its own configuration.
+	Complex ComplexOptions
 
 	// Role selects the role layer of the system prompt (0.49+). Empty is the main
 	// agent. An unknown role is refused by Create. SystemPrompt, when set, replaces the

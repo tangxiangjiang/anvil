@@ -15,6 +15,23 @@
       "agents": 0
     }
   },
+  "complex_two_items": {
+    "gated": [
+      "completed",
+      "steps",
+      "agents="
+    ],
+    "score": {
+      "completed": true,
+      "steps": 3,
+      "tool_errors": 0,
+      "refused": 0,
+      "loop_stops": 0,
+      "retries": 0,
+      "request_bytes": 30312,
+      "agents": 4
+    }
+  },
   "edit_file_unique": {
     "gated": [
       "completed",
@@ -44,7 +61,7 @@
       "refused": 0,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 5705,
+      "request_bytes": 5704,
       "agents": 0
     }
   },
@@ -95,7 +112,7 @@
       "loop_stops": 0,
       "retries": 0,
       "request_bytes": 9491,
-      "agents": 0
+      "agents": 1
     }
   },
   "inv_child_result_only": {
@@ -112,7 +129,7 @@
       "loop_stops": 0,
       "retries": 0,
       "request_bytes": 9029,
-      "agents": 0
+      "agents": 1
     }
   },
   "inv_loop_guard": {
@@ -145,7 +162,7 @@
       "refused": 1,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 3427,
+      "request_bytes": 3423,
       "agents": 0
     }
   },
@@ -179,7 +196,7 @@
       "refused": 0,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 3531,
+      "request_bytes": 3529,
       "agents": 0
     }
   },
@@ -196,7 +213,7 @@
       "refused": 1,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 3493,
+      "request_bytes": 3495,
       "agents": 0
     }
   },
@@ -230,7 +247,7 @@
       "refused": 0,
       "loop_stops": 1,
       "retries": 0,
-      "request_bytes": 9707,
+      "request_bytes": 9697,
       "agents": 0
     }
   },
@@ -263,7 +280,7 @@
       "loop_stops": 0,
       "retries": 0,
       "request_bytes": 13131,
-      "agents": 0
+      "agents": 1
     }
   },
   "multi_delegate_refused": {
@@ -280,8 +297,8 @@
       "refused": 1,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 16724,
-      "agents": 0
+      "request_bytes": 16722,
+      "agents": 1
     }
   },
   "multi_file_edit_patch": {
@@ -348,7 +365,7 @@
       "loop_stops": 0,
       "retries": 0,
       "request_bytes": 38631,
-      "agents": 0
+      "agents": 2
     }
   },
   "provider_two_file_edit_test": {
@@ -380,7 +397,7 @@
       "loop_stops": 0,
       "retries": 0,
       "request_bytes": 16469,
-      "agents": 0
+      "agents": 2
     }
   },
   "retry_429_then_ok": {
@@ -429,7 +446,7 @@
       "loop_stops": 0,
       "retries": 0,
       "request_bytes": 9085,
-      "agents": 0
+      "agents": 1
     }
   },
   "two_file_edit_test": {
@@ -461,7 +478,7 @@
       "loop_stops": 0,
       "retries": 0,
       "request_bytes": 11483,
-      "agents": 0
+      "agents": 2
     }
   }
 }

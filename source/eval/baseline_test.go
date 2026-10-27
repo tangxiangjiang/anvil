@@ -57,6 +57,11 @@ func behaviourCases() []evalCase {
 		if fixture.refused != 0 || fixture.loopStop != 0 {
 			gated = append(append([]string(nil), behaviourGate...), "refused", "loop_stops")
 		}
+		if fixture.task.Name == "complex_two_items" {
+			// Decide, analyze and two workers: four child agents exactly. A fifth is a stray
+			// child, a third a Worker that never ran.
+			gated = append(append([]string(nil), gated...), "agents=")
+		}
 		cases = append(cases, evalCase{name: fixture.task.Name, gated: gated, run: func(t *testing.T) (Score, error) {
 			if len(fixture.options.Test.Command) != 0 {
 				fixture.options.Test.Command = []string{prepareFixtureTest(t), "-test.count=1"}

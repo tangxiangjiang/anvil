@@ -199,6 +199,29 @@ func delegateTool(reg *tools.Registry) *tools.FuncTool {
 	}
 }
 
+// workerPrompt is the user message a worker is sent: its task is the brief in its system
+// prompt, so the message only starts it.
+const workerPrompt = "Do the work in your brief. End with the acceptance lines."
+
+// workerOptions builds a worker child's Options: the worker role, the brief rendered as
+// its L3, the brief's effort or the parent's, and the file allowlist as generated deny
+// rules. delegate and a Complex run's Worker stage both create workers through here, so
+// one allowlist and one report serve both.
+func (a *Agent) workerOptions(b *Brief, selectors []string, depth int) Options {
+	in := spawnParams{Prompt: b.Goal, Description: oneLine(b.Goal), Tools: selectors, MaxSteps: b.MaxSteps}
+	opts := a.childOptions(in, selectors, depth)
+	opts.SystemPrompt = ""
+	opts.Role = RoleWorker
+	opts.brief = renderBrief(b)
+	if b.Effort != "" {
+		opts.Effort = Effort(b.Effort)
+	}
+	// After the parent's own rules, so theirs are the ones a reader meets first and a
+	// path the parent may not touch stays untouchable whatever the brief says.
+	opts.confine = append(opts.confine, confineRules(b.Files)...)
+	return opts
+}
+
 func delegate(ctx context.Context, reg *tools.Registry, raw json.RawMessage) (string, error) {
 	parent := agentFromContext(ctx)
 	if parent == nil {
@@ -221,18 +244,7 @@ func delegate(ctx context.Context, reg *tools.Registry, raw json.RawMessage) (st
 	}
 
 	depth := parent.depth + 1
-	in := spawnParams{Prompt: b.Goal, Description: oneLine(b.Goal), Tools: selectors, MaxSteps: b.MaxSteps}
-	opts := parent.childOptions(in, selectors, depth)
-	opts.SystemPrompt = ""
-	opts.Role = RoleWorker
-	opts.brief = renderBrief(&b)
-	if b.Effort != "" {
-		opts.Effort = Effort(b.Effort)
-	}
-	// After the parent's own rules, so theirs are the ones a reader meets first and a
-	// path the parent may not touch stays untouchable whatever the brief says.
-	opts.confine = append(opts.confine, confineRules(b.Files)...)
-
+	opts := parent.workerOptions(&b, selectors, depth)
 	ident := subagentIdentity{
 		ParentAgentID:    parent.id,
 		ParentRunID:      parent.currentRunID(),
@@ -249,7 +261,7 @@ func delegate(ctx context.Context, reg *tools.Registry, raw json.RawMessage) (st
 	}
 	defer child.Close()
 
-	run, err := child.Send(callCtx, "Do the work in your brief. End with the acceptance lines.")
+	run, err := child.Send(callCtx, workerPrompt)
 	if err != nil {
 		return "", fmt.Errorf("start worker: %w", err)
 	}

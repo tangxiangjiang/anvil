@@ -164,6 +164,52 @@ func agentFixtures() []agentFixture {
 			}, steps: 2,
 		},
 		{
+			// Complex: decide, analyze, then a two-item roadmap where item b waits for item a.
+			task: Task{Name: "complex_two_items", UserMsg: "make both files new", Setup: func(dir string) error {
+				if err := os.MkdirAll(filepath.Join(dir, "pkg"), 0o755); err != nil {
+					return err
+				}
+				return writeFiles(dir, map[string]string{"pkg/a.txt": "old", "pkg/b.txt": "old"})
+			}, Check: func(dir string, result runtime.Result) error {
+				for _, name := range []string{"a", "b"} {
+					if data, _ := os.ReadFile(filepath.Join(dir, "pkg", name+".txt")); string(data) != "new" {
+						return fmt.Errorf("pkg/%s.txt=%q, want the worker's edit", name, data)
+					}
+				}
+				if result.Status != "finished" || !strings.Contains(result.Result, "workflow complex: finished (3 steps)") {
+					return fmt.Errorf("the complex run did not finish its three steps: %s", result.Result)
+				}
+				return nil
+			}}, options: anvil.Options{Mode: anvil.ModeComplex, Subagents: anvil.SubagentOptions{Enabled: true, MaxDepth: 3, MaxAgents: 8},
+				Checkpoints: &anvil.CheckpointOptions{}},
+			answer: func(_ context.Context, req llm.Request) (*llm.Response, error) {
+				sys := ""
+				for _, m := range req.Messages {
+					if m.Role == llm.RoleSystem {
+						sys = m.Content
+					}
+				}
+				user, round := userAndTools(req)
+				switch {
+				case strings.Contains(sys, "You are the decision stage"):
+					return textAnswer(`{"summary":"edit both files","options":[{"name":"A","rationale":"simple"}],"chosen":"A"}`), nil
+				case strings.Contains(sys, "You are the analysis stage"):
+					return textAnswer(`{"items":[{"id":"a","goal":"edit a","plan":["edit"],"files":["pkg/a.txt"],"acceptance":["a says new"],"depends_on":[]},` +
+						`{"id":"b","goal":"edit b","plan":["edit"],"files":["pkg/b.txt"],"acceptance":["b says new"],"depends_on":["a"]}]}`), nil
+				case strings.Contains(sys, "The brief below is your task"):
+					name := "pkg/a.txt"
+					if strings.Contains(sys, "Goal: edit b") {
+						name = "pkg/b.txt"
+					}
+					if round == 0 {
+						return toolAnswer("w-"+name, "edit_file", `{"path":"`+name+`","old_string":"old","new_string":"new"}`), nil
+					}
+					return textAnswer("[met] " + strings.TrimSuffix(strings.TrimPrefix(name, "pkg/"), ".txt") + " says new"), nil
+				}
+				return textAnswer("unexpected " + user), nil
+			}, steps: 3,
+		},
+		{
 			// Multi: the main agent delegates one item and the worker meets both acceptance lines.
 			task: Task{Name: "multi_delegate_met", UserMsg: "delegate the edit of pkg/a.txt", Setup: func(dir string) error {
 				if err := os.MkdirAll(filepath.Join(dir, "pkg"), 0o755); err != nil {

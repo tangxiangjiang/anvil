@@ -16,7 +16,7 @@ import (
 )
 
 // Score is shared by all tiers. RequestBytes counts provider-neutral Request
-// JSON, not HTTP bytes. Retries counts retry events (0.48+). Agents stays a placeholder until agent modes (0.50).
+// JSON, not HTTP bytes. Retries counts retry events (0.48+). Agents counts the distinct child agents that emitted an event (0.50+); a run with no children is 0.
 type Score struct {
 	Completed    bool  `json:"completed"`
 	Steps        int   `json:"steps"`
@@ -38,6 +38,20 @@ type scorer struct {
 	toolErrors     int
 	refused        int
 	childLoopStops int
+	agents         map[string]bool // distinct child agents that emitted an event
+}
+
+// noteAgent counts a child agent once, however many events it emits.
+func (s *scorer) noteAgent(id string) {
+	if id == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.agents == nil {
+		s.agents = map[string]bool{}
+	}
+	s.agents[id] = true
 }
 
 func (s *scorer) observe(ev runtime.Event) {
@@ -77,7 +91,7 @@ func (s *scorer) finish(result runtime.Result, completed bool, requestBytes int6
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := Score{Completed: completed, Steps: result.Steps, ToolErrors: s.toolErrors,
-		Refused: s.refused, RequestBytes: requestBytes, LoopStops: s.childLoopStops, Retries: s.retries}
+		Refused: s.refused, RequestBytes: requestBytes, LoopStops: s.childLoopStops, Retries: s.retries, Agents: len(s.agents)}
 	if result.Code == runtime.CodeLoopDetected {
 		out.LoopStops++
 	}

@@ -38,9 +38,10 @@ func TestModeOption(t *testing.T) {
 	}
 	complexOpts := subagentTestOptions(dir)
 	complexOpts.Mode = ModeComplex
+	complexOpts.Subagents.Enabled = false
 	if a, err := Create(context.Background(), complexOpts); err == nil {
 		a.Close()
-		t.Fatal("complex was accepted before it exists")
+		t.Fatal("complex without Subagents.Enabled was accepted")
 	}
 
 	single, err := Create(context.Background(), subagentTestOptions(dir))
