@@ -60,7 +60,7 @@
       "refused": 1,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 18136,
+      "request_bytes": 18133,
       "agents": 0
     }
   },
@@ -77,7 +77,7 @@
       "refused": 0,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 5769,
+      "request_bytes": 5772,
       "agents": 0
     }
   },
@@ -162,7 +162,7 @@
       "refused": 1,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 3462,
+      "request_bytes": 3464,
       "agents": 0
     }
   },
@@ -230,7 +230,7 @@
       "refused": 0,
       "loop_stops": 1,
       "retries": 0,
-      "request_bytes": 9697,
+      "request_bytes": 9707,
       "agents": 0
     }
   },
@@ -247,6 +247,40 @@
       "loop_stops": 0,
       "retries": 0,
       "request_bytes": 11660,
+      "agents": 0
+    }
+  },
+  "multi_delegate_met": {
+    "gated": [
+      "completed",
+      "steps"
+    ],
+    "score": {
+      "completed": true,
+      "steps": 2,
+      "tool_errors": 0,
+      "refused": 0,
+      "loop_stops": 0,
+      "retries": 0,
+      "request_bytes": 13131,
+      "agents": 0
+    }
+  },
+  "multi_delegate_refused": {
+    "gated": [
+      "completed",
+      "steps",
+      "refused",
+      "loop_stops"
+    ],
+    "score": {
+      "completed": true,
+      "steps": 2,
+      "tool_errors": 1,
+      "refused": 1,
+      "loop_stops": 0,
+      "retries": 0,
+      "request_bytes": 16724,
       "agents": 0
     }
   },
@@ -378,7 +412,7 @@
       "refused": 1,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 11699,
+      "request_bytes": 11701,
       "agents": 0
     }
   },

@@ -41,6 +41,7 @@ type Spec struct {
 	CWD        string
 	AllowShell bool
 	Role       Role
+	Multi      bool   // adds the delegate paragraph to the main role's L1
 	RoleText   string // non-empty replaces the role's L1; it never replaces L0
 	Project    string // L2, already assembled by the caller
 	Brief      string // L3, already rendered
@@ -109,6 +110,12 @@ const analyzeText = `You are the analysis stage. Turn the decision you were give
 	`concrete files, ordered steps, and an acceptance check for each step. Produce the roadmap the ` +
 	`brief's schema asks for. Do not implement it.`
 
+// multiText is the one paragraph that separates Multi from Single for the main agent.
+const multiText = `You can hand work to a worker with the delegate tool. Prefer to analyse and decide yourself. ` +
+	`Delegate work that is well specified: you can name the files it may change and say what done looks like. ` +
+	`Keep for yourself work that is not. Read the acceptance report a delegate returns rather than assuming it succeeded. ` +
+	`Use spawn_agent to find something out; use delegate to have something done.`
+
 // RoleBody returns the L1 text of a role. The main text carries the working
 // directory, so cwd is only used there.
 func RoleBody(role Role, cwd string) string {
@@ -132,7 +139,11 @@ func Compose(s Spec) string {
 	if s.RoleText != "" {
 		parts = append(parts, s.RoleText)
 	} else {
-		parts = append(parts, RoleBody(s.Role, s.CWD))
+		body := RoleBody(s.Role, s.CWD)
+		if s.Multi && s.Role == RoleMain {
+			body += "\n\n" + multiText
+		}
+		parts = append(parts, body)
 	}
 	if s.Project != "" {
 		parts = append(parts, s.Project)

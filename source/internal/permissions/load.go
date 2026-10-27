@@ -248,6 +248,27 @@ func compile(r Rule, pos int, source string) (rule, error) {
 	if r.Tool == "" {
 		return rule{}, fmt.Errorf("rule %d: tool is required; write %q to mean every tool", pos+1, "*")
 	}
+	var unless []string
+	if r.Unless != nil {
+		if effect != Deny {
+			return rule{}, fmt.Errorf("rule %d: unless is only valid on a deny rule", pos+1)
+		}
+		if r.Pattern != "" {
+			return rule{}, fmt.Errorf("rule %d: unless and pattern cannot be combined", pos+1)
+		}
+		unless = make([]string, 0, len(r.Unless))
+		for _, g := range r.Unless {
+			if strings.TrimSpace(g) == "" {
+				return rule{}, fmt.Errorf("rule %d: unless holds an empty glob", pos+1)
+			}
+			// A directory entry ends with "/" and covers everything under it.
+			clean := cleanPath(g)
+			if strings.HasSuffix(g, "/") || strings.HasSuffix(g, `\`) {
+				clean += "/**"
+			}
+			unless = append(unless, clean)
+		}
+	}
 	if r.Source != "" {
 		source = r.Source
 	}
@@ -255,7 +276,7 @@ func compile(r Rule, pos int, source string) (rule, error) {
 	if r.Index > 0 {
 		index = r.Index - 1
 	}
-	return rule{effect: effect, tool: r.Tool, pattern: r.Pattern, reason: r.Reason, source: source, index: index}, nil
+	return rule{effect: effect, tool: r.Tool, pattern: r.Pattern, unless: unless, unlessAsWritten: r.Unless, reason: r.Reason, source: source, index: index}, nil
 }
 
 // jsonError names the line and column of a syntax or type error, because the

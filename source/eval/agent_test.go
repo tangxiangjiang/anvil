@@ -164,6 +164,82 @@ func agentFixtures() []agentFixture {
 			}, steps: 2,
 		},
 		{
+			// Multi: the main agent delegates one item and the worker meets both acceptance lines.
+			task: Task{Name: "multi_delegate_met", UserMsg: "delegate the edit of pkg/a.txt", Setup: func(dir string) error {
+				if err := os.MkdirAll(filepath.Join(dir, "pkg"), 0o755); err != nil {
+					return err
+				}
+				return writeFiles(dir, map[string]string{"pkg/a.txt": "old"})
+			}, Check: func(dir string, result runtime.Result) error {
+				if err := finished(dir, result); err != nil {
+					return err
+				}
+				if data, _ := os.ReadFile(filepath.Join(dir, "pkg", "a.txt")); string(data) != "new" {
+					return fmt.Errorf("pkg/a.txt=%q, want the worker's edit", data)
+				}
+				for _, message := range result.Messages {
+					if message.Name == "delegate" && strings.Count(message.Content, "\n  [met]") == 2 && !strings.Contains(message.Content, "\n  [not met]") &&
+						strings.Contains(message.Content, "changed: pkg/a.txt") {
+						return nil
+					}
+				}
+				return fmt.Errorf("the parent did not read two [met] report lines and the changed file")
+			}}, options: anvil.Options{Mode: anvil.ModeMulti, BuiltinTools: []string{"read", "delegate"}, Subagents: anvil.SubagentOptions{Enabled: true},
+				Checkpoints: &anvil.CheckpointOptions{}},
+			answer: func(_ context.Context, req llm.Request) (*llm.Response, error) {
+				user, round := userAndTools(req)
+				if strings.HasPrefix(user, "Do the work in your brief") {
+					if round == 0 {
+						return toolAnswer("w-edit", "edit_file", `{"path":"pkg/a.txt","old_string":"old","new_string":"new"}`), nil
+					}
+					return textAnswer("[met] pkg/a.txt says new\n[met] only pkg changed"), nil
+				}
+				if round == 0 {
+					return toolAnswer("delegate", "delegate", `{"goal":"edit pkg/a.txt","plan":["replace old with new"],"files":["pkg/"],"acceptance":["pkg/a.txt says new","only pkg changed"],"tools":["read","edit"]}`), nil
+				}
+				return textAnswer("delegated and read the report"), nil
+			}, steps: 2,
+		},
+		{
+			// Multi: the worker tries a file outside files, the rule refuses it, and the
+			// parent's report shows the item that did not hold. Exactly one refusal.
+			task: Task{Name: "multi_delegate_refused", UserMsg: "delegate the edit of pkg/a.txt", Setup: func(dir string) error {
+				if err := os.MkdirAll(filepath.Join(dir, "pkg"), 0o755); err != nil {
+					return err
+				}
+				return writeFiles(dir, map[string]string{"pkg/a.txt": "old", "README.md": "old"})
+			}, Check: func(dir string, result runtime.Result) error {
+				if err := finished(dir, result); err != nil {
+					return err
+				}
+				if data, _ := os.ReadFile(filepath.Join(dir, "README.md")); string(data) != "old" {
+					return fmt.Errorf("README.md changed: %q", data)
+				}
+				for _, message := range result.Messages {
+					if message.Name == "delegate" && strings.Contains(message.Content, "[not met]") {
+						return nil
+					}
+				}
+				return fmt.Errorf("the parent's report does not show a [not met] item")
+			}}, options: anvil.Options{Mode: anvil.ModeMulti, BuiltinTools: []string{"read", "delegate"}, Subagents: anvil.SubagentOptions{Enabled: true}},
+			answer: func(_ context.Context, req llm.Request) (*llm.Response, error) {
+				user, round := userAndTools(req)
+				if strings.HasPrefix(user, "Do the work in your brief") {
+					switch round {
+					case 0:
+						return toolAnswer("w-out", "edit_file", `{"path":"README.md","old_string":"old","new_string":"new"}`), nil
+					case 1:
+						return toolAnswer("w-in", "edit_file", `{"path":"pkg/a.txt","old_string":"old","new_string":"new"}`), nil
+					}
+					return textAnswer("[met] pkg/a.txt says new\n[not met] README.md was edited: refused by the allowlist"), nil
+				}
+				if round == 0 {
+					return toolAnswer("delegate", "delegate", `{"goal":"edit pkg/a.txt","plan":["replace old with new"],"files":["pkg/"],"acceptance":["pkg/a.txt says new","README.md was edited"],"tools":["read","edit"]}`), nil
+				}
+				return textAnswer("read the report"), nil
+			}, steps: 2, refused: 1,
+		},
+		{
 			task: Task{Name: "permission_deny_no_callback", UserMsg: "attempt a denied write", Check: func(dir string, result runtime.Result) error {
 				if err := finished(dir, result); err != nil {
 					return err

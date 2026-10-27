@@ -156,6 +156,11 @@ func createAgent(ctx context.Context, opts Options, ident subagentIdentity) (*Ag
 		Depth:            ident.Depth,
 		TaskTitle:        ident.TaskTitle,
 	}
+	if ident.Brief != nil {
+		if raw, err := json.Marshal(ident.Brief); err == nil {
+			meta.Brief = raw
+		}
+	}
 	if ident.ParentAgentID != "" {
 		meta.Kind = "subagent"
 	}
@@ -358,6 +363,8 @@ func buildPromptSpec(cwd string, opts Options) (prompt.Spec, error) {
 		AllowShell: opts.Local.AllowShellEnabled(),
 		Role:       prompt.Role(opts.Role),
 		RoleText:   opts.SystemPrompt,
+		Multi:      opts.Mode != ModeSingle,
+		Brief:      opts.brief,
 		Project:    strings.Join(project, "\n\n"),
 	}, nil
 }
@@ -551,7 +558,7 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 		anvilHome, _ := permissions.AnvilHome()
 		reg.SetPermissionRulesSource(permissions.NewSource(
 			cwd, userPath, permissions.HomeDir(), anvilHome,
-			permissionRules(opts.PermissionRules), permRules,
+			codeRules(opts), permRules,
 		))
 	}
 	// What is left here is the caller's own callback: the file hooks are checked in
@@ -660,7 +667,11 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 	if opts.Subagents.Enabled && opts.depth+1 < subagentMaxDepth(opts.Subagents) {
 		// run_workflow orchestrates the same children spawn_agent creates, so it
 		// shares the depth rule: a workflow cannot be used to get around it.
-		for _, tool := range []*tools.FuncTool{subagentTool(reg), workflowTool(reg)} {
+		agentTools := []*tools.FuncTool{subagentTool(reg), workflowTool(reg)}
+		if opts.Mode != ModeSingle {
+			agentTools = append(agentTools, delegateTool(reg))
+		}
+		for _, tool := range agentTools {
 			if err := reg.Register(tool); err != nil {
 				if lspSup != nil {
 					lspSup.Close()
@@ -930,7 +941,7 @@ func toToolPreview(p tools.Preview) ToolPreview {
 func buildPermissionRules(cwd string, opts Options) (*permissions.Set, error) {
 	// Validated on its own first, so an error names a rule the caller can count
 	// rather than a position in the merged list.
-	code, err := permissions.New(permissionRules(opts.PermissionRules))
+	code, err := permissions.New(codeRules(opts))
 	if err != nil {
 		return nil, newError("permission rules", false, err)
 	}
@@ -964,6 +975,14 @@ func buildPermissionRules(cwd string, opts Options) (*permissions.Set, error) {
 		})
 	}
 	return set, nil
+}
+
+// codeRules are the rules a program passes in: the caller's own, then the generated
+// deny a delegated child carries. Order matters for the citation only, since a deny
+// beats an allow wherever it sits; the generated rules come after the caller's so the
+// caller's rules are always the ones a reader meets first.
+func codeRules(opts Options) []permissions.Rule {
+	return append(permissionRules(opts.PermissionRules), opts.confine...)
 }
 
 func permissionRules(rules []PermissionRule) []permissions.Rule {
@@ -1608,6 +1627,17 @@ func normalizeOptions(opts Options) (Options, string, error) {
 	}
 	if !llm.Effort(opts.Effort).Valid() {
 		return opts, "", newError("unsupported effort: "+string(opts.Effort)+" (use low, medium or high, or leave it empty)", false, nil)
+	}
+	switch opts.Mode {
+	case ModeSingle:
+	case ModeMulti:
+		if !opts.Subagents.Enabled {
+			return opts, "", newError("mode multi needs Subagents.Enabled: delegate creates a child agent", false, nil)
+		}
+	case ModeComplex:
+		return opts, "", newError("mode complex is not available yet", false, nil)
+	default:
+		return opts, "", newError("unsupported mode: "+string(opts.Mode)+" (use multi, or leave it empty)", false, nil)
 	}
 	if !prompt.Role(opts.Role).Valid() {
 		return opts, "", newError("unsupported role: "+string(opts.Role), false, nil)

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/anvil-dev/anvil/internal/permissions"
 	"github.com/anvil-dev/anvil/internal/tasks"
 	"github.com/anvil-dev/anvil/internal/tools"
 )
@@ -24,6 +25,9 @@ type subagentIdentity struct {
 	ParentToolCallID string
 	TaskTitle        string
 	Depth            int
+	// Brief is the validated delegate brief, written to the child's meta record so a
+	// replay of the parent shows what the child was asked (0.50+). Nil for spawn_agent.
+	Brief *Brief
 }
 
 // subagentBudget bounds how many agents one root run tree may create. The
@@ -395,6 +399,9 @@ func (a *Agent) childOptions(in spawnParams, selectors []string, depth int) Opti
 		completer:         a.complete,
 		budget:            a.budget,
 		taskMgr:           a.taskMgr,
+		// A child of a confined worker is confined to the same files: spawn_agent must not be
+		// a way around the allowlist a brief set.
+		confine: append([]permissions.Rule(nil), a.opts.confine...),
 		depth:             depth,
 		Local: LocalOptions{
 			CWD:             a.cwd,

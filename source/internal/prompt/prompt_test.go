@@ -147,3 +147,39 @@ func TestRoleValid(t *testing.T) {
 		t.Fatal("an unknown role was accepted")
 	}
 }
+
+// Multi adds one paragraph to the main role and changes nothing else.
+func TestMultiParagraph(t *testing.T) {
+	single := prompt.Compose(prompt.Spec{CWD: "/ws"})
+	multi := prompt.Compose(prompt.Spec{CWD: "/ws", Multi: true})
+	if strings.Contains(single, "delegate") {
+		t.Fatal("Single mentions delegate")
+	}
+	if !strings.Contains(multi, "delegate tool") {
+		t.Fatalf("Multi lacks the paragraph:\n%s", multi)
+	}
+	start := strings.Index(multi, "You can hand work")
+	end := strings.Index(multi, "use delegate to have something done.")
+	if start < 0 || end < 0 {
+		t.Fatal("paragraph not found")
+	}
+	paragraph := multi[start : end+len("use delegate to have something done.")]
+	if strings.Replace(multi, "\n\n"+paragraph, "", 1) != single {
+		t.Fatal("Multi differs from Single by more than the paragraph")
+	}
+	// Roles other than main are not told about delegate.
+	for _, role := range []prompt.Role{prompt.RoleSubagent, prompt.RoleWorker} {
+		if strings.Contains(prompt.Compose(prompt.Spec{CWD: "/ws", Role: role, Multi: true}), "delegate tool") {
+			t.Fatalf("role %q got the Multi paragraph", role)
+		}
+	}
+}
+
+// A brief is rendered into its own layer, before the closing line.
+func TestBriefLayerSitsBeforeClosing(t *testing.T) {
+	got := prompt.Compose(prompt.Spec{CWD: "/ws", Role: prompt.RoleWorker, Brief: "GOAL: x"})
+	at := strings.Index(got, "# Brief\nGOAL: x")
+	if at < 0 || at > strings.Index(got, prompt.Closing) {
+		t.Fatalf("brief misplaced:\n%s", got)
+	}
+}

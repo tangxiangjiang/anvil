@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/anvil-dev/anvil/internal/llm"
+	"github.com/anvil-dev/anvil/internal/permissions"
 	"github.com/anvil-dev/anvil/internal/tasks"
 )
 
@@ -44,6 +45,19 @@ const (
 	RoleWorker   Role = "worker"   // a child executing a brief
 	RoleDecision Role = "decision" // the first stage of a staged run
 	RoleAnalyze  Role = "analyze"  // the second stage of a staged run
+)
+
+// Mode is how a session divides its work (0.50+): Single is today's agent, Multi adds
+// the delegate tool and the prompt paragraph that says when to use it. It is set at
+// Create or Resume and does not change for the life of an Agent; it is not a
+// SendOption and is not persisted. A container that wants another mode resumes the
+// session with new Options.
+type Mode string
+
+const (
+	ModeSingle  Mode = ""
+	ModeMulti   Mode = "multi"
+	ModeComplex Mode = "complex" // reserved: refused until the staged run lands (p_0.50.2)
 )
 
 type Provider string
@@ -160,6 +174,10 @@ type Options struct {
 	// Project rules (when enabled) are still appended. Not persisted across Resume unless passed again.
 	SystemPrompt string
 
+	// Mode selects Single (default) or Multi (0.50+). Multi needs Subagents.Enabled and
+	// registers the delegate tool. An unknown mode is refused by Create and Resume.
+	Mode Mode
+
 	// Role selects the role layer of the system prompt (0.49+). Empty is the main
 	// agent. An unknown role is refused by Create. SystemPrompt, when set, replaces the
 	// role's text; the safety layer is prepended to either.
@@ -228,6 +246,14 @@ type Options struct {
 	agentID string
 	depth   int
 	budget  *subagentBudget
+	// brief is the rendered task layer (L3) a delegated child's prompt carries. Only the
+	// delegate tool sets it, so a model's own text never reaches L3 except through the
+	// SDK's rendering.
+	brief string
+	// confine are generated deny rules a delegated child carries after the parent's own
+	// (Unless rules cannot be written in the public PermissionRule, which stays
+	// comparable). Unexported: only the delegate tool sets them.
+	confine []permissions.Rule
 	// skipFileMCP tells Create to discard servers loaded from .cursor/mcp.json.
 	// A child without the mcp selector inherits SettingSources (they also carry
 	// rules and hooks) but must not start the file's servers.

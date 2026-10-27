@@ -239,7 +239,7 @@ func TestRulesRoundTripIsExact(t *testing.T) {
 		t.Fatalf("Rules() has %d rules, want %d", len(got), len(want))
 	}
 	for i := range want {
-		if got[i] != want[i] {
+		if !sameRule(got[i], want[i]) {
 			t.Errorf("Rules()[%d] = %+v, want %+v", i, got[i], want[i])
 		}
 	}
@@ -267,4 +267,19 @@ func TestRulesRoundTripIsExact(t *testing.T) {
 	if got := (*Set)(nil).Rules(); got != nil {
 		t.Errorf("nil set Rules() = %v, want nil", got)
 	}
+}
+
+// sameRule compares rules field by field: Rule carries a slice (Unless), so it is not
+// comparable as a value.
+func sameRule(a, b Rule) bool {
+	if a.Effect != b.Effect || a.Tool != b.Tool || a.Pattern != b.Pattern || a.Reason != b.Reason ||
+		a.Source != b.Source || a.Index != b.Index || len(a.Unless) != len(b.Unless) {
+		return false
+	}
+	for i := range a.Unless {
+		if a.Unless[i] != b.Unless[i] {
+			return false
+		}
+	}
+	return true
 }

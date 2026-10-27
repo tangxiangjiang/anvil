@@ -485,7 +485,7 @@ func TestCancelKillsTheProcessTree(t *testing.T) {
 // or reads their table always gets the call-card decision.
 func TestAgentToolsAreNeverAutoApproved(t *testing.T) {
 	for _, name := range []string{
-		"spawn_agent", "run_workflow", "task_list", "task_output", "task_cancel",
+		"spawn_agent", "delegate", "run_workflow", "task_list", "task_output", "task_cancel",
 	} {
 		if AutoApproveCall(name, nil) {
 			t.Errorf("AutoApproveCall(%q) = true; these tools must reach the card", name)

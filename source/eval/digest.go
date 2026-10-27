@@ -111,7 +111,7 @@ func CanonicalRequest(req llm.Request) ([]byte, error) {
 			lines := strings.Split(text, "\n")
 			table := name == "run_workflow" && strings.HasPrefix(lines[0], "workflow ")
 			for j, line := range lines {
-				if j == 0 && name == "spawn_agent" {
+				if j == 0 && (name == "spawn_agent" || name == "delegate") {
 					if match := spawnSummary.FindStringSubmatchIndex(line); match != nil {
 						lines[j] = line[:match[2]] + normalizeID(line[match[2]:match[3]]) + line[match[3]:]
 					}
