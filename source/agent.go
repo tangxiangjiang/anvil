@@ -1136,6 +1136,12 @@ func (a *Agent) Send(ctx context.Context, message string, opts ...SendOption) (*
 	}
 	a.running = true
 	historyCopy := append([]llm.Message(nil), a.history...)
+	// A provider's tool-loop state belongs to the run that produced it. A resumed session has
+	// none (the store keeps none), so a live one starts each run without it too, and the two
+	// send the same history.
+	for i := range historyCopy {
+		historyCopy[i].ProviderState = nil
+	}
 	wall := a.opts.MaxWallTime
 	runCtx, cancelCause := context.WithCancelCause(ctx)
 	run := newRun("run-"+id.New(), cancelCause)

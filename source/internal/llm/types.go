@@ -28,6 +28,15 @@ type Message struct {
 	ToolCallID string
 	ToolCalls  []ToolCall
 	Name       string
+	// ProviderState is what a provider needs back, verbatim, to continue the tool loop this
+	// message started (0.48+). Today that is one thing: Anthropic's signed thinking blocks,
+	// which the Messages API requires on the next request of a tool-use turn (docs: "Required:
+	// within a tool-use turn, pass thinking blocks back"). It is a JSON list of the provider's
+	// own blocks, opaque to the rest of the SDK: nothing decodes it, it is not the reasoning
+	// text a user sees (that is Delta.Reasoning), it is never persisted, and no adapter but the
+	// one that wrote it reads it.
+	// omitempty keeps a request that carries none byte-identical to one recorded before the field existed.
+	ProviderState []byte `json:",omitempty"`
 }
 
 // ContentPart is a multimodal message part.

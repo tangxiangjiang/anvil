@@ -74,6 +74,8 @@ func (c *Anthropic) CompleteStream(ctx context.Context, req Request, onDelta fun
 	var stopReason string
 	var curTool *ToolCall
 	var curArgs strings.Builder
+	var curThinking *thinkingAcc
+	var thinkingBlocks []json.RawMessage
 	var usage *Usage
 
 	sc := bufio.NewScanner(httpResp.Body)
@@ -93,6 +95,8 @@ func (c *Anthropic) CompleteStream(ctx context.Context, req Request, onDelta fun
 			Delta struct {
 				Type        string `json:"type"`
 				Text        string `json:"text"`
+				Thinking    string `json:"thinking"`
+				Signature   string `json:"signature"`
 				PartialJSON string `json:"partial_json"`
 				StopReason  string `json:"stop_reason"`
 			} `json:"delta"`
@@ -101,6 +105,8 @@ func (c *Anthropic) CompleteStream(ctx context.Context, req Request, onDelta fun
 				ID    string          `json:"id"`
 				Name  string          `json:"name"`
 				Input json.RawMessage `json:"input"`
+				// A redacted_thinking block arrives whole in content_block_start.
+				Data string `json:"data"`
 			} `json:"content_block"`
 			Message struct {
 				Usage *anthropicUsageWire `json:"usage"`
@@ -121,9 +127,16 @@ func (c *Anthropic) CompleteStream(ctx context.Context, req Request, onDelta fun
 		}
 		switch envelope.Type {
 		case "content_block_start":
-			if envelope.ContentBlock.Type == "tool_use" {
+			switch envelope.ContentBlock.Type {
+			case "tool_use":
 				curTool = &ToolCall{ID: envelope.ContentBlock.ID, Name: envelope.ContentBlock.Name}
 				curArgs.Reset()
+			case "thinking":
+				curThinking = &thinkingAcc{}
+			case "redacted_thinking":
+				if block, err := json.Marshal(map[string]string{"type": "redacted_thinking", "data": envelope.ContentBlock.Data}); err == nil {
+					thinkingBlocks = append(thinkingBlocks, block)
+				}
 			}
 		case "content_block_delta":
 			if envelope.Delta.Type == "text_delta" && envelope.Delta.Text != "" {
@@ -133,7 +146,25 @@ func (c *Anthropic) CompleteStream(ctx context.Context, req Request, onDelta fun
 			if envelope.Delta.Type == "input_json_delta" {
 				curArgs.WriteString(envelope.Delta.PartialJSON)
 			}
+			// The reasoning text is a display stream; the block that goes back to the provider
+			// is rebuilt from the same deltas, signature included, so it is the provider's own.
+			if curThinking != nil {
+				switch envelope.Delta.Type {
+				case "thinking_delta":
+					curThinking.text.WriteString(envelope.Delta.Thinking)
+				case "signature_delta":
+					curThinking.signature.WriteString(envelope.Delta.Signature)
+				}
+			}
 		case "content_block_stop":
+			if curThinking != nil {
+				if block, err := json.Marshal(map[string]string{
+					"type": "thinking", "thinking": curThinking.text.String(), "signature": curThinking.signature.String(),
+				}); err == nil {
+					thinkingBlocks = append(thinkingBlocks, block)
+				}
+				curThinking = nil
+			}
 			if curTool != nil {
 				args := json.RawMessage(curArgs.String())
 				if len(args) == 0 {
@@ -182,10 +213,16 @@ func (c *Anthropic) CompleteStream(ctx context.Context, req Request, onDelta fun
 		return nil, fmt.Errorf("anthropic stream: tool call %q was cut off before it finished", curTool.Name)
 	}
 	return &Response{
-		Message:    Message{Role: RoleAssistant, Content: content.String(), ToolCalls: toolCalls},
+		Message:    Message{Role: RoleAssistant, Content: content.String(), ToolCalls: toolCalls, ProviderState: encodeProviderState(thinkingBlocks)},
 		Usage:      usage,
 		StopReason: anthropicStop(stopReason),
 	}, nil
 }
 
 var _ StreamCompleter = (*Anthropic)(nil)
+
+// thinkingAcc collects one streamed thinking block: its text and, arriving last, its signature.
+type thinkingAcc struct {
+	text      strings.Builder
+	signature strings.Builder
+}

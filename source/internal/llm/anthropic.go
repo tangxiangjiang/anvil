@@ -198,7 +198,8 @@ func toAnthropicMessages(in []Message, promptCache bool) (system any, out []anth
 			})
 		case RoleAssistant:
 			flushTools()
-			blocks := make([]any, 0, 1+len(m.ToolCalls))
+			// The signed thinking blocks of this turn go first, as the provider produced them.
+			blocks := append(make([]any, 0, 1+len(m.ToolCalls)), providerBlocks(m.ProviderState)...)
 			if m.Content != "" {
 				blocks = append(blocks, map[string]any{"type": "text", "text": m.Content})
 			}
@@ -306,6 +307,7 @@ func anthropicUserContent(m Message) []any {
 
 func fromAnthropicContent(blocks []json.RawMessage) (Message, error) {
 	msg := Message{Role: RoleAssistant}
+	var kept []json.RawMessage
 	for _, raw := range blocks {
 		var meta struct {
 			Type string `json:"type"`
@@ -336,9 +338,45 @@ func fromAnthropicContent(blocks []json.RawMessage) (Message, error) {
 				args = json.RawMessage(`{}`)
 			}
 			msg.ToolCalls = append(msg.ToolCalls, ToolCall{ID: t.ID, Name: t.Name, Args: args})
+		case "thinking", "redacted_thinking":
+			// Kept whole and in order: the provider rejects a turn whose thinking blocks were
+			// edited, reordered or partly dropped.
+			kept = append(kept, append(json.RawMessage(nil), raw...))
 		}
 	}
+	msg.ProviderState = encodeProviderState(kept)
 	return msg, nil
+}
+
+// encodeProviderState is the list of a response's thinking blocks, or nil when it had none, so
+// a response without thinking is exactly what it was before this field existed.
+func encodeProviderState(blocks []json.RawMessage) []byte {
+	if len(blocks) == 0 {
+		return nil
+	}
+	data, err := json.Marshal(blocks)
+	if err != nil {
+		return nil
+	}
+	return data
+}
+
+// providerBlocks reads ProviderState back into blocks to write at the start of an assistant
+// turn. State that does not parse is dropped, never sent: a malformed block would turn a
+// working request into a rejected one.
+func providerBlocks(state []byte) []any {
+	if len(state) == 0 {
+		return nil
+	}
+	var raw []json.RawMessage
+	if err := json.Unmarshal(state, &raw); err != nil {
+		return nil
+	}
+	out := make([]any, 0, len(raw))
+	for _, b := range raw {
+		out = append(out, b)
+	}
+	return out
 }
 
 func toAnthropicTools(in []ToolDef) []anthropicTool {
