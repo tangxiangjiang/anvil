@@ -2,7 +2,7 @@
 
 Versioned delivery for Anvil through milestone **0.50**. Design cutoff: [`doc/design/v0.x/`](../../design/v0.x/).
 Milestone 0.46 closes the VS Code polish line; 0.47–0.50 develop and polish agent capabilities.
-The shipped VSIX and host version is **0.46.54**; it is not the milestone status.
+The shipped VSIX and host version is **0.46.66**; it is not the milestone status.
 
 ## Version index
 
@@ -53,7 +53,7 @@ The shipped VSIX and host version is **0.46.54**; it is not the milestone status
 | 0.43 | Context management | done | [m_0.43_context_management.vscode.md](m_0.43_context_management.vscode.md) | [43](../../design/v0.x/43-context-management.vscode.md) |
 | 0.44 | MCP management | done | [m_0.44_mcp_management.vscode.md](m_0.44_mcp_management.vscode.md) | [44](../../design/v0.x/44-mcp-management.vscode.md) |
 | 0.45 | Protocol smoke + web polish | done | [m_0.45_protocol_smoke.md](m_0.45_protocol_smoke.md) | [35](../../design/v0.x/35-vscode-extension.vscode.md) + [45](../../design/v0.x/45-web-editor-polish.md) |
-| 0.46 | Editor polish (58 phases) | done | [m_0.46_editor_polish.vscode.md](m_0.46_editor_polish.vscode.md) | [46](../../design/v0.x/46-editor-polish.vscode.md) |
+| 0.46 | Editor polish (70 phases) | done | [m_0.46_editor_polish.vscode.md](m_0.46_editor_polish.vscode.md) | [46](../../design/v0.x/46-editor-polish.vscode.md) |
 | 0.47 | Evaluation baseline and audit | done | [m_0.47_evaluation_and_audit.md](m_0.47_evaluation_and_audit.md) | [47](../../design/v0.x/47-evaluation.md) |
 | 0.48 | LLM calls: effort, retry, stop reasons | planned | [m_0.48_llm_calls.md](m_0.48_llm_calls.md) | [48](../../design/v0.x/48-llm-effort-and-retry.md) |
 | 0.49 | Roles and prompts | planned | [m_0.49_roles_and_prompts.md](m_0.49_roles_and_prompts.md) | [49](../../design/v0.x/49-roles-and-prompts.md) |

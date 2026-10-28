@@ -85,8 +85,9 @@ test('chat model selection uses the curated list and remains a session option', 
   assert.match(CHAT, /case 'selectModel':[\s\S]*?this\.setModel\(msg\.model\)/);
   assert.match(CHAT, /No models are available\. Run Anvil: Manage Models first\./);
   assert.match(CHAT, /await this\.applyOptions\(\{ model/);
-  assert.match(CHAT_JS, /modelSelect\.addEventListener\('change'/);
-  assert.match(CHAT_JS, /vscode\.postMessage\(\{ type: 'selectModel', model: modelSelect\.value \}\)/);
+  assert.match(CHAT_JS, /modelPicker\.addEventListener\('click'/);
+  assert.match(CHAT_JS, /type: 'selectModel', model: value/);
+  assert.match(CHAT_JS, /type: 'effort', effort: button\.dataset\.effort/);
 });
 
 test('the models manager owns workspace subagent profile CRUD', () => {

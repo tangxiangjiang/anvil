@@ -38,9 +38,10 @@ func NewOpenAI(cfg Config) *OpenAI {
 }
 
 type openAIRequest struct {
-	Model    string          `json:"model"`
-	Messages []openAIMessage `json:"messages"`
-	Tools    []openAITool    `json:"tools,omitempty"`
+	Model           string          `json:"model"`
+	Messages        []openAIMessage `json:"messages"`
+	Tools           []openAITool    `json:"tools,omitempty"`
+	ReasoningEffort Effort          `json:"reasoning_effort,omitempty"`
 }
 
 type openAIMessage struct {
@@ -120,9 +121,10 @@ func (c *OpenAI) Complete(ctx context.Context, req Request) (*Response, error) {
 		return nil, &HTTPError{Status: 401, Message: "missing API key", Retryable: false}
 	}
 	body := openAIRequest{
-		Model:    firstNonEmpty(req.Model, c.cfg.Model),
-		Messages: toOpenAIMessages(req.Messages),
-		Tools:    toOpenAITools(req.Tools),
+		Model:           firstNonEmpty(req.Model, c.cfg.Model),
+		Messages:        toOpenAIMessages(req.Messages),
+		Tools:           toOpenAITools(req.Tools),
+		ReasoningEffort: req.Effort,
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {

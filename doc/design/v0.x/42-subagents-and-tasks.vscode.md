@@ -416,6 +416,13 @@ tool a foreground turn uses after a background turn started something. `task_can
 not a pause. A task that already ended returns its final status and no error: asking twice is not
 a failure.
 
+The runtime loop guard recognizes a matching `task_output` result whose status is `running` as an
+explicit lifecycle wait state. It clears generic repeat/result/cycle streaks instead of warning or
+stopping the foreground agent: identical output is expected while the task has not transitioned.
+This exception is narrow. A terminal status, malformed result, error, or task id that does not
+match the call is processed by the ordinary loop guard, so repeatedly rereading completed work
+still warns and then stops.
+
 ### Permission and scheduling
 
 - A background **shell** call is a `shell` call: it is gated by the `shell` group, and its

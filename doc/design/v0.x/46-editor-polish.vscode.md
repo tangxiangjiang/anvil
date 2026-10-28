@@ -1214,3 +1214,72 @@ directly instead of inferring them from titles or engineering vocabulary.
 The map opens with a compact topology and root totals. Selecting a child then loads at most the
 recent transcript window needed for its prompt, latest result, steps and usage. This keeps opening
 the overview cheap while still making a working or completed delegation inspectable.
+
+## 53. The current plan is docked above the composer
+
+A plan awaiting review is active input to the next decision, not an old transcript card. The
+current plan therefore lives in the measured composer dock above the prompt. The transcript's
+existing dock-height reservation includes the plan automatically, so its bottom always ends above
+the review surface rather than scrolling underneath it.
+
+The docked surface renders the plan prose with the same safe Markdown renderer as assistant text
+and retains Open plan, Approve and run, and Keep planning. Long prose has a bounded internal scroll
+area. A header toggle collapses the surface to a compact Plan label immediately above the composer;
+activating that label restores the full plan. Replacing or resetting the conversation removes the
+docked plan with the rest of that conversation's review state.
+
+## 54. Queued turns own their model and permission mode
+
+Enqueue and Steer make the composer a surface for the next turn while the current one is still
+running. Its model selector and permission-mode menu therefore remain enabled. A choice made there
+is staged; it never mutates the model or tool policy of the run already in flight.
+
+Each queued or priority turn snapshots the selected model and permission mode beside its text,
+mentions, images and quotes. Once the active run is terminal, the client reopens the same stored
+agent with that turn's snapshot before sending its prompt. Multiple queued messages can therefore
+carry different choices without later selector changes rewriting earlier intent. An idle send uses
+the same path, which also applies a staged choice when no message was queued at selection time.
+
+## 55. Finish protocol has a constrained recovery request
+
+Editor runs still terminate only through `finish_task`; accepting ordinary final-sounding prose
+would recreate the false-completion bug the control signal removed. Some otherwise tool-capable
+models nevertheless ignore that control while the full tool catalogue remains available.
+
+After the bounded ordinary corrections are exhausted, the runtime makes one final non-streaming
+request whose tool catalogue contains only `finish_task`. The model can then report either
+completion or an honest blocker through the same explicit wire signal, without a semantic text
+classifier. A valid standalone call finishes normally. Plain text, malformed arguments or any
+unrelated call still produces the finish-protocol error, so recovery does not weaken the terminal
+contract.
+
+## 56. Reasoning effort is a per-turn composer choice
+
+The composer places a compact Low, Medium, or High effort selector beside Model and defaults new
+VS Code conversations to Medium. Like Model and Mode, it remains available while a response runs:
+changing it stages the next Send, Enqueue, or Steer turn and never mutates the request in flight.
+
+Each submitted turn snapshots its effort. Before that turn starts, the client reopens the same
+stored agent with the captured model, effort, and permission mode. The host carries the value into
+the SDK request; OpenAI-compatible providers receive `reasoning_effort`, while Anthropic receives
+the corresponding thinking budget. Anthropic's signed thinking blocks remain opaque run state and
+are replayed only inside the active tool loop, never persisted as conversation text.
+
+## 57. Both plan surfaces precede the composer
+
+The approval Plan and the model's live Todo Plan are distinct surfaces, but both belong above the
+prompt. The live list remains replaceable rather than transcript history: each update redraws the
+same bounded list, and closing it suppresses later status-only updates for that turn. Moving it
+above the composer changes only layout; its close and per-turn reappearance rules remain intact.
+
+## 58. Model and effort share one picker
+
+The composer presents one compact Model trigger rather than adjacent native selects. Opening it
+shows the workspace default and curated available models, with the Low, Medium, and High reasoning
+effort control anchored beneath the list. This keeps the frequently paired choices in one themed
+surface and gives model names room without widening the composer toolbar.
+
+The combined surface changes presentation only. Model and effort remain separate session options,
+remain selectable during a response, and are snapshotted together for each Send, Enqueue, or Steer
+turn. Escape, outside click, or selecting a model closes the picker; choosing effort keeps it open
+so the current model selection remains visible.

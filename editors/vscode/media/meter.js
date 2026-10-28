@@ -88,18 +88,28 @@
   /**
    * The meter's one line for the session's spend, or the empty string.
    *
-   * Without a window the line is counts only. With one, the last run's total is
-   * also drawn against it.
+   * Without a window the line is counts only. With one, the host's current
+   * context estimate is drawn against it. The last provider total is only a
+   * fallback for older hosts: provider usage may accumulate multiple model
+   * rounds and must not replace an available context estimate.
    */
-  function label(state, contextWindow) {
+  function label(state, contextWindow, info) {
     const parts = [];
     if (state && (state.input > 0 || state.output > 0)) {
       if (state.input > 0) parts.push(short(state.input) + ' in');
       if (state.output > 0) parts.push(short(state.output) + ' out');
     }
-    const window = count(contextWindow);
-    if (window > 0 && state && state.last && state.last.total > 0) {
-      parts.push('last ' + short(state.last.total) + ' of ' + short(window) + ' (' + percent(state.last.total, window) + '%)');
+    const declaredWindow = count(info && info.window_tokens);
+    const window = declaredWindow || count(contextWindow);
+    const estimate = info && info.estimated_tokens;
+    const used =
+      typeof estimate === 'number' && isFinite(estimate) && estimate >= 0
+        ? Math.floor(estimate)
+        : state && state.last
+          ? count(state.last.total)
+          : 0;
+    if (window > 0 && used > 0) {
+      parts.push('last ' + short(used) + ' of ' + short(window) + ' (' + percent(used, window) + '%)');
     }
     return parts.join(' · ');
   }

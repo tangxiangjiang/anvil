@@ -65,7 +65,7 @@ const meter = (
     anvilMeter: {
       empty: () => Totals;
       add: (state: Totals, done: { usage?: Usage } | undefined) => Totals;
-      label: (state: Totals, contextWindow: number) => string;
+      label: (state: Totals, contextWindow: number, info?: ContextInfo | null) => string;
       count: (value: unknown) => number;
       short: (value: unknown) => string;
       percent: (used: number, window: number) => string;
@@ -152,6 +152,19 @@ test('a window turns the last run into a fraction of it', () => {
   assert.match(meter.label(atTen, 200000), /\(10%\)$/);
 });
 
+test('the host context estimate wins over cumulative provider usage', () => {
+  const state = meter.empty();
+  meter.add(state, run({ input_tokens: 1_980_000, output_tokens: 23_000, total_tokens: 2_003_000 }));
+  assert.equal(
+    meter.label(state, 128_000, {
+      estimated_tokens: 100_000,
+      window_tokens: 128_000,
+      compact_at_tokens: 102_000,
+    }),
+    '2M in · 23k out · last 100k of 128k (78%)',
+  );
+});
+
 test('a missing total is the sum of the halves, not zero', () => {
   const state = meter.empty();
   meter.add(state, run({ input_tokens: 4, output_tokens: 3 }));
@@ -191,6 +204,12 @@ test('the renderer counts a run once, at its terminal envelope', () => {
   // error carries the same run's total. Only the envelopes are counted.
   const event = CHAT_JS.slice(CHAT_JS.indexOf("case 'event'"), CHAT_JS.indexOf("case 'approval'"));
   assert.doesNotMatch(event, /recordUsage|meterMath\.add/);
+});
+
+test('a root terminal error is rendered once by done, while child errors remain visible', () => {
+  const render = bodyOf(CHAT_JS, 'renderEvent');
+  assert.match(render, /e\.type === 'error' && active !== mainScope/);
+  assert.match(bodyOf(CHAT_JS, 'finishRun'), /addNotice\(failure\.message\)/);
 });
 
 test('the panel tells the document how to measure, then asks the session', () => {

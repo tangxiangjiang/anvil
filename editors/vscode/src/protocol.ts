@@ -197,6 +197,7 @@ export interface SessionParams {
   provider?: string;
   base_url?: string;
   model?: string;
+  effort?: Effort;
   system_prompt?: string;
   max_steps?: number;
   store?: string;
@@ -254,6 +255,8 @@ export interface SessionParams {
    */
   web_search?: WebSearchParams;
 }
+
+export type Effort = 'low' | 'medium' | 'high';
 
 /**
  * The language servers a session may start. Presence is the switch: the

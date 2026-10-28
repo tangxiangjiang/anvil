@@ -351,7 +351,7 @@ test('a stored terminal failure keeps its reason and code after replay', () => {
       run_id: 'r1',
       status: 'error',
       steps: 13,
-      err: 'model provider returned 3 consecutive empty responses',
+      err: 'model provider returned 5 consecutive empty responses',
       code: 'empty_response',
     },
   ], 's1');
@@ -360,6 +360,6 @@ test('a stored terminal failure keeps its reason and code after replay', () => {
   const end = steps[0];
   assert.ok(end.kind === 'runEnd');
   assert.equal(end.done.status, 'error');
-  assert.equal(end.done.err, 'model provider returned 3 consecutive empty responses');
+  assert.equal(end.done.err, 'model provider returned 5 consecutive empty responses');
   assert.equal(end.done.code, 'empty_response');
 });

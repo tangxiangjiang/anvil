@@ -45,7 +45,7 @@ test('each host code maps to its own message', () => {
 });
 
 test('an exhausted empty response does not blame credentials', () => {
-  const detail = 'model provider returned 3 consecutive empty responses';
+  const detail = 'model provider returned 5 consecutive empty responses';
   const failure = classifyDone(done({ code: 'empty_response', err: detail }));
   assert.equal(failure.kind, 'empty_response');
   assert.equal(failure.message, detail);

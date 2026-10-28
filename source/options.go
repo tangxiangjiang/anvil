@@ -20,6 +20,16 @@ const (
 	ProviderAnthropic Provider = "anthropic"
 )
 
+// Effort controls how much reasoning a capable model is asked to spend.
+type Effort string
+
+const (
+	EffortDefault Effort = ""
+	EffortLow     Effort = "low"
+	EffortMedium  Effort = "medium"
+	EffortHigh    Effort = "high"
+)
+
 // SettingSource selects file-based config layers (Cursor SDK local settingSources).
 type SettingSource string
 
@@ -34,6 +44,7 @@ type Options struct {
 	APIKey   string
 	BaseURL  string
 	Model    Model
+	Effort   Effort
 	Local    LocalOptions
 	// MaxSteps is an optional hard ceiling on LLM rounds (0 = unlimited, default).
 	// Runaway loops are stopped by the runtime loop guard (repeated tool calls / stalls).

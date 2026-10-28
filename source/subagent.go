@@ -495,6 +495,7 @@ func (a *Agent) childOptions(in spawnParams, selectors []string, depth int, prof
 		APIKey:           a.opts.APIKey,
 		BaseURL:          a.opts.BaseURL,
 		Model:            a.opts.Model,
+		Effort:           a.opts.Effort,
 		MaxSteps:         a.opts.MaxSteps,
 		MaxWallTime:      a.opts.MaxWallTime,
 		Permission:       a.opts.Permission,

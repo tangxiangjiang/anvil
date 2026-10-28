@@ -2300,14 +2300,14 @@ body.vscode-high-contrast-light .body.md .md-link:focus-visible {
 /* --- the model's task list ------------------------------------------------ */
 
 /*
- * Below the composer, because it is about the work in flight rather than the
- * conversation's history: the transcript stays the record, and the plan is the
- * one thing that is replaced as it changes instead of appended to. The head is
- * outside the scrolling list so the close button is always reachable, and the
- * list is capped so a long plan cannot take the panel from the conversation.
+ * Immediately above the composer, because it is the current work control
+ * surface rather than conversation history. The plan is replaced as it
+ * changes instead of appended. The head is outside the scrolling list so the
+ * close button is always reachable, and the list is capped so a long plan
+ * cannot take the panel from the conversation.
  */
 .todos {
-  margin-top: 6px;
+  margin-bottom: 6px;
   padding: 0 calc(var(--anvil-gap) + 1px);
   font-size: 0.85em;
   line-height: var(--ui-line-tight);
@@ -2528,6 +2528,10 @@ body.drop-target {
     0 0 0 1px var(--vscode-focusBorder);
 }
 
+.composer.send-menu-open {
+  overflow: visible;
+}
+
 .composer textarea {
   width: 100%;
   /*
@@ -2600,37 +2604,208 @@ body.drop-target {
   height: 17px;
 }
 
-.composer-model {
-  min-width: 0;
-  max-width: 150px;
+.composer-model-trigger {
+  min-width: 72px;
+  max-width: 190px;
   height: 26px;
+  padding: 0 6px 0 7px;
   display: inline-flex;
   align-items: center;
-}
-
-.composer-model select {
-  min-width: 72px;
-  max-width: 150px;
-  height: 26px;
-  padding: 0 20px 0 7px;
+  gap: 5px;
   overflow: hidden;
   color: var(--vscode-descriptionForeground);
   background: transparent;
   border: 0;
   border-radius: 6px;
+  font: inherit;
   font-size: 0.78em;
-  text-overflow: ellipsis;
 }
 
-.composer-model select:hover:not(:disabled),
-.composer-model select:focus {
+.composer-model-trigger span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-model-trigger svg {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+  transition: transform 120ms ease;
+}
+
+.composer-model-trigger:hover,
+.composer-model-trigger[aria-expanded='true'] {
   color: var(--vscode-foreground);
   background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.14));
 }
 
-.composer-model select:focus {
+.composer-model-trigger[aria-expanded='true'] svg {
+  transform: rotate(180deg);
+}
+
+.composer-model-trigger:focus-visible {
   outline: 1px solid var(--vscode-focusBorder);
   outline-offset: -1px;
+}
+
+.model-menu {
+  position: absolute;
+  z-index: 6;
+  width: min(500px, calc(100% - 16px));
+  max-height: min(34em, 76vh);
+  overflow-y: auto;
+  padding: 7px;
+  border: 1px solid var(--vscode-widget-border, var(--ui-hairline));
+  border-radius: 9px;
+  color: var(--vscode-foreground);
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  box-shadow: 0 8px 24px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.42));
+}
+
+.model-menu[hidden] {
+  display: none;
+}
+
+.model-menu-head {
+  padding: 3px 5px 7px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.8em;
+}
+
+.model-menu-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.model-menu-row {
+  width: 100%;
+  padding: 6px 7px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 18px;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--vscode-foreground);
+  background: transparent;
+  text-align: left;
+  font: inherit;
+}
+
+.model-menu-row:hover,
+.model-menu-row:focus-visible {
+  background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.16));
+}
+
+.model-menu-row:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+.model-menu-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.model-menu-copy strong {
+  overflow: hidden;
+  font-size: 0.88em;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-menu-copy small {
+  overflow: hidden;
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.72em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-menu-check {
+  color: var(--vscode-descriptionForeground);
+  text-align: center;
+}
+
+.model-effort {
+  margin-top: 6px;
+  padding: 7px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-radius: 6px;
+  background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.14));
+  font-size: 0.8em;
+  font-weight: 600;
+}
+
+.model-effort > span span {
+  color: var(--vscode-descriptionForeground);
+  font-weight: 400;
+}
+
+.effort-control {
+  position: relative;
+  width: 70px;
+  height: 20px;
+  padding: 0 5px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.effort-control::before {
+  content: '';
+  position: absolute;
+  inset-inline: 9px;
+  top: 9px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--vscode-descriptionForeground);
+  opacity: 0.4;
+}
+
+.effort-control button {
+  position: relative;
+  z-index: 1;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+}
+
+.effort-control button span {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--vscode-descriptionForeground);
+}
+
+.effort-control button[aria-checked='true'] span {
+  width: 13px;
+  height: 13px;
+  background: var(--vscode-foreground);
+  box-shadow: 0 0 0 2px var(--vscode-editorWidget-background, var(--vscode-editor-background));
+}
+
+.effort-control button:hover,
+.effort-control button:focus-visible {
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.22));
+}
+
+.effort-control button:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
 }
 
 .action-menu {
@@ -2729,60 +2904,127 @@ span.action-menu-icon {
   height: 16px;
 }
 
-.composer button.icon.running {
-  width: auto;
-  min-width: 28px;
-  padding: 0 9px;
-  gap: 5px;
-}
-
-.composer button.icon.running .icon-send {
-  display: none;
-}
-
-.composer .send-label,
 .composer .queue-count {
-  display: none;
+  position: absolute;
+  top: -7px;
+  right: -5px;
+  z-index: 1;
+  display: inline;
+  min-width: 1.25em;
+  padding: 2px 4px;
+  border: 1px solid var(--vscode-button-background);
+  border-radius: 999px;
+  color: var(--vscode-badge-foreground, var(--vscode-button-foreground));
+  background: var(--vscode-badge-background, var(--vscode-button-background));
   font-size: 0.82em;
   line-height: 1;
-}
-
-.composer button.icon.running .send-label,
-.composer button.icon.running .queue-count:not([hidden]) {
-  display: inline;
-}
-
-.composer .queue-count {
-  min-width: 1.4em;
-  padding: 2px 4px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--vscode-button-foreground) 16%, transparent);
   font-variant-numeric: tabular-nums;
 }
 
-.composer .run-action {
-  height: 28px;
-  padding: 0 8px;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  border-radius: 7px;
-  font-size: 0.8em;
-  white-space: nowrap;
+.composer .queue-count[hidden] {
+  display: none;
 }
 
-.composer .run-action svg {
-  width: 14px;
-  height: 14px;
+.send-split {
+  position: relative;
+  display: inline-flex;
+  height: 28px;
+}
+
+.composer .send-split #send {
+  position: relative;
+  margin-left: 2px;
+  border-radius: 7px 0 0 7px;
+}
+
+.composer .send-mode-trigger {
+  width: 19px;
+  height: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-left: 1px solid color-mix(in srgb, var(--vscode-button-foreground) 26%, transparent);
+  border-radius: 0 7px 7px 0;
+}
+
+.composer .send-mode-trigger svg {
+  width: 12px;
+  height: 12px;
 }
 
 .composer .run-stop {
   margin-left: 0;
 }
 
-.composer .run-action[hidden],
 .composer .run-stop[hidden] {
   display: none;
+}
+
+.send-mode-menu {
+  position: absolute;
+  z-index: 7;
+  right: 0;
+  bottom: calc(100% + 7px);
+  width: 230px;
+  padding: 5px;
+  border: 1px solid var(--vscode-widget-border, var(--ui-hairline));
+  border-radius: 8px;
+  background: var(--vscode-menu-background, var(--vscode-editorWidget-background));
+  box-shadow: 0 6px 18px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.35));
+}
+
+.send-mode-menu[hidden] {
+  display: none;
+}
+
+.send-mode-row {
+  width: 100%;
+  padding: 7px 8px;
+  display: grid;
+  grid-template-columns: 16px 1fr;
+  gap: 7px;
+  color: var(--vscode-menu-foreground, var(--vscode-foreground));
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  text-align: left;
+}
+
+.send-mode-row:hover,
+.send-mode-row:focus {
+  color: var(--vscode-menu-selectionForeground, var(--vscode-foreground));
+  background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground));
+}
+
+.send-mode-row:focus {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+.send-mode-row > span:last-child {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.send-mode-row strong {
+  font-weight: 500;
+}
+
+.send-mode-row small {
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.82em;
+}
+
+.send-mode-check {
+  visibility: hidden;
+  color: var(--vscode-testing-iconPassed, #73c991);
+  font-weight: 700;
+}
+
+.send-mode-row[aria-checked='true'] .send-mode-check {
+  visibility: visible;
 }
 
 kbd {
@@ -3100,24 +3342,115 @@ kbd {
 
 /* --- plan review ---------------------------------------------------------- */
 
-/*
- * The card under a plan-mode answer. The plan itself is the bubble above it;
- * this is only the three decisions and the sentence that says what the
- * approving one costs.
- */
+.plan-dock[hidden] {
+  display: none;
+}
+
+.plan-dock {
+  margin-bottom: 6px;
+}
+
 .plan {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  gap: 6px;
-  margin: 6px 0 12px 12px;
-  padding: 8px 12px;
-  border-left: 3px solid var(--vscode-focusBorder);
-  background: var(--vscode-textBlockQuote-background, rgba(127, 127, 127, 0.1));
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--vscode-widget-border, var(--ui-hairline));
+  border-radius: 9px;
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  box-shadow: 0 3px 12px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.22));
+}
+
+.plan-toggle {
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 10px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  border: 0;
+  border-radius: 0;
+  color: var(--vscode-foreground);
+  background: transparent;
+  text-align: left;
+}
+
+.plan-toggle:hover,
+.plan-toggle:focus-visible {
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.14));
+}
+
+.plan-toggle:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+.plan-chevron {
+  width: 14px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 15px;
+  line-height: 1;
+  text-align: center;
+  transform: translateY(-1px);
+  transition: transform 120ms ease;
 }
 
 .plan-title {
   font-weight: 600;
+}
+
+.plan-content {
+  min-width: 0;
+  padding: 0 11px 10px 31px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 7px;
+  border-top: 1px solid var(--ui-hairline);
+}
+
+.plan-body {
+  box-sizing: border-box;
+  width: 100%;
+  max-height: min(34vh, 320px);
+  padding: 7px 8px 3px 0;
+  overflow: auto;
+  scrollbar-color: transparent transparent;
+}
+
+.plan-body:hover,
+.plan-body:focus-within {
+  scrollbar-color:
+    var(--vscode-scrollbarSlider-background, rgba(128, 128, 128, 0.4))
+    transparent;
+}
+
+.plan-body::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+
+.plan-body::-webkit-scrollbar-track,
+.plan-body::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.plan-body::-webkit-scrollbar-thumb {
+  border-radius: 5px;
+  background: transparent;
+}
+
+.plan-body:hover::-webkit-scrollbar-thumb,
+.plan-body:focus-within::-webkit-scrollbar-thumb {
+  background: var(--vscode-scrollbarSlider-background, rgba(128, 128, 128, 0.4));
+}
+
+.plan.collapsed .plan-content {
+  display: none;
+}
+
+.plan.collapsed .plan-chevron {
+  transform: rotate(-90deg);
 }
 
 .plan-actions {

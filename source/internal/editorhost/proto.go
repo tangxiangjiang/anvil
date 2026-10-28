@@ -27,7 +27,7 @@ const ProtocolVersion = 1
 // product line, not the protocol revision (that is ProtocolVersion): the
 // extension compares the dotted minor it packaged with against this string and
 // warns on a mismatch, so the two have to be released together (0.46).
-var Version = "0.46.54"
+var Version = "0.46.66"
 
 // Client to host request methods.
 const (
@@ -250,6 +250,7 @@ type SessionParams struct {
 	Provider        string   `json:"provider,omitempty"`
 	BaseURL         string   `json:"base_url,omitempty"`
 	Model           string   `json:"model,omitempty"`
+	Effort          string   `json:"effort,omitempty"`
 	SystemPrompt    string   `json:"system_prompt,omitempty"`
 	MaxSteps        int      `json:"max_steps,omitempty"`
 	Store           string   `json:"store,omitempty"`

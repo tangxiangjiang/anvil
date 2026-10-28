@@ -18,6 +18,7 @@ import { PLAN_APPROVED_PROMPT, planPath, planQuery, planTarget, planTitle } from
 
 const EXTENSION_ROOT = join(__dirname, '..', '..', '..');
 const CHAT_JS = readFileSync(join(EXTENSION_ROOT, 'media', 'chat.js'), 'utf8');
+const CHAT_CSS = readFileSync(join(EXTENSION_ROOT, 'media', 'chat.css'), 'utf8');
 const CHAT_PANEL = readFileSync(join(EXTENSION_ROOT, 'src', 'chatPanel.ts'), 'utf8');
 const PLAN_DOCUMENT = readFileSync(join(EXTENSION_ROOT, 'src', 'planDocument.ts'), 'utf8');
 const EXTENSION = readFileSync(join(EXTENSION_ROOT, 'src', 'extension.ts'), 'utf8');
@@ -161,6 +162,25 @@ test('the card offers the three choices and draws text only', () => {
   assert.match(settle, /msg\.action === 'approve'/);
   assert.match(settle, /Kept in plan mode/);
   assert.doesNotMatch(settle, /innerHTML|outerHTML/);
+});
+
+test('the current plan is a measured collapsible surface above the composer', () => {
+  const dock = CHAT_PANEL.indexOf('id="composerDock"');
+  const planDock = CHAT_PANEL.indexOf('id="planDock"', dock);
+  const composer = CHAT_PANEL.indexOf('<form id="composer"', dock);
+  assert.ok(dock >= 0 && planDock > dock && composer > planDock);
+
+  const plan = bodyOf(CHAT_JS, 'showPlan');
+  assert.match(plan, /planDock\.replaceChildren\(card\)/);
+  assert.match(plan, /renderBlocks\(body, parseMarkdown/);
+  assert.match(plan, /classList\.toggle\('collapsed'\)/);
+  assert.match(plan, /setAttribute\('aria-expanded'/);
+  assert.match(plan, /requestAnimationFrame\(syncComposerHeight\)/);
+  assert.doesNotMatch(plan, /append\(card\)/);
+
+  assert.match(CHAT_CSS, /\.plan-content\s*\{[\s\S]*?border-top:/);
+  assert.match(CHAT_CSS, /\.plan-body\s*\{[\s\S]*?max-height:\s*min\(34vh,\s*320px\)/);
+  assert.match(CHAT_CSS, /\.plan\.collapsed \.plan-content\s*\{[\s\S]*?display:\s*none/);
 });
 
 test('the provider answers for exactly the URI it was given content for', () => {

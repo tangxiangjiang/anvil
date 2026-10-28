@@ -22,11 +22,12 @@ type openAIStreamOptions struct {
 }
 
 type openAIStreamRequest struct {
-	Model         string               `json:"model"`
-	Messages      []openAIMessage      `json:"messages"`
-	Tools         []openAITool         `json:"tools,omitempty"`
-	Stream        bool                 `json:"stream"`
-	StreamOptions *openAIStreamOptions `json:"stream_options,omitempty"`
+	Model           string               `json:"model"`
+	Messages        []openAIMessage      `json:"messages"`
+	Tools           []openAITool         `json:"tools,omitempty"`
+	ReasoningEffort Effort               `json:"reasoning_effort,omitempty"`
+	Stream          bool                 `json:"stream"`
+	StreamOptions   *openAIStreamOptions `json:"stream_options,omitempty"`
 }
 
 // CompleteStream implements StreamCompleter for OpenAI-compatible SSE.
@@ -38,11 +39,12 @@ func (c *OpenAI) CompleteStream(ctx context.Context, req Request, onDelta func(D
 		onDelta = func(Delta) {}
 	}
 	body := openAIStreamRequest{
-		Model:         firstNonEmpty(req.Model, c.cfg.Model),
-		Messages:      toOpenAIMessages(req.Messages),
-		Tools:         toOpenAITools(req.Tools),
-		Stream:        true,
-		StreamOptions: &openAIStreamOptions{IncludeUsage: true},
+		Model:           firstNonEmpty(req.Model, c.cfg.Model),
+		Messages:        toOpenAIMessages(req.Messages),
+		Tools:           toOpenAITools(req.Tools),
+		ReasoningEffort: req.Effort,
+		Stream:          true,
+		StreamOptions:   &openAIStreamOptions{IncludeUsage: true},
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {

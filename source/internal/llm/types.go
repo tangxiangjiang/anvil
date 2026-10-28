@@ -28,6 +28,9 @@ type Message struct {
 	ToolCallID string
 	ToolCalls  []ToolCall
 	Name       string
+	// ProviderState is opaque, run-scoped provider data needed to continue a
+	// tool loop. It is never persisted or interpreted by another adapter.
+	ProviderState []json.RawMessage
 }
 
 // ContentPart is a multimodal message part.
@@ -53,11 +56,22 @@ type ToolDef struct {
 	Parameters  json.RawMessage // JSON Schema object
 }
 
+// Effort asks a reasoning-capable model how much thinking to spend.
+type Effort string
+
+const (
+	EffortDefault Effort = ""
+	EffortLow     Effort = "low"
+	EffortMedium  Effort = "medium"
+	EffortHigh    Effort = "high"
+)
+
 // Request is one completion step.
 type Request struct {
 	Model    string
 	Messages []Message
 	Tools    []ToolDef
+	Effort   Effort
 	// PromptCache asks the adapter to place cache breakpoints where the provider
 	// supports them. Only the Anthropic adapter acts on it; OpenAI-compatible
 	// providers cache on their own and ignore the flag.

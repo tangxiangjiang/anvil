@@ -23,7 +23,9 @@
   const input = document.getElementById('input');
   const sendButton = document.getElementById('send');
   const queueCount = document.getElementById('queueCount');
-  const prioritySendButton = document.getElementById('prioritySend');
+  const sendModeButton = document.getElementById('sendMode');
+  const sendModeMenu = document.getElementById('sendModeMenu');
+  const sendModeRows = sendModeMenu ? Array.from(sendModeMenu.querySelectorAll('.send-mode-row')) : [];
   const stopButton = document.getElementById('stop');
   const statusLine = document.getElementById('status');
   /**
@@ -55,7 +57,12 @@
     ? Array.from(collaborationMenu.querySelectorAll('.collaboration-row:not(:disabled)'))
     : [];
   const agentMapButton = document.getElementById('agentMap');
-  const modelSelect = document.getElementById('modelSelect');
+  const modelPicker = document.getElementById('modelPicker');
+  const modelPickerLabel = document.getElementById('modelPickerLabel');
+  const modelMenu = document.getElementById('modelMenu');
+  const modelMenuList = document.getElementById('modelMenuList');
+  const effortMenuLabel = document.getElementById('effortMenuLabel');
+  const effortButtons = Array.from(document.querySelectorAll('[data-effort]'));
   const bypassStrip = document.getElementById('bypass');
   const dontAskStrip = document.getElementById('dontAsk');
   const rootLine = document.getElementById('root');
@@ -64,6 +71,7 @@
   const focusButton = document.getElementById('focus');
   const palette = document.getElementById('palette');
   const dock = document.getElementById('composerDock');
+  const planDock = document.getElementById('planDock');
   const autoScrollButton = document.getElementById('autoScroll');
   const scrollBottomButton = document.getElementById('scrollBottom');
   const meter = document.getElementById('meter');
@@ -142,6 +150,8 @@
 
   /** Run in flight, if any. */
   let running = false;
+  /** What clicking Send does while a run is active. */
+  let runningSendMode = 'enqueue';
   /**
    * A stored conversation is being drawn. Everything said to a screen reader is
    * held back while it is: a replay is history the reader did not just ask for,
@@ -240,9 +250,9 @@
    */
   const forkBlocks = new Map();
   /**
-   * Plan cards by run id, so an approval or a refusal can settle the card it
-   * belongs to. A plan outlives its turn only as text in the extension; the
-   * card is transcript furniture and goes when the transcript does.
+   * Plan surfaces by run id, so an approval or a refusal can settle the review
+   * it belongs to. Only the newest surface is docked; older entries remain
+   * addressable until the conversation resets.
    */
   const planCards = new Map();
   /**
@@ -1067,6 +1077,10 @@
     approvals.clear();
     checkpointBlocks.clear();
     forkBlocks.clear();
+    if (planDock) {
+      planDock.replaceChildren();
+      planDock.hidden = true;
+    }
     planCards.clear();
     rewindTurns.length = 0;
     rewindStates.clear();
@@ -4238,20 +4252,31 @@
 
   // --- plan review ----------------------------------------------------------
 
-  /**
-   * The plan a plan-mode turn produced.
-   *
-   * The card is the choices and nothing else: the plan's text is the assistant
-   * bubble above it, and a second copy here would be a copy that drifts. "Open
-   * plan" is what puts it in a document; approving is a mode change plus one
-   * sentence, both of which the extension does because neither is this
-   * document's to do.
-   */
+  /** The current plan-mode result, docked immediately above the composer. */
   function showPlan(msg) {
     const runId = msg.runId;
-    if (typeof runId !== 'string' || runId === '' || planCards.has(runId)) return;
-    const card = el('div', 'plan');
-    card.appendChild(el('div', 'plan-title', 'Plan ready'));
+    if (
+      typeof runId !== 'string' ||
+      runId === '' ||
+      planCards.has(runId) ||
+      !planDock
+    ) return;
+    const card = el('section', 'plan');
+    card.setAttribute('aria-label', 'Current plan');
+    const toggle = el('button', 'plan-toggle');
+    toggle.type = 'button';
+    toggle.setAttribute('aria-expanded', 'true');
+    toggle.title = 'Collapse plan';
+    const chevron = el('span', 'plan-chevron', '⌄');
+    chevron.setAttribute('aria-hidden', 'true');
+    toggle.appendChild(chevron);
+    toggle.appendChild(el('span', 'plan-title', 'Plan'));
+    card.appendChild(toggle);
+
+    const content = el('div', 'plan-content');
+    const body = el('div', 'plan-body body md');
+    renderBlocks(body, parseMarkdown(typeof msg.text === 'string' ? msg.text : ''), 0);
+    content.appendChild(body);
     const actions = el('div', 'plan-actions');
     const open = el('button', 'ghost', 'Open plan');
     open.type = 'button';
@@ -4278,13 +4303,29 @@
     actions.appendChild(open);
     actions.appendChild(approve);
     actions.appendChild(reject);
-    card.appendChild(actions);
+    content.appendChild(actions);
     // Says what approval costs before the button is pressed rather than after:
     // it is the mode that withheld the write tools that is being left.
     const note = el('div', 'plan-note', 'Approving leaves plan mode; keeping the plan sends nothing.');
-    card.appendChild(note);
-    planCards.set(runId, { card: card, approve: approve, reject: reject, note: note });
-    append(card);
+    content.appendChild(note);
+    card.appendChild(content);
+    toggle.addEventListener('click', () => {
+      const expanded = card.classList.toggle('collapsed') === false;
+      toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+      toggle.title = expanded ? 'Collapse plan' : 'Expand plan';
+      requestAnimationFrame(syncComposerHeight);
+    });
+    planCards.set(runId, {
+      card: card,
+      toggle: toggle,
+      approve: approve,
+      reject: reject,
+      note: note,
+    });
+    const pinned = atBottom();
+    planDock.replaceChildren(card);
+    planDock.hidden = false;
+    scrollIfPinned(pinned);
   }
 
   /** The answer to one of the card's two decisions. */
@@ -4379,6 +4420,7 @@
   function openModeMenu(fromKeyboard) {
     if (!modeMenu || !modeButton || modeButton.disabled) return;
     closeActionMenu(false);
+    closeModelMenu(false);
     closeCollaborationMenu(false);
     modeMenu.hidden = false;
     modeButton.setAttribute('aria-expanded', 'true');
@@ -4391,6 +4433,36 @@
   function toggleModeMenu(event) {
     if (!modeMenu || modeMenu.hidden) openModeMenu(Boolean(event && event.detail === 0));
     else closeModeMenu(true);
+  }
+
+  function closeModelMenu(focusTrigger) {
+    if (!modelMenu || modelMenu.hidden) return;
+    modelMenu.hidden = true;
+    modelPicker?.setAttribute('aria-expanded', 'false');
+    if (focusTrigger) modelPicker?.focus();
+  }
+
+  function positionModelMenu() {
+    if (!modelMenu || !modelPicker || modelMenu.hidden) return;
+    const trigger = modelPicker.getBoundingClientRect();
+    const left = Math.max(8, Math.min(trigger.left, window.innerWidth - modelMenu.offsetWidth - 8));
+    modelMenu.style.left = left + 'px';
+    modelMenu.style.right = 'auto';
+    modelMenu.style.bottom = Math.max(8, window.innerHeight - trigger.top + 6) + 'px';
+  }
+
+  function openModelMenu(fromKeyboard) {
+    if (!modelMenu || !modelPicker || modelPicker.disabled) return;
+    closeActionMenu(false);
+    closeModeMenu(false);
+    closeCollaborationMenu(false);
+    closeSendModeMenu(false);
+    modelMenu.hidden = false;
+    modelPicker.setAttribute('aria-expanded', 'true');
+    positionModelMenu();
+    if (fromKeyboard) {
+      (modelMenuList?.querySelector('[aria-checked="true"]') || modelMenuList?.querySelector('button'))?.focus();
+    }
   }
 
   // --- collaboration and Agent Map -----------------------------------------
@@ -4429,6 +4501,7 @@
     if (!collaborationMenu || !collaborationButton || collaborationButton.disabled) return;
     closeActionMenu(false);
     closeModeMenu(false);
+    closeModelMenu(false);
     collaborationMenu.hidden = false;
     collaborationButton.setAttribute('aria-expanded', 'true');
     positionCollaborationMenu();
@@ -5025,6 +5098,38 @@
   }
 
 
+  function closeSendModeMenu(restoreFocus) {
+    if (!sendModeMenu || !sendModeButton) return;
+    sendModeMenu.hidden = true;
+    composer.classList.remove('send-menu-open');
+    sendModeButton.setAttribute('aria-expanded', 'false');
+    if (restoreFocus) sendModeButton.focus();
+  }
+
+  function updateSendMode() {
+    for (const row of sendModeRows) {
+      row.setAttribute('aria-checked', String(row.dataset.sendMode === runningSendMode));
+    }
+    if (!sendModeButton) return;
+    const label = runningSendMode === 'steer' ? 'Steer' : 'Enqueue';
+    sendModeButton.title = 'Send behavior: ' + label;
+    sendModeButton.setAttribute('aria-label', 'Send behavior: ' + label);
+  }
+
+  function toggleSendModeMenu() {
+    if (!sendModeMenu || !sendModeButton) return;
+    const opening = sendModeMenu.hidden;
+    sendModeMenu.hidden = !opening;
+    composer.classList.toggle('send-menu-open', opening);
+    sendModeButton.setAttribute('aria-expanded', String(opening));
+    if (opening) {
+      closeActionMenu(false);
+      closeModeMenu(false);
+      closeCollaborationMenu(false);
+      sendModeRows.find((row) => row.dataset.sendMode === runningSendMode)?.focus();
+    }
+  }
+
   function setRunning(next) {
     running = next;
     // The line says what is happening for exactly as long as something is:
@@ -5033,24 +5138,21 @@
     if (running) startWorking();
     else stopWorking();
     sendButton.classList.toggle('running', running);
-    sendButton.setAttribute('aria-label', running ? 'Enqueue after current response' : 'Send');
-    sendButton.title = running ? 'Queue after current response' : 'Send';
-    if (prioritySendButton) {
-      prioritySendButton.hidden = !running;
-      prioritySendButton.disabled = false;
-    }
+    const action = runningSendMode === 'steer' ? 'Interrupt and steer the current task' : 'Enqueue after current response';
+    sendButton.setAttribute('aria-label', running ? action : 'Send');
+    sendButton.title = running ? action : 'Send';
     if (stopButton) {
       stopButton.hidden = !running;
       stopButton.disabled = false;
     }
-    // The mode is a session option, so the extension refuses a change mid-turn
-    // rather than applying it half way. Saying so by disabling is honest about
-    // that; the extension's own check is what enforces it.
-    if (modeButton) modeButton.disabled = running;
-    if (running) closeModeMenu(false);
+    // Model and permission mode describe the next composer turn. During a run
+    // they remain available so an Enqueue or Steer message can capture them;
+    // the extension applies the snapshot only after this run is terminal.
+    if (modeButton) modeButton.disabled = false;
     if (collaborationButton) collaborationButton.disabled = running;
-    if (modelSelect) modelSelect.disabled = running;
+    if (modelPicker) modelPicker.disabled = false;
     if (running) closeCollaborationMenu(false);
+    if (!running) closeSendModeMenu(false);
     input.focus();
   }
 
@@ -5061,40 +5163,59 @@
       queueCount.hidden = count === 0;
     }
     const suffix = count > 0 ? ' · ' + count + ' queued' : '';
-    sendButton.title = running ? 'Queue after current response' + suffix : 'Send';
-    if (prioritySendButton) {
-      prioritySendButton.title = msg.interrupting
-        ? 'A priority message will send as soon as the current response stops'
-        : 'Interrupt the current response and send now';
-    }
+    const action = runningSendMode === 'steer' ? 'Interrupt and steer the current task' : 'Enqueue after current response';
+    sendButton.title = running ? action + suffix : 'Send';
   }
 
   function showModels(msg) {
-    if (!modelSelect) return;
+    if (!modelMenuList || !modelPickerLabel) return;
     const available = Array.isArray(msg.available) ? msg.available : [];
-    modelSelect.replaceChildren();
-    const fallback = el(
-      'option',
+    const current = typeof msg.current === 'string' ? msg.current : '';
+    const defaultModel = typeof msg.defaultModel === 'string' ? msg.defaultModel : '';
+    const selected = current === defaultModel ? '' : current;
+    modelMenuList.replaceChildren();
+    const addModel = (value, title, detail) => {
+      const row = el('button', 'model-menu-row');
+      row.type = 'button';
+      row.setAttribute('role', 'radio');
+      row.setAttribute('aria-checked', value === selected ? 'true' : 'false');
+      row.dataset.model = value;
+      const copy = el('span', 'model-menu-copy');
+      copy.appendChild(el('strong', '', title));
+      copy.appendChild(el('small', '', detail));
+      row.appendChild(copy);
+      row.appendChild(el('span', 'model-menu-check', value === selected ? '✓' : ''));
+      row.addEventListener('click', () => {
+        vscode.postMessage({ type: 'selectModel', model: value });
+        closeModelMenu(true);
+      });
+      modelMenuList.appendChild(row);
+    };
+    addModel(
       '',
-      msg.defaultModel ? 'Default · ' + msg.defaultModel : 'Default · Host',
+      'Default (recommended)',
+      defaultModel ? 'Use the workspace default · ' + defaultModel : 'Use the host default model',
     );
-    fallback.value = '';
-    modelSelect.appendChild(fallback);
     for (const id of available) {
       if (typeof id !== 'string' || id === '') continue;
-      const option = el('option', '', id);
-      option.value = id;
-      modelSelect.appendChild(option);
+      addModel(id, id, id === defaultModel ? 'Workspace default model' : 'Available model');
     }
-    const current = typeof msg.current === 'string' ? msg.current : '';
-    modelSelect.value = current === msg.defaultModel ? '' : current;
-    if (modelSelect.value === '' && current && current !== msg.defaultModel) {
-      const option = el('option', '', current);
-      option.value = current;
-      modelSelect.appendChild(option);
-      modelSelect.value = current;
+    modelPickerLabel.textContent =
+      selected === ''
+        ? defaultModel ? 'Default · ' + defaultModel : 'Default'
+        : selected;
+    modelPicker.title = current ? 'Model: ' + current : 'Model: host default';
+  }
+
+  function showEffort(msg) {
+    const effort = msg.effort === 'low' || msg.effort === 'high' ? msg.effort : 'medium';
+    const label = effort[0].toUpperCase() + effort.slice(1);
+    if (effortMenuLabel) {
+      effortMenuLabel.replaceChildren(document.createTextNode('Effort '), el('span', '', '(' + label + ')'));
     }
-    modelSelect.title = current ? 'Model: ' + current : 'Model: host default';
+    for (const button of effortButtons) {
+      button.setAttribute('aria-checked', button.dataset.effort === effort ? 'true' : 'false');
+    }
   }
 
   function dispatchQueued(msg) {
@@ -5233,10 +5354,11 @@
     // Cache is provider accounting, not a live estimate. It appears in the
     // terminal run summary once the provider has settled the request.
     setNumber(meterCache, hasLive ? '' : countText(cache.cached, '', 'cache'));
-    // The window's share of the last run, which `meterMath.label` reports
-    // beside the three counts rather than instead of them. It is a node like
-    // them, so it can be hidden and can pulse on its own.
-    const spent = meterMath.label(usageTotals, contextWindow);
+    // The host's context estimate against the window. Provider input totals
+    // may accumulate across model rounds and can be much larger than the
+    // context actually sent, so they are only the older-host fallback inside
+    // `meterMath.label`.
+    const spent = meterMath.label(usageTotals, contextWindow, contextInfo);
     const share = spent
       ? spent
           .split(' · ')
@@ -5789,7 +5911,7 @@
     images = [];
     closePalette();
     renderChips();
-    const type = running ? 'enqueue' : 'send';
+    const type = running ? (runningSendMode === 'steer' ? 'sendPriority' : 'enqueue') : 'send';
     if (!running) {
       addUser(text, sentMentions, sentImages, sentQuotes);
       // Optimistic: the host's `state` notification confirms it a moment later.
@@ -5921,6 +6043,7 @@
     closeActionMenu(false);
     closeModeMenu(false);
     closeCollaborationMenu(false);
+    closeSendModeMenu(false);
   });
 
   if (modeButton && modeMenu) {
@@ -5951,10 +6074,27 @@
     window.addEventListener('blur', () => closeModeMenu(false));
   }
 
-  if (modelSelect) {
-    modelSelect.addEventListener('change', () => {
-      vscode.postMessage({ type: 'selectModel', model: modelSelect.value });
+  if (modelPicker && modelMenu) {
+    modelPicker.addEventListener('click', (event) => {
+      if (modelMenu.hidden) openModelMenu(event.detail === 0);
+      else closeModelMenu(true);
     });
+    for (const button of effortButtons) {
+      button.addEventListener('click', () => {
+        vscode.postMessage({ type: 'effort', effort: button.dataset.effort });
+      });
+    }
+    modelMenu.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeModelMenu(true);
+      }
+    });
+    document.addEventListener('mousedown', (event) => {
+      if (modelMenu.hidden || modelMenu.contains(event.target) || modelPicker.contains(event.target)) return;
+      closeModelMenu(false);
+    });
+    window.addEventListener('blur', () => closeModelMenu(false));
   }
 
   if (collaborationButton && collaborationMenu) {
@@ -6211,31 +6351,34 @@
     composer.dispatchEvent(new Event('submit', { cancelable: true }));
   });
   if (stopButton) stopButton.addEventListener('click', requestStop);
-  if (prioritySendButton) {
-    prioritySendButton.addEventListener('click', () => {
-      const text = input.value.trim();
-      if (text === '') return;
-      const sentMentions = mentions.slice();
-      const sentImages = images.slice();
-      const sentQuotes = quotes.slice();
-      historyMath.record(history, text);
-      placed = null;
-      input.value = '';
-      growInput();
-      mentions = [];
-      quotes = [];
-      images = [];
-      closePalette();
-      renderChips();
-      prioritySendButton.disabled = true;
-      vscode.postMessage({
-        type: 'sendPriority',
-        text,
-        mentions: sentMentions,
-        images: sentImages,
-        quotes: sentQuotes.map((quote) => ({ role: quote.role, text: quote.text })),
+  if (sendModeButton && sendModeMenu) {
+    sendModeButton.addEventListener('click', toggleSendModeMenu);
+    for (const row of sendModeRows) {
+      row.addEventListener('click', () => {
+        runningSendMode = row.dataset.sendMode === 'steer' ? 'steer' : 'enqueue';
+        updateSendMode();
+        closeSendModeMenu(true);
+        if (running) setRunning(true);
       });
+    }
+    sendModeMenu.addEventListener('keydown', (event) => {
+      const current = sendModeRows.indexOf(document.activeElement);
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeSendModeMenu(true);
+      } else if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        sendModeRows[(current + 1 + sendModeRows.length) % sendModeRows.length]?.focus();
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        sendModeRows[(current - 1 + sendModeRows.length) % sendModeRows.length]?.focus();
+      }
     });
+    document.addEventListener('mousedown', (event) => {
+      if (sendModeMenu.hidden || sendModeMenu.contains(event.target) || sendModeButton.contains(event.target)) return;
+      closeSendModeMenu(false);
+    });
+    updateSendMode();
   }
 
   /**
@@ -6262,7 +6405,10 @@
     }
     else if (e.type === 'todo') setTodos(e.items);
     else if (e.type === 'compact') addCompact(e.compact);
-    else if (e.type === 'error') addNotice(e.text || 'The run reported an error.');
+    // A root run's terminal error is repeated authoritatively by `done`; draw
+    // it there once. Child errors have no root `done` in this webview, so they
+    // still belong inside the expanded subagent transcript.
+    else if (e.type === 'error' && active !== mainScope) addNotice(e.text || 'The run reported an error.');
     else if (e.type === 'progress') {
       // A step belongs to the working line while a turn runs. The same event in
       // a replay has no run of its own, so its text lands on the line instead.
@@ -6425,6 +6571,9 @@
         return;
       case 'models':
         showModels(msg);
+        return;
+      case 'effort':
+        showEffort(msg);
         return;
       case 'collaboration':
         showCollaboration(msg);

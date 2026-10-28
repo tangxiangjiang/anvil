@@ -40,9 +40,34 @@ func NewAnthropic(cfg Config) *Anthropic {
 type anthropicRequest struct {
 	Model     string             `json:"model"`
 	MaxTokens int                `json:"max_tokens"`
+	Thinking  *anthropicThinking `json:"thinking,omitempty"`
 	System    any                `json:"system,omitempty"`
 	Messages  []anthropicMessage `json:"messages"`
 	Tools     []anthropicTool    `json:"tools,omitempty"`
+}
+
+type anthropicThinking struct {
+	Type         string `json:"type"`
+	BudgetTokens int    `json:"budget_tokens"`
+}
+
+func anthropicThinkingFor(effort Effort) (*anthropicThinking, int) {
+	budget := 0
+	switch effort {
+	case EffortLow:
+		budget = 1024
+	case EffortMedium:
+		budget = 4096
+	case EffortHigh:
+		budget = 16384
+	default:
+		return nil, 8192
+	}
+	maxTokens := 8192
+	if effort == EffortHigh {
+		maxTokens = budget + 8192
+	}
+	return &anthropicThinking{Type: "enabled", BudgetTokens: budget}, maxTokens
 }
 
 type anthropicMessage struct {
@@ -98,9 +123,11 @@ func (c *Anthropic) Complete(ctx context.Context, req Request) (*Response, error
 	if err != nil {
 		return nil, err
 	}
+	thinking, maxTokens := anthropicThinkingFor(req.Effort)
 	body := anthropicRequest{
 		Model:     firstNonEmpty(req.Model, c.cfg.Model),
-		MaxTokens: 8192,
+		MaxTokens: maxTokens,
+		Thinking:  thinking,
 		System:    system,
 		Messages:  messages,
 		Tools:     toAnthropicTools(req.Tools),
@@ -180,7 +207,10 @@ func toAnthropicMessages(in []Message, promptCache bool) (system any, out []anth
 			})
 		case RoleAssistant:
 			flushTools()
-			blocks := make([]any, 0, 1+len(m.ToolCalls))
+			blocks := make([]any, 0, len(m.ProviderState)+1+len(m.ToolCalls))
+			for _, raw := range m.ProviderState {
+				blocks = append(blocks, raw)
+			}
 			if m.Content != "" {
 				blocks = append(blocks, map[string]any{"type": "text", "text": m.Content})
 			}
@@ -296,6 +326,8 @@ func fromAnthropicContent(blocks []json.RawMessage) (Message, error) {
 			return msg, err
 		}
 		switch meta.Type {
+		case "thinking", "redacted_thinking":
+			msg.ProviderState = append(msg.ProviderState, append(json.RawMessage(nil), raw...))
 		case "text":
 			var t struct {
 				Text string `json:"text"`

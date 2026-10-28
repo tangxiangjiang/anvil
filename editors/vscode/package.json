@@ -2,7 +2,7 @@
   "name": "anvil-vscode",
   "displayName": "Anvil",
   "description": "Anvil agent in VS Code: streaming chat, tool cards, per-call approvals.",
-  "version": "0.46.54",
+  "version": "0.46.66",
   "publisher": "anvil-dev",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -307,6 +307,16 @@
           "type": "string",
           "default": "",
           "markdownDescription": "OpenAI-compatible base URL, for example `https://api.openai.com/v1`. Empty means the provider default."
+        },
+        "anvil.effort": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "default": "medium",
+          "description": "Default reasoning effort for new chat turns."
         },
         "anvil.modelCatalogUrl": {
           "type": "string",

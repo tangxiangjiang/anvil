@@ -1292,6 +1292,7 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 	result := runtime.Loop(loopCtx, a.complete, a.registry, runtime.Config{
 		CWD:               a.cwd,
 		Model:             a.opts.Model.ID,
+		Effort:            llm.Effort(a.opts.Effort),
 		MaxSteps:          a.opts.MaxSteps,
 		History:           history,
 		UserMsg:           message,
@@ -1573,6 +1574,11 @@ func normalizeOptions(opts Options) (Options, string, error) {
 	case ProviderOpenAI, ProviderAnthropic:
 	default:
 		return opts, "", newError("unsupported provider: "+string(opts.Provider), false, nil)
+	}
+	switch opts.Effort {
+	case EffortDefault, EffortLow, EffortMedium, EffortHigh:
+	default:
+		return opts, "", newError("unsupported effort: "+string(opts.Effort), false, nil)
 	}
 	if opts.APIKey == "" {
 		opts.APIKey = os.Getenv("ANVIL_API_KEY")

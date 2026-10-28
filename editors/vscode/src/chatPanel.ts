@@ -56,6 +56,7 @@ import {
   ContextInfo,
   Decision,
   DoneParams,
+  Effort,
   HostEvent,
   PermissionMode,
   PermissionModeSource,
@@ -88,6 +89,10 @@ interface QueuedTurn {
   mentions: string[];
   images: string[];
   quotes: Array<{ role: 'user' | 'assistant'; text: string }>;
+  /** Options selected in the composer when this turn was submitted. */
+  model: string;
+  effort: Effort;
+  permissionMode: PermissionMode | null;
 }
 
 /** A message from the webview. */
@@ -107,6 +112,7 @@ type Inbound =
   | { type: 'commands' }
   | { type: 'mode'; mode: string }
   | { type: 'selectModel'; model: string }
+  | { type: 'effort'; effort: Effort }
   | { type: 'collaboration'; mode: 'single' | 'multi' }
   | { type: 'agentMap' }
   | { type: 'agentDetail'; agentId: string }
@@ -249,6 +255,7 @@ type Outbound =
    */
   | { type: 'fontSize'; size: number }
   | { type: 'models'; available: string[]; current: string; defaultModel: string }
+  | { type: 'effort'; effort: Effort }
   /**
    * The token meter's inputs. The window is display arithmetic only and never
    * travels to the host; `info` is the live session's own estimate, present
@@ -614,6 +621,7 @@ export class ChatPanel implements HostListener {
       storedCollaboration(context, this.agentId) ??
       (readSettings().session.subagents === false ? 'single' : 'multi');
     this.overrides.subagents = this.collaboration === 'multi';
+    this.overrides.effort = readSettings().session.effort ?? 'medium';
     this.partialReviews = new ReviewPanels(context.extensionUri);
   }
 
@@ -865,6 +873,7 @@ export class ChatPanel implements HostListener {
       this.postMode();
       this.postCollaboration();
       this.postModels();
+      this.postEffort();
       this.postQueue();
       if (this.rules.length > 0) this.post({ type: 'rules', files: this.rules });
       this.postState();
@@ -896,7 +905,15 @@ export class ChatPanel implements HostListener {
 
     switch (msg.type) {
       case 'send':
-        await this.sendTurn(msg.text, msg.mentions ?? [], msg.images ?? [], msg.quotes ?? []);
+        await this.sendTurn({
+          text: msg.text,
+          mentions: msg.mentions ?? [],
+          images: msg.images ?? [],
+          quotes: msg.quotes ?? [],
+          model: this.overrides.model ?? '',
+          effort: this.overrides.effort ?? 'medium',
+          permissionMode: this.mode ?? null,
+        });
         return;
       case 'enqueue':
         await this.enqueueTurn(this.turnPayload(msg));
@@ -931,6 +948,9 @@ export class ChatPanel implements HostListener {
         return;
       case 'selectModel':
         await this.setModel(msg.model);
+        return;
+      case 'effort':
+        await this.setEffort(msg.effort);
         return;
       case 'collaboration':
         await this.setCollaboration(msg.mode);
@@ -1208,6 +1228,9 @@ export class ChatPanel implements HostListener {
       mentions: [...(payload.mentions ?? [])],
       images: [...(payload.images ?? [])],
       quotes: (payload.quotes ?? []).map((quote) => ({ ...quote })),
+      model: this.overrides.model ?? '',
+      effort: this.overrides.effort ?? 'medium',
+      permissionMode: this.mode ?? null,
     };
   }
 
@@ -1228,7 +1251,7 @@ export class ChatPanel implements HostListener {
   private async enqueueTurn(turn: QueuedTurn): Promise<void> {
     if (!this.busy && !this.dispatchingTurn && this.turnQueue.count === 0) {
       this.post({ type: 'dispatchQueued', ...turn });
-      await this.sendTurn(turn.text, turn.mentions, turn.images, turn.quotes);
+      await this.sendTurn(turn);
       return;
     }
     this.turnQueue.enqueue(turn);
@@ -1242,7 +1265,7 @@ export class ChatPanel implements HostListener {
   private async sendPriority(turn: QueuedTurn): Promise<void> {
     if (!this.busy && !this.dispatchingTurn) {
       this.post({ type: 'dispatchQueued', ...turn });
-      await this.sendTurn(turn.text, turn.mentions, turn.images, turn.quotes);
+      await this.sendTurn(turn);
       return;
     }
     this.turnQueue.prioritize(turn);
@@ -1270,7 +1293,7 @@ export class ChatPanel implements HostListener {
     this.postQueue();
     this.post({ type: 'dispatchQueued', ...turn });
     try {
-      await this.sendTurn(turn.text, turn.mentions, turn.images, turn.quotes);
+      await this.sendTurn(turn);
     } finally {
       this.dispatchingTurn = false;
       if (!this.busy && this.turnQueue.count > 0) {
@@ -1308,22 +1331,29 @@ export class ChatPanel implements HostListener {
     }
     const chosen: PermissionMode | undefined = mode === '' ? undefined : mode;
     if (chosen === this.mode) return;
-    // Checked here rather than left to the re-open, so the refusal is reported
-    // as a refusal. `reopen` would throw the same thing, but by then the chosen
-    // mode is already recorded as an override and would silently take effect on
-    // the *next* session — a mode the user was told had been refused.
-    if (this.session?.currentState === 'running') {
-      this.post({ type: 'notice', level: 'warn', message: 'Stop the turn before changing the mode.' });
-      this.postMode();
-      return;
-    }
     // What plan mode replaced is recorded only when plan mode is entered from
     // somewhere else. Approving a plan is then a way back rather than a guess,
     // and a second `/plan` while already in plan mode does not overwrite the
     // answer with `plan` itself.
     const before = this.modeBeforePlan;
-    if (chosen === 'plan' && this.mode !== 'plan') this.modeBeforePlan = this.mode;
-    else if (chosen !== 'plan') this.modeBeforePlan = undefined;
+    const running = this.session?.currentState === 'running';
+    if (!running) {
+      if (chosen === 'plan' && this.mode !== 'plan') this.modeBeforePlan = this.mode;
+      else if (chosen !== 'plan') this.modeBeforePlan = undefined;
+    }
+    if (running) {
+      this.mode = chosen;
+      this.overrides = { ...this.overrides, permission_mode: chosen };
+      await this.context.workspaceState.update(MODE_KEY, chosen);
+      this.postMode();
+      this.postState();
+      this.post({
+        type: 'notice',
+        level: 'info',
+        message: `${chosen === undefined ? 'Workspace default' : MODE_LABELS[chosen]} selected for the next turn.`,
+      });
+      return;
+    }
     try {
       await this.applyOptions({ permission_mode: chosen });
     } catch (err) {
@@ -1364,23 +1394,29 @@ export class ChatPanel implements HostListener {
   }
 
   private async setModel(model: string): Promise<void> {
-    if (this.session?.currentState === 'running') {
-      this.post({ type: 'notice', level: 'warn', message: 'Stop the turn before changing the model.' });
-      this.postModels();
-      return;
-    }
     const settings = readSettings().models;
     if (model !== '' && !settings.available.includes(model) && model !== settings.defaultModel) {
       this.post({ type: 'notice', level: 'warn', message: `${model} is not in the available model list.` });
       this.postModels();
       return;
     }
+    const previous = this.overrides;
+    const next = { ...previous };
+    if (model === '') delete next.model;
+    else next.model = model;
+    const configured = model === '' ? settings.defaultModel || undefined : model;
+    if (this.session?.currentState === 'running') {
+      this.overrides = next;
+      this.postModels();
+      this.post({
+        type: 'notice',
+        level: 'info',
+        message: model === '' ? 'Workspace default selected for the next turn.' : `${model} selected for the next turn.`,
+      });
+      this.postState();
+      return;
+    }
     try {
-      const previous = this.overrides;
-      const next = { ...previous };
-      if (model === '') delete next.model;
-      else next.model = model;
-      const configured = model === '' ? settings.defaultModel || undefined : model;
       const session = this.session;
       let reopened = false;
       if (!session) {
@@ -1404,6 +1440,27 @@ export class ChatPanel implements HostListener {
       this.postModels();
       this.postState();
     }
+  }
+
+  private postEffort(): void {
+    this.post({ type: 'effort', effort: this.overrides.effort ?? 'medium' });
+  }
+
+  private async setEffort(effort: Effort): Promise<void> {
+    if (effort !== 'low' && effort !== 'medium' && effort !== 'high') return;
+    if (this.session?.currentState === 'running') {
+      this.overrides.effort = effort;
+    } else {
+      try {
+        await this.applyOptions({ effort });
+      } catch (err) {
+        this.post({ type: 'notice', level: 'error', message: `Could not change effort: ${(err as Error).message}` });
+        this.postEffort();
+        return;
+      }
+    }
+    this.postEffort();
+    this.postState();
   }
 
   private postCollaboration(): void {
@@ -1564,20 +1621,52 @@ export class ChatPanel implements HostListener {
     return this.pendingApprovals().length > 0;
   }
 
-  /** Composes and sends one turn, with whatever context the editor has. */
-  private async sendTurn(
-    text: string,
-    mentions: string[],
-    images: string[],
-    quotes: Array<{ role: 'user' | 'assistant'; text: string }>,
-  ): Promise<void> {
+  /**
+   * Applies the options captured when a queued turn was submitted.
+   *
+   * A selector changed during a run updates the composer's next-turn choice,
+   * not the active session. Reopening happens only after that run is terminal,
+   * immediately before this turn is interpreted and sent.
+   */
+  private async applyTurnOptions(turn: QueuedTurn): Promise<void> {
+    const session = this.session;
+    if (!session) return;
+    const settings = readSettings().models;
+    const model = turn.model === '' ? settings.defaultModel || undefined : turn.model;
+    const permissionMode = turn.permissionMode ?? undefined;
+    const current = session.settings;
+    if (permissionMode === 'plan' && current.permission_mode !== 'plan') {
+      this.modeBeforePlan =
+        current.permission_mode ?? this.resolvedMode?.mode ?? this.mode ?? 'ask';
+    }
+    if (current.model === model && current.effort === turn.effort && current.permission_mode === permissionMode) return;
+    const result = await session.reopen({ model, effort: turn.effort, permission_mode: permissionMode });
+    if (result) {
+      this.noteResolvedMode(result);
+      this.resolvedModel = result.model;
+    }
+  }
+
+  /** Composes and sends one turn, with the options and context it captured. */
+  private async sendTurn(turn: QueuedTurn): Promise<void> {
+    try {
+      await this.applyTurnOptions(turn);
+    } catch (err) {
+      this.post({
+        type: 'notice',
+        level: 'error',
+        message: `Could not apply the queued model, effort, or mode: ${(err as Error).message}`,
+      });
+      this.postState();
+      return;
+    }
     // The catalogue is only consulted for a line that could be a command, so an
     // ordinary prompt never pays for the round trip (or for the host process
     // the round trip would start).
-    const action = parseSlash(text)
-      ? route(text, await this.commandCatalogue())
-      : { kind: 'prompt' as const, text };
-    await this.runAction(action, text, mentions, images, quotes);
+    const action = parseSlash(turn.text)
+      ? route(turn.text, await this.commandCatalogue())
+      : { kind: 'prompt' as const, text: turn.text };
+    await this.runAction(action, turn.text, turn.mentions, turn.images, turn.quotes);
   }
 
   /**
@@ -3239,6 +3328,7 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri, focus = f
     --anvil-composer-h, which is what the transcript reserves at its bottom.
   -->
   <div id="composerDock" class="dock">
+    <div id="planDock" class="plan-dock" hidden></div>
     <button id="autoScroll" type="button" class="auto-scroll" aria-label="Disable auto-scroll" aria-pressed="true" title="Auto-scroll is on">
       <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M10 3v10"/>
@@ -3347,6 +3437,31 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri, focus = f
         <span class="collaboration-row-copy"><strong>Complex</strong><small>Advanced orchestration · coming later</small></span>
       </button>
     </div>
+    <div id="modelMenu" class="model-menu" role="dialog" aria-label="Select model and effort" hidden>
+      <div class="model-menu-head">Select a model</div>
+      <div id="modelMenuList" class="model-menu-list" role="radiogroup" aria-label="Available models"></div>
+      <div class="model-effort">
+        <span id="effortMenuLabel">Effort <span>(Medium)</span></span>
+        <div id="effortControl" class="effort-control" role="radiogroup" aria-label="Reasoning effort">
+          <button type="button" role="radio" aria-checked="false" data-effort="low" title="Low effort"><span></span></button>
+          <button type="button" role="radio" aria-checked="true" data-effort="medium" title="Medium effort"><span></span></button>
+          <button type="button" role="radio" aria-checked="false" data-effort="high" title="High effort"><span></span></button>
+        </div>
+      </div>
+    </div>
+    <!--
+      The model's live task plan sits immediately above the composer. Every
+      todo event carries the whole list and replaces this block; an empty list
+      hides it. The head stays outside the scrolling list so its close button
+      remains reachable with a long plan.
+    -->
+    <div id="todos" class="todos" hidden>
+      <div class="todos-head">
+        <span class="todos-title">Plan</span>
+        <button id="todosClose" type="button" class="todos-close" aria-label="Hide the task list" title="Hide the task list">×</button>
+      </div>
+      <div id="todoList" class="todo-list" role="list" aria-label="Task list"></div>
+    </div>
     <form id="composer" class="composer">
       <div id="palette" class="palette" hidden></div>
       <div id="chips" class="chips" hidden></div>
@@ -3374,12 +3489,12 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri, focus = f
             </svg>
           </button>
         </div>
-        <label class="composer-model" title="Model for this conversation">
-          <span class="sr-only">Model</span>
-          <select id="modelSelect" aria-label="Model for this conversation">
-            <option value="">Default</option>
-          </select>
-        </label>
+        <button id="modelPicker" type="button" class="composer-model-trigger" aria-label="Select model and reasoning effort" aria-expanded="false" aria-controls="modelMenu" title="Select model and reasoning effort">
+          <span id="modelPickerLabel">Default</span>
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="m4.5 6 3.5 3.5L11.5 6"/>
+          </svg>
+        </button>
         <span class="spacer"></span>
         <button id="mode" type="button" class="mode-trigger" aria-label="Agent mode" aria-expanded="false" aria-controls="modeMenu" title="Choose how the agent may act">
           <svg class="mode-trigger-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true">
@@ -3390,44 +3505,37 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri, focus = f
             <path d="m5 6.5 3 3 3-3"/>
           </svg>
         </button>
-        <button id="prioritySend" type="button" class="secondary run-action" aria-label="Interrupt and send now" title="Interrupt the current response and send now" hidden>
-          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true">
-            <path d="m11.5 2.8-6 8h4l-1 6.4 6-8h-4z"/>
-          </svg>
-          <span>Send now</span>
-        </button>
         <button id="stop" type="button" class="secondary icon run-stop" aria-label="Stop current response" title="Stop current response" hidden>
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <rect x="7" y="7" width="10" height="10" rx="1.5" fill="currentColor"/>
           </svg>
         </button>
-        <button id="send" type="button" class="primary icon" aria-label="Send" title="Send">
-          <svg class="icon-send" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M22 2 11 13"/>
-            <path d="m22 2-7 20-4-9-9-4 20-7z"/>
-          </svg>
-          <span id="sendLabel" class="send-label">Enqueue</span>
-          <span id="queueCount" class="queue-count" hidden></span>
-        </button>
+        <div class="send-split">
+          <button id="send" type="button" class="primary icon" aria-label="Send" title="Send">
+            <svg class="icon-send" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M22 2 11 13"/>
+              <path d="m22 2-7 20-4-9-9-4 20-7z"/>
+            </svg>
+            <span id="queueCount" class="queue-count" hidden></span>
+          </button>
+          <button id="sendMode" type="button" class="primary send-mode-trigger" aria-label="Choose send behavior while Anvil is working" aria-expanded="false" aria-controls="sendModeMenu" title="Choose Enqueue or Insert">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="m4.5 10 3.5-3.5 3.5 3.5"/>
+            </svg>
+          </button>
+          <div id="sendModeMenu" class="send-mode-menu" role="menu" aria-label="Send behavior" hidden>
+            <button type="button" class="send-mode-row" role="menuitemradio" aria-checked="true" data-send-mode="enqueue">
+              <span class="send-mode-check">✓</span>
+              <span><strong>Enqueue</strong><small>Send after the current response</small></span>
+            </button>
+            <button type="button" class="send-mode-row" role="menuitemradio" aria-checked="false" data-send-mode="steer">
+              <span class="send-mode-check">✓</span>
+              <span><strong>Steer</strong><small>Interrupt and guide the current task</small></span>
+            </button>
+          </div>
+        </div>
       </div>
     </form>
-    <!--
-      The model's own plan, below the composer: it is about the work in flight,
-      not about the conversation, so it does not belong in the transcript. Every
-      todo event carries the whole list and replaces this block; an empty list
-      hides it.
-      The head sits outside the scrolling list so its close button stays put
-      with a long plan. Closing hides the block until a different plan arrives:
-      a status change on the same plan is the model working, not a new plan, and
-      reopening it then would undo the reader's click.
-    -->
-    <div id="todos" class="todos" hidden>
-      <div class="todos-head">
-        <span class="todos-title">Plan</span>
-        <button id="todosClose" type="button" class="todos-close" aria-label="Hide the task list" title="Hide the task list">×</button>
-      </div>
-      <div id="todoList" class="todo-list" role="list" aria-label="Task list"></div>
-    </div>
   </div>
   <!--
     The Markdown parser first, because it is a plain script assigning a global

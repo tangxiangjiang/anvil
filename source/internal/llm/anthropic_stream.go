@@ -17,6 +17,7 @@ import (
 type anthropicStreamRequest struct {
 	Model     string             `json:"model"`
 	MaxTokens int                `json:"max_tokens"`
+	Thinking  *anthropicThinking `json:"thinking,omitempty"`
 	System    any                `json:"system,omitempty"`
 	Messages  []anthropicMessage `json:"messages"`
 	Tools     []anthropicTool    `json:"tools,omitempty"`
@@ -30,6 +31,17 @@ func (c *Anthropic) CompleteStream(ctx context.Context, req Request, onDelta fun
 	}
 	if onDelta == nil {
 		onDelta = func(Delta) {}
+	}
+	// Extended thinking blocks carry provider signatures that must be replayed
+	// verbatim during tool loops. The non-streaming decoder preserves those
+	// opaque blocks; use it until the SSE decoder can retain complete signed
+	// thinking blocks as well.
+	if req.Effort != EffortDefault {
+		resp, err := c.Complete(ctx, req)
+		if err == nil && resp != nil && resp.Message.Content != "" {
+			onDelta(Delta{Text: resp.Message.Content})
+		}
+		return resp, err
 	}
 	system, messages, err := toAnthropicMessages(req.Messages, req.PromptCache)
 	if err != nil {

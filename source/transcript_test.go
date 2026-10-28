@@ -62,7 +62,7 @@ func TestFailedRunKeepsItsReasonForTranscriptAndRunReaders(t *testing.T) {
 		wantCode Code
 	}{
 		{name: "provider error", complete: failAtProvider{}, wantErr: "gateway closed the request", wantCode: CodeProvider},
-		{name: "empty response", complete: emptyAtProvider{}, wantErr: "model provider returned 3 consecutive empty responses; automatic recovery produced no tool call or final answer", wantCode: CodeEmptyResponse},
+		{name: "empty response", complete: emptyAtProvider{}, wantErr: "model provider returned 5 consecutive empty responses; automatic recovery produced no tool call or final answer", wantCode: CodeEmptyResponse},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()

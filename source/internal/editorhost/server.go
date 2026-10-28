@@ -1481,6 +1481,7 @@ func (s *Server) buildOptions(ctx context.Context, p SessionParams, sess *sessio
 		PermissionGroups:  groups,
 		Provider:          anvil.Provider(firstNonEmpty(p.Provider, s.cfg.Provider, os.Getenv("ANVIL_PROVIDER"))),
 		BaseURL:           firstNonEmpty(p.BaseURL, s.cfg.BaseURL, os.Getenv("ANVIL_BASE_URL")),
+		Effort:            anvil.Effort(p.Effort),
 		SystemPrompt:      p.SystemPrompt,
 		RequireFinishTask: true,
 		MaxSteps:          p.MaxSteps,

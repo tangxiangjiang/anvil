@@ -64,6 +64,16 @@ function parseRules(): Rule[] {
 
 const RULES = parseRules();
 
+test('live task plan is rendered before the composer', () => {
+  const todos = PANEL.indexOf('<div id="todos" class="todos"');
+  const composer = PANEL.indexOf('<form id="composer" class="composer">');
+  assert.ok(todos >= 0, 'todo plan is present');
+  assert.ok(composer >= 0, 'composer is present');
+  assert.ok(todos < composer, 'todo plan precedes the composer');
+  assert.equal(valueOf('.todos', 'margin-bottom'), '6px');
+  assert.equal(valueOf('.todos', 'margin-top'), undefined);
+});
+
 /** The bodies of every rule whose selector list contains `selector` exactly. */
 function bodiesOf(selector: string): string[] {
   return RULES.filter((rule) => rule.selectors.includes(selector)).map((rule) => rule.body);
@@ -195,14 +205,19 @@ test('auto-scroll is an explicit persistent preference that can preserve review 
   assert.match(valueOf(".auto-scroll[aria-pressed='true']", 'border-color') ?? '', /focusBorder/);
 });
 
-test('the running composer stays editable and offers queue, priority, and stop actions', () => {
-  assert.match(PANEL, /id="prioritySend"[^>]*title="Interrupt the current response and send now"/);
+test('the running composer stays editable and offers a split queue mode plus stop', () => {
   assert.match(PANEL, /id="stop"[^>]*aria-label="Stop current response"/);
-  assert.match(PANEL, /id="sendLabel"[^>]*>Enqueue</);
+  assert.match(PANEL, /id="send"[^>]*aria-label="Send"/);
+  assert.match(PANEL, /id="sendMode"[^>]*aria-controls="sendModeMenu"/);
+  assert.match(PANEL, /data-send-mode="enqueue"[\s\S]*?>Enqueue</);
+  assert.match(PANEL, /data-send-mode="steer"[\s\S]*?>Steer</);
+  assert.doesNotMatch(PANEL, /id="prioritySend"/);
   assert.doesNotMatch(JS, /input\.disabled\s*=\s*running/);
   assert.doesNotMatch(JS, /attachButton\.disabled\s*=\s*running/);
-  assert.match(JS, /const type = running \? 'enqueue' : 'send'/);
-  assert.match(JS, /type:\s*'sendPriority'/);
+  assert.match(JS, /runningSendMode === 'steer' \? 'sendPriority' : 'enqueue'/);
+  assert.match(JS, /row\.dataset\.sendMode === 'steer'/);
+  assert.match(JS, /composer\.classList\.toggle\('send-menu-open', opening\)/);
+  assert.match(bodiesOf('.composer.send-menu-open').join(';'), /overflow:\s*visible/);
   assert.match(JS, /case 'dispatchQueued':\s*dispatchQueued\(msg\)/);
 });
 
@@ -352,6 +367,12 @@ test('the dock paints above every dot in the transcript', () => {
     assert.ok(dot > 0, `${selector} still covers its rail`);
     assert.ok(dock > dot, `${selector} must paint under the dock`);
   }
+});
+
+test('the model menu uses themed surfaces and contains the effort control', () => {
+  assert.match(bodiesOf('.model-menu').join(';'), /--vscode-editorWidget-background/);
+  assert.match(bodiesOf('.model-menu-row').join(';'), /--vscode-foreground/);
+  assert.match(PANEL, /id="modelMenu"[\s\S]*?id="modelMenuList"[\s\S]*?id="effortControl"/);
 });
 
 test('the stylesheet has no at-rules, which is what lets it be parsed as text', () => {

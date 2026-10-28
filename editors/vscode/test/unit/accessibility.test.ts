@@ -90,9 +90,12 @@ test('every icon-only control has a name that is not a tooltip', () => {
   assert.match(CHAT_JS, /dismiss\.setAttribute\('aria-label', 'Dismiss'\);/);
   // The plus is an SVG and names the menu it controls.
   assert.match(CHAT_PANEL, /id="attach"[^>]*aria-label="Add to prompt"[^>]*aria-controls="actionMenu"/);
-  // Send becomes a named Enqueue control while running; Stop has its own name.
-  assert.match(CHAT_JS, /sendButton\.setAttribute\('aria-label', running \? 'Enqueue after current response' : 'Send'\);/);
-  assert.match(CHAT_PANEL, /id="prioritySend"[^>]*aria-label="Interrupt and send now"/);
+  // The send icon names its selected running action; its adjacent trigger owns
+  // the radio menu. Stop remains a separate action.
+  assert.match(CHAT_JS, /sendButton\.setAttribute\('aria-label', running \? action : 'Send'\);/);
+  assert.match(CHAT_PANEL, /id="sendMode"[^>]*aria-controls="sendModeMenu"/);
+  assert.match(CHAT_PANEL, /id="sendModeMenu"[^>]*role="menu"/);
+  assert.match(CHAT_PANEL, /role="menuitemradio"[^>]*aria-checked="true"[^>]*data-send-mode="enqueue"/);
   assert.match(CHAT_PANEL, /id="stop"[^>]*aria-label="Stop current response"/);
 });
 

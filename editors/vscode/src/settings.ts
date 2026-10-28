@@ -13,6 +13,7 @@ import { ApiKeyStore, applyApiKeyEnv, forgetApiKey, loadApiKey, saveApiKey } fro
 import { argv, lspParams } from './languageTools';
 import { McpSettings, settingSourcesFor } from './mcp';
 import { DEFAULT_MODEL_CATALOG_URL, ModelSettings, normalizeModelIds } from './models';
+import { Effort } from './protocol';
 import { SessionConfig } from './session';
 import { WebSearchSettings, webSearchParams } from './webSearch';
 import { rootUri } from './workspaceRoot';
@@ -135,6 +136,7 @@ export function readSettings(): ResolvedSettings {
     provider: emptyToUndefined(cfg.get<string>('provider', '')),
     model: emptyToUndefined(selectedDefaultModel),
     base_url: emptyToUndefined(cfg.get<string>('baseUrl', '')),
+    effort: readEffort(cfg.get<string>('effort', 'medium')),
   };
   const defaultModel = session.model ?? '';
   const models: ModelSettings = {
@@ -245,6 +247,10 @@ export function readSettings(): ResolvedSettings {
     cacheTtlSeconds,
     fontSize,
   };
+}
+
+function readEffort(value: string | undefined): Effort {
+  return value === 'low' || value === 'high' ? value : 'medium';
 }
 
 /**

@@ -109,16 +109,14 @@ const reasoningFlushChars = 200
 // EmptyResponseError is returned after bounded recovery when a provider keeps
 // producing neither text nor tool calls. An empty turn is not a successful
 // agent completion.
-const EmptyResponseError = "model provider returned 3 consecutive empty responses; automatic recovery produced no tool call or final answer"
+const EmptyResponseError = "model provider returned 5 consecutive empty responses; automatic recovery produced no tool call or final answer"
 
-const maxEmptyResponses = 3
+const maxEmptyResponses = 5
 const maxFinishProtocolMisses = 3
 
-// FinishTaskRequiredError is returned when an editor-style run repeatedly
-// returns ordinary assistant text instead of the explicit terminal control
-// call. The model's prose cannot reliably distinguish progress from a final
-// answer; finish_task is that distinction on the wire.
-const FinishTaskRequiredError = "model did not call finish_task after 3 attempts; ordinary assistant text is not a terminal signal"
+// FinishTaskRequiredError is returned when an editor-style run ignores both
+// bounded corrections and the constrained finish-only recovery request.
+const FinishTaskRequiredError = "model did not call finish_task after corrective retries and forced finalization; ordinary assistant text is not a terminal signal"
 
 const finishTaskToolName = "finish_task"
 
@@ -126,6 +124,8 @@ const finishTaskInstruction = `# Completion protocol
 Ordinary assistant text does not end this run. Continue using tools while work remains. When the task is fully complete or honestly blocked, call finish_task exactly once and as the only tool call, with the final user-facing summary. Do not announce future work and stop.`
 
 const finishTaskCorrection = "This run is still active because ordinary assistant text is not a completion signal. If work remains, continue now with the appropriate tools. If the task is complete or honestly blocked, call finish_task alone with a non-empty final summary."
+
+const finishTaskRecovery = "Protocol recovery: terminate this run now by calling finish_task, the only available tool. Summarize completed work and verification, or state the concrete blocker honestly. Do not return ordinary assistant text."
 
 func finishTaskDef() llm.ToolDef {
 	return llm.ToolDef{
@@ -251,6 +251,7 @@ type Result struct {
 type Config struct {
 	CWD      string
 	Model    string
+	Effort   llm.Effort
 	MaxSteps int // 0 = unlimited (default); optional hard ceiling only
 	History  []llm.Message
 	UserMsg  string
@@ -362,6 +363,8 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 	transientStart := -1
 	var background backgroundComposition
 	finishProtocolMisses := 0
+	finishRecoveryUsed := false
+	finishOnlyNext := false
 	emptyResponses := 0
 	forceNonStreaming := false
 
@@ -387,7 +390,13 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 		var streamedText strings.Builder
 		var resp *llm.Response
 		var err error
-		req := llm.Request{Model: cfg.Model, Messages: messages, Tools: toolDefs, PromptCache: cfg.PromptCache}
+		requestedFinishOnly := finishOnlyNext
+		requestTools := toolDefs
+		if requestedFinishOnly {
+			requestTools = []llm.ToolDef{finishTaskDef()}
+		}
+		finishOnlyNext = false
+		req := llm.Request{Model: cfg.Model, Messages: messages, Tools: requestTools, Effort: cfg.Effort, PromptCache: cfg.PromptCache}
 		roundInput := compress.Estimate(req.Messages)
 		liveUsage := func(roundOutput int) *llm.Usage {
 			u := &llm.Usage{InputTokens: roundInput, OutputTokens: roundOutput}
@@ -513,6 +522,10 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 			invalidReason = "composition"
 			invalidError = BackgroundDelegationError
 			correctionPrompt = "All background subagent results are now available. Re-evaluate the original request and integrate those results. Continue with tools if work remains; otherwise call finish_task alone with the final summary."
+		case cfg.RequireFinishTask && requestedFinishOnly && !finishPresent:
+			invalidReason = "finish"
+			invalidError = FinishTaskRequiredError
+			correctionPrompt = finishTaskRecovery
 		case len(assistant.ToolCalls) == 0:
 			switch {
 			case strings.TrimSpace(assistant.Content) == "":
@@ -540,7 +553,18 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 			}
 			if invalidReason == "finish" {
 				finishProtocolMisses++
-				canCorrect = finishProtocolMisses < maxFinishProtocolMisses
+				switch {
+				case finishProtocolMisses < maxFinishProtocolMisses:
+					canCorrect = true
+				case !finishRecoveryUsed:
+					canCorrect = true
+					finishRecoveryUsed = true
+					finishOnlyNext = true
+					forceNonStreaming = true
+					correctionPrompt = finishTaskRecovery
+				default:
+					canCorrect = false
+				}
 			}
 			if canCorrect {
 				// Keep the rejected turn and corrective instruction in this one
@@ -552,10 +576,11 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 				messages = append(messages, llm.Message{Role: llm.RoleUser, Content: correctionPrompt})
 				retryReason = invalidReason
 				if invalidReason == "empty" {
-					// A streamed empty completion can be an SSE assembly defect
-					// rather than a model decision. Recover through the complete
-					// response parser so the same failure path is not repeated.
-					forceNonStreaming = true
+					// A streamed empty completion can be an SSE assembly defect,
+					// while some gateways fail only on their non-streaming path.
+					// Alternate both paths so recovery does not get trapped in
+					// whichever transport produced the first empty response.
+					forceNonStreaming = emptyResponses%2 == 1
 				}
 				if invalidReason == "composition" {
 					background.checkpointed = true
@@ -578,6 +603,7 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 		retryReason = ""
 		emptyResponses = 0
 		finishProtocolMisses = 0
+		finishRecoveryUsed = false
 		if cfg.RequireFinishTask && finishPresent {
 			final := llm.Message{Role: llm.RoleAssistant, Content: finishSummary}
 			emit(Event{Type: "assistant", Text: finishSummary})
