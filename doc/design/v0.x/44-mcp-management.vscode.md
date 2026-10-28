@@ -18,7 +18,7 @@ narrow, and 0.40.6 wrote the narrowness down as a contract rather than an accide
 - Every `Agent` starts its **own** MCP sessions, and any start failure aborts `Create`
   ([agent.go](../../../source/agent.go)). One mistyped server makes the session unusable.
 - `ListMCPServers` and the host's `mcp.list` describe *configuration*: name, transport and the
-  file that declared it ([mcp.go](../../../source/mcp.go),
+  file that declared it ([mcp.go](../../../source/mcp_listing.go),
   [p_0.40.6.vscode.md](../../roadmaps/v0.x/m_0.40/p_0.40.6.vscode.md)). The wire has no field for
   "connected" because the host could not observe one.
 - The editor draws a read-only card and offers no command, view or write path.
@@ -113,7 +113,7 @@ registry from the runtime's snapshot.
 ### 3.2 Editing is raw and atomic
 
 Add, update, remove and toggle are exported from package `anvil`
-([mcpconfig.go](../../../source/mcpconfig.go)) because the host may import nothing else. They:
+([mcpconfig.go](../../../source/mcp_config.go)) because the host may import nothing else. They:
 
 - read the file as `map[string]json.RawMessage`, keeping unknown top-level fields and unknown
   fields inside every other server entry;

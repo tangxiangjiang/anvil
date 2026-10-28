@@ -68,7 +68,7 @@ which is exactly today's behaviour.
 ## 4. Rewind is a run, and the UI should say so
 
 The SDK captures a checkpoint **before each run** (`CheckpointRun` in
-[checkpoints.go](../../../source/checkpoints.go)) and `session.fork` copies a conversation
+[checkpoints.go](../../../source/session_checkpoints.go)) and `session.fork` copies a conversation
 **up to a finished run**. The client already exposes both, but only as two buttons on a run.
 
 A run is one turn, and one turn starts from one user message. So "rewind to this message" is

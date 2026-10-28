@@ -32,7 +32,7 @@ find. User and assistant text was never redacted on the wire either, so a replay
 what the live stream showed. What is new is durability: output that used to scroll past now stays
 readable in the workspace's own file, which is a reason to keep the redaction honest and not a
 reason to add a mechanism. What the reader must never carry is checked rather than assumed —
-`source/transcript_test.go` asserts that no entry, and no line of the store file, contains image
+`source/session_transcript_test.go` asserts that no entry, and no line of the store file, contains image
 bytes or the API key.
 
 ## Explicit non-controls

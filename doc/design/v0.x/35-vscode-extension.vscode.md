@@ -76,7 +76,7 @@ Messages marked ← are server→client **notifications** (no `id`); → are cli
 
 ### Event payload comes from the public SDK types
 
-The `event` notification carries the fields of the public **`anvil.Event`** (`source/types.go`) — `type, text, tool_call_id, name, args, content, is_error, step, max_steps, code` — plus the `session_id` / `run_id` the host adds for correlation. A `compact` event carries `compact{reason, before, after, summarized, window}` (0.43). The terminal `done` carries the public **`anvil.RunResult`**: `status, result, steps, usage, err, code`, plus `context{...}` and `last_request_at` from the host (0.43). A manual compaction has no run to key an event by, so it arrives as its own `compact` notification with the same inner shape; the client draws one divider for both and replays it from the `summary` entry.
+The `event` notification carries the fields of the public **`anvil.Event`** (`source/agent_types.go`) — `type, text, tool_call_id, name, args, content, is_error, step, max_steps, code` — plus the `session_id` / `run_id` the host adds for correlation. A `compact` event carries `compact{reason, before, after, summarized, window}` (0.43). The terminal `done` carries the public **`anvil.RunResult`**: `status, result, steps, usage, err, code`, plus `context{...}` and `last_request_at` from the host (0.43). A manual compaction has no run to key an event by, so it arrives as its own `compact` notification with the same inner shape; the client draws one divider for both and replays it from the `summary` entry.
 
 Deliberately **not** the daemon's `JobEventBody` / `JobDoneBody`: those belong to the tool-chain protocol, and depending on them is exactly the coupling this chapter forbids. The shapes look alike because both derive from the same runtime events — that resemblance is a consequence, not a contract.
 
@@ -103,7 +103,7 @@ What the editor knows, the agent should know — but the client decides *what*, 
 
 ## Approval and permission modes
 
-The SDK already exposes a **blocking** approval hook — `Options.Permission` (`source/options.go`):
+The SDK already exposes a **blocking** approval hook — `Options.Permission` (`source/agent_options.go`):
 
 ```go
 type PermissionFunc func(ctx, PermissionRequest) (PermissionDecision, error)
@@ -119,7 +119,7 @@ The pre-0.35 gate fired only when `tools.IsMutating(name)` was true, and that ma
 
 It was closed **additively** (shipped in p_0.35.3):
 
-- Gating is by **tool group**, and the table now lives in `source/internal/tools/groups.go` as the single source of truth — `source/toolfilter.go` delegates to it, so the SDK gate and the tool filter cannot drift apart.
+- Gating is by **tool group**, and the table now lives in `source/internal/tools/groups.go` as the single source of truth — `source/agent_toolfilter.go` delegates to it, so the SDK gate and the tool filter cannot drift apart.
 - New option `Options.PermissionGroups []string`; **empty keeps the old behaviour exactly** (the four mutating builtins). The host opts in to the wider set: `write, edit, shell, verify, web, mcp`.
 - `MCP`, plugin, and `Options.Tools` handlers were routed through the gate. They belong to no group — recognised by type, since every external tool is a `*tools.FuncTool` — so they are gated **unconditionally once `PermissionGroups` is non-empty**, and stay ungated when it is empty.
 - `Options.PermissionGroups` is the only change that alters what the SDK does. `PermissionRequest.Preview` is additive: every existing caller compiles and behaves identically.
@@ -281,7 +281,7 @@ and the workspace gains a command that opens the file all of it is about.
   is what will be in the file. It never infers a label from a pattern: that would be the
   pattern grammar implemented a second time in the one place tests cannot reach. The pairing is
   pinned by `test/unit/permissionKinds.test.ts`, which reads `media/chat.js`,
-  `src/protocol.ts`, `source/permissionrules.go` and `proto.go` as text and fails if a kind has
+  `src/protocol.ts`, `source/permission_rules.go` and `proto.go` as text and fails if a kind has
   no label, if a field the card reads is renamed on the Go side, or if a method name is spelled
   two ways. All three are silent at runtime — an unlabelled button, an `undefined`, a `-32601`.
 - **Choosing one is a request, not a verdict.** The card posts the rule and the `request_id`
