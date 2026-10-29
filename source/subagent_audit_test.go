@@ -5,6 +5,7 @@ package anvil
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -28,25 +29,35 @@ func TestAuditRefusedBackgroundSpawnReturnsItsBudget(t *testing.T) {
 
 	spawn := `{"prompt":"child work","description":"child","background":true}`
 	var results []string
+	parentCalls := 0
 	parent.complete = completerFunc(func(_ context.Context, req llm.Request) (*llm.Response, error) {
+		if lastUserText(req) == "child work" {
+			return &llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Content: "child done"}}, nil
+		}
 		for _, m := range trailingToolResults(req) {
 			if len(results) < len(trailingToolResults(req)) {
 				results = append(results, m.Content)
 			}
 		}
-		switch len(trailingToolResults(req)) {
-		case 0:
+		parentCalls++
+		switch parentCalls {
+		case 1:
 			// Fill the task table with a long background shell.
 			return callResponse("c1", "shell", `{"command":"sleep 30","run_in_background":true}`), nil
-		case 1:
+		case 2:
 			// Refused: the task table is full. The budget slot is taken before this.
 			return callResponse("c2", "spawn_agent", spawn), nil
-		case 2:
+		case 3:
 			// Free the task table for real: cancel the background shell, then try again.
 			if id := taskIDFromResult(results[0]); id != "" {
 				parent.CancelTask(id)
 			}
 			return callResponse("c3", "spawn_agent", spawn), nil
+		case 4:
+			// A parent must join the background child it started before it may finish.
+			id := taskIDFromResult(trailingToolResults(req)[0].Content)
+			waitTask(t, parent, id)
+			return callResponse("c4", "task_output", fmt.Sprintf(`{"task_id":%q}`, id)), nil
 		default:
 			return &llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Content: "done"}}, nil
 		}

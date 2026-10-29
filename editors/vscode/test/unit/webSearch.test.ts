@@ -13,6 +13,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { WebSearchSettings, webSearchNeedsKey, webSearchParams } from '../../src/webSearch';
+import { configurationProperties } from '../helpers/package';
 
 const EXTENSION_ROOT = join(__dirname, '..', '..', '..');
 const CHAT_JS = readFileSync(join(EXTENSION_ROOT, 'media', 'chat.js'), 'utf8');
@@ -125,9 +126,10 @@ test('the key has its own commands and its own secret', () => {
 });
 
 test('the settings default to off and read the four fields', () => {
-  const enabled = PACKAGE.contributes.configuration.properties['anvil.webSearch.enabled'];
-  const provider = PACKAGE.contributes.configuration.properties['anvil.webSearch.provider'];
-  const maxResults = PACKAGE.contributes.configuration.properties['anvil.webSearch.maxResults'];
+  const properties = configurationProperties(PACKAGE);
+  const enabled = properties['anvil.webSearch.enabled'];
+  const provider = properties['anvil.webSearch.provider'];
+  const maxResults = properties['anvil.webSearch.maxResults'];
   assert.equal(enabled.type, 'boolean');
   assert.equal(enabled.default, false);
   assert.deepEqual(provider.enum, ['http', 'mcp']);

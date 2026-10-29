@@ -45,13 +45,16 @@ const DefaultLimit = 4
 
 // Info is one task's snapshot.
 type Info struct {
-	ID        string
-	Kind      Kind
-	Title     string
-	Status    Status
-	AgentID   string
-	StartedAt time.Time
-	EndedAt   time.Time
+	ID               string
+	Kind             Kind
+	Title            string
+	Status           Status
+	AgentID          string
+	ChildAgentID     string
+	ParentRunID      string
+	ParentToolCallID string
+	StartedAt        time.Time
+	EndedAt          time.Time
 	// ExitCode is the process exit code for a shell task; -1 when the process
 	// did not exit on its own. It is 0 for an agent task.
 	ExitCode int
@@ -74,8 +77,10 @@ type ShellSpec struct {
 
 // AgentSpec describes one background subagent.
 type AgentSpec struct {
-	Title   string
-	AgentID string
+	Title            string
+	AgentID          string
+	ParentRunID      string
+	ParentToolCallID string
 	// Run performs the work. status is a run status ("finished", "cancelled",
 	// "error"); message is what the task's output returns. The runner observes
 	// ctx, so cancelling the task stops the agent.
@@ -96,6 +101,15 @@ type task struct {
 	ring   *ring
 	cancel context.CancelCauseFunc
 	done   chan struct{}
+}
+
+type taskIDContextKey struct{}
+
+// IDFromContext returns the manager task id while an AgentSpec runner is
+// active. It lets the runner attach the concrete child id after creation.
+func IDFromContext(ctx context.Context) string {
+	id, _ := ctx.Value(taskIDContextKey{}).(string)
+	return id
 }
 
 // Manager is the tree's task table. It is safe for concurrent use.
@@ -136,7 +150,11 @@ func (m *Manager) limit() int {
 
 // start registers a new running task, refusing past the limit. The caller
 // starts the goroutine that will call finish.
-func (m *Manager) start(kind Kind, title, agentID string, cancel context.CancelCauseFunc) (*task, Info, error) {
+func (m *Manager) start(
+	kind Kind,
+	title, agentID, parentRunID, parentToolCallID string,
+	cancel context.CancelCauseFunc,
+) (*task, Info, error) {
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
@@ -155,12 +173,14 @@ func (m *Manager) start(kind Kind, title, agentID string, cancel context.CancelC
 	}
 	t := &task{
 		Info: Info{
-			ID:        "task-" + id.New(),
-			Kind:      kind,
-			Title:     title,
-			Status:    StatusRunning,
-			AgentID:   agentID,
-			StartedAt: time.Now().UTC(),
+			ID:               "task-" + id.New(),
+			Kind:             kind,
+			Title:            title,
+			Status:           StatusRunning,
+			AgentID:          agentID,
+			ParentRunID:      parentRunID,
+			ParentToolCallID: parentToolCallID,
+			StartedAt:        time.Now().UTC(),
 		},
 		ring:   newRing(),
 		cancel: cancel,
@@ -183,7 +203,7 @@ func (m *Manager) StartShell(spec ShellSpec) (Info, error) {
 		return Info{}, errors.New("command is required")
 	}
 	ctx, cancel := context.WithCancelCause(context.Background())
-	t, info, err := m.start(KindShell, spec.Title, spec.AgentID, cancel)
+	t, info, err := m.start(KindShell, spec.Title, spec.AgentID, "", "", cancel)
 	if err != nil {
 		cancel(nil)
 		return Info{}, err
@@ -198,13 +218,40 @@ func (m *Manager) StartAgent(spec AgentSpec) (Info, error) {
 		return Info{}, errors.New("agent runner is required")
 	}
 	ctx, cancel := context.WithCancelCause(context.Background())
-	t, info, err := m.start(KindAgent, spec.Title, spec.AgentID, cancel)
+	t, info, err := m.start(
+		KindAgent,
+		spec.Title,
+		spec.AgentID,
+		spec.ParentRunID,
+		spec.ParentToolCallID,
+		cancel,
+	)
 	if err != nil {
 		cancel(nil)
 		return Info{}, err
 	}
-	go m.runAgent(ctx, t, spec)
+	go m.runAgent(context.WithValue(ctx, taskIDContextKey{}, info.ID), t, spec)
 	return info, nil
+}
+
+// SetChildAgent links a running agent task to the concrete child created by its
+// runner. The task is registered before the child exists, so this is the first
+// authoritative moment the two identities can be joined.
+func (m *Manager) SetChildAgent(taskID, childAgentID string) error {
+	m.mu.Lock()
+	t, ok := m.tasks[taskID]
+	if !ok {
+		m.mu.Unlock()
+		return fmt.Errorf("unknown task: %s", taskID)
+	}
+	t.ChildAgentID = childAgentID
+	info := t.Info
+	hook := m.onChange
+	m.mu.Unlock()
+	if hook != nil {
+		hook(info)
+	}
+	return nil
 }
 
 func (m *Manager) runShell(base context.Context, t *task, spec ShellSpec) {

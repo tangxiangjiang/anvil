@@ -35,6 +35,7 @@ interface Block {
   level?: number;
   lang?: string;
   text?: string;
+  closed?: boolean;
   ordered?: boolean;
   from?: number;
   /** The offset the block started at — the streaming contract, not the ordinal. */
@@ -88,12 +89,14 @@ test('a closing fence is not part of the code, and an open fence is not an error
   assert.equal(closed.type, 'code');
   assert.equal(closed.lang, 'js');
   assert.equal(closed.text, 'const a = 1;');
+  assert.equal(closed.closed, true);
 
   // The open case is what a streaming code block looks like on every frame
   // until it ends, so it must parse as code rather than as prose.
   const open = parse('```js\nconst a = 1;').blocks[0];
   assert.equal(open.type, 'code');
   assert.equal(open.text, 'const a = 1;');
+  assert.equal(open.closed, false);
 });
 
 test('a fence with no language still parses, and a tilde fence closes on tildes', () => {

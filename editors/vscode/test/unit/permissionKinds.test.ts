@@ -19,7 +19,7 @@ const EXTENSION_ROOT = join(__dirname, '..', '..', '..');
 const ROOT = join(EXTENSION_ROOT, '..', '..');
 const PROTOCOL_GO = readFileSync(join(ROOT, 'source', 'internal', 'editorhost', 'proto.go'), 'utf8');
 const PROTOCOL_TS = readFileSync(join(EXTENSION_ROOT, 'src', 'protocol.ts'), 'utf8');
-const RULES_GO = readFileSync(join(ROOT, 'source', 'permissionrules.go'), 'utf8');
+const RULES_GO = readFileSync(join(ROOT, 'source', 'permission_rules.go'), 'utf8');
 const CHAT_JS = readFileSync(join(EXTENSION_ROOT, 'media', 'chat.js'), 'utf8');
 
 test('the permission methods travel under the names both sides spell', () => {

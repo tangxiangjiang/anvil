@@ -5,6 +5,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -36,11 +37,12 @@ type Event struct {
 	// failed (1-based) and how long the wrapper waits before the next one.
 	Attempt int
 	Delay   time.Duration
-	// Usage is what the run has consumed so far, set on the terminal event
-	// (done or error) when the provider reported any counts. It is absent on
-	// every other event: a token count is a fact about a completed exchange,
-	// not a running estimate, and a per-chunk number would be invented.
+	// Usage is authoritative on terminal events and an estimate on streamed
+	// events when UsageEstimated is true.
 	Usage *llm.Usage
+	// UsageEstimated distinguishes the live request/chunk estimate from a
+	// provider's terminal accounting.
+	UsageEstimated bool
 	// Rule is the workspace rule that decided a tool call, on tool_result. It is
 	// nil when no rule did — including when the call was allowed by a callback or
 	// ran ungated.
@@ -108,6 +110,132 @@ const MaxStepsExceededPrefix = "max steps exceeded"
 // drops silently when full and a dropped assistant chunk cannot be recovered.
 const reasoningFlushChars = 200
 
+// EmptyResponseError is returned after bounded recovery when a provider keeps
+// producing neither text nor tool calls. An empty turn is not a successful
+// agent completion.
+const EmptyResponseError = "model provider returned 3 consecutive empty responses; automatic recovery produced no tool call or final answer"
+
+const maxEmptyResponses = 3
+const maxFinishProtocolMisses = 3
+
+// FinishTaskRequiredError is returned when an editor-style run repeatedly
+// returns ordinary assistant text instead of the explicit terminal control
+// call. The model's prose cannot reliably distinguish progress from a final
+// answer; finish_task is that distinction on the wire.
+const FinishTaskRequiredError = "model did not call finish_task after 3 attempts; ordinary assistant text is not a terminal signal"
+
+const finishTaskToolName = "finish_task"
+
+const finishTaskInstruction = `# Completion protocol
+Ordinary assistant text does not end this run. Continue using tools while work remains. When the task is fully complete or honestly blocked, call finish_task exactly once and as the only tool call, with the final user-facing summary. Do not announce future work and stop.`
+
+const finishTaskCorrection = "This run is still active because ordinary assistant text is not a completion signal. If work remains, continue now with the appropriate tools. If the task is complete or honestly blocked, call finish_task alone with a non-empty final summary."
+
+func finishTaskDef() llm.ToolDef {
+	return llm.ToolDef{
+		Name:        finishTaskToolName,
+		Description: "Finish the current agent run. Call only when all work is complete or honestly blocked, and call it as the only tool in the response.",
+		Parameters: json.RawMessage(`{
+			"type":"object",
+			"properties":{"summary":{"type":"string","minLength":1,"description":"Final user-facing result, including completed work, verification, or the concrete blocker."}},
+			"required":["summary"],
+			"additionalProperties":false
+		}`),
+	}
+}
+
+func finishTaskSummary(calls []llm.ToolCall) (summary string, present bool, problem string) {
+	var finish *llm.ToolCall
+	for i := range calls {
+		if calls[i].Name != finishTaskToolName {
+			continue
+		}
+		if finish != nil || len(calls) != 1 {
+			return "", true, "finish_task must be the only tool call in its response"
+		}
+		finish = &calls[i]
+	}
+	if finish == nil {
+		return "", false, ""
+	}
+	var in struct {
+		Summary string `json:"summary"`
+	}
+	if err := json.Unmarshal(finish.Args, &in); err != nil {
+		return "", true, "finish_task arguments are invalid JSON: " + err.Error()
+	}
+	in.Summary = strings.TrimSpace(in.Summary)
+	if in.Summary == "" {
+		return "", true, "finish_task requires a non-empty summary"
+	}
+	return in.Summary, true, ""
+}
+
+const continueTaskPrompt = "The preceding model response was empty. Continue the user's task now with a tool call, or call finish_task with the final summary if the task is complete."
+
+// BackgroundDelegationError is returned when a parent agent twice tries to
+// finish without joining and integrating the background subagents it started.
+const BackgroundDelegationError = "model attempted to finish without completing the background subagent handoff"
+
+// backgroundComposition is the parent side of a background delegation. Starting
+// a child is not completion: the parent must read every terminal result, then
+// pass one explicit composition checkpoint before its final answer is accepted.
+type backgroundComposition struct {
+	tasks        map[string]bool // task id -> terminal output read
+	checkpointed bool
+}
+
+func (b *backgroundComposition) observe(calls []llm.ToolCall, results []tools.Result) {
+	if b.tasks == nil {
+		b.tasks = make(map[string]bool)
+	}
+	for i, call := range calls {
+		if i >= len(results) || results[i].IsError {
+			continue
+		}
+		switch call.Name {
+		case "spawn_agent":
+			var in struct {
+				Background bool `json:"background"`
+			}
+			if json.Unmarshal(call.Args, &in) != nil || !in.Background {
+				continue
+			}
+			if fields := strings.Fields(results[i].Content); len(fields) > 0 {
+				b.tasks[fields[0]] = false
+				b.checkpointed = false
+			}
+		case "task_output":
+			var in struct {
+				TaskID string `json:"task_id"`
+			}
+			if json.Unmarshal(call.Args, &in) != nil {
+				continue
+			}
+			if _, owned := b.tasks[in.TaskID]; !owned {
+				continue
+			}
+			fields := strings.Fields(results[i].Content)
+			if len(fields) >= 2 && fields[0] == in.TaskID && fields[1] != "running" {
+				b.tasks[in.TaskID] = true
+			}
+		}
+	}
+}
+
+func (b *backgroundComposition) pending() bool {
+	for _, read := range b.tasks {
+		if !read {
+			return true
+		}
+	}
+	return false
+}
+
+func (b *backgroundComposition) needsCheckpoint() bool {
+	return len(b.tasks) > 0 && !b.pending() && !b.checkpointed
+}
+
 // Result is the terminal run result.
 type Result struct {
 	ID     string
@@ -157,6 +285,9 @@ type Config struct {
 	Sink func(llm.Message)
 	// SystemPrompt overrides the default prompt.System(cwd) when non-empty.
 	SystemPrompt string
+	// RequireFinishTask makes finish_task the only terminal signal. Ordinary
+	// assistant text is progress and receives a bounded corrective retry.
+	RequireFinishTask bool
 	// ParallelTools runs same-turn tool_calls concurrently when all are non-mutating (0.9+).
 	ParallelTools bool
 	// ParallelToolsMax bounds concurrent tool executions (0 = 4).
@@ -196,6 +327,14 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 		}
 		messages = append([]llm.Message{{Role: llm.RoleSystem, Content: sys}}, messages...)
 	}
+	if cfg.RequireFinishTask {
+		for i := range messages {
+			if messages[i].Role == llm.RoleSystem {
+				messages[i].Content += "\n\n" + finishTaskInstruction
+				break
+			}
+		}
+	}
 	user := llm.Message{Role: llm.RoleUser, Content: cfg.UserMsg, Parts: cfg.UserParts}
 	messages = append(messages, user)
 	sink(user)
@@ -226,7 +365,16 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 	var usageAcc *llm.Usage
 	var lastRequestAt time.Time
 	toolDefs := registry.Defs()
+	if cfg.RequireFinishTask {
+		toolDefs = append(toolDefs, finishTaskDef())
+	}
 	guard := newLoopGuard()
+	retryReason := ""
+	transientStart := -1
+	var background backgroundComposition
+	finishProtocolMisses := 0
+	emptyResponses := 0
+	forceNonStreaming := false
 
 	for step := 0; ; step++ {
 		if cfg.MaxSteps > 0 && step >= cfg.MaxSteps {
@@ -242,13 +390,12 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 		// compares is exactly the one about to be sent. Step 0 is skipped: the
 		// pre-loop check already ran on this exact slice, and repeating it can
 		// only compact twice — the second summary would fold the first.
-		if step > 0 {
+		if step > 0 && retryReason == "" {
 			messages = compactBudget(ctx, completer, cfg, messages, sink, emit)
 		}
 
-		emit(Event{Type: "progress", Step: step + 1, MaxSteps: cfg.MaxSteps})
-
 		streamed := false
+		var streamedText strings.Builder
 		var resp *llm.Response
 		var err error
 		// The retrying completer reports through the context, so the Completer
@@ -257,7 +404,21 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 			emit(Event{Type: "retry", Attempt: info.Attempt, Delay: info.Delay, Text: info.Message})
 		})
 		req := llm.Request{Model: cfg.Model, Messages: messages, Tools: toolDefs, PromptCache: cfg.PromptCache, Effort: cfg.Effort, MaxOutputTokens: cfg.MaxOutputTokens}
-		if sc, ok := completer.(llm.StreamCompleter); ok {
+		roundInput := compress.Estimate(req.Messages)
+		liveUsage := func(roundOutput int) *llm.Usage {
+			u := &llm.Usage{InputTokens: roundInput, OutputTokens: roundOutput}
+			if usageAcc != nil {
+				u.InputTokens += usageAcc.InputTokens
+				u.OutputTokens += usageAcc.OutputTokens
+			}
+			u.TotalTokens = u.InputTokens + u.OutputTokens
+			return u
+		}
+		emit(Event{
+			Type: "progress", Step: step + 1, MaxSteps: cfg.MaxSteps,
+			Usage: liveUsage(0), UsageEstimated: true,
+		})
+		if sc, ok := completer.(llm.StreamCompleter); ok && !forceNonStreaming {
 			// Reasoning is accumulated and flushed in batches rather than per
 			// chunk. A reasoner emits several times the tokens of its answer,
 			// and Run.emit drops events silently once its buffer fills -- a lost
@@ -267,16 +428,22 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 			// ones dropped. Text is never held back: it is what the user is
 			// reading.
 			var reasoning strings.Builder
+			var streamedOutput strings.Builder
 			flushReasoning := func() {
 				if reasoning.Len() == 0 {
 					return
 				}
-				emit(Event{Type: "reasoning", Text: reasoning.String()})
+				emit(Event{
+					Type: "reasoning", Text: reasoning.String(),
+					Usage:          liveUsage(compress.EstimateText(streamedOutput.String())),
+					UsageEstimated: true,
+				})
 				reasoning.Reset()
 			}
 			resp, err = sc.CompleteStream(callCtx, req, func(d llm.Delta) {
 				if d.Reasoning != "" {
 					reasoning.WriteString(d.Reasoning)
+					streamedOutput.WriteString(d.Reasoning)
 					if reasoning.Len() >= reasoningFlushChars {
 						flushReasoning()
 					}
@@ -290,11 +457,24 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 				// non-streaming fallback below and lose the whole answer.
 				flushReasoning()
 				streamed = true
-				emit(Event{Type: "assistant", Text: d.Text})
+				streamedText.WriteString(d.Text)
+				streamedOutput.WriteString(d.Text)
+				emit(Event{
+					Type: "assistant", Text: d.Text,
+					Usage:          liveUsage(compress.EstimateText(streamedOutput.String())),
+					UsageEstimated: true,
+				})
 			})
 			flushReasoning() // the round boundary
 		} else {
 			resp, err = completer.Complete(callCtx, req)
+		}
+		forceNonStreaming = false
+		// A corrective retry sees the rejected assistant turn and an internal
+		// nudge, but neither belongs to the durable conversation or Result.
+		if transientStart >= 0 {
+			messages = messages[:transientStart]
+			transientStart = -1
 		}
 		if err != nil {
 			if ctx.Err() != nil {
@@ -312,6 +492,9 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 			return Result{ID: runID, Status: "error", Steps: step, Usage: usageAcc, Err: msg, Code: code, Messages: messages, LastRequestAt: lastRequestAt}
 		}
 		lastRequestAt = time.Now()
+		if resp == nil {
+			resp = &llm.Response{}
+		}
 		if resp.Usage != nil {
 			if usageAcc == nil {
 				usageAcc = &llm.Usage{}
@@ -326,6 +509,113 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 		assistant := resp.Message
 		if assistant.Role == "" {
 			assistant.Role = llm.RoleAssistant
+		}
+		// Some streaming adapters can deliver text chunks but return an empty
+		// assembled message. Preserve what the user already saw so persistence
+		// and the terminal result agree with the stream.
+		if assistant.Content == "" && streamedText.Len() > 0 {
+			assistant.Content = streamedText.String()
+		}
+		invalidReason := ""
+		invalidError := ""
+		correctionPrompt := continueTaskPrompt
+		finishSummary, finishPresent, finishProblem := "", false, ""
+		if cfg.RequireFinishTask {
+			finishSummary, finishPresent, finishProblem = finishTaskSummary(assistant.ToolCalls)
+		}
+		switch {
+		case cfg.RequireFinishTask && finishProblem != "":
+			invalidReason = "finish"
+			invalidError = finishProblem
+			correctionPrompt = finishTaskCorrection + " " + finishProblem + "."
+		case cfg.RequireFinishTask && finishPresent && background.pending():
+			invalidReason = "background"
+			invalidError = BackgroundDelegationError
+			correctionPrompt = "Background subagents started by this parent are still running or their terminal output has not been read. Continue the parent task: use task_output to join every delegated task, then integrate those results. Do not call finish_task yet."
+		case cfg.RequireFinishTask && finishPresent && background.needsCheckpoint():
+			invalidReason = "composition"
+			invalidError = BackgroundDelegationError
+			correctionPrompt = "All background subagent results are now available. Re-evaluate the original request and integrate those results. Continue with tools if work remains; otherwise call finish_task alone with the final summary."
+		case len(assistant.ToolCalls) == 0:
+			switch {
+			case strings.TrimSpace(assistant.Content) == "":
+				invalidReason = "empty"
+				invalidError = EmptyResponseError
+				emptyResponses++
+			case background.pending():
+				invalidReason = "background"
+				invalidError = BackgroundDelegationError
+				correctionPrompt = "Background subagents started by this parent are still running or their terminal output has not been read. Continue the parent task: use task_output to join every delegated task, then integrate those results. Starting a subagent is not completion."
+			case background.needsCheckpoint():
+				invalidReason = "composition"
+				invalidError = BackgroundDelegationError
+				correctionPrompt = "All background subagent results are now available. Re-evaluate the original user request against those results. If work remains, continue with tools now; otherwise return a concrete final answer describing the completed result. Do not answer with a plan for future work."
+			case cfg.RequireFinishTask:
+				invalidReason = "finish"
+				invalidError = FinishTaskRequiredError
+				correctionPrompt = finishTaskCorrection
+			}
+		}
+		if invalidReason != "" {
+			canCorrect := retryReason == ""
+			if invalidReason == "empty" {
+				canCorrect = emptyResponses < maxEmptyResponses
+			}
+			if invalidReason == "finish" {
+				finishProtocolMisses++
+				canCorrect = finishProtocolMisses < maxFinishProtocolMisses
+			}
+			if canCorrect {
+				// Keep the rejected turn and corrective instruction in this one
+				// provider request only. They are deliberately not sent to sink.
+				transientStart = len(messages)
+				if len(assistant.ToolCalls) == 0 && strings.TrimSpace(assistant.Content) != "" {
+					messages = append(messages, assistant)
+				}
+				messages = append(messages, llm.Message{Role: llm.RoleUser, Content: correctionPrompt})
+				retryReason = invalidReason
+				if invalidReason == "empty" {
+					// A streamed empty completion can be an SSE assembly defect
+					// rather than a model decision. Recover through the complete
+					// response parser so the same failure path is not repeated.
+					forceNonStreaming = true
+				}
+				if invalidReason == "composition" {
+					background.checkpointed = true
+				}
+				step--
+				continue
+			}
+			code := CodeProvider
+			if invalidReason == "empty" {
+				code = CodeEmptyResponse
+			} else if invalidReason == "finish" {
+				code = CodeFinishProtocol
+			}
+			emit(Event{Type: "error", Text: invalidError, Code: code, Usage: usageAcc, LastRequestAt: lastRequestAt})
+			return Result{
+				ID: runID, Status: "error", Steps: step + 1, Usage: usageAcc,
+				Err: invalidError, Code: code, Messages: messages, LastRequestAt: lastRequestAt,
+			}
+		}
+		retryReason = ""
+		emptyResponses = 0
+		finishProtocolMisses = 0
+		if cfg.RequireFinishTask && finishPresent {
+			final := llm.Message{Role: llm.RoleAssistant, Content: finishSummary}
+			emit(Event{Type: "assistant", Text: finishSummary})
+			messages = append(messages, final)
+			sink(final)
+			emit(Event{Type: "done", Text: finishSummary, Usage: usageAcc, LastRequestAt: lastRequestAt})
+			return Result{
+				ID:            runID,
+				Status:        "finished",
+				Result:        finishSummary,
+				Steps:         step + 1,
+				Usage:         usageAcc,
+				Messages:      messages,
+				LastRequestAt: lastRequestAt,
+			}
 		}
 		if assistant.Content != "" && !streamed {
 			emit(Event{Type: "assistant", Text: assistant.Content})
@@ -355,6 +645,7 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 
 		var results []tools.Result
 		messages, results = runToolCalls(ctx, registry, assistant.ToolCalls, cfg, messages, sink, emit)
+		background.observe(assistant.ToolCalls, results)
 		if parts := registry.TakeVisionParts(); len(parts) > 0 {
 			inj := llm.Message{
 				Role:    llm.RoleUser,

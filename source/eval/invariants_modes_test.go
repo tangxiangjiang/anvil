@@ -191,7 +191,7 @@ func multiInvariants() []evalCase {
 	var sawDelegateTool bool
 	return []evalCase{
 		named(m, "inv_permission_deny", invariantCase("inv_permission_deny", Task{UserMsg: "delegate the denied write", Check: finishedOnly},
-			multiOpts(anvil.Options{BuiltinTools: []string{"delegate"},
+			multiOpts(anvil.Options{BuiltinTools: []string{"write", "delegate"},
 				PermissionRules: []anvil.PermissionRule{{Effect: "deny", Tool: "write_file", Pattern: "*"}}}),
 			delegateAnswer([]string{"denied.txt"}, "write", func(round int) *llm.Response {
 				if round == 0 {
@@ -201,7 +201,7 @@ func multiInvariants() []evalCase {
 			}, "done"),
 			func(dir string, _ Outcome) error { return absent(dir, "denied.txt") })),
 		named(m, "inv_permission_ask", invariantCase("inv_permission_ask", Task{UserMsg: "delegate the asked write", Check: finishedOnly},
-			multiOpts(anvil.Options{BuiltinTools: []string{"delegate"}, Permission: func(context.Context, anvil.PermissionRequest) (anvil.PermissionDecision, error) {
+			multiOpts(anvil.Options{BuiltinTools: []string{"write", "delegate"}, Permission: func(context.Context, anvil.PermissionRequest) (anvil.PermissionDecision, error) {
 				asked++
 				return anvil.PermissionDecision{Allow: false, Message: CallbackRefusal}, nil
 			}}),
@@ -227,10 +227,10 @@ func multiInvariants() []evalCase {
 				return fmt.Errorf("the parent did not read the worker's failure: %q", got)
 			}
 			return nil
-		}}, multiOpts(anvil.Options{BuiltinTools: []string{"delegate"}}),
+		}}, multiOpts(anvil.Options{BuiltinTools: []string{"read", "delegate"}}),
 			delegateAnswer([]string{"out.txt"}, "read", loopRead, "the worker failed"), nil)),
 		named(m, "inv_checkpoint_restore", invariantCase("inv_checkpoint_restore", Task{UserMsg: "delegate the edits", Check: finishedOnly, Setup: seedAB},
-			multiOpts(anvil.Options{BuiltinTools: []string{"delegate"}, Checkpoints: &anvil.CheckpointOptions{}}),
+			multiOpts(anvil.Options{BuiltinTools: []string{"edit", "delegate"}, Checkpoints: &anvil.CheckpointOptions{}}),
 			func() fixtureCompleter {
 				step := 0
 				inner := delegateAnswer([]string{"a.txt", "b.txt"}, "edit", func(round int) *llm.Response {
@@ -246,7 +246,7 @@ func multiInvariants() []evalCase {
 				return inner
 			}(), restoreRoot)),
 		named(m, "inv_sandbox_escape", invariantCase("inv_sandbox_escape", Task{UserMsg: "delegate a read outside", Check: finishedOnly},
-			multiOpts(anvil.Options{BuiltinTools: []string{"delegate"}}),
+			multiOpts(anvil.Options{BuiltinTools: []string{"read", "delegate"}}),
 			delegateAnswer([]string{"out.txt"}, "read", func(round int) *llm.Response {
 				if round == 0 {
 					return toolAnswer("e", "read_file", `{"path":"../secret.txt"}`)
@@ -283,7 +283,7 @@ func multiInvariants() []evalCase {
 				return absent(dir, "plan.txt")
 			})),
 		named(m, "inv_child_never_widens", invariantCase("inv_child_never_widens", Task{UserMsg: "delegate a write to a read-only worker", Check: finishedOnly},
-			multiOpts(anvil.Options{BuiltinTools: []string{"delegate"}}),
+			multiOpts(anvil.Options{BuiltinTools: []string{"read", "delegate"}}),
 			delegateAnswer([]string{"widened.txt"}, "read", func(round int) *llm.Response {
 				if round == 0 {
 					return toolAnswer("w", "write_file", `{"path":"widened.txt","content":"x"}`)
@@ -306,7 +306,7 @@ func multiInvariants() []evalCase {
 			return nil
 		}, Setup: func(dir string) error {
 			return os.WriteFile(filepath.Join(dir, "inner.txt"), []byte("CHILD-INTERNAL"), 0o644)
-		}}, multiOpts(anvil.Options{BuiltinTools: []string{"delegate"}}),
+		}}, multiOpts(anvil.Options{BuiltinTools: []string{"read", "delegate"}}),
 			delegateAnswer([]string{"out.txt"}, "read", func(round int) *llm.Response {
 				if round == 0 {
 					return toolAnswer("r", "read_file", `{"path":"inner.txt"}`)

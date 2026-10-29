@@ -20,6 +20,9 @@ func TestSystemPromptHardening(t *testing.T) {
 		"exfiltrate",
 		"ignore previous instructions",
 		"Stay inside the workspace",
+		"```mermaid",
+		"standard Mermaid syntax",
+		"A-. label .-> B",
 	} {
 		if !strings.Contains(strings.ToLower(s), strings.ToLower(want)) {
 			t.Fatalf("missing %q in prompt:\n%s", want, s)

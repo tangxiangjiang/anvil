@@ -13,6 +13,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { argv, lspParams } from '../../src/languageTools';
+import { configurationProperties } from '../helpers/package';
 
 const EXTENSION_ROOT = join(__dirname, '..', '..', '..');
 const SETTINGS = readFileSync(join(EXTENSION_ROOT, 'src', 'settings.ts'), 'utf8');
@@ -76,7 +77,7 @@ test('settings.ts reads the four keys and sends each only when it has a value', 
 });
 
 test('package.json declares the settings with off/empty defaults', () => {
-  const props = PACKAGE.contributes.configuration.properties;
+  const props = configurationProperties(PACKAGE);
   const enabled = props['anvil.lsp.enabled'] as { default?: unknown };
   const servers = props['anvil.lsp.servers'] as { default?: unknown };
   const testCommand = props['anvil.testCommand'] as { default?: unknown };

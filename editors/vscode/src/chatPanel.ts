@@ -73,11 +73,27 @@ import { RunFailure } from './errors';
 import { readSettings, readWebSearchKey } from './settings';
 import { webSearchNeedsKey } from './webSearch';
 import { mediaAsset } from './webviewAsset';
+import { AgentMapState, buildAgentMap } from './agentMap';
+import { TurnQueue } from './turnQueue';
+
+interface TurnPayload {
+  text: string;
+  mentions?: string[];
+  images?: string[];
+  quotes?: Array<{ role: 'user' | 'assistant'; text: string }>;
+}
+
+interface QueuedTurn {
+  text: string;
+  mentions: string[];
+  images: string[];
+  quotes: Array<{ role: 'user' | 'assistant'; text: string }>;
+}
 
 /** A message from the webview. */
 type Inbound =
   | { type: 'ready' }
-  | { type: 'send'; text: string; mentions?: string[]; images?: string[] }
+  | ({ type: 'send' | 'enqueue' | 'sendPriority' } & TurnPayload)
   | { type: 'cancel' }
   | { type: 'answer'; requestId: string; decision: Decision; scope?: string }
   /**
@@ -90,6 +106,11 @@ type Inbound =
   | { type: 'pickMention' }
   | { type: 'commands' }
   | { type: 'mode'; mode: string }
+  | { type: 'selectModel'; model: string }
+  | { type: 'collaboration'; mode: 'single' | 'multi' }
+  | { type: 'agentMap' }
+  | { type: 'agentDetail'; agentId: string }
+  | { type: 'openAgent'; agentId: string }
   | { type: 'review'; requestId: string }
   /** "Let me keep only some of this", from an approval card's diff preview. */
   | { type: 'reviewPartial'; requestId: string }
@@ -211,6 +232,8 @@ type Outbound =
       error?: string;
     }
   | { type: 'done'; done: DoneParams; failure: RunFailure }
+  | { type: 'queue'; count: number; interrupting: boolean }
+  | ({ type: 'dispatchQueued' } & TurnPayload)
   | { type: 'mentions'; paths: string[] }
   /**
    * Images the picker read, as data URLs — the same shape a paste leaves in
@@ -225,6 +248,7 @@ type Outbound =
    * resizes without a reload.
    */
   | { type: 'fontSize'; size: number }
+  | { type: 'models'; available: string[]; current: string; defaultModel: string }
   /**
    * The token meter's inputs. The window is display arithmetic only and never
    * travels to the host; `info` is the live session's own estimate, present
@@ -237,7 +261,9 @@ type Outbound =
       cache_ttl_seconds: number;
       info?: ContextInfo;
     }
-  | { type: 'changes'; files: Array<Pick<ChangedFile, 'path' | 'kind'>> }
+  /** A background task changed state; spawn cards use this to stop their pulse. */
+  | { type: 'backgroundTask'; task: TaskInfo }
+  | { type: 'changes'; runId: string; files: Array<Pick<ChangedFile, 'path' | 'kind'>> }
   /**
    * A finished run that captured pre-images, so it can be undone. Posted only
    * when the run changed something: an undo that would do nothing is not a
@@ -298,6 +324,17 @@ type Outbound =
   | { type: 'commands'; commands: SlashCommand[] }
   | { type: 'help'; commands: SlashCommand[] }
   | { type: 'mode'; mode: PermissionMode | ''; resolved: PermissionMode; source: PermissionModeSource }
+  | { type: 'collaboration'; mode: 'single' | 'multi' }
+  | { type: 'agentMap'; state: AgentMapState }
+  | {
+      type: 'agentDetail';
+      agentId: string;
+      prompt: string;
+      result: string;
+      status: string;
+      steps: number;
+      usage?: import('./protocol').Usage;
+    }
   | { type: 'rules'; files: RuleFileInfo[] }
   /**
    * What the enabled MCP layers declare, and which of their files are missing.
@@ -379,6 +416,8 @@ type Outbound =
 
 /** Where the chosen permission mode is remembered between windows. */
 const MODE_KEY = 'anvil.permissionMode';
+/** Collaboration belongs to a conversation, not to the workspace default. */
+const COLLABORATION_KEY = 'anvil.collaborationByAgent';
 
 /** How many plans a tab keeps in memory for the palette commands. */
 const PLAN_KEPT = 8;
@@ -433,6 +472,15 @@ function readMode(context: vscode.ExtensionContext): PermissionMode | undefined 
   return stored !== undefined && isPermissionMode(stored) ? stored : undefined;
 }
 
+function storedCollaboration(
+  context: vscode.ExtensionContext,
+  agentId: string | undefined,
+): 'single' | 'multi' | undefined {
+  if (!agentId) return undefined;
+  const modes = context.workspaceState.get<Record<string, string>>(COLLABORATION_KEY, {});
+  return modes[agentId] === 'single' || modes[agentId] === 'multi' ? modes[agentId] : undefined;
+}
+
 export class ChatPanel implements HostListener {
   public static readonly viewType = 'anvil.chat';
 
@@ -449,6 +497,10 @@ export class ChatPanel implements HostListener {
    * agent). A crash drops it; the agent id below is what brings it back.
    */
   private session: ChatSession | undefined;
+  /** Prompts waiting behind the active run, scoped to this conversation tab. */
+  private readonly turnQueue = new TurnQueue<QueuedTurn>();
+  /** Prevents two terminal notifications from starting two queued prompts. */
+  private dispatchingTurn = false;
   /** A session being built, so two messages sent at once cannot build two. */
   private opening: Promise<ChatSession> | undefined;
   /**
@@ -470,6 +522,8 @@ export class ChatPanel implements HostListener {
   private overrides: Partial<SessionConfig> = {};
   /** The mode the live session resolved, which is not always the one asked for. */
   private resolvedMode: ResolvedMode | undefined;
+  /** The model the live host resolved, for the compact composer selector. */
+  private resolvedModel: string | undefined;
   /** Whether this is the tab in front, for the one command that means "this one". */
   private active = false;
   private disposed = false;
@@ -509,6 +563,8 @@ export class ChatPanel implements HostListener {
    * decides, which is what makes a team's choice something it can commit.
    */
   private mode: PermissionMode | undefined;
+  /** Whether this conversation exposes subagent tools. Complex is reserved. */
+  private collaboration: 'single' | 'multi';
   /**
    * The last resolved mode a notice was posted for, so a session re-opened for
    * an unrelated reason (a model change) does not repeat what the user already
@@ -554,6 +610,10 @@ export class ChatPanel implements HostListener {
   ) {
     this.mode = readMode(context);
     this.agentId = agentId === '' ? undefined : agentId;
+    this.collaboration =
+      storedCollaboration(context, this.agentId) ??
+      (readSettings().session.subagents === false ? 'single' : 'multi');
+    this.overrides.subagents = this.collaboration === 'multi';
     this.partialReviews = new ReviewPanels(context.extensionUri);
   }
 
@@ -742,12 +802,25 @@ export class ChatPanel implements HostListener {
    * use, and opening a session to hold it would be work nobody asked for.
    */
   private async applyOptions(changes: Partial<SessionConfig>): Promise<boolean> {
-    this.overrides = { ...this.overrides, ...changes };
+    const previous = this.overrides;
+    const next = { ...previous, ...changes };
     const session = this.session;
-    if (!session) return false;
-    const result = await session.reopen(changes);
-    if (result) this.noteResolvedMode(result);
-    return true;
+    if (!session) {
+      this.overrides = next;
+      return false;
+    }
+    try {
+      const result = await session.reopen(changes);
+      this.overrides = next;
+      if (result) {
+        this.noteResolvedMode(result);
+        this.resolvedModel = result.model;
+      }
+      return true;
+    } catch (err) {
+      this.overrides = previous;
+      throw err;
+    }
   }
 
   /** Turns a skill on for this conversation. False when it was already on. */
@@ -790,6 +863,9 @@ export class ChatPanel implements HostListener {
       this.postAgentId();
       this.postRoot();
       this.postMode();
+      this.postCollaboration();
+      this.postModels();
+      this.postQueue();
       if (this.rules.length > 0) this.post({ type: 'rules', files: this.rules });
       this.postState();
       for (const request of this.pendingApprovals()) {
@@ -820,7 +896,13 @@ export class ChatPanel implements HostListener {
 
     switch (msg.type) {
       case 'send':
-        await this.sendTurn(msg.text, msg.mentions ?? [], msg.images ?? []);
+        await this.sendTurn(msg.text, msg.mentions ?? [], msg.images ?? [], msg.quotes ?? []);
+        return;
+      case 'enqueue':
+        await this.enqueueTurn(this.turnPayload(msg));
+        return;
+      case 'sendPriority':
+        await this.sendPriority(this.turnPayload(msg));
         return;
       case 'cancel':
         // Nothing running is nothing to cancel: a Stop on an idle tab is not a
@@ -846,6 +928,21 @@ export class ChatPanel implements HostListener {
         return;
       case 'mode':
         await this.setMode(msg.mode);
+        return;
+      case 'selectModel':
+        await this.setModel(msg.model);
+        return;
+      case 'collaboration':
+        await this.setCollaboration(msg.mode);
+        return;
+      case 'agentMap':
+        await this.postAgentMap();
+        return;
+      case 'agentDetail':
+        await this.postAgentDetail(msg.agentId);
+        return;
+      case 'openAgent':
+        await this.hub.openSession(msg.agentId);
         return;
       case 'review':
         await this.openReview(msg.requestId);
@@ -1105,6 +1202,83 @@ export class ChatPanel implements HostListener {
 
   // --- commands ---------------------------------------------------------------
 
+  private turnPayload(payload: TurnPayload): QueuedTurn {
+    return {
+      text: payload.text,
+      mentions: [...(payload.mentions ?? [])],
+      images: [...(payload.images ?? [])],
+      quotes: (payload.quotes ?? []).map((quote) => ({ ...quote })),
+    };
+  }
+
+  private postQueue(): void {
+    this.post({
+      type: 'queue',
+      count: this.turnQueue.count,
+      interrupting: this.turnQueue.interrupting,
+    });
+  }
+
+  private clearTurnQueue(): void {
+    this.turnQueue.clear();
+    this.dispatchingTurn = false;
+    this.postQueue();
+  }
+
+  private async enqueueTurn(turn: QueuedTurn): Promise<void> {
+    if (!this.busy && !this.dispatchingTurn && this.turnQueue.count === 0) {
+      this.post({ type: 'dispatchQueued', ...turn });
+      await this.sendTurn(turn.text, turn.mentions, turn.images, turn.quotes);
+      return;
+    }
+    this.turnQueue.enqueue(turn);
+    this.postQueue();
+  }
+
+  /**
+   * Interrupts the active run, but never races a replacement prompt against
+   * session cleanup. The terminal notification is the hand-off point.
+   */
+  private async sendPriority(turn: QueuedTurn): Promise<void> {
+    if (!this.busy && !this.dispatchingTurn) {
+      this.post({ type: 'dispatchQueued', ...turn });
+      await this.sendTurn(turn.text, turn.mentions, turn.images, turn.quotes);
+      return;
+    }
+    this.turnQueue.prioritize(turn);
+    this.postQueue();
+    try {
+      await this.session?.cancel();
+    } catch (err) {
+      this.post({ type: 'notice', level: 'error', message: `Could not interrupt the turn: ${(err as Error).message}` });
+      // Keep the message: if the run ends naturally, it is still next.
+      this.turnQueue.next();
+      this.turnQueue.prioritize(turn);
+      this.postQueue();
+      void this.dispatchNextTurn();
+    }
+  }
+
+  private async dispatchNextTurn(): Promise<void> {
+    if (this.disposed || this.dispatchingTurn || this.busy) return;
+    const turn = this.turnQueue.next();
+    if (!turn) {
+      this.postQueue();
+      return;
+    }
+    this.dispatchingTurn = true;
+    this.postQueue();
+    this.post({ type: 'dispatchQueued', ...turn });
+    try {
+      await this.sendTurn(turn.text, turn.mentions, turn.images, turn.quotes);
+    } finally {
+      this.dispatchingTurn = false;
+      if (!this.busy && this.turnQueue.count > 0) {
+        void this.dispatchNextTurn();
+      }
+    }
+  }
+
   /** The catalogue, fetched once per host by the hub. */
   private commandCatalogue(): Promise<SlashCommand[]> {
     return this.hub.commandCatalogue();
@@ -1169,6 +1343,148 @@ export class ChatPanel implements HostListener {
     this.post({ type: 'notice', level: chosen === 'bypass' ? 'warn' : 'info', message: modeNotice(chosen) });
   }
 
+  private postModels(): void {
+    const settings = readSettings().models;
+    const current = this.overrides.model ?? this.resolvedModel ?? settings.defaultModel;
+    const available = [...settings.available];
+    for (const id of [settings.defaultModel, current]) {
+      if (id && !available.includes(id)) available.push(id);
+    }
+    this.post({
+      type: 'models',
+      available,
+      current: current ?? '',
+      defaultModel: settings.defaultModel,
+    });
+  }
+
+  /** Native settings or the manager changed the curated list. */
+  modelsChanged(): void {
+    this.postModels();
+  }
+
+  private async setModel(model: string): Promise<void> {
+    if (this.session?.currentState === 'running') {
+      this.post({ type: 'notice', level: 'warn', message: 'Stop the turn before changing the model.' });
+      this.postModels();
+      return;
+    }
+    const settings = readSettings().models;
+    if (model !== '' && !settings.available.includes(model) && model !== settings.defaultModel) {
+      this.post({ type: 'notice', level: 'warn', message: `${model} is not in the available model list.` });
+      this.postModels();
+      return;
+    }
+    try {
+      const previous = this.overrides;
+      const next = { ...previous };
+      if (model === '') delete next.model;
+      else next.model = model;
+      const configured = model === '' ? settings.defaultModel || undefined : model;
+      const session = this.session;
+      let reopened = false;
+      if (!session) {
+        this.overrides = next;
+      } else {
+        const result = await session.reopen({ model: configured });
+        this.overrides = next;
+        reopened = result !== undefined;
+        if (result) this.resolvedModel = result.model;
+      }
+      if (!reopened) this.resolvedModel = model === '' ? settings.defaultModel || undefined : model;
+      this.postModels();
+      this.post({
+        type: 'notice',
+        level: 'info',
+        message: model === '' ? 'Model: workspace default.' : `Model: ${model}. The conversation continues.`,
+      });
+      this.postState();
+    } catch (err) {
+      this.post({ type: 'notice', level: 'error', message: `Could not change model: ${(err as Error).message}` });
+      this.postModels();
+      this.postState();
+    }
+  }
+
+  private postCollaboration(): void {
+    this.post({ type: 'collaboration', mode: this.collaboration });
+  }
+
+  private async setCollaboration(mode: 'single' | 'multi'): Promise<void> {
+    if (mode === this.collaboration) return;
+    if (this.session?.currentState === 'running') {
+      this.post({ type: 'notice', level: 'warn', message: 'Stop the turn before changing Agent mode.' });
+      this.postCollaboration();
+      return;
+    }
+    try {
+      await this.applyOptions({ subagents: mode === 'multi' });
+      this.collaboration = mode;
+      await this.rememberCollaboration();
+      this.postCollaboration();
+      this.postState();
+    } catch (err) {
+      this.post({ type: 'notice', level: 'error', message: `Could not change Agent mode: ${(err as Error).message}` });
+      this.postCollaboration();
+    }
+  }
+
+  private async rememberCollaboration(): Promise<void> {
+    const agentId = this.currentAgentId();
+    if (!agentId) return;
+    const modes = this.context.workspaceState.get<Record<string, string>>(COLLABORATION_KEY, {});
+    await this.context.workspaceState.update(COLLABORATION_KEY, {
+      ...modes,
+      [agentId]: this.collaboration,
+    });
+  }
+
+  private async agentMapState(): Promise<AgentMapState> {
+    const rootId = this.agentId ?? this.session?.agent ?? '';
+    const [sessions, taskRows] = await Promise.all([this.hub.listSessions(), this.hub.listTasks()]);
+    return buildAgentMap(
+      rootId,
+      sessions,
+      taskRows.map((row) => row.task),
+      new Set(this.hub.runningAgentIds()),
+    );
+  }
+
+  private async postAgentMap(): Promise<void> {
+    if (!this.agentId && !this.session?.agent) {
+      this.post({ type: 'notice', level: 'info', message: 'Start a conversation before opening Agent Map.' });
+      return;
+    }
+    try {
+      this.post({ type: 'agentMap', state: await this.agentMapState() });
+    } catch (err) {
+      this.post({ type: 'notice', level: 'error', message: `Could not load Agent Map: ${(err as Error).message}` });
+    }
+  }
+
+  private async postAgentDetail(agentId: string): Promise<void> {
+    try {
+      const transcript = await this.hub.transcript(agentId, 200);
+      let prompt = '';
+      let result = '';
+      let status = 'idle';
+      let steps = 0;
+      let usage;
+      for (const entry of transcript.entries) {
+        if (entry.kind === 'message' && entry.role === 'user' && prompt === '') prompt = entry.content ?? '';
+        if (entry.kind === 'message' && entry.role === 'assistant' && entry.content) result = entry.content;
+        if (entry.kind === 'run_end') {
+          status = entry.status ?? status;
+          steps = entry.steps ?? steps;
+          usage = entry.usage ?? usage;
+        }
+      }
+      this.post({ type: 'agentDetail', agentId, prompt, result, status, steps, usage });
+    } catch (err) {
+      this.post({ type: 'notice', level: 'error', message: `Could not load Agent detail: ${(err as Error).message}` });
+    }
+  }
+
   // --- session history --------------------------------------------------------
 
   /** Opens a past agent from this workspace as the current conversation. */
@@ -1202,6 +1518,7 @@ export class ChatPanel implements HostListener {
 
   /** Ends this tab's conversation. The host stays up; the next prompt starts fresh. */
   private async clearConversation(): Promise<void> {
+    this.clearTurnQueue();
     const session = this.session;
     if (session) await session.reset();
     await this.forgetAgent();
@@ -1248,14 +1565,19 @@ export class ChatPanel implements HostListener {
   }
 
   /** Composes and sends one turn, with whatever context the editor has. */
-  private async sendTurn(text: string, mentions: string[], images: string[]): Promise<void> {
+  private async sendTurn(
+    text: string,
+    mentions: string[],
+    images: string[],
+    quotes: Array<{ role: 'user' | 'assistant'; text: string }>,
+  ): Promise<void> {
     // The catalogue is only consulted for a line that could be a command, so an
     // ordinary prompt never pays for the round trip (or for the host process
     // the round trip would start).
     const action = parseSlash(text)
       ? route(text, await this.commandCatalogue())
       : { kind: 'prompt' as const, text };
-    await this.runAction(action, text, mentions, images);
+    await this.runAction(action, text, mentions, images, quotes);
   }
 
   /**
@@ -1268,15 +1590,16 @@ export class ChatPanel implements HostListener {
     text: string,
     mentions: string[],
     images: string[],
+    quotes: Array<{ role: 'user' | 'assistant'; text: string }>,
   ): Promise<void> {
     switch (action.kind) {
       case 'prompt':
-        await this.sendQuestion(action.text, mentions, images);
+        await this.sendQuestion(action.text, mentions, images, quotes);
         return;
       case 'mode':
         await this.setMode(action.mode);
         if (action.args !== '') {
-          await this.sendQuestion(action.args, mentions, images);
+          await this.sendQuestion(action.args, mentions, images, quotes);
           return;
         }
         this.postState();
@@ -1345,7 +1668,7 @@ export class ChatPanel implements HostListener {
           });
         }
         if (action.args !== '') {
-          await this.sendQuestion(action.args, mentions, images);
+          await this.sendQuestion(action.args, mentions, images, quotes);
           return;
         }
         this.postState();
@@ -1354,7 +1677,7 @@ export class ChatPanel implements HostListener {
       default:
         // Unreachable while every action has a case. Sending what was typed is
         // the safe ending: a new command cannot swallow the user's words.
-        await this.sendQuestion(text, mentions, images);
+        await this.sendQuestion(text, mentions, images, quotes);
         return;
     }
   }
@@ -1592,6 +1915,7 @@ export class ChatPanel implements HostListener {
   private rememberAgent(agentId: string): void {
     if (!agentId || agentId === this.agentId) return;
     this.agentId = agentId;
+    void this.rememberCollaboration();
     this.postAgentId();
     this.updateTitle();
     this.hub.notifyTabs();
@@ -1643,46 +1967,48 @@ export class ChatPanel implements HostListener {
   private async pickModel(given: string): Promise<void> {
     let model = given;
     if (model === '') {
-      let entries: Awaited<ReturnType<Hub['listModels']>> = [];
-      try {
-        // This tab's provider, not the window's: a conversation pointed at one
-        // endpoint should list that endpoint's models.
-        entries = await this.hub.listModels({
-          provider: this.overrides.provider,
-          base_url: this.overrides.base_url,
-        });
-      } catch (err) {
-        this.post({
-          type: 'notice',
-          level: 'error',
-          message: `Could not list models: ${(err as Error).message} (check anvil.baseUrl)`,
-        });
-        return;
-      }
-      if (entries.length === 0) {
-        this.post({ type: 'notice', level: 'info', message: 'The provider reported no models.' });
+      const settings = readSettings().models;
+      if (settings.available.length === 0) {
+        this.post({ type: 'notice', level: 'info', message: 'No models are available. Run Anvil: Manage Models first.' });
         return;
       }
       const picked = await vscode.window.showQuickPick(
-        entries.map((entry) => ({
-          label: entry.id,
-          description: [entry.provider, entry.vision ? 'vision' : ''].filter(Boolean).join(' · '),
-          detail: entry.owned_by,
-          id: entry.id,
-        })),
+        [
+          { label: 'Workspace default', description: settings.defaultModel || 'Host default', id: '' },
+          ...settings.available.map((id) => ({ label: id, id })),
+        ],
         { title: 'Model', placeHolder: 'The model this conversation uses' },
       );
       if (!picked) return;
       model = picked.id;
     }
-    await this.applyOptions({ model });
-    this.post({ type: 'notice', level: 'info', message: `Model: ${model}. The conversation continues.` });
-    this.postState();
+    if (given !== '' && !readSettings().models.available.includes(model)) {
+      // Preserve the long-standing direct command: power users can test an id
+      // before curating it, while every picker remains the available list.
+      try {
+        await this.applyOptions({ model });
+        this.resolvedModel = model;
+        this.postModels();
+        this.post({ type: 'notice', level: 'info', message: `Model: ${model}. The conversation continues.` });
+        this.postState();
+      } catch (err) {
+        this.post({ type: 'notice', level: 'error', message: `Could not change model: ${(err as Error).message}` });
+        this.postModels();
+        this.postState();
+      }
+      return;
+    }
+    await this.setModel(model);
   }
 
   /** One ordinary turn, with the context the editor has. */
-  private async sendQuestion(text: string, mentions: string[], images: string[]): Promise<void> {
-    const context = buildPromptContext(dedupeMentions(mentions));
+  private async sendQuestion(
+    text: string,
+    mentions: string[],
+    images: string[],
+    quotes: Array<{ role: 'user' | 'assistant'; text: string }>,
+  ): Promise<void> {
+    const context = buildPromptContext(dedupeMentions(mentions), quotes);
     const { attachments, errors } = attachmentsFromDataUrls(images);
     for (const error of errors) {
       this.post({ type: 'notice', level: 'warn', message: `Dropped an attachment: ${error}.` });
@@ -2299,6 +2625,7 @@ export class ChatPanel implements HostListener {
     // updated_at — so the sidebar's copy of it is stale from here on.
     this.hub.notifySessions();
     this.hub.notifyRunning();
+    void this.dispatchNextTurn();
   };
 
   onState = (): void => {
@@ -2316,7 +2643,9 @@ export class ChatPanel implements HostListener {
   onSession = (result: SessionResult): void => {
     this.rememberAgent(result.agent_id);
     this.noteResolvedMode(result);
+    this.resolvedModel = result.model;
     this.postMode();
+    this.postModels();
     // The root is a fact about the session only after the host exists, which is
     // why the header learns it here in a multi-root window rather than at ready.
     this.postRoot();
@@ -2336,6 +2665,7 @@ export class ChatPanel implements HostListener {
    */
   onTask = (task: TaskInfo, sessionId: string): void => {
     this.hub.noteTask(sessionId, task);
+    this.post({ type: 'backgroundTask', task });
   };
 
   /**
@@ -2361,6 +2691,7 @@ export class ChatPanel implements HostListener {
       this.lastChanges = { run: runId, files: new Map(files.map((file) => [file.path, file])) };
       this.post({
         type: 'changes',
+        runId,
         files: files.map((file) => ({ path: file.path, kind: file.kind })),
       });
     } catch (err) {
@@ -2656,7 +2987,7 @@ export class ChatPanel implements HostListener {
     this.postMode();
     this.postState();
     this.post({ type: 'planSettled', runId, action: 'approve', mode: back });
-    await this.sendQuestion(PLAN_APPROVED_PROMPT, [], []);
+    await this.sendQuestion(PLAN_APPROVED_PROMPT, [], [], []);
   }
 
   /**
@@ -2808,8 +3139,13 @@ export class ChatPanel implements HostListener {
     this.session = undefined;
     this.opening = undefined;
     this.resolvedMode = undefined;
+    this.resolvedModel = undefined;
+    this.turnQueue.clear();
+    this.dispatchingTurn = false;
+    this.postQueue();
     this.postState();
     this.postMode();
+    this.postModels();
   }
 
   async dispose(): Promise<void> {
@@ -2822,6 +3158,8 @@ export class ChatPanel implements HostListener {
     this.panel = undefined;
     this.listening = false;
     this.pending = [];
+    this.turnQueue.clear();
+    this.dispatchingTurn = false;
     this.partialReviews.dispose();
     this.mcpStatusSub?.dispose();
     this.mcpStatusSub = undefined;
@@ -2848,7 +3186,7 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri, focus = f
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; font-src ${webview.cspSource}; img-src data: ${webview.cspSource}; script-src 'nonce-${nonce}';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; font-src ${webview.cspSource}; img-src data: ${webview.cspSource}; script-src 'nonce-${nonce}' 'wasm-unsafe-eval';">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="stylesheet" href="${asset('tokens.css')}">
 <link rel="stylesheet" href="${asset('chat.css')}">
@@ -2864,6 +3202,10 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri, focus = f
   <div id="srStatus" class="sr-only" role="status" aria-live="polite" aria-atomic="false"></div>
   <div id="srAlert" class="sr-only" role="alert" aria-live="assertive" aria-atomic="true"></div>
   <div id="banner" class="banner" hidden></div>
+  <div id="replayLoading" class="replay-loading" role="status" aria-live="polite" hidden>
+    <span class="replay-loading-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+    <span>Loading conversation…</span>
+  </div>
   <!--
     The transcript is a log a reader browses, not a live region: chat.js writes
     each finished answer block into the polite region above instead, once.
@@ -2881,12 +3223,13 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri, focus = f
       flight (p_0.46.24). Inside the transcript rather than the dock, because a
       floating line's reserved height is measured a frame late and the
       conversation is painted over it; here it is part of what scrolls, so it
-      cannot be overlapped. It sorts last (order: 1) however turns are appended,
-      and its first line keeps its box when empty so a turn does not change the
-      block's height.
+      cannot be overlapped. It sorts last (order: 1) however turns are appended.
+      The working line owns the active run's token counts; root/context facts
+      follow below it.
     -->
     <div id="footprint" class="footprint" hidden>
       <div id="status" class="status"></div>
+      <span id="meter" class="meter" hidden></span>
       <div id="root" class="root" hidden></div>
     </div>
   </div>
@@ -2896,65 +3239,175 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri, focus = f
     --anvil-composer-h, which is what the transcript reserves at its bottom.
   -->
   <div id="composerDock" class="dock">
+    <button id="autoScroll" type="button" class="auto-scroll" aria-label="Disable auto-scroll" aria-pressed="true" title="Auto-scroll is on">
+      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M10 3v10"/>
+        <path d="m6.5 9.5 3.5 3.5 3.5-3.5"/>
+        <path d="M5 16h10"/>
+      </svg>
+    </button>
+    <button id="scrollBottom" type="button" class="scroll-bottom" aria-label="Scroll conversation to bottom" title="Go to latest message" hidden>
+      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="m6 7.5 4 4 4-4"/>
+        <path d="M5 15.5h10"/>
+      </svg>
+    </button>
     <div id="bypass" class="bypass" hidden>Bypass is on. Tool calls run without asking.</div>
     <div id="dontAsk" class="dont-ask" hidden>No asking. Only calls this workspace's rules allow will run.</div>
+    <div id="actionMenu" class="action-menu" role="menu" aria-label="Add to prompt" hidden>
+        <button id="mention" type="button" class="action-menu-row" role="menuitem">
+          <span class="action-menu-icon mention" aria-hidden="true">@</span>
+          <span><strong>Reference files or folders</strong><small>Add workspace context to the prompt</small></span>
+        </button>
+        <button id="quote" type="button" class="action-menu-row" role="menuitem">
+          <svg class="action-menu-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M6.8 6.2H4.9a2 2 0 0 0-2 2v2.2h3.9v3.4H3.5"/>
+            <path d="M16.9 6.2H15a2 2 0 0 0-2 2v2.2h3.9v3.4h-3.3"/>
+          </svg>
+          <span><strong>Reference conversation</strong><small>Quote an earlier message with /ref</small></span>
+        </button>
+        <button id="image" type="button" class="action-menu-row" role="menuitem">
+          <svg class="action-menu-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true">
+            <rect x="3.5" y="4" width="13" height="12" rx="2"/>
+            <circle cx="7.3" cy="7.7" r="1.2"/>
+            <path d="m5 14 3.4-3.4 2.3 2.2 1.8-1.7 2.5 2.9"/>
+          </svg>
+          <span><strong>Attach an image</strong><small>Choose an image from disk</small></span>
+        </button>
+        <button id="rules" type="button" class="action-menu-row" role="menuitem">
+          <svg class="action-menu-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true">
+            <path d="M5 3.5h8.5A1.5 1.5 0 0 1 15 5v11H6.5A1.5 1.5 0 0 1 5 14.5z"/>
+            <path d="M7.5 7h5M7.5 10h5"/>
+          </svg>
+          <span><strong>Rules</strong><small>Show rule files loaded for this workspace</small></span>
+        </button>
+        <button id="permissions" type="button" class="action-menu-row" role="menuitem">
+          <svg class="action-menu-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true">
+            <path d="M10 2.8 15 5v4.2c0 3.4-2 6.1-5 8-3-1.9-5-4.6-5-8V5z"/>
+            <path d="m7.7 10 1.5 1.5 3.2-3.4"/>
+          </svg>
+          <span><strong>Permissions</strong><small>Manage tool permission rules</small></span>
+        </button>
+        <button id="slash" type="button" class="action-menu-row" role="menuitem">
+          <span class="action-menu-icon slash" aria-hidden="true">/</span>
+          <span><strong>Commands</strong><small>Browse slash commands and skills</small></span>
+        </button>
+    </div>
+    <div id="modeMenu" class="mode-menu" role="menu" aria-label="Agent mode" hidden>
+      <div class="mode-menu-head">
+        <span>Modes</span>
+        <span class="mode-menu-hint">↑ ↓ · Enter</span>
+      </div>
+      <button type="button" class="mode-row" role="menuitemradio" data-mode="">
+        <span class="mode-row-icon">◇</span>
+        <span class="mode-row-copy"><strong>Workspace default</strong><small>Follow .anvil/permissions.json for this workspace</small></span>
+        <span class="mode-row-check" aria-hidden="true">✓</span>
+      </button>
+      <button type="button" class="mode-row" role="menuitemradio" data-mode="ask">
+        <span class="mode-row-icon">✋</span>
+        <span class="mode-row-copy"><strong>Ask</strong><small>Ask before actions that workspace rules do not allow</small></span>
+        <span class="mode-row-check" aria-hidden="true">✓</span>
+      </button>
+      <button type="button" class="mode-row" role="menuitemradio" data-mode="accept_edits">
+        <span class="mode-row-icon">‹/›</span>
+        <span class="mode-row-copy"><strong>Accept edits</strong><small>Edit files automatically; ask before other protected actions</small></span>
+        <span class="mode-row-check" aria-hidden="true">✓</span>
+      </button>
+      <button type="button" class="mode-row" role="menuitemradio" data-mode="auto">
+        <span class="mode-row-icon">ϟ</span>
+        <span class="mode-row-copy"><strong>Auto</strong><small>Approve safe actions and pause for anything risky</small></span>
+        <span class="mode-row-check" aria-hidden="true">✓</span>
+      </button>
+      <button type="button" class="mode-row" role="menuitemradio" data-mode="plan">
+        <span class="mode-row-icon">▤</span>
+        <span class="mode-row-copy"><strong>Plan</strong><small>Explore the code and present a plan before editing</small></span>
+        <span class="mode-row-check" aria-hidden="true">✓</span>
+      </button>
+      <button type="button" class="mode-row" role="menuitemradio" data-mode="dont_ask">
+        <span class="mode-row-icon">⊘</span>
+        <span class="mode-row-copy"><strong>No asking</strong><small>Refuse actions that workspace rules do not allow</small></span>
+        <span class="mode-row-check" aria-hidden="true">✓</span>
+      </button>
+      <button type="button" class="mode-row danger" role="menuitemradio" data-mode="bypass">
+        <span class="mode-row-icon">⚠</span>
+        <span class="mode-row-copy"><strong>Bypass</strong><small>Run every tool call without approval</small></span>
+        <span class="mode-row-check" aria-hidden="true">✓</span>
+      </button>
+    </div>
+    <div id="collaborationMenu" class="collaboration-menu" role="menu" aria-label="Agent collaboration mode" hidden>
+      <button type="button" class="collaboration-row" role="menuitemradio" data-collaboration="single">
+        <span class="collaboration-row-copy"><strong>Single</strong><small>One Agent works directly on the task</small></span>
+        <span class="collaboration-row-check" aria-hidden="true">✓</span>
+      </button>
+      <button type="button" class="collaboration-row" role="menuitemradio" data-collaboration="multi">
+        <span class="collaboration-row-copy"><strong>Multi</strong><small>Main Agent may delegate work to subagents</small></span>
+        <span class="collaboration-row-check" aria-hidden="true">✓</span>
+      </button>
+      <button type="button" class="collaboration-row" role="menuitemradio" data-collaboration="complex" aria-disabled="true" disabled>
+        <span class="collaboration-row-copy"><strong>Complex</strong><small>Advanced orchestration · coming later</small></span>
+      </button>
+    </div>
     <form id="composer" class="composer">
       <div id="palette" class="palette" hidden></div>
       <div id="chips" class="chips" hidden></div>
-      <textarea id="input" rows="1" placeholder="Describe a change…  (@ references a file, / lists commands)" aria-label="Prompt"></textarea>
+      <textarea id="input" rows="1" placeholder="Ask Anvil anything…  (@ files, / commands)" aria-label="Prompt"></textarea>
       <div class="actions">
-        <!--
-          The empty value is a real choice: "let the workspace decide". It is
-          first because it is what a workspace with no stored choice is in, and
-          the label is filled in by chat.js with the mode it resolved to, since
-          which mode that is depends on a file this side has to read.
-        -->
-        <select id="mode" aria-label="Permission mode" title="What the agent may do without asking">
-          <option value="">Workspace default</option>
-          <option value="ask">Ask before changes</option>
-          <option value="accept_edits">Accept edits</option>
-          <option value="auto">Auto: safe actions</option>
-          <option value="plan">Plan only</option>
-          <option value="dont_ask">Only what the rules allow</option>
-          <option value="bypass">Bypass approvals</option>
-        </select>
-        <button id="rules" type="button" class="ghost" title="Which rule files this workspace loaded" hidden>Rules</button>
-        <button id="permissions" type="button" class="ghost" title="Manage permission rules: what runs without asking, what asks, and what is refused">Permissions</button>
-        <!--
-          The reading view. It is a state, not an action, so it is drawn as a
-          pressed toggle; the label says what it shows rather than what it
-          hides.
-        -->
-        <button id="focus" type="button" class="ghost" aria-pressed="${focus ? 'true' : 'false'}" title="Show only the conversation: hide tool cards and thinking (Ctrl+Alt+F)">Focus</button>
-        <!--
-          What this session has spent, inside the composer rather than floating
-          above the transcript (p_0.46.24): this is the one opaque surface in the
-          dock, so the conversation cannot be painted over it. It is the only
-          flexible child in the row, so a long total truncates here before a
-          button moves, and the whole string stays in the tooltip.
-        -->
-        <div id="meter" class="meter" hidden></div>
+        <button id="attach" type="button" class="composer-tool" aria-label="Add to prompt" aria-expanded="false" aria-controls="actionMenu" title="Add to prompt">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
+            <path d="M10 4v12M4 10h12"/>
+          </svg>
+        </button>
+        <button id="focus" type="button" class="composer-tool" aria-label="Toggle conversation focus view" aria-pressed="${focus ? 'true' : 'false'}" title="Show only the conversation: hide tool cards and thinking (Ctrl+Alt+F)">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true">
+            <path d="M7 3.5H4.5a1 1 0 0 0-1 1V7M13 3.5h2.5a1 1 0 0 1 1 1V7M7 16.5H4.5a1 1 0 0 1-1-1V13M13 16.5h2.5a1 1 0 0 0 1-1V13"/>
+          </svg>
+        </button>
+        <div class="collaboration-control">
+          <button id="collaboration" type="button" class="collaboration-trigger" aria-label="Agent collaboration mode" aria-expanded="false" aria-controls="collaborationMenu" title="Choose Agent collaboration mode">
+            <span class="collaboration-dot" aria-hidden="true"></span>
+            <span id="collaborationLabel">Multi</span>
+          </button>
+          <button id="agentMap" type="button" class="agent-map-trigger" aria-label="Open Agent Map" title="Open Agent Map">
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="5" cy="10" r="2"/><circle cx="15" cy="5" r="2"/><circle cx="15" cy="15" r="2"/>
+              <path d="M7 9.4 13 5.6M7 10.6l6 3.8"/>
+            </svg>
+          </button>
+        </div>
+        <label class="composer-model" title="Model for this conversation">
+          <span class="sr-only">Model</span>
+          <select id="modelSelect" aria-label="Model for this conversation">
+            <option value="">Default</option>
+          </select>
+        </label>
         <span class="spacer"></span>
-        <button id="attach" type="button" class="secondary" aria-label="Reference a file or folder" title="Reference a file or folder">@</button>
-        <!--
-          The picker the paste path already accepts: a button because a paste
-          needs an image in the clipboard first, and a file on disk is the
-          common case.
-        -->
-        <button id="image" type="button" class="secondary" title="Attach an image">Image</button>
-        <!--
-          One control for both ends of a turn: a paper plane sends, and the same
-          button becomes a stop square while a turn runs. A separate Stop button
-          would appear only at the moment Send stops being useful.
-        -->
+        <button id="mode" type="button" class="mode-trigger" aria-label="Agent mode" aria-expanded="false" aria-controls="modeMenu" title="Choose how the agent may act">
+          <svg class="mode-trigger-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true">
+            <path d="m11.5 2.8-6 8h4l-1 6.4 6-8h-4z"/>
+          </svg>
+          <span id="modeLabel">Workspace default</span>
+          <svg class="mode-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
+            <path d="m5 6.5 3 3 3-3"/>
+          </svg>
+        </button>
+        <button id="prioritySend" type="button" class="secondary run-action" aria-label="Interrupt and send now" title="Interrupt the current response and send now" hidden>
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true">
+            <path d="m11.5 2.8-6 8h4l-1 6.4 6-8h-4z"/>
+          </svg>
+          <span>Send now</span>
+        </button>
+        <button id="stop" type="button" class="secondary icon run-stop" aria-label="Stop current response" title="Stop current response" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="7" y="7" width="10" height="10" rx="1.5" fill="currentColor"/>
+          </svg>
+        </button>
         <button id="send" type="button" class="primary icon" aria-label="Send" title="Send">
           <svg class="icon-send" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M22 2 11 13"/>
             <path d="m22 2-7 20-4-9-9-4 20-7z"/>
           </svg>
-          <svg class="icon-stop" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true">
-            <rect x="7" y="7" width="10" height="10" rx="1.5" fill="currentColor"/>
-          </svg>
+          <span id="sendLabel" class="send-label">Enqueue</span>
+          <span id="queueCount" class="queue-count" hidden></span>
         </button>
       </div>
     </form>
@@ -2991,6 +3444,12 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri, focus = f
     its fonts ship: the browser already knows how to draw mathematics.
   -->
   <script nonce="${nonce}" src="${asset('vendor/katex/katex.min.js')}"></script>
+  <!-- Mermaid is also vendored. Its SVG is parsed as inert XML and sanitized
+       before insertion; model output is never assigned as markup. -->
+  <script nonce="${nonce}" src="${asset('vendor/mermaid/mermaid.min.js')}"></script>
+  <!-- Shiki supplies offline TextMate grammars for completed code fences.
+       chat.js consumes tokens and still constructs every span through the DOM. -->
+  <script nonce="${nonce}" src="${asset('vendor/shiki/shiki.min.js')}"></script>
   <script nonce="${nonce}" src="${asset('markdown.js')}"></script>
   <script nonce="${nonce}" src="${asset('meter.js')}"></script>
   <script nonce="${nonce}" src="${asset('history.js')}"></script>

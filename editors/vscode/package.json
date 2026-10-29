@@ -2,7 +2,7 @@
   "name": "anvil-vscode",
   "displayName": "Anvil",
   "description": "Anvil agent in VS Code: streaming chat, tool cards, per-call approvals.",
-  "version": "0.47.0",
+  "version": "0.46.54",
   "publisher": "anvil-dev",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -162,6 +162,16 @@
         "category": "Anvil"
       },
       {
+        "command": "anvil.openModels",
+        "title": "Anvil: Manage Models",
+        "category": "Anvil"
+      },
+      {
+        "command": "anvil.selectDefaultModel",
+        "title": "Anvil: Select Default Model",
+        "category": "Anvil"
+      },
+      {
         "command": "anvil.openMcpFile",
         "title": "Anvil: Open mcp.json",
         "category": "Anvil"
@@ -270,14 +280,20 @@
         }
       ]
     },
-    "configuration": {
-      "title": "Anvil",
+    "configuration": [
+      {
+      "title": "Anvil: Runtime",
       "properties": {
         "anvil.hostPath": {
           "type": "string",
           "default": "",
           "markdownDescription": "Path to the `anvil-host` sidecar binary. Empty uses the binary bundled in the extension, then `anvil-host` on `PATH`. A relative path is resolved against the workspace folder. Set this only to run a host you built yourself."
-        },
+        }
+      }
+      },
+      {
+      "title": "Anvil: Models",
+      "properties": {
         "anvil.provider": {
           "type": "string",
           "enum": [
@@ -287,16 +303,32 @@
           "default": "openai",
           "description": "Model provider. Sent in session.new, not through the environment."
         },
-        "anvil.model": {
-          "type": "string",
-          "default": "",
-          "markdownDescription": "Model id (for example `gpt-5.2`). Empty means the host's default."
-        },
         "anvil.baseUrl": {
           "type": "string",
           "default": "",
           "markdownDescription": "OpenAI-compatible base URL, for example `https://api.openai.com/v1`. Empty means the provider default."
         },
+        "anvil.modelCatalogUrl": {
+          "type": "string",
+          "scope": "resource",
+          "default": "https://athenai.mihoyo.com/v1/models",
+          "markdownDescription": "Exact OpenAI-compatible model catalog endpoint. [Open Model Manager](command:anvil.openModels) to fetch it with the stored Anvil API key."
+        },
+        "anvil.availableModels": {
+          "type": "array",
+          "scope": "resource",
+          "default": [],
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          },
+          "markdownDescription": "Curated model ids shown in chat. [Open Model Manager](command:anvil.openModels) to edit this list, or [Select Default Model](command:anvil.selectDefaultModel)."
+        }
+      }
+      },
+      {
+      "title": "Anvil: Agent and Context",
+      "properties": {
         "anvil.maxSteps": {
           "type": "number",
           "default": 0,
@@ -305,16 +337,16 @@
         },
         "anvil.contextWindow": {
           "type": "number",
-          "default": 0,
+          "default": 128000,
           "minimum": 0,
-          "markdownDescription": "The context window the token meter measures against, in tokens. 0 means unknown: the composer then shows cumulative input and output counts with no fraction, and the session does not auto-compact. Anvil does not guess a window from the model name, so a percentage appears only when this is set."
+          "markdownDescription": "The context budget the token meter measures against, in tokens. The conservative 128k default prevents an unconfigured conversation from growing without bound; set the model's real window to use more capacity. Set 0 explicitly to disable automatic compaction and show cumulative counts without a fraction."
         },
         "anvil.autoCompactAt": {
           "type": "number",
           "default": 0.8,
           "minimum": 0.1,
           "maximum": 1,
-          "markdownDescription": "How full the context window may get before the host summarizes the conversation on its own, as a fraction of `anvil.contextWindow`. The meter marks this point and counts down to it. Ignored while the window is 0."
+          "markdownDescription": "How full the context budget may get before the host summarizes the conversation on its own, as a fraction of `anvil.contextWindow`. The meter marks this point and counts down to it. Ignored while the window is 0."
         },
         "anvil.contextKeepRecent": {
           "type": "number",
@@ -327,14 +359,24 @@
           "default": 0,
           "minimum": 0,
           "markdownDescription": "How long the provider keeps its prompt cache, in seconds, for the meter's countdown. 0 means the provider's default: 300 seconds for Anthropic, and no countdown for a provider whose cache lifetime is unknown. The countdown appears only after a run reports cached tokens."
-        },
+        }
+      }
+      },
+      {
+      "title": "Anvil: Editor",
+      "properties": {
         "anvil.chatFontSize": {
           "type": "number",
           "default": 15,
           "minimum": 10,
           "maximum": 24,
           "markdownDescription": "The chat view's base text size, in pixels. Display only: changing it updates open conversations immediately and does not restart the agent. The default is two pixels larger than the editor's usual 13px UI font."
-        },
+        }
+      }
+      },
+      {
+      "title": "Anvil: Sessions and Tools",
+      "properties": {
         "anvil.store": {
           "type": "string",
           "enum": [
@@ -367,8 +409,8 @@
         },
         "anvil.subagents": {
           "type": "boolean",
-          "default": true,
-          "markdownDescription": "Let a session hand work to child agents: `spawn_agent` runs a brief in its own conversation, and `background: true` starts it in the task table. Children inherit the parent's tools and permissions, and a child's mutating call still stops for approval. Off means the tool is not registered at all, so the model is told it does not exist."
+          "default": false,
+          "markdownDescription": "Let a session hand work to child agents: `spawn_agent` runs a brief in its own conversation, and `background: true` starts it in the task table. Children inherit the parent's tools and permissions, and a child's mutating call still stops for approval. Off by default; the tool is then not registered at all, so the model is told it does not exist."
         },
         "anvil.lsp.enabled": {
           "type": "boolean",
@@ -381,25 +423,46 @@
           "markdownDescription": "Language servers to start, each `{language, pattern, command, args}`. A command that cannot start removes its tools and never refuses the session. The command runs with the host's privileges in a workspace you have trusted, and it is never handed to a shell.",
           "items": {
             "type": "object",
-            "required": ["command"],
+            "required": [
+              "command"
+            ],
             "properties": {
-              "language": { "type": "string", "description": "Language id, for example `go`." },
-              "pattern": { "type": "string", "description": "Glob the server applies to, for example `**/*.go`." },
-              "command": { "type": "string", "description": "Executable to start. Arguments travel separately." },
-              "args": { "type": "array", "items": { "type": "string" }, "description": "Arguments passed verbatim." }
+              "language": {
+                "type": "string",
+                "description": "Language id, for example `go`."
+              },
+              "pattern": {
+                "type": "string",
+                "description": "Glob the server applies to, for example `**/*.go`."
+              },
+              "command": {
+                "type": "string",
+                "description": "Executable to start. Arguments travel separately."
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Arguments passed verbatim."
+              }
             }
           }
         },
         "anvil.testCommand": {
           "type": "array",
           "default": [],
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "markdownDescription": "The argv of the workspace's test command, for example `[\"go\", \"test\", \"./...\"]`. Setting it registers the `run_tests` tool. Empty leaves the tool unregistered."
         },
         "anvil.buildCommand": {
           "type": "array",
           "default": [],
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "markdownDescription": "The argv of the workspace's build command. Setting it registers the `build` tool. Empty leaves the tool unregistered."
         },
         "anvil.mcp.project": {
@@ -439,13 +502,16 @@
           "description": "Results per search, 1–10. 0 uses the provider default (5)."
         }
       }
-    }
+      }
+    ]
   },
   "scripts": {
     "compile": "tsc -p .",
     "watch": "tsc -p . --watch",
     "build:host": "node scripts/build-host.mjs",
     "vendor:katex": "node scripts/vendor-katex.mjs",
+    "vendor:mermaid": "node scripts/vendor-mermaid.mjs",
+    "vendor:shiki": "node scripts/vendor-shiki.mjs",
     "package:vsix": "node scripts/package-vsix.mjs",
     "package:all": "node scripts/package-vsix.mjs --all",
     "smoke:vsix": "node scripts/smoke-packaged.mjs",
@@ -458,9 +524,12 @@
     "@types/node": "^22.20.5",
     "@types/vscode": "^1.105.0",
     "@vscode/vsce": "^3.9.2",
+    "esbuild": "0.28.2",
     "eslint": "^9.39.5",
     "globals": "^14.0.0",
     "katex": "0.19.0",
+    "mermaid": "^12.2.0",
+    "shiki": "4.5.0",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.71.2"
   }

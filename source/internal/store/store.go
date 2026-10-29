@@ -97,6 +97,8 @@ type Record struct {
 	Status string `json:"status,omitempty"`
 	Steps  int    `json:"steps,omitempty"`
 	Usage  *Usage `json:"usage,omitempty"`
+	Err    string `json:"err,omitempty"`
+	Code   string `json:"code,omitempty"`
 }
 
 // Store is a directory-backed JSONL session store.

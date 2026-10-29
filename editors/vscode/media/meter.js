@@ -31,7 +31,13 @@
   /** The same shorthand `runSummary` uses for a run's own numbers. */
   function short(value) {
     if (typeof value !== 'number' || !isFinite(value) || value <= 0) return '';
-    return value >= 1000 ? (value / 1000).toFixed(value >= 10000 ? 0 : 1) + 'k' : String(value);
+    const scaled = (amount, unit) => {
+      const text = amount.toFixed(amount >= 10 ? 0 : 1).replace(/\.0$/, '');
+      return text + unit;
+    };
+    if (value >= 1000000) return scaled(value / 1000000, 'M');
+    if (value >= 1000) return scaled(value / 1000, 'k');
+    return String(Math.floor(value));
   }
 
   /** A fresh accumulator: nothing spent, no previous run. */

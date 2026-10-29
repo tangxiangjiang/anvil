@@ -65,6 +65,9 @@ export const Method = {
   Prompt: 'prompt',
   Cancel: 'cancel',
   ModelsList: 'models.list',
+  SubagentsGet: 'subagents.get',
+  SubagentsUpsert: 'subagents.upsert',
+  SubagentsRemove: 'subagents.remove',
   SkillsList: 'skills.list',
   RulesList: 'rules.list',
   /**
@@ -602,12 +605,19 @@ export interface ApprovalResponse {
 export interface PromptContext {
   /** Workspace-relative paths the user referenced. Files are read by the host. */
   mentions?: Mention[];
+  /** Earlier visible conversation messages the user explicitly quoted. */
+  quotes?: Quote[];
   selection?: Selection;
   diagnostics?: Diagnostic[];
 }
 
 export interface Mention {
   path: string;
+}
+
+export interface Quote {
+  role: 'user' | 'assistant';
+  text: string;
 }
 
 export interface Selection {
@@ -679,6 +689,9 @@ export interface TaskInfo {
   status: 'running' | 'finished' | 'failed' | 'cancelled';
   /** The agent whose tool call started the task, not a subagent's own id. */
   agent_id?: string;
+  child_agent_id?: string;
+  parent_run_id?: string;
+  parent_tool_call_id?: string;
   started_at: string;
   ended_at?: string;
   /** A shell task's exit code; -1 when the process did not exit on its own. */
@@ -758,6 +771,8 @@ export interface SessionInfo {
    * these are what nest it under its parent in the sidebar.
    */
   parent_agent_id?: string;
+  parent_run_id?: string;
+  parent_tool_call_id?: string;
   depth?: number;
   subagent?: boolean;
   /** The description the spawn call gave the task, which is the readable name. */
@@ -848,6 +863,8 @@ export interface TranscriptEntry {
   status?: RunStatus;
   steps?: number;
   usage?: Usage;
+  err?: string;
+  code?: string;
 }
 
 export interface SessionTranscriptResult {
@@ -1160,6 +1177,24 @@ export interface ModelEntry {
   vision?: boolean;
 }
 
+export interface SubagentProfile {
+  id: string;
+  description: string;
+  instructions: string;
+  model?: string;
+  tools?: string[];
+  max_steps?: number;
+}
+
+export interface SubagentsResult {
+  path: string;
+  exists: boolean;
+  profiles: SubagentProfile[];
+  tool_groups: string[];
+  default_tools: string[];
+  problem?: string;
+}
+
 // --- event / done ------------------------------------------------------------
 
 export type EventType =
@@ -1218,13 +1253,10 @@ export interface HostEvent {
   step?: number;
   max_steps?: number;
   code?: string;
-  /**
-   * The run's token usage so far, on a terminal event the host forwards (an
-   * `error`), when the provider reported any (0.40.8+). Absent elsewhere and
-   * absent when unknown — which is not the same as zero. The authoritative
-   * end-of-run usage is the `done` notification's `usage`.
-   */
+  /** Provider usage on terminal errors, or a live estimate when marked below. */
   usage?: Usage;
+  /** True only for running input/output estimates; `done.usage` replaces them. */
+  usage_estimated?: boolean;
   /**
    * The workspace rule that decided this tool result, when one did. It is how a
    * call that ran without a prompt says why it did not need one; absent means no

@@ -23,6 +23,11 @@ const (
 	CodeAuth              = "auth"
 	CodeProviderMidStream = "provider_mid_stream"
 	CodeToolPanic         = "tool_panic"
+	// CodeEmptyResponse is a provider that kept returning neither text nor a tool call
+	// after bounded recovery. CodeFinishProtocol is a run that required finish_task and
+	// never called it. Both belong to the editor completion protocol.
+	CodeEmptyResponse  = "empty_response"
+	CodeFinishProtocol = "finish_protocol"
 )
 
 // Sentinel causes for context.WithCancelCause / WithTimeoutCause.

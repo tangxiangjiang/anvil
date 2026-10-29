@@ -23,6 +23,7 @@ import { HostManager } from './hostManager';
 import { HostRpcError } from './hostClient';
 import { McpSettings } from './mcp';
 import { McpPanels } from './mcpPanel';
+import { ModelsPanels } from './modelsPanel';
 import { PermissionsPanels } from './permissionsPanel';
 import { PlanDocuments } from './planDocument';
 import { ToolOutputDocuments } from './toolOutput';
@@ -53,6 +54,8 @@ import {
   SessionInfo,
   SessionTranscriptResult,
   SkillEntry,
+  SubagentProfile,
+  SubagentsResult,
   TaskInfo,
 } from './protocol';
 import { PreviewDocuments } from './review';
@@ -69,6 +72,8 @@ export class Hub {
   private readonly permissions: PermissionsPanels;
   /** The window's MCP manager; one document for every layer's servers. */
   private readonly mcp: McpPanels;
+  /** The window's curated model manager. */
+  private readonly models: ModelsPanels;
   /** The window's Tasks panel; one table of background work, revealed the same. */
   private readonly tasks: TasksPanels;
   /**
@@ -131,6 +136,7 @@ export class Hub {
     });
     this.permissions = new PermissionsPanels(context.extensionUri, this);
     this.mcp = new McpPanels(context.extensionUri, this);
+    this.models = new ModelsPanels(context, this);
     this.tasks = new TasksPanels(context.extensionUri, {
       listTasks: () => this.listTasks(),
       taskOutput: (sessionId, taskId, offset, limit) =>
@@ -597,6 +603,17 @@ export class Hub {
     this.mcp.open();
   }
 
+  /** Opens the curated model list and gateway discovery manager. */
+  openModels(): void {
+    this.models.open();
+  }
+
+  /** Native settings changed: refresh the manager and every composer's list. */
+  modelsChanged(): void {
+    this.models.configurationChanged();
+    for (const panel of this.panels) panel.modelsChanged();
+  }
+
   /**
    * Shows one layer's `mcp.json` where it lives, creating it when it is not
    * there.
@@ -647,6 +664,18 @@ export class Hub {
   /** The provider's model catalogue, for a tab's /model picker. */
   listModels(options: { provider?: string; base_url?: string } = {}): Promise<ModelEntry[]> {
     return this.manager.listModels(options);
+  }
+
+  subagentProfiles(): Promise<SubagentsResult> {
+    return this.manager.subagentProfiles();
+  }
+
+  upsertSubagentProfile(profile: SubagentProfile): Promise<SubagentsResult> {
+    return this.manager.upsertSubagentProfile(profile);
+  }
+
+  removeSubagentProfile(id: string): Promise<SubagentsResult> {
+    return this.manager.removeSubagentProfile(id);
   }
 
   /** Appends a rule to the workspace file, optionally settling a pending prompt. */
@@ -806,6 +835,7 @@ export class Hub {
     this.permissions.dispose();
     this.tasks.dispose();
     this.mcp.dispose();
+    this.models.dispose();
     for (const panel of panels) await panel.dispose().catch(() => undefined);
     await this.manager.dispose();
   }

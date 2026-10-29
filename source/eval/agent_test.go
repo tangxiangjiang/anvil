@@ -122,7 +122,7 @@ func agentFixtures() []agentFixture {
 					}
 				}
 				return fmt.Errorf("child did not read and report")
-			}}, options: anvil.Options{BuiltinTools: []string{"read", "spawn_agent"}, Subagents: anvil.SubagentOptions{Enabled: true}},
+			}}, options: anvil.Options{BuiltinTools: []string{"read_file", "glob", "spawn_agent"}, Subagents: anvil.SubagentOptions{Enabled: true}},
 			answer: func(_ context.Context, req llm.Request) (*llm.Response, error) {
 				user, round := userAndTools(req)
 				if user == "read note.txt and report" {
@@ -148,7 +148,7 @@ func agentFixtures() []agentFixture {
 					}
 				}
 				return fmt.Errorf("workflow did not finish both steps")
-			}}, options: anvil.Options{BuiltinTools: []string{"read", "run_workflow"}, Subagents: anvil.SubagentOptions{Enabled: true}},
+			}}, options: anvil.Options{BuiltinTools: []string{"read_file", "glob", "run_workflow"}, Subagents: anvil.SubagentOptions{Enabled: true}},
 			answer: func(_ context.Context, req llm.Request) (*llm.Response, error) {
 				user, round := userAndTools(req)
 				switch user {
@@ -230,7 +230,7 @@ func agentFixtures() []agentFixture {
 					}
 				}
 				return fmt.Errorf("the parent did not read two [met] report lines and the changed file")
-			}}, options: anvil.Options{Mode: anvil.ModeMulti, BuiltinTools: []string{"read", "delegate"}, Subagents: anvil.SubagentOptions{Enabled: true},
+			}}, options: anvil.Options{Mode: anvil.ModeMulti, BuiltinTools: []string{"read", "edit", "delegate"}, Subagents: anvil.SubagentOptions{Enabled: true},
 				Checkpoints: &anvil.CheckpointOptions{}},
 			answer: func(_ context.Context, req llm.Request) (*llm.Response, error) {
 				user, round := userAndTools(req)
@@ -267,7 +267,7 @@ func agentFixtures() []agentFixture {
 					}
 				}
 				return fmt.Errorf("the parent's report does not show a [not met] item")
-			}}, options: anvil.Options{Mode: anvil.ModeMulti, BuiltinTools: []string{"read", "delegate"}, Subagents: anvil.SubagentOptions{Enabled: true}},
+			}}, options: anvil.Options{Mode: anvil.ModeMulti, BuiltinTools: []string{"read", "edit", "delegate"}, Subagents: anvil.SubagentOptions{Enabled: true}},
 			answer: func(_ context.Context, req llm.Request) (*llm.Response, error) {
 				user, round := userAndTools(req)
 				if strings.HasPrefix(user, "Do the work in your brief") {

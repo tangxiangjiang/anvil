@@ -409,6 +409,16 @@ func TestSubagentTaskIsAnAgentRow(t *testing.T) {
 	if row["kind"] != "agent" {
 		t.Fatalf("kind=%v, want agent", row["kind"])
 	}
+	if got, _ := row["child_agent_id"].(string); got == "" {
+		t.Fatalf("agent task has no concrete child identity: %v", row)
+	}
+	if got, _ := row["parent_tool_call_id"].(string); got != "call_bg_spawn" {
+		t.Fatalf("parent_tool_call_id=%q, want call_bg_spawn", got)
+	}
+	parentRunID, _ := paramsOf(t, out.done)["run_id"].(string)
+	if got, _ := row["parent_run_id"].(string); got != parentRunID {
+		t.Fatalf("parent_run_id=%q, want %q", got, parentRunID)
+	}
 	read := resultOf(t, h.callOK(MethodTasksOutput, TasksOutputParams{SessionID: sessionID, TaskID: taskID}))
 	if got, _ := read["output"].(string); !strings.Contains(got, "hello from the background child") {
 		t.Fatalf("an agent task's output is its final message, got %q", got)

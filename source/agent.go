@@ -670,7 +670,7 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 	if opts.Subagents.Enabled && opts.depth+1 < subagentMaxDepth(opts.Subagents) {
 		// run_workflow orchestrates the same children spawn_agent creates, so it
 		// shares the depth rule: a workflow cannot be used to get around it.
-		agentTools := []*tools.FuncTool{subagentTool(reg), workflowTool(reg)}
+		agentTools := []*tools.FuncTool{subagentTool(reg, opts.Subagents.Profiles), workflowTool(reg)}
 		if opts.Mode != ModeSingle {
 			agentTools = append(agentTools, delegateTool(reg))
 		}
@@ -1378,33 +1378,35 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 			AutoCompactAt: a.opts.Context.AutoCompactAt,
 			KeepRecent:    a.opts.Context.KeepRecent,
 		},
-		PromptCache:      promptCacheEnabled(a.opts),
-		Effort:           llm.Effort(a.opts.Effort),
-		MaxOutputTokens:  a.opts.MaxOutputTokens,
-		SystemPrompt:     sysPrompt,
-		ParallelTools:    a.opts.ParallelTools,
-		ParallelToolsMax: a.opts.ParallelToolsMax,
-		Sink:             func(m llm.Message) { a.persistMessage(run.id, m) },
+		PromptCache:       promptCacheEnabled(a.opts),
+		Effort:            llm.Effort(a.opts.Effort),
+		MaxOutputTokens:   a.opts.MaxOutputTokens,
+		SystemPrompt:      sysPrompt,
+		RequireFinishTask: a.opts.RequireFinishTask,
+		ParallelTools:     a.opts.ParallelTools,
+		ParallelToolsMax:  a.opts.ParallelToolsMax,
+		Sink:              func(m llm.Message) { a.persistMessage(run.id, m) },
 	}, func(ev runtime.Event) {
 		out := Event{
-			Type:          EventType(ev.Type),
-			Text:          ev.Text,
-			ToolCallID:    ev.ToolCallID,
-			Name:          ev.Name,
-			Args:          json.RawMessage(ev.Args),
-			Content:       ev.Content,
-			IsError:       ev.IsError,
-			Step:          ev.Step,
-			MaxSteps:      ev.MaxSteps,
-			Code:          Code(ev.Code),
-			Attempt:       ev.Attempt,
-			Delay:         ev.Delay,
-			Rule:          permissionRuleMatch(ev.Rule),
-			Protected:     ev.Protected,
-			Usage:         usageInfo(ev.Usage),
-			Items:         todoItemsInfo(ev.Items),
-			Compact:       compactInfo(ev.Compact),
-			LastRequestAt: ev.LastRequestAt,
+			Type:           EventType(ev.Type),
+			Text:           ev.Text,
+			ToolCallID:     ev.ToolCallID,
+			Name:           ev.Name,
+			Args:           json.RawMessage(ev.Args),
+			Content:        ev.Content,
+			IsError:        ev.IsError,
+			Step:           ev.Step,
+			MaxSteps:       ev.MaxSteps,
+			Code:           Code(ev.Code),
+			Attempt:        ev.Attempt,
+			Delay:          ev.Delay,
+			Rule:           permissionRuleMatch(ev.Rule),
+			Protected:      ev.Protected,
+			Usage:          usageInfo(ev.Usage),
+			UsageEstimated: ev.UsageEstimated,
+			Items:          todoItemsInfo(ev.Items),
+			Compact:        compactInfo(ev.Compact),
+			LastRequestAt:  ev.LastRequestAt,
 		}
 		run.emit(out)
 		// A child's events travel to whoever asked for the child, tagged with the
@@ -1464,6 +1466,8 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 		Status: string(rr.Status),
 		Steps:  rr.Steps,
 		Usage:  usage,
+		Err:    rr.Err,
+		Code:   string(rr.Code),
 	})
 
 	var err error

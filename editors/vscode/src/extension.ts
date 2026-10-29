@@ -23,9 +23,11 @@ import { initWorkspaceRoot } from './workspaceRoot';
 import {
   clearApiKey,
   clearWebSearchKey,
+  initDefaultModel,
   promptForApiKey,
   promptForWebSearchKey,
   readSettings,
+  saveDefaultModel,
   settingsKey,
 } from './settings';
 import { ToolOutputDocuments } from './toolOutput';
@@ -42,6 +44,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // to be installed before a panel is restored or a command can run. It is the
   // one place that knows which folder a conversation belongs to (0.46).
   initWorkspaceRoot(context);
+  initDefaultModel(context);
 
   // One content provider for the window, for the life of the extension: it is
   // what makes a diff view of a file that has not been written yet possible.
@@ -122,6 +125,27 @@ export function activate(context: vscode.ExtensionContext): void {
     // form that changes it. `/mcp` in a composer opens the same document.
     vscode.commands.registerCommand('anvil.openMcp', () => {
       hub.openMcp();
+    }),
+
+    vscode.commands.registerCommand('anvil.openModels', () => {
+      hub.openModels();
+    }),
+
+    vscode.commands.registerCommand('anvil.selectDefaultModel', async () => {
+      const models = readSettings().models;
+      const picked = await vscode.window.showQuickPick(
+        [
+          { label: 'Host default', id: '' },
+          ...models.available.map((id) => ({ label: id, id })),
+        ],
+        {
+          title: 'Default model',
+          placeHolder: models.defaultModel || 'Host default',
+        },
+      );
+      if (!picked) return;
+      await saveDefaultModel(context, picked.id);
+      hub.modelsChanged();
     }),
 
     // One layer's `mcp.json`, created when it is not there. The manager's Open
@@ -392,6 +416,7 @@ export function activate(context: vscode.ExtensionContext): void {
       const previous = lastSettings;
       lastSettings = next;
       if (next.fontSize !== previous.fontSize) hub.setFontSize(next.fontSize);
+      if (JSON.stringify(next.models) !== JSON.stringify(previous.models)) hub.modelsChanged();
       if (hub.running && settingsKey(previous) !== settingsKey(next)) {
         await hub.restart();
       }

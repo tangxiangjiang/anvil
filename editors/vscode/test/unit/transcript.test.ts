@@ -164,6 +164,21 @@ test('a second prompt is a user turn again, because a run end closes the first',
   assert.equal(second.text, 'second');
 });
 
+test('replay hides the editor context envelope from the user bubble', () => {
+  const entries: TranscriptEntry[] = [
+    {
+      kind: 'message',
+      run_id: 'r1',
+      role: 'user',
+      content:
+        '<context>\n<diagnostics count="1">\nsrc/main.ts:1:1 error: broken\n</diagnostics>\n</context>\n\n继续帮我实现下',
+    },
+  ];
+
+  const steps = replayOf(entries, 's1');
+  assert.deepEqual(steps, [{ kind: 'user', text: '继续帮我实现下' }]);
+});
+
 test('a turn that carried only an image is still a turn', () => {
   // The prompt is empty and the images were never stored, so this is all there
   // is: an empty user turn. Dropping it would lose the fact that it happened.
@@ -327,4 +342,24 @@ test('a run boundary that never said how it ended replays as one that finished',
   assert.ok(end.kind === 'runEnd');
   assert.equal(end.done.status, 'finished');
   assert.equal(end.done.steps, undefined);
+});
+
+test('a stored terminal failure keeps its reason and code after replay', () => {
+  const steps = replayOf([
+    {
+      kind: 'run_end',
+      run_id: 'r1',
+      status: 'error',
+      steps: 13,
+      err: 'model provider returned 3 consecutive empty responses',
+      code: 'empty_response',
+    },
+  ], 's1');
+
+  assert.deepEqual(kinds(steps), ['runEnd']);
+  const end = steps[0];
+  assert.ok(end.kind === 'runEnd');
+  assert.equal(end.done.status, 'error');
+  assert.equal(end.done.err, 'model provider returned 3 consecutive empty responses');
+  assert.equal(end.done.code, 'empty_response');
 });

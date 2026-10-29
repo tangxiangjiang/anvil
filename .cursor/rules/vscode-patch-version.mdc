@@ -1,0 +1,21 @@
+---
+description: Increment and synchronize the VS Code plugin patch version for every feature or fix
+alwaysApply: true
+---
+
+# VS Code patch version
+
+- Every completed user-visible VS Code plugin feature or bug fix increments the
+  patch component by exactly one (for example, `0.46.49` → `0.46.50`).
+- Treat one delivered batch as one increment, regardless of how many files it
+  changes. Do not increment for documentation-only, test-only, formatting, or
+  refactoring work that changes no behavior.
+- Read the current version from `editors/vscode/package.json`; never infer it
+  from a roadmap phase number or git tag.
+- Keep these version declarations synchronized:
+  - `editors/vscode/package.json`
+  - the root package entries in `editors/vscode/package-lock.json`
+  - `source/internal/editorhost/proto.go`
+  - shipped-version references in project and VS Code README/roadmap docs
+- Perform the bump before packaging, smoke-testing, or installing the VSIX so
+  the artifact filename and embedded Host version use the new patch number.

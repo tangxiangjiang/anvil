@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -39,6 +40,72 @@ func (c *writeThenFinish) Complete(ctx context.Context, req llm.Request) (*llm.R
 		Message: llm.Message{Role: llm.RoleAssistant, Content: "wrote note.txt"},
 		Usage:   &llm.Usage{InputTokens: 20, OutputTokens: 5, TotalTokens: 25},
 	}, nil
+}
+
+type failAtProvider struct{}
+
+func (failAtProvider) Complete(context.Context, llm.Request) (*llm.Response, error) {
+	return nil, errors.New("gateway closed the request")
+}
+
+type emptyAtProvider struct{}
+
+func (emptyAtProvider) Complete(context.Context, llm.Request) (*llm.Response, error) {
+	return &llm.Response{}, nil
+}
+
+func TestFailedRunKeepsItsReasonForTranscriptAndRunReaders(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		complete llm.Completer
+		wantErr  string
+		wantCode Code
+	}{
+		{name: "provider error", complete: failAtProvider{}, wantErr: "gateway closed the request", wantCode: CodeProvider},
+		{name: "empty response", complete: emptyAtProvider{}, wantErr: "model provider returned 3 consecutive empty responses; automatic recovery produced no tool call or final answer", wantCode: CodeEmptyResponse},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			a, err := Create(context.Background(), Options{
+				APIKey: "k", Model: Model{ID: "m"}, Local: LocalOptions{CWD: dir},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer a.Close()
+			a.complete = tc.complete
+
+			run, err := a.Send(context.Background(), "keep the failure")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := run.Wait(context.Background()); err == nil {
+				t.Fatal("provider failure was reported as success")
+			}
+
+			transcript, err := LoadTranscript(context.Background(), a.AgentID(), TranscriptOptions{
+				Local: LocalOptions{CWD: dir},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			end := transcript.Entries[len(transcript.Entries)-1]
+			if end.Kind != TranscriptRunEnd || end.Status != string(StatusError) ||
+				end.Err != tc.wantErr || end.Code != tc.wantCode {
+				t.Fatalf("stored run end = %+v", end)
+			}
+
+			info, err := GetRun(context.Background(), a.AgentID(), run.ID(), ListOptions{
+				Local: LocalOptions{CWD: dir},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.Err != end.Err || info.Code != end.Code {
+				t.Fatalf("run info = %+v, transcript = %+v", info, end)
+			}
+		})
+	}
 }
 
 func TestTranscriptReadsAStoredConversation(t *testing.T) {

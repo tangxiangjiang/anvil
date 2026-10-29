@@ -122,15 +122,16 @@ test('a run the provider refuses ends as a done with its own code', { skip: miss
 
     const done = dones[0];
     assert.equal(done.status, 'error');
-    assert.equal(done.code, 'provider');
+    // No key is configured, so the host's own classification is a refused credential.
+    assert.equal(done.code, 'auth');
     assert.ok((done.err ?? '').length > 0, 'the host says why');
     assert.equal(session.currentState, 'idle');
 
     // And what the panel would show for it: a provider problem with a fix,
     // not a generic failure.
     const failure = classifyDone(done);
-    assert.equal(failure.kind, 'provider');
-    assert.match(failure.message, /API key|provider/i);
+    assert.equal(failure.kind, 'auth');
+    assert.match(failure.message, /API key/i);
     assert.ok(events.length > 0, 'the run reported progress before it failed');
   } finally {
     await session.close();

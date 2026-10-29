@@ -63,7 +63,28 @@
 }
 
 .status-running {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   color: var(--vscode-charts-blue, var(--vscode-focusBorder));
+}
+
+.background-activity {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 1em;
+}
+
+.background-dot {
+  display: block;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.55;
+  transform-origin: center;
+  will-change: transform, opacity;
 }
 
 .status-finished {

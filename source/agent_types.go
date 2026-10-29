@@ -111,6 +111,11 @@ const (
 	// CodeAuth is a 401 or 403.
 	CodeAuth      Code = "auth"
 	CodeToolPanic Code = "tool_panic"
+	// CodeEmptyResponse is a provider that kept returning neither text nor a tool call
+	// after bounded recovery. CodeFinishProtocol is a run that required finish_task and
+	// never called it.
+	CodeEmptyResponse  Code = "empty_response"
+	CodeFinishProtocol Code = "finish_protocol"
 )
 
 // RunResult is the authoritative outcome of a Run (from Wait).
@@ -148,11 +153,12 @@ type Event struct {
 	// wait before the next one.
 	Attempt int
 	Delay   time.Duration
-	// Usage is the run's token usage so far, set on the terminal event (done or
-	// error) when the provider reported any (0.40.8+). It is absent from every
-	// other event and from a run whose provider sent no counts: nil means
-	// "unknown", which a client must not draw as zero.
-	Usage *Usage
+	// Usage is authoritative on terminal events (set when the provider reported any
+	// counts; nil means "unknown", which a client must not draw as zero). While a
+	// streamed model request is in flight it may carry a live estimate, explicitly marked
+	// by UsageEstimated; clients must replace that estimate with RunResult.Usage.
+	Usage          *Usage
+	UsageEstimated bool
 	// Rule is the workspace rule that decided this call, set on EventToolResult
 	// when one did (0.36+). It is nil for a call no rule decided — an ungated
 	// read, a call the mode gate allowed untouched, or one a callback approved —

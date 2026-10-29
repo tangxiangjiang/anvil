@@ -212,6 +212,47 @@ func TestAgentTaskOutputIsItsMessage(t *testing.T) {
 	}
 }
 
+func TestAgentTaskPublishesLineageAndConcreteChild(t *testing.T) {
+	m := NewManager()
+	release := make(chan struct{})
+	started := make(chan string, 1)
+	info, err := m.StartAgent(AgentSpec{
+		Title:            "subagent inspect graph",
+		AgentID:          "agent-parent",
+		ParentRunID:      "run-parent",
+		ParentToolCallID: "call-spawn",
+		Run: func(ctx context.Context) (string, string, error) {
+			started <- IDFromContext(ctx)
+			<-release
+			return "finished", "done", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartAgent: %v", err)
+	}
+	if got := <-started; got != info.ID {
+		t.Fatalf("task id in context = %q, want %q", got, info.ID)
+	}
+	if info.ParentRunID != "run-parent" || info.ParentToolCallID != "call-spawn" {
+		t.Fatalf("start lineage = %+v", info)
+	}
+	if err := m.SetChildAgent(info.ID, "agent-child"); err != nil {
+		t.Fatalf("SetChildAgent: %v", err)
+	}
+	linked, err := m.Get(info.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if linked.AgentID != "agent-parent" || linked.ChildAgentID != "agent-child" {
+		t.Fatalf("linked task = %+v", linked)
+	}
+	close(release)
+	final := waitStatus(t, m, info.ID)
+	if final.ChildAgentID != "agent-child" {
+		t.Fatalf("terminal child = %q", final.ChildAgentID)
+	}
+}
+
 func TestCloseCancelsRunningTasks(t *testing.T) {
 	m := NewManager()
 	info, err := m.StartShell(ShellSpec{Command: sleepCommand(), Timeout: 60 * time.Second})

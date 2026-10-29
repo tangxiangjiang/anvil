@@ -45,6 +45,11 @@ type TaskInfo struct {
 	// Status is running, finished, failed, or cancelled.
 	Status  TaskStatus
 	AgentID string
+	// ChildAgentID is set for an agent task once its concrete child session has
+	// been created. ParentRunID and ParentToolCallID identify the spawn.
+	ChildAgentID     string
+	ParentRunID      string
+	ParentToolCallID string
 	// StartedAt and EndedAt are UTC. EndedAt is zero while the task runs.
 	StartedAt time.Time
 	EndedAt   time.Time
@@ -149,13 +154,16 @@ func (a *Agent) taskManager() *tasks.Manager {
 
 func toTaskInfo(info tasks.Info) TaskInfo {
 	return TaskInfo{
-		ID:        info.ID,
-		Kind:      TaskKind(info.Kind),
-		Title:     info.Title,
-		Status:    TaskStatus(info.Status),
-		AgentID:   info.AgentID,
-		StartedAt: info.StartedAt,
-		EndedAt:   info.EndedAt,
-		ExitCode:  info.ExitCode,
+		ID:               info.ID,
+		Kind:             TaskKind(info.Kind),
+		Title:            info.Title,
+		Status:           TaskStatus(info.Status),
+		AgentID:          info.AgentID,
+		ChildAgentID:     info.ChildAgentID,
+		ParentRunID:      info.ParentRunID,
+		ParentToolCallID: info.ParentToolCallID,
+		StartedAt:        info.StartedAt,
+		EndedAt:          info.EndedAt,
+		ExitCode:         info.ExitCode,
 	}
 }

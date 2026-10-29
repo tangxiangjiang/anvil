@@ -196,15 +196,25 @@ func TestBackgroundSubagent(t *testing.T) {
 	}
 	defer parent.Close()
 
+	// A parent that starts background work must join it before it may finish: it reads the
+	// child's terminal output with task_output, then its next answer is accepted after the
+	// loop's one composition checkpoint. The script follows that protocol.
+	parentCalls := 0
 	parent.complete = completerFunc(func(_ context.Context, req llm.Request) (*llm.Response, error) {
 		if lastUserText(req) == "say hello" {
 			return textResponse("child answer"), nil
 		}
-		if len(trailingToolResults(req)) > 0 {
-			return textResponse("parent done"), nil
+		parentCalls++
+		switch parentCalls {
+		case 1:
+			return callResponse("call-1", "spawn_agent",
+				`{"prompt":"say hello","description":"Greeter","background":true}`), nil
+		case 2:
+			id := taskIDFromResult(trailingToolResults(req)[0].Content)
+			waitTask(t, parent, id)
+			return callResponse("call-2", "task_output", fmt.Sprintf(`{"task_id":%q}`, id)), nil
 		}
-		return callResponse("call-1", "spawn_agent",
-			`{"prompt":"say hello","description":"Greeter","background":true}`), nil
+		return textResponse("parent done"), nil
 	})
 
 	run, err := parent.Send(context.Background(), "parent task")

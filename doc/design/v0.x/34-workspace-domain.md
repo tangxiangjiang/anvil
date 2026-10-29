@@ -16,6 +16,18 @@ Reshape **Clusters** around a product hierarchy:
 
 Vision: [`DELIVERY_PIPELINE_VISION.md`](../../../DELIVERY_PIPELINE_VISION.md) §4.0.
 
+### Workspace is workflow state, not an editor folder
+
+The Workspace hierarchy is the durable workflow definition stored in the database. Desktop VS
+Code, hosted VS Code Server and Flutter are clients of that definition; none owns a separate copy
+of its state. A VS Code “workspace folder” is only the checkout selected for one execution and
+must not be confused with this domain object.
+
+The current client direction is recorded in
+[32 — Sandbox code review + VS Code Server](32-sandbox-code-review.md#product-direction-locked-2026-10-23):
+VS Code is the primary fast-moving workflow client, Flutter is the alternative pure client, and
+anvil-web remains review/audit plus the hosted-VS-Code launch point.
+
 ## Clusters UI
 
 | Page | Content |

@@ -14,6 +14,11 @@ export type FailureKind =
   | 'cancelled'
   | 'max_steps'
   | 'provider'
+  | 'auth'
+  | 'provider_busy'
+  | 'request_rejected'
+  | 'empty_response'
+  | 'finish_protocol'
   | 'wall_time'
   | 'deadline'
   | 'context'
@@ -31,6 +36,11 @@ const MESSAGES: Record<Exclude<FailureKind, 'none'>, string> = {
   cancelled: 'Stopped.',
   max_steps: 'The agent hit its step limit before finishing. Raise anvil.maxSteps or ask for a smaller change.',
   provider: 'The model provider rejected the request. Check the API key, the model id, and anvil.baseUrl.',
+  auth: 'The model provider refused the credentials. Check the API key and anvil.baseUrl.',
+  provider_busy: 'The model provider is rate limiting this key and the retries ran out. Wait a moment and send it again.',
+  request_rejected: 'The model provider rejected the request itself. Check the model id and shorten the conversation if it is large.',
+  empty_response: 'The model provider repeatedly returned an empty completion. Automatic recovery produced no text or tool call.',
+  finish_protocol: 'The model did not send the required finish_task completion signal.',
   wall_time: 'The turn ran out of wall-clock time.',
   deadline: 'The turn ran out of time.',
   context: 'The conversation no longer fits the model context. Start a new session or shorten the request.',
@@ -49,6 +59,9 @@ export function classifyDone(done: DoneParams): RunFailure {
 
   const kind = classifyCode(done.code);
   const detail = (done.err || '').trim();
+  if (kind === 'empty_response' || kind === 'finish_protocol') {
+    return { kind, message: detail || MESSAGES.empty_response, isError: true };
+  }
   let message = MESSAGES[kind] ?? '';
   if (message === '') {
     message = detail || 'The run failed.';
@@ -67,8 +80,18 @@ export function classifyCode(code: string | undefined): Exclude<FailureKind, 'no
       return 'max_steps';
     case 'provider':
     case 'provider_error':
-    case 'auth':
+    case 'provider_mid_stream':
       return 'provider';
+    case 'auth':
+      return 'auth';
+    case 'provider_busy':
+      return 'provider_busy';
+    case 'request_rejected':
+      return 'request_rejected';
+    case 'empty_response':
+      return 'empty_response';
+    case 'finish_protocol':
+      return 'finish_protocol';
     case 'max_wall_time':
       return 'wall_time';
     case 'context_deadline':

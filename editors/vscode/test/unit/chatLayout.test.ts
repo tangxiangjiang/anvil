@@ -33,6 +33,7 @@ import { test } from 'node:test';
 const EXTENSION_ROOT = join(__dirname, '..', '..', '..');
 const CSS = readFileSync(join(EXTENSION_ROOT, 'media', 'chat.css'), 'utf8');
 const JS = readFileSync(join(EXTENSION_ROOT, 'media', 'chat.js'), 'utf8');
+const PANEL = readFileSync(join(EXTENSION_ROOT, 'src', 'chatPanel.ts'), 'utf8');
 
 /** The stylesheet with its comments dropped, so prose cannot look like a rule. */
 const SOURCE = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
@@ -151,6 +152,60 @@ test('the composer is out of the flow, and the transcript still fills the body',
   assert.equal(valueOf('.dock > *', 'pointer-events'), 'auto');
 });
 
+test('a floating latest-message button returns the transcript to its bottom', () => {
+  assert.match(
+    JS,
+    /const scrollBottomButton = document\.getElementById\('scrollBottom'\)/,
+  );
+  assert.match(
+    JS,
+    /scrollBottomButton\.addEventListener\('click', scrollConversationToBottom\)/,
+  );
+  assert.match(JS, /transcript\.addEventListener\('scroll', syncScrollBottomButton/);
+  assert.match(
+    JS,
+    /function scrollConversationToBottom\(\) \{\s*transcript\.scrollTop = transcript\.scrollHeight;/,
+  );
+
+  assert.equal(valueOf('.scroll-bottom', 'position'), 'absolute');
+  assert.match(valueOf('.scroll-bottom', 'bottom') ?? '', /100%/);
+  assert.equal(valueOf('.scroll-bottom[hidden]', 'display'), 'none');
+});
+
+test('auto-scroll is an explicit persistent preference that can preserve review position', () => {
+  assert.match(PANEL, /id="autoScroll"[^>]*aria-pressed="true"/);
+  assert.match(JS, /const autoScrollButton = document\.getElementById\('autoScroll'\)/);
+  assert.match(JS, /restoredDocumentState\.autoScroll === false/);
+  assert.match(JS, /remember\(\{ autoScroll \}\)/);
+  assert.match(
+    JS,
+    /autoScrollButton\.addEventListener\('click', \(\) => setAutoScroll\(!autoScroll\)\)/,
+  );
+  // On means every layout write follows. Off falls back to the old pinned
+  // behavior, so a reader already upstream keeps that exact review position.
+  assert.match(
+    JS,
+    /function scrollIfPinned\(wasPinned\) \{\s*if \(autoScroll \|\| wasPinned\) transcript\.scrollTop = transcript\.scrollHeight;/,
+  );
+  // Re-enabling is immediate rather than waiting for the next model chunk.
+  assert.match(JS, /if \(autoScroll\) scrollConversationToBottom\(\)/);
+
+  assert.equal(valueOf('.auto-scroll', 'position'), 'absolute');
+  assert.match(bodiesOf('.auto-scroll').join(';'), /right:\s*max\([^;]*40px/);
+  assert.match(valueOf(".auto-scroll[aria-pressed='true']", 'border-color') ?? '', /focusBorder/);
+});
+
+test('the running composer stays editable and offers queue, priority, and stop actions', () => {
+  assert.match(PANEL, /id="prioritySend"[^>]*title="Interrupt the current response and send now"/);
+  assert.match(PANEL, /id="stop"[^>]*aria-label="Stop current response"/);
+  assert.match(PANEL, /id="sendLabel"[^>]*>Enqueue</);
+  assert.doesNotMatch(JS, /input\.disabled\s*=\s*running/);
+  assert.doesNotMatch(JS, /attachButton\.disabled\s*=\s*running/);
+  assert.match(JS, /const type = running \? 'enqueue' : 'send'/);
+  assert.match(JS, /type:\s*'sendPriority'/);
+  assert.match(JS, /case 'dispatchQueued':\s*dispatchQueued\(msg\)/);
+});
+
 test('the transcript reserves the composer height, and the script measures it', () => {
   const reserve = valueOf('.transcript', 'padding-bottom');
   assert.ok(reserve, '.transcript must reserve room for the floating composer');
@@ -186,6 +241,23 @@ test('the composer is a card, and the tab is themed as an editor', () => {
   assert.doesNotMatch(body, /--vscode-sideBar-background/);
 });
 
+test('the composer is one compact surface with a two-storey layout', () => {
+  const composer = bodiesOf('.composer').join(';');
+  assert.match(composer, /border-radius:\s*10px/);
+  assert.match(composer, /padding:\s*0/);
+  assert.match(composer, /gap:\s*0/);
+  assert.match(composer, /overflow:\s*hidden/);
+
+  const input = bodiesOf('.composer textarea').join(';');
+  assert.match(input, /min-height:\s*2\.8em/);
+  assert.match(input, /background:\s*transparent/);
+  assert.match(input, /border:\s*0/);
+
+  const actions = bodiesOf('.composer .actions').join(';');
+  assert.match(actions, /border-top:\s*1px solid var\(--ui-hairline\)/);
+  assert.match(actions, /min-height:\s*36px/);
+});
+
 test('the error banner can be hidden', () => {
   // `.banner` is `display: flex`, which beats the user-agent rule for the
   // hidden attribute. Without this override the dismiss button sets `hidden`
@@ -202,6 +274,16 @@ test('the assistant body reflows, and a code block does not', () => {
 
   // And the opposite inside a code block: a wrapped code line is a changed line.
   assert.equal(valueOf('.body.md .md-code code', 'white-space'), 'pre');
+});
+
+test('the user speaks from a green bubble on the right', () => {
+  const user = bodiesOf('.msg.user .body').join(';');
+  assert.match(user, /align-self:\s*flex-end/);
+  assert.match(user, /width:\s*fit-content/);
+  assert.match(user, /max-width:\s*66\.666%/);
+  assert.match(user, /text-align:\s*left/);
+  assert.match(user, /testing-iconPassed|charts-green/);
+  assert.match(user, /border-radius:\s*14px 14px 4px 14px/);
 });
 
 test('no rail reaches past the end of the reply it belongs to', () => {

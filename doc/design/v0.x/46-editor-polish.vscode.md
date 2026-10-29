@@ -869,3 +869,348 @@ the reason it is there.
 A test reads the numbers rather than the intent: the dock's `z-index` must be greater than the
 `z-index` of all three dot rules. Pinning `2` on the dock alone would pass a later change that
 raised a dot to `5`.
+
+## 31. Token counts belong below the working line
+
+The input, output and cached-token counts describe the conversation being read, so they sit
+in that conversation's footprint rather than in the composer's controls. Their order is the
+order a reader asks the questions: what the run is doing now, what the conversation has
+spent, then which root and context window it belongs to. The meter therefore follows the
+hammer/status line and precedes the root line.
+
+The move changes location, not arithmetic. Usage remains the sum of authoritative terminal
+envelopes for the current conversation. Before the first envelope arrives, named em dashes
+keep the line present without claiming zero. Input, output, window share and cache remain
+separate inline boxes; when a reported value changes, only that box pulses once through the
+Web Animations API. Reduced-motion removes the pulse, and the cache countdown updates its
+own child without pulsing or pulling a reader back to the bottom once per second.
+
+Because the meter now lives in the scrolling transcript, a real count change preserves a
+reader who was already pinned to the end. A cache-clock tick does not: it changes no token
+count and must not override a deliberate scroll. The full visible sentence remains in the
+tooltip and accessible name when the line truncates.
+
+## 32. Live numbers are estimates until the provider settles them
+
+Provider usage is terminal accounting: OpenAI-compatible streams send it in a final usage
+chunk, while Anthropic can state input at message start but still settles output at message
+end. A meter cannot be both live and claim those values are measured. While a request is in
+flight, the runtime therefore marks its usage explicitly as estimated.
+
+At the start of each model round, input is estimated from the messages being sent and added
+to the exact usage of earlier rounds in the same run. As text and reasoning chunks arrive,
+their accumulated text estimate becomes the running output. These values ride on the
+existing progress, assistant and reasoning events: no second event stream can crowd out an
+assistant chunk. Tool-call JSON and provider-specific tokenization may make the estimate
+drift; that is why the terminal run result replaces it rather than being added to it.
+
+The webview overlays the current run estimate on completed conversation totals. Input and
+output move toward each new target over 320ms, retargeting an in-flight animation from the
+number currently painted so fast chunks do not queue. Reduced-motion paints each target
+immediately. Cache is never estimated and remains derived only from terminal provider usage.
+When `done` arrives, the live overlay is cleared before authoritative usage is added, which
+prevents one run from being counted twice.
+
+## 33. One settled line, one travelling highlight
+
+The live meter and the finished run summary must not state the same usage on adjacent lines.
+While a run is active, the meter owns the moving input/output estimate. When the run settles,
+the meter hides and the status line owns the provider's final facts in one sentence:
+`8 steps · 829k tokens (823k in / 5.3k out) · 87% cache`. Cache is a terminal ratio of
+cached input to reported input, capped at 100%; absence remains unknown and is omitted.
+
+Counts choose their unit by magnitude: integers below one thousand, K for thousands and M
+for millions. Values below ten units keep one decimal and trailing `.0` is removed, so the
+line says `5.3k`, `829k`, `3.7M` and `12M`.
+
+The moving emphasis is a character front rather than a whole-line pulse. Script splits the
+current visible text into spans, sweeps a focus-coloured glow across them, and at the front
+raises brightness and scale before restoring both behind it. A new stream target retargets
+the numeric roll instead of queueing another animation. The forge word uses the same sweep
+when its rotating or host-supplied text changes, and is larger, heavier and brighter than
+the elapsed-time metadata. Reduced motion replaces text immediately and creates no spans or
+animation frames.
+
+## 34. Fold the work, keep the conclusion
+
+A completed reply has two different kinds of content: the working trace that is useful on
+demand, and the conclusion that answers the prompt. Folding both made the newest completed
+answer disappear at the moment it became useful; leaving both open made long conversations
+remain dominated by old work.
+
+The `Summary` block is therefore hoisted from the reply body's `<details>` to its immediate
+next sibling after its title and body have been derived. It stays in the same document
+position relative to the turn, but closing the details can no longer hide it. Removing the
+block from the body also triggers a rail pass there, and the Summary drops its old rail
+classes because its end dot now stands alone below the fold.
+
+Run completion closes the current reply immediately on both the live and replay paths. This
+boundary deliberately overrides a reader pin: pinning protects a reply from the later user
+message's housekeeping, while completion is the product rule that turns active work into
+compact history. The reply reference remains until the next user message so terminal rows
+and post-run controls still route into the completed turn rather than appearing after its
+visible conclusion.
+
+## 35. A token unit is not a direction
+
+The live roll splits its text into one inline-block per character so the highlight can travel
+through it. Ordinary whitespace inside a character-sized inline block can collapse until
+`8.3M in` reads as `8.3Min`, with the same ambiguity in `37k out`.
+
+The count/direction boundary is now a non-breaking space in the value itself, so reduced
+motion and accessibility text keep the separation. During animation that whitespace span
+also receives a fixed `0.4em` width. The gap therefore survives both render paths without
+splitting the count and its direction into separately timed animations.
+
+## 36. Live and settled usage share one scope
+
+The runtime's live estimate is already cumulative across every model round in the current
+run. Adding the webview's completed-session accumulator to it changed the scope from “this
+reply” to “this conversation”, while the terminal status still reported the provider's
+current-run total. A live `8.3M in` could therefore settle to `1.2M in` without either input
+changing at that instant.
+
+The live meter now renders `liveUsage` directly. The terminal envelope clears that estimate,
+and `runSummary` displays the same run's authoritative provider usage. Cache is not estimated
+and no previous run's cache belongs beside the active run's counts, so it is absent while the
+reply runs and appears only as the final provider-derived percentage.
+
+## 37. One line follows the work
+
+The live token estimate is metadata for the same active run as escape, elapsed time and step.
+Giving it a second footprint row made one operation read as two statuses. Its animated count
+nodes now move into the existing parenthetical, producing
+`(esc to interrupt · 1m 2s · step 1 · 1.2M in · 3.6k out)`. The meter carries its own leading
+separator and is an inline span, so its hidden state neither leaves punctuation behind nor
+reserves another line.
+
+An activity word is also a state, not ambient decoration. Cycling forge verbs by elapsed time
+could say `Quenching…` while the run was visibly blocked on `Allow Bash?`. The clock now
+updates only the parenthetical. Progress starts a model round at `Thinking…`; reasoning,
+assistant stream, tool call, result and approval events move the word to concrete activities
+such as `Responding…`, `Reading…`, `Searching…`, `Editing…`, `Running Bash…`, and
+`Waiting for Bash approval…`. Each real transition keeps the travelling highlight, while an
+unchanged state—including an approval wait—stays still.
+
+## 38. A diagram is a Markdown block
+
+A fenced `mermaid` block is model output in the same way as prose, code and mathematics, so
+it renders in the reply and focus view rather than requiring a separate preview. The parser
+records whether a fence has actually closed: an open streaming fence stays source text, and
+only the stable closed block starts layout. This avoids rerunning a graph engine on every
+token and gives malformed input a readable fallback.
+
+Mermaid 12.2.0 is vendored with the extension and loaded under the existing nonce, with no
+CDN or network permission. It runs in strict mode with HTML labels disabled. More
+importantly, its returned SVG string is never assigned to the document as markup: it is
+percent-encoded into an SVG data-image, an image context where scripts cannot execute or
+mutate the webview. A rejected graph keeps its fenced source and adds one short error note.
+Detailed diagrams keep a 640px reading width and scroll inside their own block on a narrower
+panel.
+
+## 40. Diagram syntax can identify itself
+
+Models do not consistently label a fence `mermaid`; they sometimes write an unlabelled or
+`text` fence whose first line is already the unambiguous declaration `flowchart LR` or
+`classDiagram`. The renderer now recognizes the standard Mermaid declarations in those two
+neutral fence forms. A fence explicitly labelled for another language remains code, so a
+JavaScript string containing `flowchart` cannot be stolen by the diagram renderer.
+
+The diagram theme also moves from Mermaid's high-contrast dark preset to a restrained base
+theme matched to VS Code light and dark surfaces. Nodes use one-pixel borders without
+filters, containers use quieter fills, and ordinary labels are 13px regular text. Dense
+class members drop to 12px and empty member compartments disappear. Flowchart HTML labels
+are enabled inside the already-isolated SVG image so `<br/>` wraps and modest 240px label
+widths produce architecture nodes rather than clipped single lines.
+
+## 39. A dense diagram has a large view
+
+Mermaid's default label weight is too loud in an architecture graph with many multi-line
+nodes. The renderer now supplies a theme stylesheet that keeps node, edge and ordinary group
+labels at weight 400, with only group titles at 500. This stylesheet is part of the isolated
+SVG image, so it does not leak into reply typography.
+
+The inline image is a real button with a visible keyboard focus state. Activating it opens a
+modal viewport sized to the editor, with zoom from 50% to 300% in 25% steps, a fit reset and
+two-dimensional scrolling. Escape uses the dialog's native close behaviour; a named Close
+button and backdrop click provide the pointer path. The inline block can therefore remain
+compact while a graph with dense labels remains inspectable.
+
+## 41. Ask for syntax the renderer can consume
+
+Source fallback is necessary for malformed model output, but it should not be the usual path.
+The default coding-agent prompt now asks the model to put diagrams in a closed `mermaid`
+fence and to use standard Mermaid grammar rather than plausible shorthand.
+
+The contract includes the canonical labelled dotted edge, `A-. label .-> B`, because removing
+the spaces around that label produces source that looks reasonable but does not follow
+Mermaid's documented grammar. This is generation guidance, not source rewriting: user-authored
+diagrams remain visible and unchanged when Mermaid rejects them.
+
+## 42. A turn names the files it changed
+
+The changed-file tracker already computes the exact added, modified and deleted files after a
+live run, and each row already opens its diff. Its card previously appended wherever the
+asynchronous comparison happened to finish, which separated the files from the conclusion
+they explain.
+
+The changed-files message now carries its run id. When a successful run hoists its concluding
+answer into Summary, the webview records that Summary under the same id and inserts the file
+list as its next sibling. This run-keyed join prevents a slow comparison from placing one
+turn's files under a later turn. Runs without a prose Summary keep the existing bottom-of-turn
+fallback rather than losing their review list.
+
+## 43. The user's side reads as a bubble
+
+User text and agent prose previously occupied the same full-width column, distinguished mainly
+by the small speaker label. The user's body is now a content-sized green bubble aligned to the
+right, with its text aligned the same way. The asymmetric lower-right corner provides the
+speech-tail cue without adding another icon.
+
+The bubble stops at two thirds of the reading column. Short prompts therefore remain compact,
+while long prompts wrap before they can crowd out the visual distinction between question and
+answer. The green is mixed with the active editor background from VS Code theme colours, so it
+remains a surface rather than a fixed light- or dark-theme swatch.
+
+## 44. Background work keeps a visible pulse
+
+A background spawn used to settle its parent tool row to the static word `background`. That
+confirmed the handoff but did not show whether work was still happening, and the row could
+remain visually active after the task had already ended.
+
+The active state now uses three small blue dots that rise and brighten in sequence beside the
+word `background`. The same signal appears beside `running` in the Tasks panel, creating one
+visual meaning on both surfaces without flashing the row or moving surrounding content.
+Animation uses the Web Animations API rather than stylesheet keyframes and becomes a static
+three-dot signal when reduced motion is requested.
+
+Task lifecycle notifications also return to the chat document. A task id joins the notification
+to the spawn card even when the notification arrives before the spawn result; running starts
+the pulse, while finished, failed and cancelled stop it and replace the wording and state
+colour. The indicator therefore reports task state rather than merely elapsed time.
+
+## 45. One compact surface composes a turn
+
+The old composer placed a fully bordered textarea inside a padded, bordered card, then filled a
+second row with long text buttons. It read as a form inside a floating panel and spent more
+height describing its controls than accepting a short prompt.
+
+The composer is now one rounded two-storey surface. Its upper storey is a borderless prompt
+with a shorter resting height that still grows and scrolls under the existing measurement
+contract. A single hairline separates the lower action rail. Reference, image, loaded rules,
+permission management and focus view remain individual controls, but use labelled 26px icon
+buttons; their titles and ARIA names retain the full explanation. Permission mode and the
+send/stop control stay on the right, where the action that changes the run is easiest to find.
+
+Chips and the slash palette remain inside the same surface, and bypass/no-asking warnings remain
+outside it. The outer border takes the focus colour through `:focus-within`, so removing the
+textarea's nested border does not remove keyboard orientation or high-contrast separation.
+
+## 46. A message can become context for the next turn
+
+Copying an earlier answer into the prompt loses who said it and makes a long conversation harder
+to scan. Each user bubble and completed assistant answer therefore offers a quiet quote action.
+Activating it adds a removable chip to the composer rather than duplicating the message into the
+editable prompt.
+
+The add menu's Conversation reference row and `/ref ` open the same newest-first picker. Search
+matches the speaker and visible text; keyboard navigation uses the existing palette contract.
+The selected messages travel as prompt context labelled by speaker and are echoed under the sent
+user bubble, so both the model and the transcript retain what the user referred to.
+
+Quoted text is treated as context, not as a replacement for the editable request. The host
+normalizes its speaker label, caps the number of quotes and spends the existing context byte
+budget on their text.
+
+## 47. The diagram action stays outside the drawing
+
+A hover-only View button hid the route to a diagram's large view and covered the drawing when it
+appeared. The action now sits above the frame at its upper-right edge, remains visible with reduced
+opacity, and becomes fully opaque on hover or keyboard focus.
+
+It uses the editor widget surface, ordinary foreground and toolbar hover colours rather than the
+blue primary-action palette. View is useful but secondary; its location and neutral treatment keep
+that hierarchy while making the action discoverable.
+
+## 48. Completed code uses TextMate grammars
+
+A regular-expression tokenizer can distinguish a string from a comment, but it cannot reliably
+understand C++ declarations, templates, macros or language-specific scopes. The webview therefore
+ships an offline Shiki browser bundle and uses its TextMate grammars for completed fenced blocks.
+The dark and light surfaces select Shiki's matching VS Code themes.
+
+An open streaming fence remains plain text: rebuilding token spans for every arriving fragment
+would trade a cosmetic improvement for typing latency. Once the fence closes, highlighting runs
+asynchronously and replaces the block only if the same text still owns that DOM node. Shiki token
+content is inserted with text nodes and spans rather than HTML, preserving the transcript's rule
+that model output is never markup.
+
+Models sometimes omit the fence language even when the syntax is unambiguous. Unlabelled,
+`text` and `plaintext` fences therefore use conservative signatures before falling back to plain
+text. C++ requires evidence such as `enum class`, `virtual`, an access label, `namespace`,
+`template<` or `::`; prose is not coloured merely because it contains braces.
+
+Shiki's TextMate engine compiles its bundled Oniguruma WebAssembly at runtime. The chat Webview's
+CSP therefore permits `wasm-unsafe-eval` alongside nonce-bound scripts. This permission enables
+WebAssembly compilation only; it does not permit JavaScript `eval`, remote scripts or inline
+model-authored code.
+
+## 49. A flowchart keeps its natural scale and theme
+
+The inline Mermaid SVG previously had `width: 100%` and a 640px minimum. That enlarged a
+three-node flowchart until ordinary 16px labels looked like headings. Inline SVG width now comes
+from the diagram's own viewBox. Small diagrams remain at Mermaid's natural scale; diagrams wider
+than the reading column or taller than the standard inline viewport shrink proportionally into a
+complete topology thumbnail. Inline text may become too small on a dense graph by design: the
+thumbnail answers “what is the structure?”, while View provides natural-size detail, zoom and pan.
+
+Mermaid also writes authored `style ... fill:` values directly onto node shapes. Those inline
+styles can outrank theme CSS and create a light colour block with light labels in a dark editor.
+The post-render normalization now writes the active editor widget fill and border onto node and
+cluster shapes after Mermaid, so inline and large views retain one readable VS Code-themed
+surface.
+
+## 50. Class diagrams and code blocks are previews
+
+A class diagram with every method expanded spends most of its inline area on signatures and leaves
+the relationships—the reason to draw the diagram—off screen. The Context render therefore limits
+each class to three attributes and three methods and inserts an ellipsis when either section has
+more. This truncation happens in a preview copy of the Mermaid source. View lazily renders the
+original source, so no class detail is lost.
+
+Relationship paths and marker shapes are normalized after Mermaid in the same way as nodes. Filled
+composition/aggregation markers retain their shape but use the editor's description foreground;
+relationship lines use no fill and the same theme stroke instead of Mermaid's black defaults.
+
+Inline diagrams and fenced code are bounded preview surfaces. Content beyond their standard height
+scrolls inside the block. Scrollbar tracks remain transparent, and the thumb appears only on hover
+or keyboard focus, using VS Code's scrollbar theme colours.
+
+## 51. The latest turn is one action away
+
+Reading an earlier part of a long conversation should not make the newest turn difficult to
+recover. When the transcript is away from its bottom, a compact down-to-line button appears above
+the composer at the reading column's right edge. Activating it moves the conversation directly to
+its latest content.
+
+The control is hidden while the transcript is already at the bottom, so it adds no permanent
+chrome to the composer. It is a labelled button with a themed neutral surface and remains outside
+the composer measurement, preventing its appearance from changing the transcript's reserved
+bottom space.
+
+## 52. Collaboration is a session choice with a visible tree
+
+Single and Multi are properties of one conversation, not global working styles. New conversations
+start in Single unless the user explicitly enables `anvil.subagents`. Switching reopens
+the same stored agent with subagent tools disabled or enabled, preserving its identity and
+transcript. Complex remains visible but disabled until orchestration beyond parent/child delegation
+has an implemented runtime.
+
+Multi exposes an Agent Map beside the selector. It contains only the current root and all of its
+stored descendants, augmented by live background task state. Background task records carry the
+concrete child agent id plus the spawning run and tool-call ids, so the view joins identities
+directly instead of inferring them from titles or engineering vocabulary.
+
+The map opens with a compact topology and root totals. Selecting a child then loads at most the
+recent transcript window needed for its prompt, latest result, steps and usage. This keeps opening
+the overview cheap while still making a working or completed delegation inspectable.

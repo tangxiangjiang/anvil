@@ -53,20 +53,21 @@ test('the ladder is the same list, in the same order, on both sides', () => {
   assert.deepEqual(clientModes(), modes);
 });
 
-test('every mode has a label for the user and an option in the select', () => {
+test('every mode has a label and a row in the custom menu', () => {
   const table = /const MODE_LABELS: Record<PermissionMode, string> = \{([\s\S]*?)\n\};/.exec(PANEL_TS)?.[1];
   assert.ok(table, 'the label table is in chatPanel.ts');
   const labelled = [...table.matchAll(/^\s*(\w+):/gm)].map((m) => m[1]);
   const modes = hostModes();
   assert.deepEqual(labelled.sort(), [...modes].sort(), 'every mode is labelled, and nothing else is');
 
-  // The select offers each mode by its wire value, plus the empty entry that
+  // The menu offers each mode by its wire value, plus the empty entry that
   // means "let the workspace decide" — which is not a mode and has no label.
-  const select = /<select id="mode"[\s\S]*?<\/select>/.exec(PANEL_TS)?.[0];
-  assert.ok(select, 'the mode select is in the panel markup');
-  const options = [...select.matchAll(/<option value="([\w]*)"/g)].map((m) => m[1]);
-  assert.deepEqual(options.filter((v) => v !== '').sort(), [...modes].sort(), 'every mode is selectable');
-  assert.equal(options[0], '', 'the workspace-default entry comes first');
+  const menu = /<div id="modeMenu"[\s\S]*?<\/div>\s*<form id="composer"/.exec(PANEL_TS)?.[0];
+  assert.ok(menu, 'the custom mode menu is in the panel markup');
+  const rows = [...menu.matchAll(/data-mode="([\w]*)"/g)].map((m) => m[1]);
+  assert.deepEqual(rows.filter((v) => v !== '').sort(), [...modes].sort(), 'every mode is selectable');
+  assert.equal(rows[0], '', 'the workspace-default entry comes first');
+  assert.match(PANEL_TS, /id="mode"[^>]*aria-controls="modeMenu"/);
 });
 
 test('the two mirrors say the same thing, in the same words', () => {

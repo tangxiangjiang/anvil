@@ -19,6 +19,7 @@ import { test } from 'node:test';
 import { SessionInfo, TaskInfo } from '../../src/protocol';
 import { SessionNode, SessionRow, buildSessionView } from '../../src/sessionList';
 import { transcriptFor } from '../../src/taskList';
+import { configurationProperties } from '../helpers/package';
 
 const EXTENSION_ROOT = join(__dirname, '..', '..', '..');
 const ROOT = join(EXTENSION_ROOT, '..', '..');
@@ -30,6 +31,7 @@ const HUB = read('src/hub.ts');
 const PROTOCOL_TS = read('src/protocol.ts');
 const STATUS_BAR = read('src/statusBar.ts');
 const TASKS_JS = read('media/tasks.js');
+const TASKS_CSS = read('media/tasks.css');
 const TASKS_PANEL = read('src/tasksPanel.ts');
 const TASK_LIST = read('src/taskList.ts');
 const PACKAGE_JSON = JSON.parse(read('package.json')) as {
@@ -184,7 +186,8 @@ test("a child's events land in the card its spawn call made", () => {
   assert.match(CHAT_JS, /function renderEvent\(e, msg\) \{/);
   // Replacing the transcript drops the scopes with it: a card that no longer
   // exists cannot receive a child's events.
-  assert.match(CHAT_JS, /spawnScopes\.clear\(\);\s*active = mainScope;/);
+  assert.match(CHAT_JS, /spawnScopes\.clear\(\)/);
+  assert.match(CHAT_JS, /active = mainScope/);
 });
 
 test('a spawn result settles the card, whatever the child did', () => {
@@ -206,6 +209,36 @@ test('a spawn result settles the card, whatever the child did', () => {
   assert.match(toolResult, /if \(event\.tool_call_id && spawnScopes\.has\(event\.tool_call_id\)\) \{/);
 });
 
+test('background work pulses only while its real task is running', () => {
+  const activity = bodyOf(CHAT_JS, 'backgroundActivity');
+  assert.match(activity, /background-activity/);
+  assert.match(activity, /i < 3/);
+  assert.match(activity, /iterations: Infinity/);
+  assert.match(activity, /!reduceMotion/);
+
+  const update = bodyOf(CHAT_JS, 'updateBackgroundTask');
+  assert.match(update, /backgroundTaskStates\.set\(task\.id, task\)/);
+  assert.match(update, /task\.status === 'running'/);
+  assert.match(update, /classList\.add\('background-running'\)/);
+  assert.match(update, /classList\.remove\('background-running', 'done', 'failed', 'stopped'\)/);
+  assert.match(update, /backgroundCards\.delete\(task\.id\)/);
+
+  const result = bodyOf(CHAT_JS, 'addSpawnResult');
+  assert.match(result, /backgroundCards\.set\(background\[1\], card\)/);
+  assert.match(result, /updateBackgroundTask\(/);
+  assert.match(CHAT_PANEL, /type: 'backgroundTask', task/);
+  assert.match(CHAT_PANEL, /this\.post\(\{ type: 'backgroundTask', task \}\)/);
+});
+
+test('the Tasks panel gives running rows the same reduced-motion-aware pulse', () => {
+  assert.match(TASKS_JS, /function backgroundActivity\(\)/);
+  assert.match(TASKS_JS, /prefers-reduced-motion: reduce/);
+  assert.match(TASKS_JS, /row\.status === 'running'/);
+  assert.match(TASKS_CSS, /\.status-running \{[^}]*display:\s*inline-flex/s);
+  assert.match(TASKS_CSS, /\.background-dot \{[^}]*border-radius:\s*50%/s);
+  assert.match(CHAT_CSS, /\.tool\.spawn\.background-running \.state/);
+});
+
 test('the spawn card and its nested body are styled', () => {
   assert.match(CHAT_CSS, /\.tool\.spawn \{/);
   assert.match(CHAT_CSS, /\.tool \.spawn-body \{/);
@@ -218,11 +251,11 @@ test('/tasks opens the table instead of becoming a prompt', () => {
   assert.ok(submit, 'the submit handler is in chat.js');
   const body = submit[0];
   const command = body.indexOf("if (text === '/tasks')");
-  const running = body.indexOf("if (text === '' || running) return;");
+  const empty = body.indexOf("if (text === '') return;");
   assert.ok(command >= 0, 'the composer intercepts exactly /tasks');
-  // Before the running guard: the table is most useful during a turn.
-  assert.ok(running > command, '/tasks is checked before the running guard');
-  const block = body.slice(command, running);
+  // Before prompt validation: the table is most useful during a turn.
+  assert.ok(empty > command, '/tasks is checked before prompt validation');
+  const block = body.slice(command, empty);
   assert.match(block, /vscode\.postMessage\(\{ type: 'openTasks' \}\)/);
   // The text is consumed, but nothing is echoed, recorded, or sent: it is a
   // command, so it must not become a turn in the transcript or the history.
@@ -286,7 +319,7 @@ test('the task panel and the spawn card render output as text only', () => {
 test('the setting and the command exist for the two new surfaces', () => {
   const commands = PACKAGE_JSON.contributes.commands.map((entry) => entry.command);
   assert.ok(commands.includes('anvil.openTasks'));
-  const subagents = PACKAGE_JSON.contributes.configuration.properties['anvil.subagents'];
+  const subagents = configurationProperties(PACKAGE_JSON)['anvil.subagents'];
   assert.ok(subagents, 'anvil.subagents is a setting');
-  assert.equal(subagents.default, true);
+  assert.equal(subagents.default, false);
 });

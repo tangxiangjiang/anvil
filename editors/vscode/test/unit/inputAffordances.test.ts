@@ -42,18 +42,48 @@ test('Escape interrupts only when a turn is running', () => {
   // Nothing in that handler touches the composer: an idle Escape belongs to the
   // palette and to the draft.
   assert.doesNotMatch(body, /input\.value/);
-  // The send button — the same control that stops a running turn — and Escape
-  // are one action, so the two paths cannot drift.
-  assert.match(CHAT_JS, /sendButton\.addEventListener\('click', \(\) => \{[\s\S]*?if \(running\) \{[\s\S]*?requestStop\(\)/);
-  assert.match(CHAT_JS, /function requestStop\(\) \{\s*sendButton\.disabled = true;\s*vscode\.postMessage\(\{ type: 'cancel' \}\)/);
+  // The explicit Stop button and Escape share one action, so the two paths
+  // cannot drift while Send remains available as Enqueue.
+  assert.match(CHAT_JS, /stopButton\.addEventListener\('click', requestStop\)/);
+  assert.match(CHAT_JS, /function requestStop\(\) \{\s*if \(stopButton\) stopButton\.disabled = true;\s*vscode\.postMessage\(\{ type: 'cancel' \}\)/);
   assert.match(CHAT_JS, /vscode\.postMessage\(\{ type: 'cancel' \}\)/);
 });
 
-test('the picker button sits beside the attach button and asks the host', () => {
-  assert.match(CHAT_PANEL, /id="attach"[\s\S]*?id="image"[\s\S]*?id="send"/);
-  assert.match(CHAT_JS, /imageButton\.addEventListener\('click', \(\) => vscode\.postMessage\(\{ type: 'pickImages' \}\)\)/);
-  // Locked with the rest of the composer while a turn runs.
-  assert.match(CHAT_JS, /if \(imageButton\) imageButton\.disabled = running;/);
+test('the plus menu owns references, image, rules, permissions and slash commands', () => {
+  assert.match(
+    CHAT_PANEL,
+    /id="actionMenu"[\s\S]*?id="mention"[\s\S]*?id="image"[\s\S]*?id="rules"[\s\S]*?id="permissions"[\s\S]*?id="slash"/,
+  );
+  assert.match(CHAT_PANEL, /id="attach"[^>]*aria-controls="actionMenu"/);
+  assert.match(CHAT_CSS, /\.action-menu\[hidden\]\s*\{\s*display:\s*none/);
+  assert.match(CHAT_JS, /attachButton\.addEventListener\('click', toggleActionMenu\)/);
+  assert.match(CHAT_JS, /mentionButton\.addEventListener\('click', \(\) => \{[\s\S]*?askForMentions\(\)/);
+  assert.match(CHAT_JS, /imageButton\.addEventListener\('click', \(\) => \{[\s\S]*?type: 'pickImages'/);
+  assert.match(CHAT_JS, /slashButton\.addEventListener\('click', \(\) => \{[\s\S]*?input\.value = '\/'[\s\S]*?updatePalette\(\)/);
+  assert.match(CHAT_JS, /rulesButton\.addEventListener\('click', \(\) => \{[\s\S]*?showRules\(rules\)/);
+  assert.match(CHAT_JS, /permissionsButton\.addEventListener\('click', \(\) => \{[\s\S]*?type: 'openPermissions'/);
+  assert.match(CHAT_JS, /window\.addEventListener\('blur', \(\) => closeActionMenu\(false\)\)/);
+  assert.match(
+    CHAT_JS,
+    /document\.addEventListener\('mousedown',[\s\S]*?actionMenu\.contains\(event\.target\)[\s\S]*?attachButton\.contains\(event\.target\)[\s\S]*?closeActionMenu\(false\)/,
+  );
+  assert.doesNotMatch(CHAT_JS, /scheduleActionMenuClose|actionMenu\.addEventListener\('mouseleave'/);
+});
+
+test('the compact action rail keeps every composer capability', () => {
+  for (const id of ['attach', 'focus']) {
+    assert.match(
+      CHAT_PANEL,
+      new RegExp(`id="${id}"[^>]*class="composer-tool"[^>]*aria-label=`),
+      `${id} remains a labelled compact action`,
+    );
+  }
+  for (const id of ['mention', 'image', 'rules', 'permissions', 'slash']) {
+    assert.match(CHAT_PANEL, new RegExp(`id="${id}"[^>]*class="action-menu-row"`));
+  }
+  assert.match(CHAT_PANEL, /id="mode"[\s\S]*?id="send"/);
+  assert.match(CHAT_PANEL, /id="send"[^>]*class="primary icon"/);
+  assert.match(CHAT_CSS, /\.composer \.composer-tool \{[^}]*width:\s*26px/s);
 });
 
 test('the host opens the image dialog and answers with data URLs', () => {

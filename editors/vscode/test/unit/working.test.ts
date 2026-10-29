@@ -70,7 +70,7 @@ test('the mark is an anvil, a hammer and a spark, built as nodes', () => {
 test('the line is built once, and its two halves never show together', () => {
   assert.match(CHAT_JS, /const statusText = el\('span', 'status-text'\)/);
   assert.match(CHAT_JS, /const workingLine = el\('span', 'working'\)/);
-  assert.match(CHAT_JS, /el\('span', 'working-word', WORKING_WORDS\[0\]\)/);
+  assert.match(CHAT_JS, /el\('span', 'working-word', DEFAULT_WORKING_WORD\)/);
   assert.match(CHAT_JS, /const workingMeta = el\('span', 'working-meta'\)/);
   assert.match(CHAT_JS, /statusLine\.appendChild\(workingLine\)/);
   assert.match(CHAT_JS, /statusLine\.appendChild\(statusText\)/);
@@ -81,7 +81,10 @@ test('the line is built once, and its two halves never show together', () => {
   assert.match(status, /statusText\.textContent = text/);
   assert.match(status, /syncFootprint\(\)/);
   const sync = bodyOf(CHAT_JS, 'syncFootprint');
-  assert.match(sync, /footprint\.hidden = rootLine\.hidden && workingLine\.hidden && statusText\.hidden/);
+  assert.match(
+    sync,
+    /footprint\.hidden = rootLine\.hidden && meter\.hidden && workingLine\.hidden && statusText\.hidden/,
+  );
   // Nothing writes the status element's text directly any more: that would
   // wipe the animation's nodes on the next update.
   assert.doesNotMatch(CHAT_JS, /statusLine\.textContent/);
@@ -90,8 +93,7 @@ test('the line is built once, and its two halves never show together', () => {
 test('the clock starts with the turn and stops with it', () => {
   const start = bodyOf(CHAT_JS, 'startWorking');
   assert.match(start, /workingSince = Date\.now\(\)/);
-  assert.match(start, /workingHostWord = ''/);
-  assert.match(start, /workingWord\.textContent = WORKING_WORDS\[0\]/);
+  assert.match(start, /workingWord\.textContent = DEFAULT_WORKING_WORD/);
   assert.match(start, /workingLine\.hidden = false/);
   assert.match(start, /syncFootprint\(\)/);
   assert.match(start, /setInterval\(renderWorkingMeta, 1000\)/);
@@ -111,7 +113,7 @@ test('the clock starts with the turn and stops with it', () => {
   assert.match(running, /else stopWorking\(\)/);
 });
 
-test('the parenthetical says escape, the clock and the step', () => {
+test('the parenthetical says escape, clock, step and live counts', () => {
   const meta = bodyOf(CHAT_JS, 'renderWorkingMeta');
   assert.match(meta, /'esc to interrupt'/);
   // Minutes only once they are earned.
@@ -129,28 +131,31 @@ test('the parenthetical says escape, the clock and the step', () => {
   // not the punctuation in front of it.
   assert.match(meta, /createTextNode\('\\u00a0· '\)/);
   assert.match(meta, /workingMeta\.appendChild\(workingStepNode\)/);
+  assert.match(meta, /workingMeta\.appendChild\(meter\)/);
   assert.match(meta, /document\.createTextNode\('\)'\)/);
   // The tick skips a tab nobody is looking at, like the cache clock does; the
   // next tick after the tab returns brings the elapsed time up to date.
   assert.match(meta, /if \(document\.hidden\) return/);
 });
 
-test('the word turns through the forge, and a host word stops it', () => {
-  const open = CHAT_JS.indexOf('const WORKING_WORDS = [');
-  assert.ok(open > 0, 'the verb list is in chat.js');
-  const list = CHAT_JS.slice(open, CHAT_JS.indexOf('];', open));
-  for (const word of ['Forging…', 'Hammering…', 'Tempering…', 'Striking…', 'Quenching…', 'Shaping…']) {
-    assert.match(list, new RegExp(`'${word}'`));
-  }
-  // Every three seconds, derived from the clock the line already runs: the
-  // renderer gained no second timer for this.
-  const meta = bodyOf(CHAT_JS, 'renderWorkingMeta');
-  assert.match(meta, /if \(workingHostWord === ''\)/);
-  assert.match(meta, /WORKING_WORDS\[Math\.floor\(seconds \/ 3\) % WORKING_WORDS\.length\]/);
-  // A step text from the host replaces the rotation, and the next tick no
-  // longer overwrites it.
-  const progress = CHAT_JS.slice(CHAT_JS.indexOf("e.type === 'progress'"));
-  assert.match(progress, /workingHostWord = e\.text/);
+test('the activity word follows real stream, tool and approval events', () => {
+  assert.doesNotMatch(CHAT_JS, /WORKING_WORDS|Math\.floor\(seconds \/ 3\)/);
+  const activity = bodyOf(CHAT_JS, 'toolActivity');
+  assert.match(activity, /'read_file'.*return 'Reading…'/s);
+  assert.match(activity, /'grep'.*return 'Searching…'/s);
+  assert.match(activity, /'write_file'.*return 'Editing…'/s);
+  assert.match(activity, /name === 'shell'.*return 'Running Bash…'/s);
+
+  const render = bodyOf(CHAT_JS, 'renderEvent');
+  assert.match(render, /setWorkingActivity\('Responding…'\)/);
+  assert.match(render, /setWorkingActivity\(toolActivity\(e\.name\)\)/);
+  assert.match(render, /setWorkingActivity\(DEFAULT_WORKING_WORD\)/);
+
+  const approval = bodyOf(CHAT_JS, 'showApproval');
+  assert.match(approval, /setWorkingActivity\('Waiting for ' \+ toolTitle\(request\.tool\) \+ ' approval…'\)/);
+  // The one-second clock redraws metadata only; it cannot rotate the word while
+  // an approval is waiting.
+  assert.doesNotMatch(bodyOf(CHAT_JS, 'renderWorkingMeta'), /workingWord|setWorkingActivity|flowText/);
 });
 
 test('the head swings from script, and only when motion is welcome', () => {
@@ -184,7 +189,7 @@ test('a progress event feeds the line with what the host reported', () => {
   const progress = CHAT_JS.slice(CHAT_JS.indexOf("e.type === 'progress'"));
   assert.match(progress, /typeof e\.step === 'number' && e\.step > 0/);
   assert.match(progress, /workingMax = typeof e\.maxSteps === 'number'/);
-  assert.match(progress, /workingWord\.textContent = e\.text/);
+  assert.match(progress, /setWorkingActivity\(e\.text\)/);
   assert.match(progress, /else setStatus\(e\.text\)/);
 });
 
@@ -201,7 +206,11 @@ test('the line is one row of mark and text, with a pivot in the stylesheet', () 
   // `hidden` has to beat the display rule above.
   assert.match(ruleBody('.status .working[hidden]'), /display:\s*none/);
   // The mark and the word keep their size; the parenthetical is what truncates.
-  assert.match(ruleBody('.status .working-word'), /flex:\s*0 0 auto/);
+  const word = ruleBody('.status .working-word');
+  assert.match(word, /flex:\s*0 0 auto/);
+  assert.match(word, /font-size:\s*1\.12em/);
+  assert.match(word, /font-weight:\s*650/);
+  assert.match(word, /color:\s*var\(--vscode-foreground\)/);
   const meta = ruleBody('.status .working-meta');
   assert.match(meta, /min-width:\s*0/);
   assert.match(meta, /text-overflow:\s*ellipsis/);
@@ -238,16 +247,18 @@ test('the session’s lines scroll with the conversation, as one entry', () => {
   assert.ok(transcript > 0 && block > transcript, 'the footprint is in the transcript');
   assert.ok(dock > block, 'the footprint is before the dock');
 
-  // The dock no longer owns either line.
+  // The dock no longer owns any footprint line.
   const dockBody = CHAT_PANEL.slice(dock, CHAT_PANEL.indexOf('<form id="composer"', dock));
   assert.doesNotMatch(dockBody, /id="status"|id="root"|id="meter"/);
 
-  // Inside the block the run’s line comes first: what the turn is doing, then
-  // what the conversation is.
+  // The meter starts hidden in the footprint and is moved into the working
+  // parenthetical when a run starts; it is never a visible row of its own.
   const inner = CHAT_PANEL.slice(block, dock);
   const status = inner.indexOf('id="status"');
+  const meter = inner.indexOf('id="meter"');
   const root = inner.indexOf('id="root"');
-  assert.ok(status >= 0 && root > status, 'status, then root');
+  assert.ok(status >= 0 && meter > status && root > meter, 'status owns meter before root');
+  assert.match(bodyOf(CHAT_JS, 'renderWorkingMeta'), /workingMeta\.appendChild\(meter\)/);
 
   // Moving an element means cutting it, not copying it.
   for (const id of ['footprint', 'status', 'root', 'meter']) {
@@ -255,20 +266,21 @@ test('the session’s lines scroll with the conversation, as one entry', () => {
   }
 });
 
-test('the session’s total sits in the composer, left of the buttons', () => {
+test('the live total is inline with the working metadata', () => {
+  const block = CHAT_PANEL.indexOf('id="footprint"');
+  const status = CHAT_PANEL.indexOf('id="status"', block);
+  const meter = CHAT_PANEL.indexOf('id="meter"', block);
+  const root = CHAT_PANEL.indexOf('id="root"', block);
   const form = CHAT_PANEL.indexOf('<form id="composer"');
-  const actions = CHAT_PANEL.indexOf('<div class="actions">', form);
-  const meter = CHAT_PANEL.indexOf('id="meter"', actions);
-  const spacer = CHAT_PANEL.indexOf('<span class="spacer"></span>', actions);
-  assert.ok(actions > 0 && meter > actions, 'the meter is in the actions row');
-  assert.ok(spacer > meter, 'before the spacer, so it grows left of the buttons');
+  assert.ok(block > 0 && status > block && meter > status && root > meter, 'meter is born beside status');
+  assert.ok(meter < form, 'the meter is in the transcript, not the composer');
+  assert.match(CHAT_PANEL, /<span id="meter" class="meter" hidden><\/span>/);
 
-  // It is the row's only flexible child, so it truncates before a button moves.
-  const css = ruleBody('.composer .meter');
-  assert.match(css, /flex: 1 1 auto/);
-  assert.match(css, /min-width: 0/);
-  assert.match(css, /text-overflow: ellipsis/);
-  assert.match(css, /text-align: left/);
+  const css = ruleBody('.footprint .meter');
+  assert.match(css, /display:\s*inline/);
+  assert.match(css, /white-space:\s*nowrap/);
+  assert.doesNotMatch(css, /flex:|text-overflow/);
+  assert.match(ruleBody('.footprint .meter[hidden]'), /display:\s*none/);
 });
 
 test('the footprint keeps the panel’s own rhythm, and reserves its first line', () => {
@@ -300,10 +312,7 @@ test('the footprint keeps the panel’s own rhythm, and reserves its first line'
   assert.match(summary, /text-overflow:\s*ellipsis/);
 });
 
-test('the composer’s controls cannot be squeezed by the total', () => {
-  // The meter is the row's only flexible child; a shrunk button loses its
-  // label before a truncated number loses its meaning (p_0.46.25).
+test('the composer’s controls keep their size without the total', () => {
   assert.match(ruleBody('.composer .actions > button'), /flex:\s*0 0 auto/);
-  assert.match(ruleBody('.composer .actions > select'), /flex:\s*0 0 auto/);
-  assert.match(ruleBody('.composer .meter'), /flex:\s*1 1 auto/);
+  assert.equal(CHAT_PANEL.slice(CHAT_PANEL.indexOf('<form id="composer"')).includes('id="meter"'), false);
 });

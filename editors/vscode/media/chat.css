@@ -130,6 +130,38 @@ body {
   opacity: 1;
 }
 
+.replay-loading {
+  position: absolute;
+  z-index: 20;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--vscode-descriptionForeground);
+  background: var(--vscode-editor-background);
+}
+
+.replay-loading[hidden] {
+  display: none;
+}
+
+.replay-loading-mark {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 18px;
+}
+
+.replay-loading-mark i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--vscode-progressBar-background, var(--vscode-focusBorder));
+  opacity: 0.75;
+}
+
 /* --- transcript ----------------------------------------------------------- */
 
 .transcript {
@@ -216,10 +248,70 @@ body {
 }
 
 .msg.user .body {
-  background: var(--vscode-input-background);
-  border: 1px solid var(--ui-hairline);
-  border-radius: var(--anvil-radius);
+  align-self: flex-end;
+  box-sizing: border-box;
+  width: fit-content;
+  max-width: 66.666%;
+  background: color-mix(
+    in srgb,
+    var(--vscode-testing-iconPassed, var(--vscode-charts-green, #3fb950)) 24%,
+    var(--vscode-editor-background)
+  );
+  border: 1px solid
+    color-mix(
+      in srgb,
+      var(--vscode-testing-iconPassed, var(--vscode-charts-green, #3fb950)) 55%,
+      var(--vscode-editor-background)
+    );
+  border-radius: 14px 14px 4px 14px;
   padding: 8px 12px;
+  text-align: left;
+}
+
+.msg.user > .who,
+.msg.user > .refs,
+.msg.user > .shots {
+  align-self: flex-end;
+  text-align: right;
+}
+
+.msg.user > .who {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.message-quote {
+  box-sizing: border-box;
+  width: 20px;
+  height: 20px;
+  padding: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--vscode-descriptionForeground);
+  cursor: pointer;
+  opacity: 0.72;
+}
+
+.message-quote svg {
+  width: 16px;
+  height: 16px;
+}
+
+.message-quote:hover,
+.message-quote:focus-visible {
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.16));
+  color: var(--vscode-foreground);
+  opacity: 1;
+}
+
+.message-quote:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 1px;
 }
 
 .msg.error .body {
@@ -259,7 +351,9 @@ body {
 .body.md .md-p:last-child,
 .body.md .md-list:last-child,
 .body.md .md-quote:last-child,
-.body.md .md-code:last-child {
+.body.md .md-code:last-child,
+.body.md .md-mermaid-wrap:last-child > .md-mermaid,
+.body.md .md-mermaid:last-child {
   margin-bottom: 0;
 }
 
@@ -298,13 +392,9 @@ body {
   border-top: 1px solid var(--ui-hairline);
 }
 
-/*
- * One height cap in the whole file, and it is not here: tool output can be
- * arbitrarily long and is not what the reader came for, while a code block in
- * the answer is, so that one is allowed to be as tall as it is and the
- * transcript scrolls. It scrolls sideways instead of wrapping, because a wrapped
- * code line is a changed code line.
- */
+/* Code is an inline preview. Long blocks keep their own scroll surface, and
+   lines scroll sideways instead of wrapping because a wrapped code line is a
+   changed code line. View/edit actions can still open the full source. */
 .body.md .md-code {
   margin: 0 0 10px;
   padding: 10px 12px;
@@ -312,7 +402,9 @@ body {
   border-radius: var(--ui-radius-sm);
   background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.10));
   overflow: auto;
+  max-height: min(440px, 55vh);
   line-height: 1.6;
+  scrollbar-width: none;
 }
 
 .body.md .md-code code {
@@ -320,6 +412,395 @@ body {
   font-size: 0.92em;
   white-space: pre;
   word-break: normal;
+}
+
+/* A sanitized Mermaid SVG is a bounded topology preview. */
+.body.md .md-mermaid {
+  margin: 0 0 10px;
+  padding: 10px;
+  border: 1px solid var(--ui-hairline);
+  border-radius: var(--ui-radius-sm);
+  background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.10));
+  overflow: auto;
+  max-height: min(600px, 68vh);
+  scrollbar-width: none;
+}
+
+.body.md .md-code::-webkit-scrollbar,
+.body.md .md-mermaid::-webkit-scrollbar {
+  width: 0 !important;
+  height: 0 !important;
+}
+
+.body.md .md-code.scroll-active,
+.body.md .md-mermaid.scroll-active {
+  scrollbar-width: auto;
+}
+
+.body.md .md-code.scroll-active::-webkit-scrollbar,
+.body.md .md-mermaid.scroll-active::-webkit-scrollbar {
+  width: 10px !important;
+  height: 10px !important;
+}
+
+.body.md .md-code::-webkit-scrollbar-button,
+.body.md .md-mermaid::-webkit-scrollbar-button {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  background: transparent !important;
+  -webkit-appearance: none;
+}
+
+.body.md .md-code::-webkit-scrollbar-track,
+.body.md .md-code::-webkit-scrollbar-corner,
+.body.md .md-mermaid::-webkit-scrollbar-track,
+.body.md .md-mermaid::-webkit-scrollbar-corner {
+  background: transparent !important;
+}
+
+.body.md .md-code::-webkit-scrollbar-thumb,
+.body.md .md-mermaid::-webkit-scrollbar-thumb {
+  background-color: transparent !important;
+  border-color: transparent !important;
+  border-radius: 5px;
+}
+
+.body.md .md-code.scroll-active::-webkit-scrollbar-thumb,
+.body.md .md-mermaid.scroll-active::-webkit-scrollbar-thumb {
+  background-color: var(--vscode-scrollbarSlider-background, rgba(128, 128, 128, 0.4)) !important;
+}
+
+.body.md .md-code::-webkit-scrollbar-thumb:hover,
+.body.md .md-mermaid::-webkit-scrollbar-thumb:hover {
+  background-color: var(--vscode-scrollbarSlider-hoverBackground, rgba(128, 128, 128, 0.6)) !important;
+}
+
+.body.md .md-code:focus-visible,
+.body.md .md-mermaid:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 1px;
+}
+
+.body.md .md-mermaid .md-code {
+  margin: 0;
+}
+
+.md-mermaid-svg {
+  --anvil-mermaid-natural-width: auto;
+  display: block;
+  color: #d0d0d0 !important;
+  -webkit-text-fill-color: #d0d0d0 !important;
+}
+
+.md-mermaid-svg:not(.md-mermaid-large) {
+  width: var(--anvil-mermaid-natural-width, auto) !important;
+  min-width: 0;
+  max-width: 100% !important;
+  max-height: min(560px, 62vh);
+  height: auto;
+  margin-inline: auto;
+}
+
+.md-mermaid-svg foreignObject,
+.md-mermaid-svg foreignObject * {
+  color: #d0d0d0 !important;
+  -webkit-text-fill-color: #d0d0d0 !important;
+  overflow: visible !important;
+}
+
+.md-mermaid-svg foreignObject * {
+  line-height: 1.15 !important;
+}
+
+.md-mermaid-svg .nodeLabel {
+  display: block;
+  text-align: center;
+  white-space: normal;
+}
+
+/* Mermaid's dark sequence theme leaves several text classes black even though
+ * the webview canvas is dark. Keep the diagram vocabulary, but source every
+ * foreground and surface from the active VS Code theme so no label can become
+ * black-on-dark. These selectors also reach HTML labels in foreignObject. */
+.md-mermaid-svg text,
+.md-mermaid-svg .nodeLabel,
+.md-mermaid-svg .edgeLabel,
+.md-mermaid-svg .cluster-label,
+.md-mermaid-svg .messageText,
+.md-mermaid-svg .labelText,
+.md-mermaid-svg .loopText,
+.md-mermaid-svg .noteText,
+.md-mermaid-svg text.actor {
+  color: #d0d0d0 !important;
+  fill: #d0d0d0 !important;
+}
+
+.md-mermaid-svg .actor tspan,
+.md-mermaid-svg foreignObject .actor,
+.md-mermaid-svg foreignObject .actor * {
+  color: #d0d0d0 !important;
+  fill: #d0d0d0 !important;
+  -webkit-text-fill-color: #d0d0d0 !important;
+}
+
+.md-mermaid-svg .actor,
+.md-mermaid-svg .labelBox,
+.md-mermaid-svg .note,
+.md-mermaid-svg .node rect,
+.md-mermaid-svg .node polygon,
+.md-mermaid-svg .node path {
+  fill: var(--vscode-editorWidget-background, var(--vscode-editor-background)) !important;
+  stroke: var(--vscode-focusBorder) !important;
+}
+
+.md-mermaid-svg .node rect {
+  rx: 6px;
+  ry: 6px;
+  stroke-width: 1.2px !important;
+}
+
+.md-mermaid-svg .cluster rect {
+  fill: var(--vscode-editorWidget-background, var(--vscode-editor-background)) !important;
+  stroke: var(--vscode-panel-border, var(--vscode-focusBorder)) !important;
+  stroke-width: 1px !important;
+  rx: 8px;
+  ry: 8px;
+}
+
+.md-mermaid-svg .actor-line,
+.md-mermaid-svg .messageLine0,
+.md-mermaid-svg .messageLine1,
+.md-mermaid-svg .loopLine {
+  stroke: var(--vscode-editor-foreground) !important;
+}
+
+.md-mermaid-svg .flowchart-link {
+  fill: none !important;
+  stroke: var(--vscode-descriptionForeground) !important;
+  stroke-width: 1.4px !important;
+}
+
+.md-mermaid-svg marker path,
+.md-mermaid-svg .arrowheadPath {
+  fill: var(--vscode-descriptionForeground) !important;
+  stroke: var(--vscode-descriptionForeground) !important;
+}
+
+.md-mermaid-svg [id$='-sequencenumber'] {
+  fill: var(--vscode-editorWidget-background, var(--vscode-editor-background)) !important;
+  stroke: var(--vscode-focusBorder) !important;
+  stroke-width: 1.5px !important;
+}
+
+.md-mermaid-svg .sequenceNumber {
+  color: var(--vscode-editor-foreground) !important;
+  fill: var(--vscode-editor-foreground) !important;
+  opacity: 0.82;
+}
+
+.md-mermaid-svg .activation0,
+.md-mermaid-svg .activation1,
+.md-mermaid-svg .activation2 {
+  fill: var(--vscode-editorWidget-background, var(--vscode-editor-background)) !important;
+  stroke: var(--vscode-focusBorder) !important;
+}
+
+.md-mermaid-svg .edgeLabel,
+.md-mermaid-svg .labelBkg {
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background)) !important;
+  fill: var(--vscode-editorWidget-background, var(--vscode-editor-background)) !important;
+}
+
+.md-mermaid-svg .edgeLabel p {
+  margin: 0;
+  padding: 2px 5px;
+  border-radius: 3px;
+  line-height: 1.25;
+}
+
+.body.md .md-mermaid-wrap {
+  position: relative;
+}
+
+.body.md .md-mermaid-surface {
+  position: relative;
+}
+
+.body.md .md-mermaid-view {
+  position: absolute;
+  z-index: 2;
+  top: -29px;
+  right: 6px;
+  min-width: 54px;
+  height: 26px;
+  padding: 3px 11px;
+  border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border, rgba(128, 128, 128, 0.35)));
+  border-radius: 5px;
+  color: var(--vscode-foreground);
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  box-shadow: 0 1px 4px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.25));
+  cursor: pointer;
+  opacity: 0.64;
+  transition: opacity 120ms ease, background-color 120ms ease;
+}
+
+.body.md .md-mermaid-view:hover,
+.body.md .md-mermaid-view:focus-visible {
+  opacity: 1;
+}
+
+.body.md .md-mermaid-view:hover {
+  background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground));
+}
+
+.body.md .md-mermaid-view:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
+
+.body.md .md-mermaid-error {
+  margin-top: 8px;
+  color: var(--vscode-errorForeground);
+  font-size: 0.85em;
+}
+
+.md-mermaid-dialog {
+  width: 94vw;
+  max-width: none;
+  height: 92vh;
+  max-height: none;
+  padding: 0;
+  border: 1px solid var(--vscode-panel-border, var(--ui-hairline));
+  border-radius: var(--ui-radius);
+  background: var(--vscode-editor-background);
+  color: var(--vscode-editor-foreground);
+}
+
+.md-mermaid-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.62);
+}
+
+.md-mermaid-dialog-panel {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+}
+
+.md-mermaid-toolbar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--vscode-panel-border, var(--ui-hairline));
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.md-mermaid-toolbar button {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.md-mermaid-toolbar .title {
+  flex: 1 1 auto;
+  font-weight: 600;
+}
+
+.md-mermaid-toolbar-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--vscode-panel-border, var(--ui-hairline));
+  border-radius: 7px;
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  box-shadow: 0 1px 3px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.25));
+}
+
+.md-mermaid-toolbar-controls button.md-mermaid-toolbar-button {
+  display: grid;
+  place-items: center;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  line-height: 0;
+  color: var(--vscode-descriptionForeground);
+  background: transparent;
+}
+
+.md-mermaid-toolbar-controls button.md-mermaid-toolbar-button:hover:not(:disabled) {
+  color: var(--vscode-foreground);
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15));
+}
+
+.md-mermaid-toolbar-controls button.md-mermaid-toolbar-button[aria-pressed='true'] {
+  color: var(--vscode-foreground);
+  background: var(--vscode-toolbar-activeBackground, rgba(128, 128, 128, 0.22));
+}
+
+.md-mermaid-toolbar-controls button.md-mermaid-toolbar-button:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 1px;
+}
+
+.md-mermaid-toolbar-button.close {
+  position: relative;
+  margin-left: 5px;
+}
+
+.md-mermaid-toolbar-button.close::before {
+  content: '';
+  position: absolute;
+  left: -4px;
+  top: 5px;
+  bottom: 5px;
+  width: 1px;
+  background: var(--vscode-panel-border, var(--ui-hairline));
+}
+
+.md-mermaid-toolbar-icon {
+  display: block;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.md-mermaid-viewport {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  padding: 16px;
+  overflow: auto;
+}
+
+.md-mermaid-viewport.panning {
+  cursor: grab;
+  user-select: none;
+}
+
+.md-mermaid-viewport.panning.dragging {
+  cursor: grabbing;
+}
+
+.md-mermaid-large {
+  display: block;
+  max-width: none;
+  height: auto;
+  margin: 0 auto;
+  transform-origin: top left;
 }
 
 .body.md .md-inline-code {
@@ -696,6 +1177,17 @@ button.ghost[aria-pressed='true'] {
 }
 
 /*
+ * Author styles outrank Chromium's built-in closed-details rule. Because the
+ * body above explicitly becomes flex, relying on the user-agent stylesheet can
+ * leave a closed reply's children painted in a zero-height details slot,
+ * compressing the transcript into overlapping lines after replay. Hide the
+ * work explicitly; the hoisted Summary remains the reply's visible sibling.
+ */
+.reply:not([open]) > .reply-body {
+  display: none;
+}
+
+/*
  * The start marker. A hollow ring in the ending's colour: the turn is
  * bookended by one pair of dots, and the hollow form is already what an open
  * row means. Drawn 8px and laid out 6px, so its centre is the rail's 9px.
@@ -737,6 +1229,11 @@ button.ghost[aria-pressed='true'] {
 .reply > .reply-head .reply-name {
   flex: 0 0 auto;
   color: var(--ui-muted);
+}
+
+.reply > .reply-head > .message-quote {
+  flex: 0 0 auto;
+  margin-left: auto;
 }
 
 /*
@@ -1099,6 +1596,35 @@ button.ghost[aria-pressed='true'] {
 .tool .spawn-note {
   color: var(--vscode-descriptionForeground);
   font-size: 0.9em;
+}
+
+.tool.spawn.background-running > summary::before {
+  --dot: var(--vscode-charts-blue, var(--vscode-focusBorder, #3794ff));
+}
+
+.tool.spawn.background-running .state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--vscode-charts-blue, var(--vscode-focusBorder, #3794ff));
+}
+
+.background-activity {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 1em;
+}
+
+.background-dot {
+  display: block;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.55;
+  transform-origin: center;
+  will-change: transform, opacity;
 }
 
 .tool .spawn-action {
@@ -1551,6 +2077,7 @@ body.vscode-high-contrast-light .body.md .md-link:focus-visible {
   padding: 0;
   font-size: 0.85em;
   line-height: var(--ui-line-tight);
+  font-variant-numeric: tabular-nums;
   color: var(--ui-muted);
   white-space: nowrap;
   overflow: hidden;
@@ -1668,6 +2195,25 @@ body.vscode-high-contrast-light .body.md .md-link:focus-visible {
 /* The mark and the word keep their size; only the parenthetical truncates. */
 .status .working-word {
   flex: 0 0 auto;
+  font-size: 1.12em;
+  font-weight: 650;
+  color: var(--vscode-foreground);
+  filter: brightness(1.12);
+}
+
+/* Script drives the travelling highlight so reduced motion needs no override
+ * and the stylesheet remains free of keyframes. */
+.flow-char {
+  display: inline-block;
+  transform-origin: center;
+  will-change: transform, filter, text-shadow;
+}
+
+/* A whitespace character split into its own animated span can collapse to no
+ * visible width. Keep count units apart from their directions: `8.3M in`, not
+ * `8.3Min`. */
+.flow-char.flow-gap {
+  width: 0.4em;
 }
 
 /*
@@ -1720,26 +2266,21 @@ body.vscode-high-contrast-light .body.md .md-link:focus-visible {
 }
 
 /*
- * What this session has spent, inside the composer's actions row (p_0.46.24).
- * It moved here because the composer is the dock's one opaque surface: a total
- * painted on it cannot be covered by the transcript, even during the frame in
- * which the dock's reserve is still catching up. It is the row's only flexible
- * child, so it ellipsises before a button moves; the full string stays in the
- * tooltip and the accessible name. The conversation's own context share is not
- * here — it rides on the root line in the transcript's footprint, because it
- * describes that conversation rather than the session.
+ * The active run's counts live inside the working parenthetical. The parent
+ * owns truncation for the whole `(esc · time · step · counts)` sentence, while
+ * this inline keeps the animated count boxes together.
  */
-.composer .meter {
-  flex: 1 1 auto;
-  min-width: 0;
+.footprint .meter {
+  display: inline;
   padding: 0;
-  font-size: 0.8em;
-  line-height: var(--ui-line-tight);
-  color: var(--ui-muted);
+  font-size: inherit;
+  line-height: inherit;
+  color: inherit;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  text-align: left;
+}
+
+.footprint .meter[hidden] {
+  display: none;
 }
 
 /*
@@ -1747,12 +2288,12 @@ body.vscode-high-contrast-light .body.md .md-link:focus-visible {
  * transform on an inline box does not apply, and the whole line pulsing on a
  * cache-clock tick would make the seconds look like spend (p_0.46.26).
  */
-.composer .meter > span {
+.footprint .meter > span {
   display: inline-block;
 }
 
 /* A count the provider did not report is absent, not zero. */
-.composer .meter > span[hidden] {
+.footprint .meter > span[hidden] {
   display: none;
 }
 
@@ -1912,20 +2453,79 @@ body.drop-target {
   flex: 0 0 auto;
 }
 
+.scroll-bottom,
+.auto-scroll {
+  position: absolute;
+  right: max(calc(var(--anvil-gap) + 4px), calc((100% - var(--anvil-read-width)) / 2 + 4px));
+  bottom: calc(100% + 6px);
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--vscode-widget-border, var(--ui-hairline));
+  border-radius: 8px;
+  color: var(--vscode-descriptionForeground);
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  box-shadow: 0 2px 8px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.25));
+  opacity: 0.76;
+  cursor: pointer;
+  transition: opacity 120ms ease, color 120ms ease, background-color 120ms ease;
+}
+
+.auto-scroll {
+  right: max(calc(var(--anvil-gap) + 40px), calc((100% - var(--anvil-read-width)) / 2 + 40px));
+}
+
+.scroll-bottom[hidden] {
+  display: none;
+}
+
+.scroll-bottom:hover,
+.scroll-bottom:focus-visible,
+.auto-scroll:hover,
+.auto-scroll:focus-visible {
+  opacity: 1;
+  color: var(--vscode-foreground);
+  background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground));
+}
+
+.auto-scroll[aria-pressed='true'] {
+  opacity: 1;
+  color: var(--vscode-foreground);
+  border-color: var(--vscode-focusBorder);
+  background: var(--vscode-toolbar-activeBackground, var(--vscode-toolbar-hoverBackground));
+}
+
+.scroll-bottom svg,
+.auto-scroll svg {
+  width: 17px;
+  height: 17px;
+}
+
 .composer {
   border: 1px solid var(--vscode-input-border, var(--ui-hairline));
-  border-radius: var(--anvil-radius);
+  border-radius: 10px;
   /*
    * The widget background rather than the editor's: this is a surface floating
    * over the transcript, and in a high-contrast theme it is the border that
    * separates the two — the shadow may be absent there.
    */
   background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
-  box-shadow: 0 4px 12px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.28));
-  padding: var(--anvil-gap);
+  box-shadow: 0 6px 18px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.30));
+  padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 0;
+  overflow: hidden;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.composer:focus-within {
+  border-color: var(--vscode-focusBorder);
+  box-shadow:
+    0 6px 18px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.30)),
+    0 0 0 1px var(--vscode-focusBorder);
 }
 
 .composer textarea {
@@ -1937,41 +2537,180 @@ body.drop-target {
    * overwrote on the next keystroke.
    */
   resize: none;
-  min-height: 3.6em;
+  min-height: 2.8em;
   max-height: 30vh;
   overflow-y: auto;
-  padding: 6px 8px;
+  padding: 12px 14px 8px;
   font-family: inherit;
   font-size: inherit;
   color: var(--vscode-input-foreground);
-  background: var(--vscode-input-background);
-  border: 1px solid var(--vscode-input-border, var(--ui-hairline));
-  border-radius: var(--ui-radius-sm);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
 }
 
 .composer textarea:focus {
-  outline: 1px solid var(--vscode-focusBorder);
+  outline: 1px solid transparent;
   outline-offset: -1px;
 }
 
 .composer .actions {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 3px;
+  min-height: 36px;
+  padding: 5px 7px;
+  border-top: 1px solid var(--ui-hairline);
 }
 
 .composer .actions .spacer {
   flex: 1;
 }
 
-/*
- * The controls keep their size (p_0.46.25). The meter is the row's only
- * flexible child, so a long session total truncates there; without this a flex
- * row's default `flex-shrink: 1` would squeeze a button's label first.
- */
-.composer .actions > button,
-.composer .actions > select {
+/* The controls keep their size (p_0.46.25). */
+.composer .actions > button {
   flex: 0 0 auto;
+}
+
+.composer .composer-tool {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--vscode-descriptionForeground);
+}
+
+.composer .composer-tool:hover:not(:disabled),
+.composer .composer-tool[aria-pressed='true'] {
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.14));
+  color: var(--vscode-foreground);
+}
+
+.composer .composer-tool[aria-pressed='true'] {
+  box-shadow: inset 0 0 0 1px var(--vscode-focusBorder);
+}
+
+.composer .composer-tool svg {
+  width: 17px;
+  height: 17px;
+}
+
+.composer-model {
+  min-width: 0;
+  max-width: 150px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.composer-model select {
+  min-width: 72px;
+  max-width: 150px;
+  height: 26px;
+  padding: 0 20px 0 7px;
+  overflow: hidden;
+  color: var(--vscode-descriptionForeground);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  font-size: 0.78em;
+  text-overflow: ellipsis;
+}
+
+.composer-model select:hover:not(:disabled),
+.composer-model select:focus {
+  color: var(--vscode-foreground);
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.14));
+}
+
+.composer-model select:focus {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+.action-menu {
+  position: absolute;
+  z-index: 4;
+  bottom: calc(var(--anvil-gap) + 38px);
+  left: max(calc(var(--anvil-gap) + 6px), calc((100% - var(--anvil-read-width)) / 2 + 6px));
+  width: min(300px, calc(100% - 12px));
+  padding: 5px;
+  border: 1px solid var(--vscode-widget-border, var(--ui-hairline));
+  border-radius: 8px;
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  box-shadow: 0 6px 18px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.35));
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2px;
+}
+
+.action-menu[hidden] {
+  display: none;
+}
+
+.action-menu-row {
+  min-width: 0;
+  padding: 6px 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 6px;
+  text-align: left;
+  color: var(--vscode-foreground);
+  background: transparent;
+}
+
+.action-menu-row:hover,
+.action-menu-row:focus-visible {
+  background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.14));
+}
+
+.action-menu-row:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+.action-menu-row > span:last-child {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.action-menu-row strong {
+  font-size: 0.92em;
+  font-weight: 500;
+}
+
+.action-menu-row small {
+  overflow: hidden;
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.78em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.action-menu-icon {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  color: var(--vscode-descriptionForeground);
+}
+
+span.action-menu-icon {
+  text-align: center;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 16px;
+}
+
+.action-menu-icon.slash,
+.action-menu-icon.mention {
+  font-weight: 700;
 }
 
 .composer button.icon {
@@ -1981,6 +2720,8 @@ body.drop-target {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  border-radius: 7px;
+  margin-left: 2px;
 }
 
 .composer button.icon svg {
@@ -1988,13 +2729,60 @@ body.drop-target {
   height: 16px;
 }
 
-.composer button.icon .icon-stop,
+.composer button.icon.running {
+  width: auto;
+  min-width: 28px;
+  padding: 0 9px;
+  gap: 5px;
+}
+
 .composer button.icon.running .icon-send {
   display: none;
 }
 
-.composer button.icon.running .icon-stop {
-  display: block;
+.composer .send-label,
+.composer .queue-count {
+  display: none;
+  font-size: 0.82em;
+  line-height: 1;
+}
+
+.composer button.icon.running .send-label,
+.composer button.icon.running .queue-count:not([hidden]) {
+  display: inline;
+}
+
+.composer .queue-count {
+  min-width: 1.4em;
+  padding: 2px 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--vscode-button-foreground) 16%, transparent);
+  font-variant-numeric: tabular-nums;
+}
+
+.composer .run-action {
+  height: 28px;
+  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 7px;
+  font-size: 0.8em;
+  white-space: nowrap;
+}
+
+.composer .run-action svg {
+  width: 14px;
+  height: 14px;
+}
+
+.composer .run-stop {
+  margin-left: 0;
+}
+
+.composer .run-action[hidden],
+.composer .run-stop[hidden] {
+  display: none;
 }
 
 kbd {
@@ -2010,6 +2798,10 @@ kbd {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
+}
+
+.composer .chips {
+  padding: 8px 12px 0;
 }
 
 .chip {
@@ -2030,6 +2822,17 @@ kbd {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.chip.quote {
+  max-width: min(100%, 360px);
+  border-color: color-mix(in srgb, var(--vscode-charts-purple, #b180d7) 45%, var(--ui-hairline));
+}
+
+.chip-quote-mark {
+  color: var(--vscode-charts-purple, #b180d7);
+  font-size: 1.15em;
+  line-height: 1;
 }
 
 .chip img {
@@ -2064,6 +2867,13 @@ kbd {
   font-family: var(--vscode-editor-font-family, monospace);
   font-size: 0.85em;
   color: var(--vscode-descriptionForeground);
+}
+
+.msg .quote-ref {
+  max-width: min(100%, 420px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .msg .shots {
@@ -2329,28 +3139,151 @@ kbd {
   color: var(--vscode-errorForeground, #f85149);
 }
 
-/* --- mode select ---------------------------------------------------------- */
+/* --- mode menu ------------------------------------------------------------ */
 
-/*
- * The mode select lives in the composer's action row now, not on a toolbar of
- * its own: it is a property of what the next prompt may do, which is the thing
- * the composer is for.
- */
-.composer select {
-  max-width: 14em;
+.mode-trigger {
   min-width: 0;
-  font-family: inherit;
-  font-size: inherit;
-  padding: 2px 4px;
+  max-width: 12em;
+  height: 28px;
+  padding: 0 7px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid transparent;
+  border-radius: 7px;
   color: var(--vscode-dropdown-foreground, var(--vscode-foreground));
-  background: var(--vscode-dropdown-background, var(--vscode-input-background));
-  border: 1px solid var(--vscode-dropdown-border, var(--vscode-input-border, transparent));
-  border-radius: 4px;
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.12));
+  font-family: inherit;
+  font-size: 0.9em;
 }
 
-.composer select:focus {
+.mode-trigger:hover:not(:disabled),
+.mode-trigger[aria-expanded='true'] {
+  background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.18));
+}
+
+.mode-trigger:focus-visible {
   outline: 1px solid var(--vscode-focusBorder);
   outline-offset: -1px;
+}
+
+.mode-trigger-icon {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+}
+
+#modeLabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mode-chevron {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+  transition: transform 120ms ease;
+}
+
+.mode-trigger[aria-expanded='true'] .mode-chevron {
+  transform: rotate(180deg);
+}
+
+.mode-menu {
+  position: absolute;
+  z-index: 4;
+  right: max(calc(var(--anvil-gap) + 38px), calc((100% - var(--anvil-read-width)) / 2 + 38px));
+  bottom: calc(var(--anvil-gap) + 38px);
+  width: min(330px, calc(100% - 24px));
+  max-height: min(31em, 72vh);
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--vscode-widget-border, var(--ui-hairline));
+  border-radius: 9px;
+  color: var(--vscode-foreground);
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  box-shadow: 0 8px 24px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.4));
+}
+
+.mode-menu[hidden] {
+  display: none;
+}
+
+.mode-menu-head {
+  padding: 5px 8px 7px;
+  display: flex;
+  justify-content: space-between;
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.8em;
+}
+
+.mode-menu-hint {
+  font-family: var(--vscode-editor-font-family, monospace);
+}
+
+.mode-row {
+  width: 100%;
+  padding: 7px 8px;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) 18px;
+  align-items: center;
+  gap: 7px;
+  border: 0;
+  border-radius: 6px;
+  text-align: left;
+  color: var(--vscode-foreground);
+  background: transparent;
+}
+
+.mode-row:hover,
+.mode-row:focus-visible,
+.mode-row.selected {
+  background: var(--vscode-list-activeSelectionBackground, rgba(128, 128, 128, 0.22));
+}
+
+.mode-row:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+.mode-row-icon {
+  color: var(--vscode-descriptionForeground);
+  text-align: center;
+  font-family: var(--vscode-editor-font-family, monospace);
+}
+
+.mode-row-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mode-row-copy strong {
+  font-size: 0.94em;
+  font-weight: 500;
+}
+
+.mode-row-copy small {
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.78em;
+  line-height: 1.25;
+}
+
+.mode-row-check {
+  visibility: hidden;
+  justify-self: end;
+}
+
+.mode-row.selected .mode-row-check {
+  visibility: visible;
+}
+
+.mode-row.danger strong,
+.mode-row.danger .mode-row-icon {
+  color: var(--vscode-errorForeground);
 }
 
 button.ghost {
@@ -2362,6 +3295,346 @@ button.ghost {
 
 button.ghost:hover:not(:disabled) {
   background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15));
+}
+
+.collaboration-control {
+  display: inline-flex;
+  align-items: stretch;
+  min-width: 0;
+  height: 26px;
+  border: 1px solid var(--vscode-panel-border, var(--ui-hairline));
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.collaboration-trigger,
+.agent-map-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 0;
+  border-radius: 0;
+  padding: 0 7px;
+  color: var(--vscode-foreground);
+  background: transparent;
+  font-size: 0.8em;
+}
+
+.collaboration-trigger:hover:not(:disabled),
+.agent-map-trigger:hover:not(:disabled),
+.collaboration-trigger[aria-expanded='true'] {
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15));
+}
+
+.collaboration-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--vscode-descriptionForeground);
+  opacity: 0.62;
+  transition: background 120ms ease, opacity 120ms ease, box-shadow 120ms ease;
+}
+
+.collaboration-dot.active {
+  background: var(--vscode-testing-iconPassed, #73c991);
+  opacity: 1;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--vscode-testing-iconPassed, #73c991) 18%, transparent);
+}
+
+.agent-map-trigger {
+  width: 27px;
+  padding: 0;
+  border-left: 1px solid var(--vscode-panel-border, var(--ui-hairline));
+}
+
+.agent-map-trigger[hidden] {
+  display: none;
+}
+
+.collaboration-menu {
+  position: absolute;
+  z-index: 5;
+  width: min(280px, calc(100% - 24px));
+  padding: 6px;
+  border: 1px solid var(--vscode-widget-border, var(--ui-hairline));
+  border-radius: 9px;
+  color: var(--vscode-foreground);
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  box-shadow: 0 8px 24px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.4));
+}
+
+.collaboration-menu[hidden] {
+  display: none;
+}
+
+.collaboration-row {
+  width: 100%;
+  padding: 8px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 18px;
+  align-items: center;
+  gap: 7px;
+  border: 0;
+  border-radius: 6px;
+  text-align: left;
+  color: var(--vscode-foreground);
+  background: transparent;
+}
+
+.collaboration-row:hover:not(:disabled),
+.collaboration-row:focus-visible,
+.collaboration-row.selected {
+  background: var(--vscode-list-activeSelectionBackground, rgba(128, 128, 128, 0.22));
+}
+
+.collaboration-row:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+.collaboration-row:disabled {
+  opacity: 0.42;
+}
+
+.collaboration-row-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.collaboration-row-copy strong {
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.collaboration-row-copy small {
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.8em;
+}
+
+.collaboration-row-check {
+  visibility: hidden;
+  justify-self: end;
+}
+
+.collaboration-row.selected .collaboration-row-check {
+  visibility: visible;
+}
+
+.agent-map-dialog {
+  width: min(780px, calc(100vw - 32px));
+  max-width: none;
+  height: min(620px, calc(100vh - 40px));
+  padding: 0;
+  border: 1px solid var(--vscode-widget-border, var(--ui-hairline));
+  border-radius: 10px;
+  color: var(--vscode-foreground);
+  background: var(--vscode-editor-background);
+  box-shadow: 0 14px 44px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.55));
+}
+
+.agent-map-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.agent-map-panel {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.agent-map-head {
+  min-height: 46px;
+  padding: 0 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--vscode-panel-border, var(--ui-hairline));
+  font-weight: 600;
+}
+
+.agent-map-close {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  color: var(--vscode-icon-foreground, var(--vscode-foreground));
+  background: transparent;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.agent-map-close:hover {
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15));
+}
+
+.agent-map-content {
+  flex: 1;
+  min-height: 0;
+  padding: 18px;
+  overflow: auto;
+}
+
+.agent-map-subtitle,
+.agent-map-meta,
+.agent-map-empty {
+  margin: 0 0 16px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.86em;
+}
+
+.agent-map-topology {
+  min-height: 280px;
+  display: grid;
+  grid-template-columns: minmax(180px, 0.8fr) minmax(230px, 1.2fr);
+  align-items: center;
+  gap: 54px;
+}
+
+.agent-map-root,
+.agent-map-children {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.agent-map-child {
+  position: relative;
+}
+
+.agent-map-child::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  right: 100%;
+  width: 54px;
+  border-top: 1px solid var(--vscode-panel-border, var(--ui-hairline));
+}
+
+.agent-map-card {
+  width: 100%;
+  min-height: 58px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 5px;
+  border: 1px solid var(--vscode-panel-border, var(--ui-hairline));
+  border-radius: 8px;
+  text-align: left;
+  color: var(--vscode-foreground);
+  background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+}
+
+.agent-map-card:hover,
+.agent-map-card:focus-visible {
+  border-color: var(--vscode-focusBorder);
+  background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.12));
+}
+
+.agent-map-card:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
+
+.agent-map-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+}
+
+.agent-map-status {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--vscode-descriptionForeground);
+}
+
+.status-working .agent-map-status {
+  background: var(--vscode-progressBar-background, #0e70c0);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--vscode-progressBar-background, #0e70c0) 20%, transparent);
+}
+
+.status-finished .agent-map-status {
+  background: var(--vscode-testing-iconPassed, #73c991);
+}
+
+.status-failed .agent-map-status {
+  background: var(--vscode-testing-iconFailed, #f14c4c);
+}
+
+.agent-map-card small {
+  color: var(--vscode-descriptionForeground);
+}
+
+.agent-map-back,
+.agent-map-open {
+  margin: 0 0 14px;
+  padding: 6px 9px;
+  border: 1px solid var(--vscode-button-border, transparent);
+  border-radius: 5px;
+  color: var(--vscode-button-foreground);
+  background: var(--vscode-button-background);
+}
+
+.agent-map-back:hover,
+.agent-map-open:hover {
+  background: var(--vscode-button-hoverBackground);
+}
+
+.agent-map-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(70px, 1fr));
+  gap: 8px;
+}
+
+.agent-map-stat {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid var(--vscode-panel-border, var(--ui-hairline));
+  border-radius: 7px;
+  background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+}
+
+.agent-map-stat strong {
+  font-size: 1.35em;
+}
+
+.agent-map-stat small {
+  color: var(--vscode-descriptionForeground);
+}
+
+.agent-map-detail-section {
+  margin: 0 0 14px;
+}
+
+.agent-map-detail-section h3 {
+  margin: 0 0 6px;
+  font-size: 0.86em;
+  font-weight: 600;
+  color: var(--vscode-descriptionForeground);
+}
+
+.agent-map-detail-section pre {
+  max-height: 190px;
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border: 1px solid var(--vscode-panel-border, var(--ui-hairline));
+  border-radius: 7px;
+  color: var(--vscode-editor-foreground);
+  background: var(--vscode-textCodeBlock-background, var(--vscode-editor-background));
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.83em;
 }
 
 /*

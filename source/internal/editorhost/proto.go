@@ -27,7 +27,7 @@ const ProtocolVersion = 1
 // product line, not the protocol revision (that is ProtocolVersion): the
 // extension compares the dotted minor it packaged with against this string and
 // warns on a mismatch, so the two have to be released together (0.46).
-var Version = "0.47.0"
+var Version = "0.46.54"
 
 // Client to host request methods.
 const (
@@ -70,6 +70,9 @@ const (
 	MethodPrompt            = "prompt"
 	MethodCancel            = "cancel"
 	MethodModelsList        = "models.list"
+	MethodSubagentsGet      = "subagents.get"
+	MethodSubagentsUpsert   = "subagents.upsert"
+	MethodSubagentsRemove   = "subagents.remove"
 	MethodSkillsList        = "skills.list"
 	MethodRulesList         = "rules.list"
 	// MethodMCPList reports the MCP servers the selected file layers declare,
@@ -745,10 +748,12 @@ type SessionInfo struct {
 	// Subagent identity (0.42+). Empty on a top-level session. ParentAgentID is
 	// what the tree nests a child under, and TaskTitle is the description its
 	// spawn call carried — the name a person gave the work, not a derived one.
-	ParentAgentID string `json:"parent_agent_id,omitempty"`
-	Depth         int    `json:"depth,omitempty"`
-	Subagent      bool   `json:"subagent,omitempty"`
-	TaskTitle     string `json:"task_title,omitempty"`
+	ParentAgentID    string `json:"parent_agent_id,omitempty"`
+	ParentRunID      string `json:"parent_run_id,omitempty"`
+	ParentToolCallID string `json:"parent_tool_call_id,omitempty"`
+	Depth            int    `json:"depth,omitempty"`
+	Subagent         bool   `json:"subagent,omitempty"`
+	TaskTitle        string `json:"task_title,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
@@ -932,6 +937,8 @@ type TranscriptEntry struct {
 	Status string `json:"status,omitempty"`
 	Steps  int    `json:"steps,omitempty"`
 	Usage  *Usage `json:"usage,omitempty"`
+	Err    string `json:"err,omitempty"`
+	Code   string `json:"code,omitempty"`
 }
 
 // TranscriptCall is one tool invocation inside a replayed assistant message.
@@ -1191,6 +1198,8 @@ type PromptContext struct {
 	// Mentions are workspace-relative paths the user referenced. Files are read
 	// into the message; directories become a listing.
 	Mentions []Mention `json:"mentions,omitempty"`
+	// Quotes are earlier conversation messages the user explicitly referenced.
+	Quotes []Quote `json:"quotes,omitempty"`
 	// Selection is the editor's active selection, sent as text.
 	Selection *Selection `json:"selection,omitempty"`
 	// Diagnostics are the client's own, straight from its language server.
@@ -1202,6 +1211,12 @@ type PromptContext struct {
 // host's decisions.
 type Mention struct {
 	Path string `json:"path"`
+}
+
+// Quote is one earlier visible conversation message.
+type Quote struct {
+	Role string `json:"role"`
+	Text string `json:"text"`
 }
 
 // Selection is the active editor selection.
@@ -1267,8 +1282,11 @@ type TaskInfo struct {
 	// AgentID is the agent whose tool call started the task. For an agent task
 	// it is the starter, not the child: the child does not exist yet when the
 	// row is created.
-	AgentID   string    `json:"agent_id,omitempty"`
-	StartedAt time.Time `json:"started_at"`
+	AgentID          string    `json:"agent_id,omitempty"`
+	ChildAgentID     string    `json:"child_agent_id,omitempty"`
+	ParentRunID      string    `json:"parent_run_id,omitempty"`
+	ParentToolCallID string    `json:"parent_tool_call_id,omitempty"`
+	StartedAt        time.Time `json:"started_at"`
 	// EndedAt is absent while the task runs.
 	EndedAt *time.Time `json:"ended_at,omitempty"`
 	// ExitCode is the process exit code of a shell task, -1 when it did not
@@ -1353,6 +1371,33 @@ type ModelsResult struct {
 	Models []ModelEntry `json:"models"`
 }
 
+// SubagentProfileEntry is one workspace-shared child specialization.
+type SubagentProfileEntry struct {
+	ID           string   `json:"id"`
+	Description  string   `json:"description"`
+	Instructions string   `json:"instructions"`
+	Model        string   `json:"model,omitempty"`
+	Tools        []string `json:"tools,omitempty"`
+	MaxSteps     int      `json:"max_steps,omitempty"`
+}
+
+type SubagentsUpsertParams struct {
+	Profile SubagentProfileEntry `json:"profile"`
+}
+
+type SubagentsRemoveParams struct {
+	ID string `json:"id"`
+}
+
+type SubagentsResult struct {
+	Path         string                 `json:"path"`
+	Exists       bool                   `json:"exists"`
+	Profiles     []SubagentProfileEntry `json:"profiles"`
+	ToolGroups   []string               `json:"tool_groups"`
+	DefaultTools []string               `json:"default_tools"`
+	Problem      string                 `json:"problem,omitempty"`
+}
+
 // ---------------------------------------------------------------------------
 // event / done notifications
 // ---------------------------------------------------------------------------
@@ -1374,11 +1419,11 @@ type EventParams struct {
 	Step       int             `json:"step,omitempty"`
 	MaxSteps   int             `json:"max_steps,omitempty"`
 	Code       string          `json:"code,omitempty"`
-	// Usage is the run's token usage so far on a terminal event (an error the
-	// host forwards), when the provider reported any (0.40.8+). It is absent
-	// elsewhere, so a client that predates the field reads exactly what it did.
-	// The authoritative end-of-run usage is still the `done` notification.
-	Usage *Usage `json:"usage,omitempty"`
+	// Usage is authoritative on a forwarded terminal error. On streamed events
+	// it may be a live estimate, explicitly marked by UsageEstimated. The
+	// authoritative end-of-run usage is still the `done` notification.
+	Usage          *Usage `json:"usage,omitempty"`
+	UsageEstimated bool   `json:"usage_estimated,omitempty"`
 	// Rule is the rule that decided this tool result, when one did. It is how a
 	// call that ran without a prompt says why it did not need one: nil means no
 	// rule decided it, which is not the same as "some rule allowed it".

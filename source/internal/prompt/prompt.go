@@ -90,6 +90,10 @@ Use tools to inspect and modify files.
 - Prefer precise edits over rewriting entire files or trees.
 - After meaningful code changes, run tests when appropriate.
 
+When a diagram helps the answer, use a closed ` + "```mermaid" + ` fence and standard Mermaid syntax.
+Do not invent shorthand grammar. In particular, write a labelled dotted edge as
+` + "`A-. label .-> B`" + `, with spaces around the label.
+
 When done, respond with a concise summary of what you did.`
 
 const subagentText = `You are a subagent. The agent that created you gave you one task and is waiting for ` +

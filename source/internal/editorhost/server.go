@@ -196,6 +196,12 @@ func (s *Server) dispatch(ctx context.Context, req *Request) (any, *RPCError) {
 		return s.handleCancel(ctx, req.Params)
 	case MethodModelsList:
 		return s.handleModelsList(ctx, req.Params)
+	case MethodSubagentsGet:
+		return s.handleSubagentsGet(req.Params)
+	case MethodSubagentsUpsert:
+		return s.handleSubagentsUpsert(req.Params)
+	case MethodSubagentsRemove:
+		return s.handleSubagentsRemove(req.Params)
 	case MethodSkillsList:
 		return s.handleSkillsList(ctx, req.Params)
 	case MethodRulesList:
@@ -383,10 +389,12 @@ func (s *Server) handleSessionList(ctx context.Context, params json.RawMessage) 
 			LastRunID:  in.LastRunID,
 			Runs:       in.Runs,
 
-			ParentAgentID: in.ParentAgentID,
-			Depth:         in.Depth,
-			Subagent:      in.Kind == "subagent",
-			TaskTitle:     in.TaskTitle,
+			ParentAgentID:    in.ParentAgentID,
+			ParentRunID:      in.ParentRunID,
+			ParentToolCallID: in.ParentToolCallID,
+			Depth:            in.Depth,
+			Subagent:         in.Kind == "subagent",
+			TaskTitle:        in.TaskTitle,
 		}
 		if !in.CreatedAt.IsZero() {
 			entry.CreatedAt = in.CreatedAt.UTC().Format("2006-01-02T15:04:05Z")
@@ -583,6 +591,8 @@ func (s *Server) handleSessionTranscript(ctx context.Context, params json.RawMes
 			Name:       in.Name,
 			Status:     in.Status,
 			Steps:      in.Steps,
+			Err:        in.Err,
+			Code:       string(in.Code),
 		}
 		for _, tc := range in.ToolCalls {
 			entry.ToolCalls = append(entry.ToolCalls, TranscriptCall{
@@ -869,13 +879,16 @@ func (s *Server) forwardTask(sess *session, info anvil.TaskInfo) {
 // taskInfo projects one public task snapshot onto the wire shape.
 func taskInfo(t anvil.TaskInfo) TaskInfo {
 	out := TaskInfo{
-		ID:        t.ID,
-		Kind:      string(t.Kind),
-		Title:     t.Title,
-		Status:    string(t.Status),
-		AgentID:   t.AgentID,
-		StartedAt: t.StartedAt,
-		ExitCode:  t.ExitCode,
+		ID:               t.ID,
+		Kind:             string(t.Kind),
+		Title:            t.Title,
+		Status:           string(t.Status),
+		AgentID:          t.AgentID,
+		ChildAgentID:     t.ChildAgentID,
+		ParentRunID:      t.ParentRunID,
+		ParentToolCallID: t.ParentToolCallID,
+		StartedAt:        t.StartedAt,
+		ExitCode:         t.ExitCode,
 	}
 	if !t.EndedAt.IsZero() {
 		ended := t.EndedAt
@@ -1001,6 +1014,62 @@ func (s *Server) handleModelsList(ctx context.Context, params json.RawMessage) (
 		})
 	}
 	return out, nil
+}
+
+func (s *Server) handleSubagentsGet(params json.RawMessage) (any, *RPCError) {
+	if _, err := decode[struct{}](params); err != nil {
+		return nil, errInvalidParams("subagents.get: " + err.Error())
+	}
+	return subagentsResult(anvil.LoadSubagentProfiles(s.cwdPath())), nil
+}
+
+func (s *Server) handleSubagentsUpsert(params json.RawMessage) (any, *RPCError) {
+	p, err := decode[SubagentsUpsertParams](params)
+	if err != nil {
+		return nil, errInvalidParams("subagents.upsert: " + err.Error())
+	}
+	state, saveErr := anvil.UpsertSubagentProfile(s.cwdPath(), profileFromWire(p.Profile))
+	if saveErr != nil {
+		return nil, errInvalidParams("subagents.upsert: " + saveErr.Error())
+	}
+	return subagentsResult(state), nil
+}
+
+func (s *Server) handleSubagentsRemove(params json.RawMessage) (any, *RPCError) {
+	p, err := decode[SubagentsRemoveParams](params)
+	if err != nil {
+		return nil, errInvalidParams("subagents.remove: " + err.Error())
+	}
+	if strings.TrimSpace(p.ID) == "" {
+		return nil, errInvalidParams("subagents.remove: id is required")
+	}
+	state, saveErr := anvil.RemoveSubagentProfile(s.cwdPath(), p.ID)
+	if saveErr != nil {
+		return nil, errInvalidParams("subagents.remove: " + saveErr.Error())
+	}
+	return subagentsResult(state), nil
+}
+
+func profileFromWire(p SubagentProfileEntry) anvil.SubagentProfile {
+	return anvil.SubagentProfile{
+		ID: p.ID, Description: p.Description, Instructions: p.Instructions,
+		Model: p.Model, Tools: p.Tools, MaxSteps: p.MaxSteps,
+	}
+}
+
+func subagentsResult(state anvil.SubagentProfileState) SubagentsResult {
+	result := SubagentsResult{
+		Path: state.Path, Exists: state.Exists, Problem: state.Problem,
+		Profiles: []SubagentProfileEntry{}, ToolGroups: anvil.SubagentToolGroups(),
+		DefaultTools: []string{"read", "search", "skills", "git", "vision"},
+	}
+	for _, p := range state.Profiles {
+		result.Profiles = append(result.Profiles, SubagentProfileEntry{
+			ID: p.ID, Description: p.Description, Instructions: p.Instructions,
+			Model: p.Model, Tools: p.Tools, MaxSteps: p.MaxSteps,
+		})
+	}
+	return result
 }
 
 // ---------------------------------------------------------------------------
@@ -1409,15 +1478,16 @@ func (s *Server) buildOptions(ctx context.Context, p SessionParams, sess *sessio
 	// computations of one flag is how the option and the mode start disagreeing
 	// about whether this session has read the workspace's policy.
 	opts := anvil.Options{
-		PermissionGroups: groups,
-		Provider:         anvil.Provider(firstNonEmpty(p.Provider, s.cfg.Provider, os.Getenv("ANVIL_PROVIDER"))),
-		BaseURL:          firstNonEmpty(p.BaseURL, s.cfg.BaseURL, os.Getenv("ANVIL_BASE_URL")),
-		SystemPrompt:     p.SystemPrompt,
-		MaxSteps:         p.MaxSteps,
-		BuiltinTools:     p.BuiltinTools,
-		DisallowedTools:  p.DisallowedTools,
-		Skills:           p.Skills,
-		Plugins:          p.Plugins,
+		PermissionGroups:  groups,
+		Provider:          anvil.Provider(firstNonEmpty(p.Provider, s.cfg.Provider, os.Getenv("ANVIL_PROVIDER"))),
+		BaseURL:           firstNonEmpty(p.BaseURL, s.cfg.BaseURL, os.Getenv("ANVIL_BASE_URL")),
+		SystemPrompt:      p.SystemPrompt,
+		RequireFinishTask: true,
+		MaxSteps:          p.MaxSteps,
+		BuiltinTools:      p.BuiltinTools,
+		DisallowedTools:   p.DisallowedTools,
+		Skills:            p.Skills,
+		Plugins:           p.Plugins,
 		Local: anvil.LocalOptions{
 			CWD:             s.cwdPath(),
 			LoadRules:       p.LoadRules,
@@ -1443,10 +1513,12 @@ func (s *Server) buildOptions(ctx context.Context, p SessionParams, sess *sessio
 	// installed before the agent exists, and every child in the tree — however
 	// deep — reports through the same options.
 	if boolOr(p.Subagents, true) {
+		profileState := anvil.LoadSubagentProfiles(s.cwdPath())
 		opts.Subagents = anvil.SubagentOptions{
-			Enabled: true,
-			OnEvent: func(ev anvil.SubagentEvent) { s.forwardSubagentEvent(sess, ev) },
-			OnTask:  func(info anvil.TaskInfo) { s.forwardTask(sess, info) },
+			Enabled:  true,
+			Profiles: profileState.Profiles,
+			OnEvent:  func(ev anvil.SubagentEvent) { s.forwardSubagentEvent(sess, ev) },
+			OnTask:   func(info anvil.TaskInfo) { s.forwardTask(sess, info) },
 		}
 	}
 	if len(p.TestCommand) > 0 {

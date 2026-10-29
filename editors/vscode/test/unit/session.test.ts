@@ -420,6 +420,27 @@ test('reopen() before the first prompt only changes what will be sent', async ()
   assert.deepEqual(built.transport.calls[0].params, { permission_mode: 'plan' });
 });
 
+test('a rejected reopen restores the previous options and live session', async () => {
+  const built = build({ model: 'working-model' });
+  await built.session.open();
+  let resumes = 0;
+  built.transport.answer('session.resume', (params) => {
+    resumes++;
+    if (resumes === 1) throw new Error('model was rejected');
+    return { ...SESSION_RESULT, session_id: 'restored', ...(params as object) };
+  });
+
+  await assert.rejects(() => built.session.reopen({ model: 'bad-model' }), /model was rejected/);
+
+  assert.equal(built.session.settings.model, 'working-model');
+  assert.equal(built.session.id, 'restored');
+  assert.equal(resumes, 2);
+  assert.deepEqual(built.transport.calls.at(-1)?.params, {
+    agent_id: 'a1',
+    model: 'working-model',
+  });
+});
+
 test('reopen() is refused while a turn is running, and changes nothing', async () => {
   const built = build({ permission_mode: 'ask' });
   await built.session.send('go');

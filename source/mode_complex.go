@@ -52,18 +52,42 @@ func stageEffort(s Stage, def Effort) Effort {
 	return def
 }
 
-func stageTools(s Stage, def []string) []string {
+func stageTools(reg *tools.Registry, s Stage, def []string) []string {
 	if len(s.Tools) > 0 {
 		return s.Tools
 	}
-	return def
+	return availableSelectors(reg, def)
+}
+
+// availableSelectors keeps the default selectors the parent actually has a tool for. A
+// default is a wish, not a request: a session without a test runner still gets a Worker,
+// just one without verify. A selector the caller names in Stage.Tools is not filtered, so
+// asking for a tool the parent lacks is still refused.
+func availableSelectors(reg *tools.Registry, def []string) []string {
+	if reg == nil {
+		return append([]string(nil), def...)
+	}
+	have := map[string]bool{}
+	for _, name := range reg.Names() {
+		have[name] = true
+	}
+	out := make([]string, 0, len(def))
+	for _, selector := range def {
+		for name := range tools.ExpandToolSelectors([]string{selector}) {
+			if have[name] {
+				out = append(out, selector)
+				break
+			}
+		}
+	}
+	return out
 }
 
 // complexSpec builds the three-step workflow a Complex run executes. Decision and
 // Analyze are ordinary steps with a role and a schema; Worker is a fan-out over the
 // roadmap's items whose children are created the way delegate creates one.
-func complexSpec(o ComplexOptions, message, directive, skills string) workflowSpec {
-	spec := complexSteps(o, message)
+func complexSpec(reg *tools.Registry, o ComplexOptions, message, directive, skills string) workflowSpec {
+	spec := complexSteps(reg, o, message)
 	for i := range spec.Steps {
 		spec.Steps[i].directive = directive
 		spec.Steps[i].skills = skills
@@ -88,19 +112,19 @@ func withRunLayers(brief, directive, skills string) string {
 	return strings.Join(parts, "\n\n")
 }
 
-func complexSteps(o ComplexOptions, message string) workflowSpec {
+func complexSteps(reg *tools.Registry, o ComplexOptions, message string) workflowSpec {
 	return workflowSpec{
 		Name:        "complex",
 		MaxParallel: o.MaxParallel,
 		Steps: []workflowStep{
 			{ID: "decide", Prompt: message, literal: true, Role: string(RoleDecision), ResultSchema: schemaDecision,
-				Tools: stageTools(o.Decision, decisionTools), Model: o.Decision.Model, MaxSteps: o.Decision.MaxSteps,
+				Tools: stageTools(reg, o.Decision, decisionTools), Model: o.Decision.Model, MaxSteps: o.Decision.MaxSteps,
 				Effort: string(stageEffort(o.Decision, EffortHigh))},
 			{ID: "analyze", Prompt: "{{decide.result}}", DependsOn: []string{"decide"}, Role: string(RoleAnalyze), ResultSchema: schemaRoadmap,
-				Tools: stageTools(o.Analyze, analyzeTools), Model: o.Analyze.Model, MaxSteps: o.Analyze.MaxSteps,
+				Tools: stageTools(reg, o.Analyze, analyzeTools), Model: o.Analyze.Model, MaxSteps: o.Analyze.MaxSteps,
 				Effort: string(stageEffort(o.Analyze, EffortMedium))},
 			{ID: "work", Prompt: "{{item}}", DependsOn: []string{"analyze"}, ForEach: &workflowFanOut{From: "analyze", Path: "items"},
-				BriefFromItem: true, Tools: stageTools(o.Worker, delegateTools), Model: o.Worker.Model, MaxSteps: o.Worker.MaxSteps,
+				BriefFromItem: true, Tools: stageTools(reg, o.Worker, delegateTools), Model: o.Worker.Model, MaxSteps: o.Worker.MaxSteps,
 				Effort: string(stageEffort(o.Worker, EffortLow))},
 		},
 	}
@@ -157,7 +181,7 @@ func (a *Agent) executeComplex(ctx context.Context, cancelCause context.CancelCa
 
 // runComplex builds the workflow, runs it and renders the answer.
 func (a *Agent) runComplex(ctx context.Context, run *Run, message, directive string) (RunStatus, string, Code) {
-	spec := complexSpec(a.opts.Complex, message, directive, routerSkillsText(a.cwd, a.opts, message))
+	spec := complexSpec(a.registry, a.opts.Complex, message, directive, routerSkillsText(a.cwd, a.opts, message))
 	if err := validateWorkflow(spec); err != nil {
 		return StatusError, err.Error(), ""
 	}

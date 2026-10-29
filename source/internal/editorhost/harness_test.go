@@ -31,7 +31,8 @@ type turn struct {
 }
 
 func textTurn(content string) turn {
-	return turn{content: content}
+	args, _ := json.Marshal(map[string]string{"summary": content})
+	return turn{toolID: "finish", tool: "finish_task", args: string(args)}
 }
 
 func toolTurn(id, name, args string) turn {

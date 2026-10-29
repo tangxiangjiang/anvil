@@ -12,8 +12,10 @@ import * as vscode from 'vscode';
 import { ApiKeyStore, applyApiKeyEnv, forgetApiKey, loadApiKey, saveApiKey } from './apiKeyStore';
 import { argv, lspParams } from './languageTools';
 import { McpSettings, settingSourcesFor } from './mcp';
+import { DEFAULT_MODEL_CATALOG_URL, ModelSettings, normalizeModelIds } from './models';
 import { SessionConfig } from './session';
 import { WebSearchSettings, webSearchParams } from './webSearch';
+import { rootUri } from './workspaceRoot';
 
 const SECTION = 'anvil';
 const SECRET_KEY = 'anvil.apiKey';
@@ -21,6 +23,46 @@ const WEB_SECRET_KEY = 'anvil.webSearchKey';
 const WEB_ENV_KEY = 'ANVIL_WEB_SEARCH_API_KEY';
 /** Global state only. Not registered with `setKeysForSync`, so it stays on this machine. */
 const SAVED_KEY = 'anvil.apiKey';
+const DEFAULT_MODEL_KEY = 'anvil.defaultModel';
+let selectedDefaultModel = '';
+
+/**
+ * Loads the workspace's curated default and migrates the former free-text
+ * setting. The value is installed synchronously; removing the old keys can
+ * finish after activation without changing what the first session sees.
+ */
+export function initDefaultModel(context: vscode.ExtensionContext): void {
+  const cfg = vscode.workspace.getConfiguration(SECTION, rootUri());
+  const legacy = (cfg.get<string>('model', '') ?? '').trim();
+  selectedDefaultModel = context.workspaceState.get<string>(DEFAULT_MODEL_KEY, legacy);
+  if (selectedDefaultModel !== '') {
+    void context.workspaceState.update(DEFAULT_MODEL_KEY, selectedDefaultModel);
+  }
+  const inspected = cfg.inspect<string>('model');
+  if (!inspected) return;
+  const clears: Thenable<void>[] = [];
+  if (inspected.workspaceFolderValue !== undefined) {
+    clears.push(cfg.update('model', undefined, vscode.ConfigurationTarget.WorkspaceFolder));
+  }
+  if (inspected.workspaceValue !== undefined) {
+    clears.push(cfg.update('model', undefined, vscode.ConfigurationTarget.Workspace));
+  }
+  if (inspected.globalValue !== undefined) {
+    clears.push(cfg.update('model', undefined, vscode.ConfigurationTarget.Global));
+  }
+  void Promise.all(clears);
+}
+
+export async function saveDefaultModel(
+  context: vscode.ExtensionContext,
+  model: string,
+): Promise<void> {
+  selectedDefaultModel = model.trim();
+  await context.workspaceState.update(
+    DEFAULT_MODEL_KEY,
+    selectedDefaultModel === '' ? undefined : selectedDefaultModel,
+  );
+}
 
 export interface ResolvedSettings {
   /**
@@ -51,6 +93,8 @@ export interface ResolvedSettings {
    * the child was started with.
    */
   webSearch: WebSearchSettings;
+  /** Curated model catalogue and the workspace's default selection. */
+  models: ModelSettings;
   /**
    * The context window the meter measures the last run against, or 0 when it is
    * unknown. This is display arithmetic, not a session option: it never travels
@@ -89,8 +133,14 @@ export function readSettings(): ResolvedSettings {
   const loadCursor = cfg.get<boolean>('cursorRules', true) ?? true;
   const session: SessionConfig = {
     provider: emptyToUndefined(cfg.get<string>('provider', '')),
-    model: emptyToUndefined(cfg.get<string>('model', '')),
+    model: emptyToUndefined(selectedDefaultModel),
     base_url: emptyToUndefined(cfg.get<string>('baseUrl', '')),
+  };
+  const defaultModel = session.model ?? '';
+  const models: ModelSettings = {
+    catalogUrl: (cfg.get<string>('modelCatalogUrl', DEFAULT_MODEL_CATALOG_URL) ?? DEFAULT_MODEL_CATALOG_URL).trim(),
+    available: normalizeModelIds(cfg.get<unknown>('availableModels', [])),
+    defaultModel,
   };
   if (maxSteps > 0) session.max_steps = maxSteps;
   if (store !== '') session.store = store;
@@ -115,7 +165,7 @@ export function readSettings(): ResolvedSettings {
   // editor's normal shape. Sent explicitly both ways, because a host's default
   // is not this client's to assume, and turning it off has to reach the session
   // that was just opened rather than the next one.
-  session.subagents = cfg.get<boolean>('subagents', true) ?? true;
+  session.subagents = cfg.get<boolean>('subagents', false) ?? false;
   // Language servers, the test command and the build command are all "a tool
   // the user configured": when nothing is configured the fields are omitted,
   // so the request is exactly the one an older client sent. A workspace's
@@ -148,9 +198,10 @@ export function readSettings(): ResolvedSettings {
   };
   const web = webSearchParams(webSearch);
   if (web) session.web_search = web;
-  // A window of zero, or a nonsense value, means the user has not told the
-  // panel one: the meter then shows counts and no fraction.
-  const window = cfg.get<number>('contextWindow', 0) ?? 0;
+  // Fresh installs get a conservative safety budget: leaving this unknown used
+  // to disable compaction silently and let a long editor conversation grow
+  // until the provider rejected it. Zero remains an explicit opt-out.
+  const window = cfg.get<number>('contextWindow', 128000) ?? 128000;
   const contextWindow = Number.isFinite(window) && window > 0 ? Math.floor(window) : 0;
   const compactShare = cfg.get<number>('autoCompactAt', 0.8) ?? 0.8;
   const autoCompactAt = fractionOf(compactShare, 0.8);
@@ -187,6 +238,7 @@ export function readSettings(): ResolvedSettings {
     rules: { load_project: loadProject, load_cursor_rules: loadCursor },
     mcp,
     webSearch,
+    models,
     contextWindow,
     autoCompactAt,
     contextKeepRecent,
@@ -206,6 +258,7 @@ export function readSettings(): ResolvedSettings {
 export function settingsKey(settings: ResolvedSettings): string {
   const hostRelevant: Partial<ResolvedSettings> = { ...settings };
   delete hostRelevant.fontSize;
+  delete hostRelevant.models;
   return JSON.stringify(hostRelevant);
 }
 
