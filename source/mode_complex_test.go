@@ -151,6 +151,141 @@ func TestComplexSend(t *testing.T) {
 	}
 }
 
+// WithDirective reaches every stage's prompt, so the Worker that edits files is bound by
+// it, and the next Send starts without it.
+func TestComplexDirectiveReachesEveryStage(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir, map[string]string{"pkg/a.txt": "old"})
+	parent, err := Create(context.Background(), complexOptions(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+
+	var mu sync.Mutex
+	seen := map[string][]bool{}
+	parent.complete = completerFunc(func(_ context.Context, req llm.Request) (*llm.Response, error) {
+		stage := stageOf(req)
+		mu.Lock()
+		if len(trailingToolResults(req)) == 0 {
+			seen[stage] = append(seen[stage], strings.Contains(systemOf(req), "ONLY TOUCH pkg"))
+		}
+		mu.Unlock()
+		switch stage {
+		case "decision":
+			return textResponse(goodDecision), nil
+		case "analyze":
+			return textResponse(roadmapJSON(map[string]any{"id": "a", "goal": "edit a", "plan": []string{"edit"},
+				"files": []string{"pkg/a.txt"}, "acceptance": []string{"a says new"}, "depends_on": []string{}})), nil
+		}
+		return textResponse("[met] a says new"), nil
+	})
+
+	send := func(opts ...SendOption) {
+		run, err := parent.Send(context.Background(), "make a new", opts...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, err := run.Wait(context.Background())
+		if err != nil || res.Status != StatusFinished {
+			t.Fatalf("err=%v result=%+v", err, res)
+		}
+	}
+	send(WithDirective("ONLY TOUCH pkg"))
+	mu.Lock()
+	for _, stage := range []string{"decision", "analyze", "worker"} {
+		if len(seen[stage]) != 1 || !seen[stage][0] {
+			t.Fatalf("the %s stage did not get the directive: %v", stage, seen[stage])
+		}
+	}
+	seen = map[string][]bool{}
+	mu.Unlock()
+
+	send()
+	mu.Lock()
+	defer mu.Unlock()
+	for stage, flags := range seen {
+		for _, with := range flags {
+			if with {
+				t.Fatalf("the %s stage kept a directive from the previous Send", stage)
+			}
+		}
+	}
+	if strings.Contains(parent.systemPrompt, "ONLY TOUCH") {
+		t.Fatal("the directive entered the agent's own prompt")
+	}
+}
+
+// Skills the router matches to the message reach every stage, as they reach Single's main
+// agent, and a message that matches none leaves the stage prompts without the section.
+func TestComplexMatchedSkillsReachEveryStage(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir, map[string]string{
+		"pkg/a.txt": "old",
+		".anvil/skills/tidy-imports/SKILL.md": "---\nname: tidy-imports\ndescription: tidy imports\n---\nSKILL_BODY_TIDY_77\n",
+	})
+	opts := complexOptions(dir)
+	opts.Local.SettingSources = []SettingSource{SettingSourceProject}
+	parent, err := Create(context.Background(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+
+	var mu sync.Mutex
+	seen := map[string][]bool{}
+	parent.complete = completerFunc(func(_ context.Context, req llm.Request) (*llm.Response, error) {
+		stage := stageOf(req)
+		mu.Lock()
+		if len(trailingToolResults(req)) == 0 {
+			seen[stage] = append(seen[stage], strings.Contains(systemOf(req), "SKILL_BODY_TIDY_77"))
+		}
+		mu.Unlock()
+		switch stage {
+		case "decision":
+			return textResponse(goodDecision), nil
+		case "analyze":
+			return textResponse(roadmapJSON(map[string]any{"id": "a", "goal": "edit a", "plan": []string{"edit"},
+				"files": []string{"pkg/a.txt"}, "acceptance": []string{"a says new"}, "depends_on": []string{}})), nil
+		}
+		return textResponse("[met] a says new"), nil
+	})
+
+	send := func(message string) {
+		run, err := parent.Send(context.Background(), message)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, err := run.Wait(context.Background())
+		if err != nil || res.Status != StatusFinished {
+			t.Fatalf("err=%v result=%+v", err, res)
+		}
+	}
+	send("tidy imports in pkg")
+	mu.Lock()
+	for _, stage := range []string{"decision", "analyze", "worker"} {
+		if len(seen[stage]) != 1 || !seen[stage][0] {
+			t.Fatalf("the %s stage did not get the matched skill: %v", stage, seen[stage])
+		}
+	}
+	seen = map[string][]bool{}
+	mu.Unlock()
+
+	send("rename the widget")
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen["decision"]) != 1 {
+		t.Fatalf("second run did not execute: %v", seen)
+	}
+	for stage, flags := range seen {
+		for _, with := range flags {
+			if with {
+				t.Fatalf("the %s stage got a skill the message does not match", stage)
+			}
+		}
+	}
+}
+
 // A Complex Worker is held to its item's files exactly like a delegate worker.
 func TestComplexWorkerIsConfined(t *testing.T) {
 	dir := t.TempDir()

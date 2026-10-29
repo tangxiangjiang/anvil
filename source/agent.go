@@ -1149,7 +1149,7 @@ func (a *Agent) Send(ctx context.Context, message string, opts ...SendOption) (*
 	a.mu.Unlock()
 
 	if a.opts.Mode == ModeComplex {
-		go a.executeComplex(runCtx, cancelCause, wall, run, message)
+		go a.executeComplex(runCtx, cancelCause, wall, run, message, cfg.Directive)
 		return run, nil
 	}
 	go a.executeRun(runCtx, cancelCause, wall, run, message, cfg.Directive, historyCopy, parts)

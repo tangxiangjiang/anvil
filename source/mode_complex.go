@@ -62,7 +62,33 @@ func stageTools(s Stage, def []string) []string {
 // complexSpec builds the three-step workflow a Complex run executes. Decision and
 // Analyze are ordinary steps with a role and a schema; Worker is a fan-out over the
 // roadmap's items whose children are created the way delegate creates one.
-func complexSpec(o ComplexOptions, message string) workflowSpec {
+func complexSpec(o ComplexOptions, message, directive, skills string) workflowSpec {
+	spec := complexSteps(o, message)
+	for i := range spec.Steps {
+		spec.Steps[i].directive = directive
+		spec.Steps[i].skills = skills
+	}
+	return spec
+}
+
+// withRunLayers appends what the caller's Send adds to a run (its directive and the skills
+// matched to its message) to a stage's brief layer. With neither, the brief is returned
+// exactly as it was.
+func withRunLayers(brief, directive, skills string) string {
+	parts := []string{}
+	if brief != "" {
+		parts = append(parts, brief)
+	}
+	if skills != "" {
+		parts = append(parts, "Skills matched to the caller's request; use them where they apply to your stage:\n"+skills)
+	}
+	if directive != "" {
+		parts = append(parts, "The caller gave this instruction for the whole run; it applies to your stage:\n"+directive)
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func complexSteps(o ComplexOptions, message string) workflowSpec {
 	return workflowSpec{
 		Name:        "complex",
 		MaxParallel: o.MaxParallel,
@@ -83,7 +109,7 @@ func complexSpec(o ComplexOptions, message string) workflowSpec {
 // executeComplex runs a Complex Send: the three-stage workflow on this agent, rendered as
 // the run's final message. Its children's events reach Subagents.OnEvent exactly as a
 // run_workflow's do, and the run's own stream carries the stage outcome as a message.
-func (a *Agent) executeComplex(ctx context.Context, cancelCause context.CancelCauseFunc, wall time.Duration, run *Run, message string) {
+func (a *Agent) executeComplex(ctx context.Context, cancelCause context.CancelCauseFunc, wall time.Duration, run *Run, message, directive string) {
 	defer func() {
 		a.registry.SetRunContext("", "")
 		cancelCause(nil)
@@ -102,7 +128,7 @@ func (a *Agent) executeComplex(ctx context.Context, cancelCause context.CancelCa
 	a.registry.SetRunContext(a.id, run.id)
 	a.persistMessageValue(run.id, "user", message)
 
-	status, text, code := a.runComplex(ctx, run, message)
+	status, text, code := a.runComplex(ctx, run, message, directive)
 
 	a.persistMessageValue(run.id, "assistant", text)
 	a.mu.Lock()
@@ -130,8 +156,8 @@ func (a *Agent) executeComplex(ctx context.Context, cancelCause context.CancelCa
 }
 
 // runComplex builds the workflow, runs it and renders the answer.
-func (a *Agent) runComplex(ctx context.Context, run *Run, message string) (RunStatus, string, Code) {
-	spec := complexSpec(a.opts.Complex, message)
+func (a *Agent) runComplex(ctx context.Context, run *Run, message, directive string) (RunStatus, string, Code) {
+	spec := complexSpec(a.opts.Complex, message, directive, routerSkillsText(a.cwd, a.opts, message))
 	if err := validateWorkflow(spec); err != nil {
 		return StatusError, err.Error(), ""
 	}

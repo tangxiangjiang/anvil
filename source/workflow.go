@@ -93,6 +93,13 @@ type workflowStep struct {
 	// literal marks a prompt the SDK built from text it does not control, such as a
 	// user's message: its braces are not tokens and nothing is substituted into it.
 	literal bool
+	// directive is the caller's per-run instruction (WithDirective) for a staged run. It is
+	// appended to the child's brief layer, so every stage sees it and a Worker that edits
+	// files is bound by it. Unexported: a model-written workflow cannot set it.
+	directive string
+	// skills is the router's matched-skills text for the user's message, handed to every
+	// stage the way Single hands it to the main agent. Unexported for the same reason.
+	skills string
 }
 
 // tokens are the {{...}} references in the step's prompt; a literal prompt has none.
@@ -981,6 +988,7 @@ func (w *workflowRun) runChild(ctx context.Context, stepIndex, itemIndex int, pr
 		// A stage that must answer in a schema is told the shape in its own brief layer.
 		opts.brief = schemaBrief(step.ResultSchema)
 	}
+	opts.brief = withRunLayers(opts.brief, step.directive, step.skills)
 	ident := subagentIdentity{
 		ParentAgentID:    w.parent.id,
 		ParentRunID:      w.parentRunID,
