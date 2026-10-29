@@ -25,6 +25,10 @@ test('each host code maps to its own message', () => {
   const cases: Array<[string, string]> = [
     ['max_steps', 'max_steps'],
     ['provider', 'provider'],
+    ['provider_mid_stream', 'provider'],
+    ['auth', 'auth'],
+    ['provider_busy', 'provider_busy'],
+    ['request_rejected', 'request_rejected'],
     ['empty_response', 'empty_response'],
     ['finish_protocol', 'finish_protocol'],
     ['max_wall_time', 'wall_time'],
@@ -45,7 +49,7 @@ test('each host code maps to its own message', () => {
 });
 
 test('an exhausted empty response does not blame credentials', () => {
-  const detail = 'model provider returned 5 consecutive empty responses';
+  const detail = 'model provider returned 3 consecutive empty responses';
   const failure = classifyDone(done({ code: 'empty_response', err: detail }));
   assert.equal(failure.kind, 'empty_response');
   assert.equal(failure.message, detail);

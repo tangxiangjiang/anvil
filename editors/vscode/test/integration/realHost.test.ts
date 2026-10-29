@@ -92,7 +92,7 @@ test('the real host handshakes and reports what it can do', { skip: missing }, a
   assert.equal(client.running, false);
 });
 
-test('a run the provider refuses ends as a done with its own code', { skip: missing }, async () => {
+test('a run without credentials ends as an auth error with its own code', { skip: missing }, async () => {
   const events: HostEvent[] = [];
   const dones: DoneParams[] = [];
   const client = realClient();
@@ -122,15 +122,15 @@ test('a run the provider refuses ends as a done with its own code', { skip: miss
 
     const done = dones[0];
     assert.equal(done.status, 'error');
-    assert.equal(done.code, 'provider');
+    assert.equal(done.code, 'auth');
     assert.ok((done.err ?? '').length > 0, 'the host says why');
     assert.equal(session.currentState, 'idle');
 
-    // And what the panel would show for it: a provider problem with a fix,
+    // And what the panel would show for it: an authentication problem with a fix,
     // not a generic failure.
     const failure = classifyDone(done);
-    assert.equal(failure.kind, 'provider');
-    assert.match(failure.message, /API key|provider/i);
+    assert.equal(failure.kind, 'auth');
+    assert.match(failure.message, /API key|authentication/i);
     assert.ok(events.length > 0, 'the run reported progress before it failed');
   } finally {
     await session.close();
