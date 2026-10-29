@@ -40,7 +40,6 @@ func NewAnthropic(cfg Config) *Anthropic {
 type anthropicRequest struct {
 	Model     string             `json:"model"`
 	MaxTokens int                `json:"max_tokens"`
-	Thinking  *anthropicThinking `json:"thinking,omitempty"`
 	System    any                `json:"system,omitempty"`
 	Messages  []anthropicMessage `json:"messages"`
 	Tools     []anthropicTool    `json:"tools,omitempty"`
@@ -60,30 +59,6 @@ func thinkingFor(e Effort) *anthropicThink {
 		return nil
 	}
 	return &anthropicThink{Type: "enabled", BudgetTokens: budget}
-}
-
-type anthropicThinking struct {
-	Type         string `json:"type"`
-	BudgetTokens int    `json:"budget_tokens"`
-}
-
-func anthropicThinkingFor(effort Effort) (*anthropicThinking, int) {
-	budget := 0
-	switch effort {
-	case EffortLow:
-		budget = 1024
-	case EffortMedium:
-		budget = 4096
-	case EffortHigh:
-		budget = 16384
-	default:
-		return nil, 8192
-	}
-	maxTokens := 8192
-	if effort == EffortHigh {
-		maxTokens = budget + 8192
-	}
-	return &anthropicThinking{Type: "enabled", BudgetTokens: budget}, maxTokens
 }
 
 type anthropicMessage struct {
@@ -140,7 +115,6 @@ func (c *Anthropic) Complete(ctx context.Context, req Request) (*Response, error
 	if err != nil {
 		return nil, err
 	}
-	thinking, maxTokens := anthropicThinkingFor(req.Effort)
 	body := anthropicRequest{
 		Model:     firstNonEmpty(req.Model, c.cfg.Model),
 		MaxTokens: anthropicMaxTokens(req.Effort, req.MaxOutputTokens),
@@ -342,8 +316,6 @@ func fromAnthropicContent(blocks []json.RawMessage) (Message, error) {
 			return msg, err
 		}
 		switch meta.Type {
-		case "thinking", "redacted_thinking":
-			msg.ProviderState = append(msg.ProviderState, append(json.RawMessage(nil), raw...))
 		case "text":
 			var t struct {
 				Text string `json:"text"`

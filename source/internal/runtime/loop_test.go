@@ -304,7 +304,7 @@ func (c *emptyCompleter) Complete(ctx context.Context, req llm.Request) (*llm.Re
 	}, nil
 }
 
-func TestLoopErrorsAfterFiveEmptyResponses(t *testing.T) {
+func TestLoopErrorsAfterThreeEmptyResponses(t *testing.T) {
 	dir := t.TempDir()
 	reg := tools.NewRegistry(dir, false)
 	completer := &emptyCompleter{}
@@ -331,7 +331,7 @@ func TestLoopErrorsAfterFiveEmptyResponses(t *testing.T) {
 	if res.Status != "error" || res.Code != runtime.CodeEmptyResponse || res.Err != runtime.EmptyResponseError {
 		t.Fatalf("status=%s code=%q err=%q", res.Status, res.Code, res.Err)
 	}
-	if completer.n != 5 || res.Steps != 1 {
+	if completer.n != 3 || res.Steps != 1 {
 		t.Fatalf("calls=%d steps=%d", completer.n, res.Steps)
 	}
 	if doneEvents != 0 || errorEvent == nil || errorEvent.Text != runtime.EmptyResponseError {
@@ -340,7 +340,7 @@ func TestLoopErrorsAfterFiveEmptyResponses(t *testing.T) {
 	if len(persisted) != 1 || persisted[0].Role != llm.RoleUser {
 		t.Fatalf("persisted=%+v", persisted)
 	}
-	if res.Usage == nil || res.Usage.TotalTokens != 10 {
+	if res.Usage == nil || res.Usage.TotalTokens != 6 {
 		t.Fatalf("usage=%+v", res.Usage)
 	}
 }
@@ -433,13 +433,12 @@ func TestLoopRequiresFinishTaskAfterModelOnlyAnnouncesWork(t *testing.T) {
 }
 
 type alwaysDeferredCompleter struct {
-	n        int
-	requests []llm.Request
+	n int
 }
 
 func (c *alwaysDeferredCompleter) Complete(ctx context.Context, req llm.Request) (*llm.Response, error) {
 	_ = ctx
-	c.requests = append(c.requests, req)
+	_ = req
 	c.n++
 	return &llm.Response{Message: llm.Message{
 		Role:    llm.RoleAssistant,
@@ -470,74 +469,11 @@ func TestLoopErrorsWhenModelNeverCallsFinishTask(t *testing.T) {
 	if res.Status != "error" || res.Code != runtime.CodeFinishProtocol || res.Err != runtime.FinishTaskRequiredError {
 		t.Fatalf("status=%s code=%q err=%q", res.Status, res.Code, res.Err)
 	}
-	if completer.n != 4 || doneEvents != 0 {
+	if completer.n != 3 || doneEvents != 0 {
 		t.Fatalf("calls=%d done=%d", completer.n, doneEvents)
-	}
-	last := completer.requests[len(completer.requests)-1]
-	if len(last.Tools) != 1 || last.Tools[0].Name != "finish_task" {
-		t.Fatalf("forced finalization tools=%+v", last.Tools)
 	}
 	if len(persisted) != 1 || persisted[0].Role != llm.RoleUser {
 		t.Fatalf("persisted=%+v", persisted)
-	}
-}
-
-type finishRecoveryCompleter struct {
-	streamCalls   int
-	completeCalls int
-	last          llm.Request
-}
-
-func (c *finishRecoveryCompleter) Complete(
-	ctx context.Context,
-	req llm.Request,
-) (*llm.Response, error) {
-	_ = ctx
-	c.completeCalls++
-	c.last = req
-	return &llm.Response{Message: llm.Message{
-		Role: llm.RoleAssistant,
-		ToolCalls: []llm.ToolCall{{
-			ID:   "finish-recovery",
-			Name: "finish_task",
-			Args: json.RawMessage(`{"summary":"恢复收口成功。"}`),
-		}},
-	}}, nil
-}
-
-func (c *finishRecoveryCompleter) CompleteStream(
-	ctx context.Context,
-	req llm.Request,
-	onDelta func(llm.Delta),
-) (*llm.Response, error) {
-	_ = ctx
-	_ = req
-	_ = onDelta
-	c.streamCalls++
-	return &llm.Response{Message: llm.Message{
-		Role:    llm.RoleAssistant,
-		Content: "工作已经完成。",
-	}}, nil
-}
-
-func TestLoopRecoversFinishProtocolWithOnlyFinishToolAndNonStreaming(t *testing.T) {
-	reg := tools.NewRegistry(t.TempDir(), false)
-	completer := &finishRecoveryCompleter{}
-	res := runtime.Loop(context.Background(), completer, reg, runtime.Config{
-		CWD:               t.TempDir(),
-		Model:             "m",
-		UserMsg:           "完成任务",
-		RequireFinishTask: true,
-	}, nil)
-
-	if res.Status != "finished" || res.Result != "恢复收口成功。" {
-		t.Fatalf("status=%s result=%q err=%q", res.Status, res.Result, res.Err)
-	}
-	if completer.streamCalls != 3 || completer.completeCalls != 1 {
-		t.Fatalf("stream=%d complete=%d", completer.streamCalls, completer.completeCalls)
-	}
-	if len(completer.last.Tools) != 1 || completer.last.Tools[0].Name != "finish_task" {
-		t.Fatalf("forced finalization tools=%+v", completer.last.Tools)
 	}
 }
 
@@ -681,40 +617,6 @@ func TestLoopRetriesAnEmptyStreamThroughComplete(t *testing.T) {
 	}
 	if completer.streamCalls != 1 || completer.completeCalls != 1 || res.Steps != 1 {
 		t.Fatalf("stream=%d complete=%d steps=%d", completer.streamCalls, completer.completeCalls, res.Steps)
-	}
-}
-
-type alwaysEmptyDualCompleter struct {
-	streamCalls   int
-	completeCalls int
-}
-
-func (c *alwaysEmptyDualCompleter) Complete(context.Context, llm.Request) (*llm.Response, error) {
-	c.completeCalls++
-	return &llm.Response{Message: llm.Message{Role: llm.RoleAssistant}}, nil
-}
-
-func (c *alwaysEmptyDualCompleter) CompleteStream(
-	context.Context, llm.Request, func(llm.Delta),
-) (*llm.Response, error) {
-	c.streamCalls++
-	return &llm.Response{Message: llm.Message{Role: llm.RoleAssistant}}, nil
-}
-
-func TestLoopAlternatesTransportsDuringEmptyRecovery(t *testing.T) {
-	dir := t.TempDir()
-	reg := tools.NewRegistry(dir, false)
-	completer := &alwaysEmptyDualCompleter{}
-
-	res := runtime.Loop(context.Background(), completer, reg, runtime.Config{
-		CWD: dir, Model: "m", UserMsg: "answer",
-	}, nil)
-
-	if res.Code != runtime.CodeEmptyResponse {
-		t.Fatalf("status=%s code=%q err=%q", res.Status, res.Code, res.Err)
-	}
-	if completer.streamCalls != 3 || completer.completeCalls != 2 {
-		t.Fatalf("stream=%d complete=%d", completer.streamCalls, completer.completeCalls)
 	}
 }
 

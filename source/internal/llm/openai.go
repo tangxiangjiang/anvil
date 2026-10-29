@@ -125,10 +125,9 @@ func (c *OpenAI) Complete(ctx context.Context, req Request) (*Response, error) {
 		return nil, NewHTTPError(401, "missing API key")
 	}
 	body := openAIRequest{
-		Model:           firstNonEmpty(req.Model, c.cfg.Model),
-		Messages:        toOpenAIMessages(req.Messages),
-		Tools:           toOpenAITools(req.Tools),
-		ReasoningEffort: req.Effort,
+		Model:    firstNonEmpty(req.Model, c.cfg.Model),
+		Messages: toOpenAIMessages(req.Messages),
+		Tools:    toOpenAITools(req.Tools),
 	}
 	body.ReasoningEffort = string(req.Effort)
 	body.MaxCompletionTokens = req.MaxOutputTokens

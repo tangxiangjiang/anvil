@@ -384,11 +384,11 @@ func Restore(root, agentID, runID string, resolve func(rel string) (string, erro
 	return restored, nil
 }
 
-// Finish records the post-run state of files whose bytes actually changed and
-// drops captures for failed or no-op writes. resolve maps a manifest path to its
-// absolute path, the same way Restore does, so both agree on where a file is. A
-// file the run deleted, or one that is no longer a regular file, records no
-// post hash and is restored without the check.
+// Finish records the post-run state of every file a run captured: the hash of
+// what each file holds now, after the run's writes. resolve maps a manifest path
+// to its absolute path, the same way Restore does, so both agree on where a file
+// is. A file the run deleted, or one that is no longer a regular file, records
+// nothing and is restored without the check.
 func Finish(root, agentID, runID string, resolve func(rel string) (string, error)) error {
 	dir, err := runDir(root, agentID, runID)
 	if err != nil {
@@ -399,10 +399,9 @@ func Finish(root, agentID, runID string, resolve func(rel string) (string, error
 	if err != nil {
 		return err
 	}
-	changed := make([]Entry, 0, len(m.Files))
 	for i := range m.Files {
-		entry := m.Files[i]
-		if entry.Path == "" {
+		entry := &m.Files[i]
+		if !entry.Existed || entry.Path == "" {
 			continue
 		}
 		abs, err := resolve(entry.Path)
@@ -410,18 +409,7 @@ func Finish(root, agentID, runID string, resolve func(rel string) (string, error
 			return fmt.Errorf("checkpoint: finish %s: %w", entry.Path, err)
 		}
 		info, err := os.Stat(abs)
-		if errors.Is(err, os.ErrNotExist) {
-			if entry.Existed {
-				changed = append(changed, entry)
-			}
-			continue
-		}
-		if err != nil {
-			changed = append(changed, entry)
-			continue
-		}
-		if info.IsDir() {
-			changed = append(changed, entry)
+		if err != nil || info.IsDir() {
 			continue
 		}
 		data, err := os.ReadFile(abs)
@@ -430,15 +418,7 @@ func Finish(root, agentID, runID string, resolve func(rel string) (string, error
 		}
 		sum := sha256.Sum256(data)
 		entry.PostSHA256 = hex.EncodeToString(sum[:])
-		if entry.Existed && entry.PostSHA256 == entry.SHA256 {
-			continue
-		}
-		changed = append(changed, entry)
 	}
-	if len(changed) == 0 {
-		return os.RemoveAll(dir)
-	}
-	m.Files = changed
 	return saveManifest(dir, m)
 }
 

@@ -109,61 +109,6 @@ func TestCaptureIgnoresDirectoriesAndUnsafeNames(t *testing.T) {
 	}
 }
 
-func TestFinishDropsNoOpAndFailedWrites(t *testing.T) {
-	root := t.TempDir()
-	workspace := t.TempDir()
-	unchanged := filepath.Join(workspace, "unchanged.txt")
-	write(t, unchanged, "same bytes")
-
-	if err := Capture(root, "agent-1", "run-1", "unchanged.txt", unchanged); err != nil {
-		t.Fatal(err)
-	}
-	if err := Capture(root, "agent-1", "run-1", "never-created.txt", filepath.Join(workspace, "never-created.txt")); err != nil {
-		t.Fatal(err)
-	}
-	resolve := func(rel string) (string, error) {
-		return filepath.Join(workspace, filepath.FromSlash(rel)), nil
-	}
-	if err := Finish(root, "agent-1", "run-1", resolve); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Get(root, "agent-1", "run-1"); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("no-op checkpoint still exists: %v", err)
-	}
-	runs, err := List(root, "agent-1")
-	if err != nil || len(runs) != 0 {
-		t.Fatalf("runs=%+v err=%v, want none", runs, err)
-	}
-}
-
-func TestFinishKeepsOnlyFilesWhoseContentChanged(t *testing.T) {
-	root := t.TempDir()
-	workspace := t.TempDir()
-	same := filepath.Join(workspace, "same.txt")
-	edited := filepath.Join(workspace, "edited.txt")
-	write(t, same, "same")
-	write(t, edited, "before")
-	for _, path := range []string{"same.txt", "edited.txt"} {
-		if err := Capture(root, "agent-1", "run-1", path, filepath.Join(workspace, path)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	write(t, edited, "after")
-	resolve := func(rel string) (string, error) {
-		return filepath.Join(workspace, filepath.FromSlash(rel)), nil
-	}
-	if err := Finish(root, "agent-1", "run-1", resolve); err != nil {
-		t.Fatal(err)
-	}
-	run, err := Get(root, "agent-1", "run-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(run.Files) != 1 || run.Files[0].Path != "edited.txt" || run.Files[0].PostSHA256 == "" {
-		t.Fatalf("files=%+v, want only edited.txt with its post hash", run.Files)
-	}
-}
-
 func TestListIsNewestFirst(t *testing.T) {
 	root := t.TempDir()
 	base := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)

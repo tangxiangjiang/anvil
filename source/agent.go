@@ -1366,7 +1366,6 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 	result := runtime.Loop(loopCtx, a.complete, a.registry, runtime.Config{
 		CWD:               a.cwd,
 		Model:             a.opts.Model.ID,
-		Effort:            llm.Effort(a.opts.Effort),
 		MaxSteps:          a.opts.MaxSteps,
 		History:           history,
 		UserMsg:           message,

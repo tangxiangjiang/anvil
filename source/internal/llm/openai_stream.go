@@ -43,12 +43,11 @@ func (c *OpenAI) CompleteStream(ctx context.Context, req Request, onDelta func(D
 		onDelta = func(Delta) {}
 	}
 	body := openAIStreamRequest{
-		Model:           firstNonEmpty(req.Model, c.cfg.Model),
-		Messages:        toOpenAIMessages(req.Messages),
-		Tools:           toOpenAITools(req.Tools),
-		ReasoningEffort: req.Effort,
-		Stream:          true,
-		StreamOptions:   &openAIStreamOptions{IncludeUsage: true},
+		Model:         firstNonEmpty(req.Model, c.cfg.Model),
+		Messages:      toOpenAIMessages(req.Messages),
+		Tools:         toOpenAITools(req.Tools),
+		Stream:        true,
+		StreamOptions: &openAIStreamOptions{IncludeUsage: true},
 	}
 	body.ReasoningEffort = string(req.Effort)
 	body.MaxCompletionTokens = req.MaxOutputTokens

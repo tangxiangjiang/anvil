@@ -75,22 +75,6 @@ func (g *loopGuard) Observe(calls []llm.ToolCall, results []tools.Result) (loopA
 	}
 	reason := ""
 	for i, tc := range calls {
-		var content string
-		if i < len(results) {
-			content = results[i].Content
-		}
-		if isRunningTaskPoll(tc, content) {
-			// Re-reading a running background task is an explicit wait state,
-			// not evidence that the model learned nothing. Break every generic
-			// streak so a legitimate join cannot inherit an earlier warning.
-			g.lastCallFP = ""
-			g.callStreak = 0
-			g.lastResultFP = ""
-			g.resultStreak = 0
-			g.seq = nil
-			g.warned = false
-			continue
-		}
 		cfp := callFingerprint(tc)
 		if cfp == g.lastCallFP {
 			g.callStreak++
@@ -103,6 +87,10 @@ func (g *loopGuard) Observe(calls []llm.ToolCall, results []tools.Result) (loopA
 			break
 		}
 
+		var content string
+		if i < len(results) {
+			content = results[i].Content
+		}
 		rfp := resultFingerprint(tc.Name, content)
 		if rfp == g.lastResultFP {
 			g.resultStreak++
@@ -129,20 +117,6 @@ func (g *loopGuard) Observe(calls []llm.ToolCall, results []tools.Result) (loopA
 		return loopWarn, reason
 	}
 	return loopStop, reason
-}
-
-func isRunningTaskPoll(call llm.ToolCall, content string) bool {
-	if call.Name != "task_output" {
-		return false
-	}
-	var in struct {
-		TaskID string `json:"task_id"`
-	}
-	if json.Unmarshal(call.Args, &in) != nil || strings.TrimSpace(in.TaskID) == "" {
-		return false
-	}
-	fields := strings.Fields(content)
-	return len(fields) >= 2 && fields[0] == in.TaskID && fields[1] == "running"
 }
 
 // detectCycle reports a short sequence of identical calls repeated in a row.
