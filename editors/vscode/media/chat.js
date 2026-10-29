@@ -104,8 +104,15 @@
     meter.appendChild(meterCache);
   }
   const todoBlock = document.getElementById('todos');
+  const todosToggle = document.getElementById('todosToggle');
+  const todosBody = document.getElementById('todosBody');
+  const todosCount = document.getElementById('todosCount');
   const todoList = document.getElementById('todoList');
-  const todosClose = document.getElementById('todosClose');
+  const todoCurrentLabel = document.getElementById('todoCurrentLabel');
+  const todoEmpty = document.getElementById('todoEmpty');
+  const todoHistory = document.getElementById('todoHistory');
+  const todoHistorySummary = document.getElementById('todoHistorySummary');
+  const todoHistoryList = document.getElementById('todoHistoryList');
   /**
    * The page's two live regions. `srStatus` is polite — a finished answer and
    * the end of a turn; `srAlert` is assertive and reserved for the two things
@@ -276,6 +283,12 @@
   let mentions = [];
   /** Earlier messages selected as context for the next prompt. */
   let quotes = [];
+  /** The current browser selection, split into narrative regions by speaker. */
+  let selectedQuoteParts = [];
+  let selectedCopyText = '';
+  let selectionQuoteButton = null;
+  let selectionContextMenu = null;
+  let selectionPaintQueued = false;
   /** Quoteable messages in transcript order. */
   let quoteCandidates = [];
   let nextQuoteId = 1;
@@ -1104,7 +1117,7 @@
     stopWorking();
     setStatus('');
     resetUsage();
-    setTodos([]);
+    clearTodoHistory();
     transcript.textContent = '';
     // The node survives the clear — only the reference to it in the document
     // does not — so putting it back is what makes a cleared conversation look
@@ -1156,6 +1169,157 @@
     input.focus();
   }
 
+  /** The part of one narrative region covered by a browser selection. */
+  function selectedTextWithin(range, node) {
+    if (!range.intersectsNode(node)) return '';
+    const bounds = document.createRange();
+    bounds.selectNodeContents(node);
+    const clipped = range.cloneRange();
+    if (clipped.compareBoundaryPoints(Range.START_TO_START, bounds) < 0) {
+      clipped.setStart(bounds.startContainer, bounds.startOffset);
+    }
+    if (clipped.compareBoundaryPoints(Range.END_TO_END, bounds) > 0) {
+      clipped.setEnd(bounds.endContainer, bounds.endOffset);
+    }
+    return clipped.toString().replace(/\u00a0/g, ' ').trim();
+  }
+
+  /**
+   * Splits a selection at message boundaries. UI labels, tool rows and the
+   * composer have no `data-quote-role`, so selecting across the whole window
+   * still quotes only conversation prose.
+   */
+  function transcriptSelection() {
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+      return { parts: [], text: '', range: null };
+    }
+    const range = selection.getRangeAt(0);
+    const parts = [];
+    for (const node of transcript.querySelectorAll('[data-quote-role]')) {
+      const text = selectedTextWithin(range, node);
+      if (text === '') continue;
+      parts.push({
+        role: node.dataset.quoteRole === 'user' ? 'user' : 'assistant',
+        text,
+      });
+    }
+    return { parts, text: selection.toString(), range };
+  }
+
+  function closeSelectionContextMenu() {
+    if (selectionContextMenu) selectionContextMenu.hidden = true;
+  }
+
+  function clearTranscriptSelection() {
+    const selection = window.getSelection();
+    if (selection) selection.removeAllRanges();
+    selectedQuoteParts = [];
+    selectedCopyText = '';
+    if (selectionQuoteButton) selectionQuoteButton.hidden = true;
+    closeSelectionContextMenu();
+  }
+
+  /** Adds one chip per selected message, preserving each message's speaker. */
+  function quoteTranscriptSelection(parts) {
+    const selected = Array.isArray(parts) ? parts : [];
+    for (const part of selected) {
+      if (!part || typeof part.text !== 'string' || part.text.trim() === '') continue;
+      quotes.push({
+        id: nextQuoteId++,
+        role: part.role === 'user' ? 'user' : 'assistant',
+        text: part.text.trim(),
+      });
+    }
+    if (selected.length === 0) return;
+    renderChips();
+    closePalette();
+    clearTranscriptSelection();
+    input.focus();
+  }
+
+  function ensureSelectionQuoteButton() {
+    if (selectionQuoteButton && selectionQuoteButton.isConnected) return selectionQuoteButton;
+    const button = el('button', 'selection-quote');
+    button.type = 'button';
+    button.title = 'Quote selection (Ctrl+Shift+Q)';
+    button.setAttribute('aria-label', 'Quote selected conversation text');
+    button.appendChild(messageQuoteIcon());
+    button.appendChild(el('span', '', 'Quote'));
+    // Keep the browser selection alive until click reads the cached pieces.
+    button.addEventListener('pointerdown', (event) => event.preventDefault());
+    button.addEventListener('click', () => quoteTranscriptSelection(selectedQuoteParts));
+    document.body.appendChild(button);
+    selectionQuoteButton = button;
+    return button;
+  }
+
+  function ensureSelectionContextMenu() {
+    if (selectionContextMenu && selectionContextMenu.isConnected) return selectionContextMenu;
+    const menu = el('div', 'selection-context-menu');
+    menu.setAttribute('role', 'menu');
+    menu.hidden = true;
+    const quote = el('button', '', 'Quote selection');
+    quote.type = 'button';
+    quote.setAttribute('role', 'menuitem');
+    quote.addEventListener('click', () => quoteTranscriptSelection(selectedQuoteParts));
+    const copy = el('button', '', 'Copy');
+    copy.type = 'button';
+    copy.setAttribute('role', 'menuitem');
+    copy.addEventListener('click', () => {
+      if (selectedCopyText !== '') vscode.postMessage({ type: 'copy', text: selectedCopyText });
+      closeSelectionContextMenu();
+    });
+    menu.appendChild(quote);
+    menu.appendChild(copy);
+    menu.addEventListener('keydown', (event) => {
+      const rows = Array.from(menu.querySelectorAll('button'));
+      const current = rows.indexOf(document.activeElement);
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeSelectionContextMenu();
+        input.focus();
+      } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault();
+        const delta = event.key === 'ArrowDown' ? 1 : -1;
+        rows[(current + delta + rows.length) % rows.length].focus();
+      }
+    });
+    document.body.appendChild(menu);
+    selectionContextMenu = menu;
+    return menu;
+  }
+
+  function paintSelectionQuoteAction() {
+    selectionPaintQueued = false;
+    // Focusing the custom context menu may collapse the browser range. Its
+    // actions use the pieces captured when the menu opened.
+    if (selectionContextMenu && !selectionContextMenu.hidden) return;
+    const selected = transcriptSelection();
+    selectedQuoteParts = selected.parts;
+    selectedCopyText = selected.text;
+    const button = ensureSelectionQuoteButton();
+    if (selected.parts.length === 0 || !selected.range) {
+      button.hidden = true;
+      return;
+    }
+    const rect = selected.range.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) {
+      button.hidden = true;
+      return;
+    }
+    button.hidden = false;
+    const width = button.offsetWidth || 76;
+    button.style.left = Math.max(8, Math.min(window.innerWidth - width - 8, rect.left + rect.width / 2 - width / 2)) + 'px';
+    button.style.top = Math.max(8, rect.top - 34) + 'px';
+  }
+
+  function scheduleSelectionQuoteAction() {
+    if (selectionPaintQueued) return;
+    selectionPaintQueued = true;
+    requestAnimationFrame(paintSelectionQuoteAction);
+  }
+
   function quoteAction(candidate, label) {
     const button = el('button', 'message-quote');
     button.type = 'button';
@@ -1191,7 +1355,9 @@
     who.appendChild(el('span', null, 'you'));
     who.appendChild(quoteAction(candidate, 'Quote this message'));
     wrap.appendChild(who);
-    wrap.appendChild(el('div', 'body', text));
+    const body = el('div', 'body', text);
+    body.dataset.quoteRole = 'user';
+    wrap.appendChild(body);
     // What travelled with the prompt is echoed under it: a file read on the
     // user's behalf is part of the turn, and a transcript that omits it would
     // misreport what the model was asked.
@@ -1344,6 +1510,7 @@
     const wrap = el('div', 'msg assistant');
     wrap.appendChild(el('div', 'who', 'anvil'));
     const body = el('div', 'body md');
+    body.dataset.quoteRole = 'assistant';
     wrap.appendChild(body);
     const state = {
       wrap,
@@ -5442,66 +5609,124 @@
   /** The mark a status draws. An unknown status gets a plain one, not a guess. */
   const todoMarks = { pending: '○', in_progress: '◐', done: '✓' };
 
-  /**
-   * The plan the reader closed, and the one on screen.
-   *
-   * A closed plan stays closed while the model moves its rows — a status change
-   * is the plan being worked, not a new plan — and a plan whose text changed is
-   * a different plan that should appear. An empty list ends both: there is
-   * nothing to keep closed, and the next plan opens normally.
-   */
-  let dismissedTodos = '';
-  let todoSignature = '';
-  /**
-   * Which turn a dismissal belongs to. Closing hides the plan for that turn;
-   * a later turn is a new plan even when the model reuses the same words, so
-   * the epoch is what keeps "closed" from following the session forever — a
-   * model that keeps one list across turns would otherwise never show it again.
-   */
+  /** At most this many distinct revisions from the retained conversation. */
+  const TODO_HISTORY_LIMIT = 20;
+  /** Oldest first. A status-only update replaces one entry in place. */
+  const todoHistoryEntries = [];
+  let currentTodoKey = '';
   let todoEpoch = 0;
-  let dismissedEpoch = -1;
+
+  function setTodosCollapsed(collapsed) {
+    if (!todoBlock || !todosBody || !todosToggle) return;
+    todoBlock.classList.toggle('collapsed', collapsed);
+    todosBody.hidden = collapsed;
+    todosToggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    todosToggle.setAttribute('aria-label', collapsed ? 'Expand plan' : 'Collapse plan');
+    todosToggle.title = collapsed ? 'Expand plan' : 'Collapse plan';
+    requestAnimationFrame(syncComposerHeight);
+  }
+
+  function drawTodoRows(container, items) {
+    container.replaceChildren();
+    for (const item of items) {
+      const row = el('div', 'todo-row');
+      row.setAttribute('role', 'listitem');
+      if (todoMarks[item.status]) row.dataset.status = item.status;
+      row.appendChild(el('span', 'todo-mark', todoMarks[item.status] || '·'));
+      row.appendChild(el('span', 'todo-text', item.text));
+      container.appendChild(row);
+    }
+  }
+
+  /** Draws every saved plan except the one already visible as Current. */
+  function renderTodoHistory() {
+    if (!todoHistory || !todoHistoryList || !todoHistorySummary) return;
+    todoHistoryList.replaceChildren();
+    const past = todoHistoryEntries
+      .map((entry, index) => ({ entry, number: index + 1 }))
+      .filter(({ entry }) => entry.key !== currentTodoKey)
+      .reverse();
+    todoHistory.hidden = past.length === 0;
+    todoHistorySummary.textContent = `History (${past.length})`;
+    for (const { entry, number } of past) {
+      const details = el('details', 'todo-history-entry');
+      const summary = el('summary', 'todo-history-entry-summary');
+      summary.appendChild(el('span', 'todo-history-number', `Plan ${number}`));
+      summary.appendChild(el('span', 'todo-history-title', entry.items[0].text));
+      const done = entry.items.filter((item) => item.status === 'done').length;
+      summary.appendChild(el('span', 'todo-history-progress', `${done}/${entry.items.length}`));
+      details.appendChild(summary);
+      const rows = el('div', 'todo-history-rows');
+      rows.setAttribute('role', 'list');
+      rows.setAttribute('aria-label', `Plan ${number}`);
+      drawTodoRows(rows, entry.items);
+      details.appendChild(rows);
+      todoHistoryList.appendChild(details);
+    }
+    if (todosCount) {
+      todosCount.textContent = todoHistoryEntries.length > 1
+        ? `${todoHistoryEntries.length} saved`
+        : '';
+    }
+  }
 
   /**
-   * Replaces the task list under the composer.
-   *
-   * It replaces rather than appends because every call carries the whole list:
-   * appending would show the plan's history as separate blocks, and the model
-   * moving an item to done would leave the old pending row on screen. An empty
-   * list hides the block entirely, which is how a call clears it.
+   * Replaces Current and records distinct revisions. The run id makes replay
+   * reconstruct the same boundaries as the live stream; the epoch is a
+   * fallback for an older host that omitted it.
    */
-  function setTodos(items) {
+  function setTodos(items, runId) {
     if (!todoBlock || !todoList) return;
-    const list = Array.isArray(items) ? items : [];
-    todoList.textContent = '';
+    const list = (Array.isArray(items) ? items : [])
+      .map((item) => ({
+        text: item && typeof item.text === 'string' ? item.text.trim() : '',
+        status: item && typeof item.status === 'string' ? item.status : '',
+      }))
+      .filter((item) => item.text !== '');
     if (list.length === 0) {
-      dismissedTodos = '';
-      todoSignature = '';
-      todoBlock.hidden = true;
+      currentTodoKey = '';
+      drawTodoRows(todoList, []);
+      todoList.hidden = true;
+      if (todoCurrentLabel) todoCurrentLabel.hidden = true;
+      if (todoEmpty) todoEmpty.hidden = false;
+      renderTodoHistory();
+      todoBlock.hidden = todoHistoryEntries.length === 0;
       return;
     }
-    const signature = list
-      .map((item) => (item && typeof item.text === 'string' ? item.text : ''))
-      .join('\n');
-    todoSignature = signature;
-    for (const item of list) {
-      const text = item && typeof item.text === 'string' ? item.text : '';
-      if (text === '') continue;
-      const status = item && typeof item.status === 'string' ? item.status : '';
-      const row = el('div', 'todo-row');
-      // The container is a list, so its rows say what they are; without the
-      // role a generic div inside a list is a row no reader can count.
-      row.setAttribute('role', 'listitem');
-      if (todoMarks[status]) row.dataset.status = status;
-      row.appendChild(el('span', 'todo-mark', todoMarks[status] || '·'));
-      row.appendChild(el('span', 'todo-text', text));
-      todoList.appendChild(row);
+    const signature = list.map((item) => item.text).join('\n');
+    const owner = typeof runId === 'string' && runId !== '' ? runId : `turn:${todoEpoch}`;
+    const key = `${owner}\n${signature}`;
+    const existing = todoHistoryEntries.find((entry) => entry.key === key);
+    if (existing) existing.items = list;
+    else {
+      todoHistoryEntries.push({ key, items: list });
+      if (todoHistoryEntries.length > TODO_HISTORY_LIMIT) todoHistoryEntries.shift();
+      if (!replaying) setTodosCollapsed(false);
     }
-    // Same plan, closed earlier in this turn: status moved, and it stays
-    // closed. A plan whose text changed is a new plan and appears, and so is
-    // any plan in a later turn.
-    todoBlock.hidden =
-      todoList.childNodes.length === 0 ||
-      (signature === dismissedTodos && dismissedEpoch === todoEpoch);
+    currentTodoKey = key;
+    todoList.hidden = false;
+    if (todoCurrentLabel) todoCurrentLabel.hidden = false;
+    if (todoEmpty) todoEmpty.hidden = true;
+    drawTodoRows(todoList, list);
+    renderTodoHistory();
+    todoBlock.hidden = false;
+  }
+
+  /** A switched conversation must not inherit the old one's plan archive. */
+  function clearTodoHistory() {
+    todoHistoryEntries.length = 0;
+    currentTodoKey = '';
+    if (todoList) drawTodoRows(todoList, []);
+    if (todoHistoryList) todoHistoryList.replaceChildren();
+    if (todoHistory) {
+      todoHistory.hidden = true;
+      todoHistory.open = false;
+    }
+    if (todoEmpty) todoEmpty.hidden = true;
+    if (todoCurrentLabel) todoCurrentLabel.hidden = false;
+    if (todosCount) todosCount.textContent = '';
+    setTodosCollapsed(true);
+    if (todoBlock) todoBlock.hidden = true;
   }
 
   /**
@@ -5630,7 +5855,11 @@
     if (i >= lines.length) return null;
     const title = summaryTitle(lines[i]);
     if (title === '') return null;
-    const body = lines.slice(i + 1).join('\n').replace(/^(?:[ \t]*\r?\n)+/, '');
+    // A clipped title is only a preview of a prose first line, not a
+    // replacement for it. Keep that complete line in the rendered body so the
+    // visual transcript contains the same answer as Copy.
+    const bodyFrom = title.endsWith('…') ? i : i + 1;
+    const body = lines.slice(bodyFrom).join('\n').replace(/^(?:[ \t]*\r?\n)+/, '');
     return { title, body };
   }
 
@@ -6220,15 +6449,9 @@
     focusButton.addEventListener('click', () => setFocus(!focusView));
   }
 
-  if (todosClose) {
-    // Closing is about this plan, not about the feature: the list reappears
-    // when a different plan arrives. The button goes with the block, so focus
-    // moves to the control that still does something.
-    todosClose.addEventListener('click', () => {
-      dismissedTodos = todoSignature;
-      dismissedEpoch = todoEpoch;
-      todoBlock.hidden = true;
-      sendButton.focus();
+  if (todosToggle && todosBody && todoBlock) {
+    todosToggle.addEventListener('click', () => {
+      setTodosCollapsed(!todoBlock.classList.contains('collapsed'));
     });
   }
 
@@ -6269,6 +6492,35 @@
     vscode.postMessage({ type: 'cancel' });
   }
 
+  document.addEventListener('selectionchange', scheduleSelectionQuoteAction);
+  transcript.addEventListener('scroll', scheduleSelectionQuoteAction, { passive: true });
+  window.addEventListener('resize', scheduleSelectionQuoteAction);
+
+  transcript.addEventListener('contextmenu', (event) => {
+    const selected = transcriptSelection();
+    if (selected.parts.length === 0) return;
+    event.preventDefault();
+    selectedQuoteParts = selected.parts;
+    selectedCopyText = selected.text;
+    if (selectionQuoteButton) selectionQuoteButton.hidden = true;
+    const menu = ensureSelectionContextMenu();
+    menu.hidden = false;
+    const width = 176;
+    const height = 70;
+    const rect = selected.range ? selected.range.getBoundingClientRect() : null;
+    const x = event.clientX || (rect ? rect.left : 8);
+    const y = event.clientY || (rect ? rect.bottom : 8);
+    menu.style.left = Math.max(8, Math.min(window.innerWidth - width - 8, x)) + 'px';
+    menu.style.top = Math.max(8, Math.min(window.innerHeight - height - 8, y)) + 'px';
+    const first = menu.querySelector('button');
+    if (first) first.focus();
+  });
+
+  document.addEventListener('pointerdown', (event) => {
+    if (!selectionContextMenu || selectionContextMenu.hidden) return;
+    if (!selectionContextMenu.contains(event.target)) closeSelectionContextMenu();
+  });
+
   /*
    * Escape interrupts a turn, from anywhere in the panel.
    *
@@ -6281,6 +6533,14 @@
     if (event.key !== 'Escape' || !running) return;
     event.preventDefault();
     requestStop();
+  });
+
+  window.addEventListener('keydown', (event) => {
+    if (!event.ctrlKey || !event.shiftKey || event.altKey || event.key.toLowerCase() !== 'q') return;
+    const selected = transcriptSelection();
+    if (selected.parts.length === 0) return;
+    event.preventDefault();
+    quoteTranscriptSelection(selected.parts);
   });
 
   // --- dropping files onto the panel ---------------------------------------
@@ -6403,7 +6663,7 @@
       addToolResult(e);
       if (active === mainScope) setWorkingActivity(DEFAULT_WORKING_WORD);
     }
-    else if (e.type === 'todo') setTodos(e.items);
+    else if (e.type === 'todo') setTodos(e.items, e.run_id);
     else if (e.type === 'compact') addCompact(e.compact);
     // A root run's terminal error is repeated authoritatively by `done`; draw
     // it there once. Child errors have no root `done` in this webview, so they
@@ -6652,6 +6912,9 @@
         // A replayed turn. The composer does this for a live one, and it is not
         // involved here, so the replay asks for it directly.
         addUser(msg.text || '');
+        // Also separate fallback plan identities when an older stored event
+        // has no run id.
+        todoEpoch += 1;
         // It is also a prompt this conversation has shown, which is what the
         // recall list holds.
         historyMath.record(history, msg.text || '');

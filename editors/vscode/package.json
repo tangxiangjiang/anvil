@@ -2,7 +2,7 @@
   "name": "anvil-vscode",
   "displayName": "Anvil",
   "description": "Anvil agent in VS Code: streaming chat, tool cards, per-call approvals.",
-  "version": "0.46.66",
+  "version": "0.46.81",
   "publisher": "anvil-dev",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -77,15 +77,20 @@
         "category": "Anvil"
       },
       {
-        "command": "anvil.openSessionInNewTab",
-        "title": "Anvil: Open Session in New Tab",
-        "category": "Anvil"
-      },
-      {
         "command": "anvil.renameSession",
         "title": "Anvil: Rename Session",
         "category": "Anvil",
         "icon": "$(edit)"
+      },
+      {
+        "command": "anvil.archiveSession",
+        "title": "Anvil: Archive Session",
+        "category": "Anvil"
+      },
+      {
+        "command": "anvil.unarchiveSession",
+        "title": "Anvil: Unarchive Session",
+        "category": "Anvil"
       },
       {
         "command": "anvil.deleteSession",
@@ -208,41 +213,41 @@
     "menus": {
       "view/title": [
         {
-          "command": "anvil.newSession",
+          "command": "anvil.searchSessions",
           "when": "view == anvil.sessions",
           "group": "navigation@1"
         },
         {
-          "command": "anvil.searchSessions",
+          "command": "anvil.refreshSessions",
           "when": "view == anvil.sessions",
           "group": "navigation@2"
         },
         {
-          "command": "anvil.refreshSessions",
-          "when": "view == anvil.sessions",
-          "group": "navigation@3"
-        },
-        {
           "command": "anvil.stop",
           "when": "view == anvil.sessions && anvil.busy",
-          "group": "navigation@4"
+          "group": "navigation@3"
         }
       ],
       "view/item/context": [
         {
-          "command": "anvil.openSessionInNewTab",
-          "when": "view == anvil.sessions && viewItem =~ /^session/",
-          "group": "inline@1"
+          "command": "anvil.archiveSession",
+          "when": "view == anvil.sessions && viewItem =~ /^session/ && viewItem != session.archived",
+          "group": "1_modification@1"
+        },
+        {
+          "command": "anvil.unarchiveSession",
+          "when": "view == anvil.sessions && viewItem == session.archived",
+          "group": "1_modification@1"
         },
         {
           "command": "anvil.forkSession",
           "when": "view == anvil.sessions && viewItem =~ /^session/",
-          "group": "1_modification@1"
+          "group": "1_modification@2"
         },
         {
           "command": "anvil.renameSession",
           "when": "view == anvil.sessions && viewItem =~ /^session/",
-          "group": "1_modification@2"
+          "group": "1_modification@3"
         },
         {
           "command": "anvil.deleteSession",
@@ -263,11 +268,15 @@
           "when": "false"
         },
         {
-          "command": "anvil.openSessionInNewTab",
+          "command": "anvil.renameSession",
           "when": "false"
         },
         {
-          "command": "anvil.renameSession",
+          "command": "anvil.archiveSession",
+          "when": "false"
+        },
+        {
+          "command": "anvil.unarchiveSession",
           "when": "false"
         },
         {

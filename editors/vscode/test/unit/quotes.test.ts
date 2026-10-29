@@ -36,3 +36,30 @@ test('selected quotes are removable chips and travel as prompt context', () => {
   assert.match(PROTOCOL, /quotes\?: Quote\[\]/);
   assert.match(CHAT_JS, /'↳ ' \+ \(quote\.role === 'user' \? 'you' : 'anvil'\)/);
 });
+
+test('a transcript selection is split by narrative region and speaker', () => {
+  assert.match(CHAT_JS, /body\.dataset\.quoteRole = 'user'/);
+  assert.match(CHAT_JS, /body\.dataset\.quoteRole = 'assistant'/);
+  assert.match(CHAT_JS, /function selectedTextWithin\(range, node\)/);
+  assert.match(CHAT_JS, /transcript\.querySelectorAll\('\[data-quote-role\]'\)/);
+  assert.match(CHAT_JS, /role: node\.dataset\.quoteRole === 'user' \? 'user' : 'assistant'/);
+  assert.match(CHAT_JS, /for \(const part of selected\)[\s\S]*?quotes\.push/);
+});
+
+test('selection quoting has a floating action, context menu, and shortcut', () => {
+  assert.match(CHAT_JS, /el\('button', 'selection-quote'\)/);
+  assert.match(CHAT_JS, /Quote selection \(Ctrl\+Shift\+Q\)/);
+  assert.match(CHAT_JS, /transcript\.addEventListener\('contextmenu'/);
+  assert.match(CHAT_JS, /el\('div', 'selection-context-menu'\)/);
+  assert.match(CHAT_JS, /'Quote selection'/);
+  assert.match(CHAT_JS, /event\.ctrlKey[\s\S]*?event\.shiftKey[\s\S]*?event\.key\.toLowerCase\(\) !== 'q'/);
+  assert.match(CHAT_CSS, /\.selection-quote\s*\{/);
+  assert.match(CHAT_CSS, /\.selection-context-menu\s*\{/);
+});
+
+test('selection context copy uses the existing editor clipboard path', () => {
+  assert.match(CHAT_JS, /type: 'copy', text: selectedCopyText/);
+  assert.match(PANEL, /case 'copy':[\s\S]*?this\.copy\(msg\.text\)/);
+  // Paste remains owned by the composer image path; selected text never hooks it.
+  assert.match(CHAT_JS, /input\.addEventListener\('paste'[\s\S]*?addImage\(dataUrl\)/);
+});

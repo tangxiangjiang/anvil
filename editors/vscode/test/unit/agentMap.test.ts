@@ -70,3 +70,13 @@ test('agent map breaks malformed parent cycles', () => {
   );
   assert.deepEqual(state.nodes.map((node) => node.agentId), ['root', 'child']);
 });
+
+test('the open conversation model overrides only the root listing', () => {
+  const root = { ...session('root'), model: 'stale-model' };
+  const child = { ...session('child', 'root'), model: 'child-model' };
+
+  const state = buildAgentMap('root', [root, child], [], new Set(), 'claude-sonnet-5.5');
+
+  assert.equal(state.nodes[0].model, 'claude-sonnet-5.5');
+  assert.equal(state.nodes[1].model, 'child-model');
+});

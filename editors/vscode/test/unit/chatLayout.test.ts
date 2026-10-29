@@ -65,13 +65,27 @@ function parseRules(): Rule[] {
 const RULES = parseRules();
 
 test('live task plan is rendered before the composer', () => {
-  const todos = PANEL.indexOf('<div id="todos" class="todos"');
+  const todos = PANEL.indexOf('<div id="todos" class="todos collapsed"');
   const composer = PANEL.indexOf('<form id="composer" class="composer">');
   assert.ok(todos >= 0, 'todo plan is present');
   assert.ok(composer >= 0, 'composer is present');
   assert.ok(todos < composer, 'todo plan precedes the composer');
-  assert.equal(valueOf('.todos', 'margin-bottom'), '6px');
+  // The borders overlap into one joined Plan/composer surface.
+  assert.equal(valueOf('.todos', 'margin-bottom'), '-1px');
+  assert.equal(valueOf('.todos', 'border-radius'), '10px 10px 0 0');
+  assert.equal(valueOf('.todos:not([hidden]):not(.collapsed) + .composer', 'border-top-left-radius'), '0');
   assert.equal(valueOf('.todos', 'margin-top'), undefined);
+  assert.equal(
+    valueOf('.dock:has(.composer:focus-within) .todos:not([hidden]):not(.collapsed)', 'border-color'),
+    'var(--vscode-focusBorder)',
+  );
+  assert.doesNotMatch(
+    valueOf('.dock:has(.todos:not([hidden]):not(.collapsed)) .composer:focus-within', 'box-shadow') ?? '',
+    /0 0 0 1px/,
+  );
+  assert.equal(valueOf('.todos.collapsed', 'height'), '0');
+  assert.equal(valueOf('.todos.collapsed', 'border'), '0');
+  assert.equal(valueOf('.todos.collapsed .todos-head', 'display'), 'none');
 });
 
 /** The bodies of every rule whose selector list contains `selector` exactly. */

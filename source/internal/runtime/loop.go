@@ -164,6 +164,12 @@ func finishTaskSummary(calls []llm.ToolCall) (summary string, present bool, prob
 	if in.Summary == "" {
 		return "", true, "finish_task requires a non-empty summary"
 	}
+	if strings.HasSuffix(in.Summary, ":") || strings.HasSuffix(in.Summary, "：") {
+		return "", true, "finish_task summary appears truncated because it ends with a section introducer"
+	}
+	if strings.Count(in.Summary, "```")%2 != 0 {
+		return "", true, "finish_task summary appears truncated because it contains an unclosed code fence"
+	}
 	return in.Summary, true, ""
 }
 

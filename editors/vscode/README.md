@@ -23,7 +23,7 @@ reports. The protocol between the two is chapter 35 of the design docs
 Download or build the VSIX for your platform and install it:
 
 ```bash
-code --install-extension anvil-vscode-0.46.66-win32-x64.vsix
+code --install-extension anvil-vscode-0.46.81-win32-x64.vsix
 ```
 
 Nothing else is needed: the `anvil-host` sidecar for that platform travels
@@ -68,7 +68,7 @@ The sidecar is found in this order, and the first hit wins:
 npm run package:vsix                 # this machine's platform
 npm run package:vsix -- --target linux-x64
 npm run package:all                  # one VSIX per target, in sequence
-npm run smoke:vsix -- --vsix anvil-vscode-0.46.66-win32-x64.vsix
+npm run smoke:vsix -- --vsix anvil-vscode-0.46.81-win32-x64.vsix
 ```
 
 Targets: `win32-x64`, `win32-arm64`, `linux-x64`, `linux-arm64`, `darwin-x64`,

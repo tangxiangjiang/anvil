@@ -314,6 +314,77 @@ body {
   outline-offset: 1px;
 }
 
+.selection-quote {
+  position: fixed;
+  z-index: 8;
+  height: 28px;
+  padding: 3px 9px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--vscode-widget-border, var(--ui-hairline));
+  border-radius: 6px;
+  color: var(--vscode-menu-foreground, var(--vscode-foreground));
+  background: var(--vscode-menu-background, var(--vscode-editorWidget-background));
+  box-shadow: 0 3px 12px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.32));
+  font: inherit;
+  font-size: 0.82em;
+  cursor: pointer;
+}
+
+.selection-quote[hidden],
+.selection-context-menu[hidden] {
+  display: none;
+}
+
+.selection-quote:hover,
+.selection-quote:focus-visible {
+  color: var(--vscode-menu-selectionForeground, var(--vscode-foreground));
+  background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground));
+}
+
+.selection-quote:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 1px;
+}
+
+.selection-quote svg {
+  width: 16px;
+  height: 16px;
+}
+
+.selection-context-menu {
+  position: fixed;
+  z-index: 9;
+  width: 176px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--vscode-menu-border, var(--vscode-widget-border, var(--ui-hairline)));
+  border-radius: 6px;
+  background: var(--vscode-menu-background, var(--vscode-editorWidget-background));
+  box-shadow: 0 5px 18px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.38));
+}
+
+.selection-context-menu button {
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 3px;
+  color: var(--vscode-menu-foreground, var(--vscode-foreground));
+  background: transparent;
+  font: inherit;
+  text-align: left;
+}
+
+.selection-context-menu button:hover,
+.selection-context-menu button:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+  color: var(--vscode-menu-selectionForeground, var(--vscode-foreground));
+  background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground));
+}
+
 .msg.error .body {
   color: var(--vscode-errorForeground);
 }
@@ -2301,14 +2372,17 @@ body.vscode-high-contrast-light .body.md .md-link:focus-visible {
 
 /*
  * Immediately above the composer, because it is the current work control
- * surface rather than conversation history. The plan is replaced as it
- * changes instead of appended. The head is outside the scrolling list so the
- * close button is always reachable, and the list is capped so a long plan
- * cannot take the panel from the conversation.
+ * surface rather than conversation history. The head remains when the body is
+ * folded, so the action is reversible, and the current list and retained
+ * history are independently bounded.
  */
 .todos {
-  margin-bottom: 6px;
-  padding: 0 calc(var(--anvil-gap) + 1px);
+  position: relative;
+  z-index: 1;
+  margin-bottom: -1px;
+  border: 1px solid var(--vscode-input-border, var(--ui-hairline));
+  border-radius: 10px 10px 0 0;
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
   font-size: 0.85em;
   line-height: var(--ui-line-tight);
   color: var(--ui-muted);
@@ -2318,28 +2392,109 @@ body.vscode-high-contrast-light .body.md .md-link:focus-visible {
   display: flex;
   align-items: center;
   gap: 6px;
+  min-height: 30px;
+  padding: 4px 14px;
   line-height: var(--ui-line);
+}
+
+.todos-toggle {
+  position: absolute;
+  left: 50%;
+  bottom: -7px;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 14px;
+  padding: 0;
+  transform: translateX(-50%);
+  border: 1px solid var(--vscode-input-border, var(--ui-hairline));
+  border-radius: 3px;
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  color: var(--vscode-descriptionForeground);
+  cursor: pointer;
+  transition: color 120ms ease, background-color 120ms ease, border-color 120ms ease;
+}
+
+.todos-toggle:hover,
+.todos-toggle:focus-visible {
+  color: var(--vscode-foreground);
+  border-color: var(--vscode-focusBorder);
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.14));
+}
+
+.todos-toggle:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 1px;
+}
+
+.todos-toggle svg {
+  width: 18px;
+  height: 10px;
+  transition: transform 120ms ease;
+}
+
+.todos.collapsed .todos-toggle svg {
+  transform: rotate(180deg);
+}
+
+.todos.collapsed {
+  height: 0;
+  margin-bottom: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.todos.collapsed .todos-head {
+  display: none;
 }
 
 .todos-title {
   flex: 0 0 auto;
-  font-size: 0.9em;
-  font-weight: 500;
-}
-
-.todos-close {
-  margin-left: auto;
-  border: none;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  line-height: 1;
-  padding: 0 4px;
-  cursor: pointer;
-}
-
-.todos-close:hover {
   color: var(--vscode-foreground);
+  font-size: 0.92em;
+  font-weight: 600;
+}
+
+.todos-count {
+  margin-left: auto;
+  min-width: 0;
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.85em;
+}
+
+.todos-body {
+  padding: 0 14px 12px;
+}
+
+.todos-body[hidden] {
+  display: none;
+}
+
+.todos:not([hidden]):not(.collapsed) + .composer {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+/*
+ * Focus belongs to the joined surface, not only its lower half. The ordinary
+ * composer keeps its outer focus ring; when Plan is attached, both borders
+ * take the focus colour and the extra ring is removed from the internal seam.
+ */
+.dock:has(.composer:focus-within) .todos:not([hidden]):not(.collapsed) {
+  border-color: var(--vscode-focusBorder);
+}
+
+.dock:has(.todos:not([hidden]):not(.collapsed)) .composer:focus-within {
+  box-shadow: 0 6px 18px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.30));
+}
+
+.todo-section-label,
+.todo-empty {
+  margin: 2px 0;
+  font-size: 0.8em;
+  color: var(--vscode-descriptionForeground);
 }
 
 .todo-list {
@@ -2376,6 +2531,67 @@ body.vscode-high-contrast-light .body.md .md-link:focus-visible {
  * the normal foreground rather than the muted description colour. */
 .todo-row[data-status='in_progress'] {
   color: var(--vscode-foreground);
+}
+
+.todo-history {
+  margin-top: 4px;
+  border-top: 1px solid var(--ui-hairline);
+}
+
+.todo-history > summary,
+.todo-history-entry > summary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.todo-history > summary {
+  padding: 4px 0 2px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.85em;
+}
+
+.todo-history-list {
+  max-height: min(18em, 32vh);
+  overflow-y: auto;
+}
+
+.todo-history-entry {
+  border-top: 1px solid var(--ui-hairline);
+}
+
+.todo-history-entry:first-child {
+  border-top: none;
+}
+
+.todo-history-entry-summary {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  padding: 3px 0;
+}
+
+.todo-history-number,
+.todo-history-progress {
+  flex: 0 0 auto;
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.82em;
+}
+
+.todo-history-title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--vscode-foreground);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.todo-history-progress {
+  margin-left: auto;
+}
+
+.todo-history-rows {
+  padding: 0 0 4px 1.25em;
 }
 
 /* --- answer actions ------------------------------------------------------- */

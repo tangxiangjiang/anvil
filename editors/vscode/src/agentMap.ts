@@ -36,6 +36,7 @@ export function buildAgentMap(
   sessions: readonly SessionInfo[],
   tasks: readonly TaskInfo[],
   running: ReadonlySet<string> = new Set(),
+  rootModel = '',
 ): AgentMapState {
   const byId = new Map(sessions.map((session) => [session.agent_id, session]));
   const children = new Map<string, SessionInfo[]>();
@@ -65,7 +66,12 @@ export function buildAgentMap(
       agentId: session.agent_id,
       parentAgentId: session.parent_agent_id,
       title: session.task_title?.trim() || session.title?.trim() || session.agent_id,
-      model: session.model || 'default model',
+      // The root is the open conversation, whose picker may have changed the
+      // model since the session listing was persisted. Children have their own
+      // sessions and must keep reporting those models.
+      model: depth === 0 && rootModel.trim() !== ''
+        ? rootModel
+        : session.model || 'default model',
       status: statusOf(session, task, running),
       depth,
       createdAt: task?.started_at ?? session.created_at,

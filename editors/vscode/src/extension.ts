@@ -78,6 +78,11 @@ export function activate(context: vscode.ExtensionContext): void {
         // document remembered its agent; handing it back is what makes the tab
         // come back on the same conversation rather than on a blank one.
         const agentId = typeof state?.agentId === 'string' && state.agentId !== '' ? state.agentId : undefined;
+        const existing = agentId ? hub.findByAgent(agentId) : undefined;
+        if (existing) {
+          webviewPanel.dispose();
+          return;
+        }
         // The reading view is the document's own state, saved with the same
         // call. A restored tab that comes back in the other view would be a
         // reload the reader has to notice and undo.
@@ -87,7 +92,11 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
   );
 
-  const tree = new SessionTreeProvider(hub);
+  const tree = new SessionTreeProvider(hub, context.workspaceState);
+  const sessionView = vscode.window.createTreeView(SessionTreeProvider.viewType, {
+    treeDataProvider: tree,
+    showCollapseAll: true,
+  });
   /**
    * The last reading the configuration listener saw. Kept outside the
    * subscription list because it is state, not a disposable; a change is
@@ -96,10 +105,7 @@ export function activate(context: vscode.ExtensionContext): void {
   let lastSettings = readSettings();
 
   context.subscriptions.push(
-    vscode.window.createTreeView(SessionTreeProvider.viewType, {
-      treeDataProvider: tree,
-      showCollapseAll: true,
-    }),
+    sessionView,
     tree,
 
     // A new tab, always. This is the command the chat title bar and the
@@ -205,11 +211,6 @@ export function activate(context: vscode.ExtensionContext): void {
       if (agentId !== undefined) await hub.openSession(agentId);
     }),
 
-    vscode.commands.registerCommand('anvil.openSessionInNewTab', async (arg: unknown) => {
-      const agentId = agentIdOf(arg);
-      if (agentId !== undefined) hub.openTab(agentId);
-    }),
-
     // A rename is an appended record, so the conversation underneath it is the
     // same one. The box starts from the name the session has: for a session
     // nobody named, that is the first message the store derived it from.
@@ -229,6 +230,16 @@ export function activate(context: vscode.ExtensionContext): void {
       } catch (err) {
         void vscode.window.showErrorMessage(`Anvil: could not rename the session: ${(err as Error).message}`);
       }
+    }),
+
+    vscode.commands.registerCommand('anvil.archiveSession', async (arg: unknown) => {
+      const agentId = agentIdOf(arg);
+      if (agentId !== undefined) await tree.setArchived(agentId, true);
+    }),
+
+    vscode.commands.registerCommand('anvil.unarchiveSession', async (arg: unknown) => {
+      const agentId = agentIdOf(arg);
+      if (agentId !== undefined) await tree.setArchived(agentId, false);
     }),
 
     vscode.commands.registerCommand('anvil.deleteSession', async (arg: unknown) => {

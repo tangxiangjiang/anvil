@@ -68,6 +68,8 @@ export class Hub {
   readonly manager: HostManager;
 
   private readonly panels = new Set<ChatPanel>();
+  /** Human-readable names from the latest successful session listing. */
+  private readonly sessionTitles = new Map<string, string>();
   /** The window's rules manager; one document, revealed rather than duplicated. */
   private readonly permissions: PermissionsPanels;
   /** The window's MCP manager; one document for every layer's servers. */
@@ -166,6 +168,13 @@ export class Hub {
 
   /** Opens a new tab, optionally on a stored agent. */
   openTab(agentId?: string): ChatPanel {
+    if (agentId) {
+      const existing = this.findByAgent(agentId);
+      if (existing) {
+        existing.reveal();
+        return existing;
+      }
+    }
     const panel = this.createPanel(agentId);
     panel.open();
     return panel;
@@ -218,28 +227,15 @@ export class Hub {
    * The reveal-or-create entry point, for a click on a stored session.
    *
    * A click is "take me there", so a session already on screen is revealed
-   * rather than duplicated. `openSessionInNewTab` is the explicit way to get a
-   * second copy: two tabs are two sessions, each resuming the same stored
-   * conversation.
+   * rather than duplicated.
    */
   async openSession(agentId: string): Promise<void> {
-    const existing = this.findByAgent(agentId);
-    if (existing) {
-      existing.reveal();
-      return;
-    }
-    this.openTab(agentId).open();
+    this.openTab(agentId);
   }
 
-  /**
-   * Always a new tab, even when the agent is already on screen.
-   *
-   * That is two sessions resuming one stored conversation, which the host
-   * supports; it is not two tabs sharing one session. The second tab is for
-   * looking at where a conversation went while the first one carries on.
-   */
-  async openSessionInNewTab(agentId: string): Promise<void> {
-    this.openTab(agentId);
+  /** The stored title used by both the Session Manager row and its chat tab. */
+  sessionTitle(agentId: string): string | undefined {
+    return this.sessionTitles.get(agentId);
   }
 
   /** True when a host child is live; the sidebar uses it to avoid starting one. */
@@ -469,8 +465,22 @@ export class Hub {
   }
 
   /** This workspace's stored agents. Starts a host if none is live. */
-  listSessions(): Promise<SessionInfo[]> {
-    return this.manager.listSessions();
+  async listSessions(): Promise<SessionInfo[]> {
+    const sessions = await this.manager.listSessions();
+    const next = new Map<string, string>();
+    for (const session of sessions) {
+      const title = session.title?.trim();
+      if (title) next.set(session.agent_id, title);
+    }
+    const changed =
+      next.size !== this.sessionTitles.size ||
+      [...next].some(([agentId, title]) => this.sessionTitles.get(agentId) !== title);
+    if (changed) {
+      this.sessionTitles.clear();
+      for (const [agentId, title] of next) this.sessionTitles.set(agentId, title);
+      for (const panel of this.panels) panel.sessionTitleChanged();
+    }
+    return sessions;
   }
 
   /** The stored conversation for one agent, oldest first. */
@@ -491,7 +501,9 @@ export class Hub {
 
   /** Gives a stored session a name, then redraws every list that shows it. */
   async renameSession(agentId: string, title: string): Promise<void> {
-    await this.manager.renameSession(agentId, title);
+    const renamed = await this.manager.renameSession(agentId, title);
+    this.sessionTitles.set(agentId, renamed.title);
+    this.findByAgent(agentId)?.sessionTitleChanged();
     this.sessionsChanged.fire();
   }
 
@@ -523,6 +535,7 @@ export class Hub {
       if (panel.currentAgentId() === agentId) await panel.close();
     }
     await this.manager.deleteSession(agentId);
+    this.sessionTitles.delete(agentId);
     this.sessionsChanged.fire();
   }
 

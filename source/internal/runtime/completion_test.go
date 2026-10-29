@@ -32,6 +32,8 @@ func TestFinishTaskSummaryAcceptsOnlyOneValidControlCall(t *testing.T) {
 	for _, calls := range [][]llm.ToolCall{
 		{{Name: finishTaskToolName, Args: json.RawMessage(`{"summary":" "}`)}},
 		{{Name: finishTaskToolName, Args: json.RawMessage(`{`)}},
+		{{Name: finishTaskToolName, Args: json.RawMessage(`{"summary":"建议验证："}`)}},
+		{{Name: finishTaskToolName, Args: json.RawMessage("{\"summary\":\"Verification:\\n```powershell\\nnpm test\"}")}},
 		{
 			{Name: finishTaskToolName, Args: json.RawMessage(`{"summary":"done"}`)},
 			{Name: "read_file", Args: json.RawMessage(`{"path":"a"}`)},

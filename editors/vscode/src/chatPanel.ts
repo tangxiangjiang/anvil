@@ -425,6 +425,10 @@ type Outbound =
 const MODE_KEY = 'anvil.permissionMode';
 /** Collaboration belongs to a conversation, not to the workspace default. */
 const COLLABORATION_KEY = 'anvil.collaborationByAgent';
+/** Composer choices belong to a conversation and survive reconstructed tabs. */
+const COMPOSER_OPTIONS_KEY = 'anvil.composerOptionsByAgent';
+/** Prevent abandoned conversation ids from growing workspace state forever. */
+const COMPOSER_OPTIONS_KEPT = 100;
 
 /** How many plans a tab keeps in memory for the palette commands. */
 const PLAN_KEPT = 8;
@@ -486,6 +490,29 @@ function storedCollaboration(
   if (!agentId) return undefined;
   const modes = context.workspaceState.get<Record<string, string>>(COLLABORATION_KEY, {});
   return modes[agentId] === 'single' || modes[agentId] === 'multi' ? modes[agentId] : undefined;
+}
+
+interface StoredComposerOptions {
+  model?: string;
+  effort?: Effort;
+}
+
+function storedComposerOptions(
+  context: vscode.ExtensionContext,
+  agentId: string | undefined,
+): StoredComposerOptions {
+  if (!agentId) return {};
+  const saved = context.workspaceState.get<Record<string, StoredComposerOptions>>(COMPOSER_OPTIONS_KEY, {})[agentId];
+  if (!saved || typeof saved !== 'object') return {};
+  const settings = readSettings();
+  const model = typeof saved.model === 'string' ? saved.model.trim() : '';
+  const validModel =
+    model !== '' && (settings.models.available.includes(model) || model === settings.models.defaultModel);
+  const effort = saved.effort;
+  return {
+    ...(validModel ? { model } : {}),
+    ...(effort === 'low' || effort === 'medium' || effort === 'high' ? { effort } : {}),
+  };
 }
 
 export class ChatPanel implements HostListener {
@@ -617,11 +644,14 @@ export class ChatPanel implements HostListener {
   ) {
     this.mode = readMode(context);
     this.agentId = agentId === '' ? undefined : agentId;
+    const settings = readSettings();
+    const savedComposer = storedComposerOptions(context, this.agentId);
     this.collaboration =
       storedCollaboration(context, this.agentId) ??
-      (readSettings().session.subagents === false ? 'single' : 'multi');
+      (settings.session.subagents === false ? 'single' : 'multi');
     this.overrides.subagents = this.collaboration === 'multi';
-    this.overrides.effort = readSettings().session.effort ?? 'medium';
+    if (savedComposer.model) this.overrides.model = savedComposer.model;
+    this.overrides.effort = savedComposer.effort ?? settings.session.effort ?? 'medium';
     this.partialReviews = new ReviewPanels(context.extensionUri);
   }
 
@@ -1373,9 +1403,14 @@ export class ChatPanel implements HostListener {
     this.post({ type: 'notice', level: chosen === 'bypass' ? 'warn' : 'info', message: modeNotice(chosen) });
   }
 
+  /** The model named by this conversation's picker, in the same fallback order everywhere. */
+  private currentModel(): string {
+    return this.overrides.model ?? this.resolvedModel ?? readSettings().models.defaultModel;
+  }
+
   private postModels(): void {
     const settings = readSettings().models;
-    const current = this.overrides.model ?? this.resolvedModel ?? settings.defaultModel;
+    const current = this.currentModel();
     const available = [...settings.available];
     for (const id of [settings.defaultModel, current]) {
       if (id && !available.includes(id)) available.push(id);
@@ -1407,6 +1442,7 @@ export class ChatPanel implements HostListener {
     const configured = model === '' ? settings.defaultModel || undefined : model;
     if (this.session?.currentState === 'running') {
       this.overrides = next;
+      await this.rememberComposerOptions();
       this.postModels();
       this.post({
         type: 'notice',
@@ -1428,6 +1464,7 @@ export class ChatPanel implements HostListener {
         if (result) this.resolvedModel = result.model;
       }
       if (!reopened) this.resolvedModel = model === '' ? settings.defaultModel || undefined : model;
+      await this.rememberComposerOptions();
       this.postModels();
       this.post({
         type: 'notice',
@@ -1459,6 +1496,7 @@ export class ChatPanel implements HostListener {
         return;
       }
     }
+    await this.rememberComposerOptions();
     this.postEffort();
     this.postState();
   }
@@ -1496,6 +1534,24 @@ export class ChatPanel implements HostListener {
     });
   }
 
+  private async rememberComposerOptions(): Promise<void> {
+    const agentId = this.currentAgentId();
+    if (!agentId) return;
+    const saved = this.context.workspaceState.get<Record<string, StoredComposerOptions>>(COMPOSER_OPTIONS_KEY, {});
+    const entries = Object.entries(saved).filter(([id]) => id !== agentId);
+    entries.push([
+      agentId,
+      {
+        model: this.overrides.model ?? '',
+        effort: this.overrides.effort ?? 'medium',
+      },
+    ]);
+    await this.context.workspaceState.update(
+      COMPOSER_OPTIONS_KEY,
+      Object.fromEntries(entries.slice(-COMPOSER_OPTIONS_KEPT)),
+    );
+  }
+
   private async agentMapState(): Promise<AgentMapState> {
     const rootId = this.agentId ?? this.session?.agent ?? '';
     const [sessions, taskRows] = await Promise.all([this.hub.listSessions(), this.hub.listTasks()]);
@@ -1504,6 +1560,7 @@ export class ChatPanel implements HostListener {
       sessions,
       taskRows.map((row) => row.task),
       new Set(this.hub.runningAgentIds()),
+      this.currentModel(),
     );
   }
 
@@ -1843,6 +1900,11 @@ export class ChatPanel implements HostListener {
 
   /** Adopts a named agent, for `/resume <id>` typed rather than picked. */
   private async resumeAgent(agentId: string): Promise<void> {
+    const existing = this.hub.findByAgent(agentId);
+    if (existing && existing !== this) {
+      existing.reveal();
+      return;
+    }
     try {
       const session = await this.ensureSession();
       await session.continueWith(agentId);
@@ -2005,6 +2067,7 @@ export class ChatPanel implements HostListener {
     if (!agentId || agentId === this.agentId) return;
     this.agentId = agentId;
     void this.rememberCollaboration();
+    void this.rememberComposerOptions();
     this.postAgentId();
     this.updateTitle();
     this.hub.notifyTabs();
@@ -2045,10 +2108,15 @@ export class ChatPanel implements HostListener {
     this.post({ type: 'root', name: info.name, path: info.path, multi: info.multi });
   }
 
-  /** Names the tab after the conversation in it, so a tab strip is readable. */
+  /** A fresh listing or rename may have supplied this conversation's title. */
+  sessionTitleChanged(): void {
+    this.updateTitle();
+  }
+
+  /** Names the tab after the stored session title, so it matches Session Manager. */
   private updateTitle(): void {
     const agentId = this.currentAgentId();
-    const title = agentId ? `Anvil — ${agentId.slice(0, 8)}` : 'Anvil';
+    const title = agentId ? this.hub.sessionTitle(agentId) ?? `Anvil — ${agentId.slice(0, 8)}` : 'Anvil';
     if (this.panel && this.panel.title !== title) this.panel.title = title;
   }
 
@@ -3451,16 +3519,29 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri, focus = f
     </div>
     <!--
       The model's live task plan sits immediately above the composer. Every
-      todo event carries the whole list and replaces this block; an empty list
-      hides it. The head stays outside the scrolling list so its close button
-      remains reachable with a long plan.
+      todo event carries the whole list and replaces the current rows. The
+      header always stays reachable: it folds the body instead of removing the
+      only way back, while earlier retained plans live below the current one.
     -->
-    <div id="todos" class="todos" hidden>
+    <div id="todos" class="todos collapsed" hidden>
       <div class="todos-head">
         <span class="todos-title">Plan</span>
-        <button id="todosClose" type="button" class="todos-close" aria-label="Hide the task list" title="Hide the task list">×</button>
+        <span id="todosCount" class="todos-count"></span>
       </div>
-      <div id="todoList" class="todo-list" role="list" aria-label="Task list"></div>
+      <div id="todosBody" class="todos-body" hidden>
+        <div id="todoCurrentLabel" class="todo-section-label">Current</div>
+        <div id="todoList" class="todo-list" role="list" aria-label="Current task plan"></div>
+        <div id="todoEmpty" class="todo-empty" hidden>No active plan.</div>
+        <details id="todoHistory" class="todo-history" hidden>
+          <summary id="todoHistorySummary">History</summary>
+          <div id="todoHistoryList" class="todo-history-list"></div>
+        </details>
+      </div>
+      <button id="todosToggle" type="button" class="todos-toggle" aria-label="Expand plan" aria-expanded="false" aria-controls="todosBody" title="Expand plan">
+        <svg viewBox="0 0 20 10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="m5 7 5-4 5 4"/>
+        </svg>
+      </button>
     </div>
     <form id="composer" class="composer">
       <div id="palette" class="palette" hidden></div>

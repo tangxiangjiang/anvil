@@ -1283,3 +1283,170 @@ The combined surface changes presentation only. Model and effort remain separate
 remain selectable during a response, and are snapshotted together for each Send, Enqueue, or Steer
 turn. Escape, outside click, or selecting a model closes the picker; choosing effort keeps it open
 so the current model selection remains visible.
+
+## 59. Structurally incomplete finish summaries do not terminate a run
+
+`finish_task` remains the explicit terminal signal, but a syntactically valid call can still carry
+an obviously cut-off user-facing summary. A summary ending with an ASCII or full-width colon is a
+section introduction with no section; an odd Markdown fence count is a code block with no close.
+The runtime rejects either shape through the existing bounded finish-protocol correction path.
+
+This check is structural rather than a semantic completion guess. It does not inspect engineering
+words or infer whether the claimed work is sufficient; it only prevents the two observable forms
+where the final response itself cannot be rendered as a complete document.
+
+## 60. A clipped Summary title does not consume its source line
+
+The final-answer Summary normally promotes a short first line into its header and removes that line
+from the body. A long prose first line is different: its header is clipped to an 80-character
+preview, so removing the source line would discard everything beyond the preview even though Copy
+still holds the complete Markdown.
+
+When the generated title is clipped, the complete source line remains in the rendered body. Short
+standalone titles are still removed and appear once. The header therefore stays compact without
+making the visible transcript a lossy version of the answer.
+
+## 61. Undo checkpoints describe byte changes, not attempted writes
+
+A write-capable tool captures a pre-image before it runs, because after the call is too late to
+recover that state. Capture alone is not evidence of a change: a Patch may fail, and source-control
+checkout can change writability without changing bytes. Presenting either as “Undo this run” makes
+the card claim work the run did not perform.
+
+At run completion, every checkpoint entry is compared with its current bytes. Existing files whose
+hash is unchanged and creates that never appeared are removed; if none remain, the run checkpoint
+directory is removed and the editor shows no Undo card. Modified, created, and deleted files keep
+the existing post-state safety check used during restore.
+
+## 62. The live task plan folds and retains conversation history
+
+The Todo Plan's `×` looked destructive and removed its own recovery control. It is replaced by a
+header toggle: folding removes only the body, while the Plan header remains visible and restores it.
+
+Each distinct set of task texts is retained as a bounded revision in the current conversation.
+Status-only changes update that revision; a different run or changed task text creates another.
+Earlier revisions are listed newest-first below Current and can be expanded. Clearing Current keeps
+that history entry point, while switching conversations clears it before the existing transcript
+replay reconstructs the retained plans. This uses the stored `todo_write` arguments already replayed
+by the client and adds no protocol or workspace-wide archive
+([p_0.46.74](../../roadmaps/v0.x/m_0.46/p_0.46.74.vscode.md)).
+
+## 63. Plan and composer are one joined surface
+
+The live Plan sits directly above the composer, so drawing it as detached text leaves two controls
+that are spatially adjacent but visually unrelated. While Plan is present, both use the same widget
+background and border; Plan owns the upper corners, the composer owns the lower corners, and their
+shared edge overlaps into one continuous card.
+
+Collapse is a narrow handle centred on that shared edge, not an `×` and not the entire title row.
+The handle remains when the body is folded, rotates to show the inverse action, and carries
+`aria-expanded`, an action label, and keyboard focus styling. Plan and its saved count remain labels
+inside the frame
+([p_0.46.75](../../roadmaps/v0.x/m_0.46/p_0.46.75.vscode.md)).
+
+## 64. Focus encloses the complete joined surface
+
+Joining Plan and composer geometrically is incomplete if keyboard focus colours only the composer:
+the grey upper frame and blue lower frame still read as separate controls. When Plan is visible and
+the composer contains focus, Plan's border takes the same focus colour and the lower surface drops
+its extra outer ring, leaving one continuous perimeter and one shared edge. With no Plan visible,
+the composer's established standalone focus ring remains unchanged
+([p_0.46.76](../../roadmaps/v0.x/m_0.46/p_0.46.76.vscode.md)).
+
+## 65. Agent Map's root follows the conversation model picker
+
+The session listing is durable metadata and can lag a model change made in an open conversation.
+Agent Map previously used that listing for every node, so its root could name the model from session
+creation while the composer had already selected another model. The open panel is authoritative for
+its own root: explicit picker override, then host-resolved model, then workspace default. Only that
+root is replaced; child agents continue to report the model stored on each child session
+([p_0.46.77](../../roadmaps/v0.x/m_0.46/p_0.46.77.vscode.md)).
+
+## 66. A collapsed Plan is only its handle
+
+Keeping the title frame after hiding the body spends a full row to say only that Plan is closed.
+In the collapsed state the frame, title, saved count, background and border therefore disappear;
+the centred edge handle remains on the composer's top edge and its native tooltip names *Expand
+plan*. The composer regains its upper corners and standalone focus ring. Expanding restores the
+joined frame, title, count, shared corners and shared focus treatment
+([p_0.46.78](../../roadmaps/v0.x/m_0.46/p_0.46.78.vscode.md)).
+
+## 67. Selected transcript text becomes explicit quote context
+
+Paste remains literal: text stays editable text and image paste stays an attachment. A transcript
+selection instead exposes an explicit floating Quote action, a selected-text context menu with
+Quote and Copy, and `Ctrl+Shift+Q`. Narrative regions carry only their speaker identity; tool rows,
+headers and composer controls do not participate. A range crossing messages is clipped at each
+narrative region and becomes one quote chip per region, preserving user and assistant roles.
+
+The selection itself is browser-local and transient. Quoting copies its text into the existing
+bounded quote-context path, clears the range, and focuses the composer; it adds no protocol shape
+and does not turn clipboard provenance into hidden behavior
+([p_0.46.79](../../roadmaps/v0.x/m_0.46/p_0.46.79.vscode.md)).
+
+## 68. Composer model choices belong to their conversation
+
+The workspace default is a fallback, not a replacement for a model explicitly selected in an
+existing chat. Each conversation therefore keeps its latest model and reasoning effort in VS Code
+workspace state, keyed by agent id. Reconstructing that conversation's tab restores the same
+composer choices before its session is resumed; separate conversations may retain different
+choices.
+
+Saved models are accepted only while they remain in the curated workspace catalogue (or are the
+current workspace default). Removing a model makes the conversation fall back safely instead of
+silently reviving an unavailable id. Choices made before the first prompt are recorded as soon as
+the host assigns the conversation id. This is editor preference state, not transcript content, so
+JSONL remains focused on the conversation itself
+([p_0.46.80](../../roadmaps/v0.x/m_0.46/p_0.46.80.vscode.md)).
+
+## 69. A stored session is one titled chat tab
+
+Session Manager is navigation, not a request to create another live client for the same
+conversation. Opening a stored session therefore reveals its existing chat tab when present;
+direct opens, in-chat resume and restored editor tabs all enforce the same one-session/one-tab
+identity. The former explicit duplicate-tab action is removed. Fork remains separate because it
+creates a new agent id and a genuinely distinct conversation.
+
+The title shown by `session.list` is also the chat tab title. Successful listings refresh the
+title cache, the first completed turn replaces the temporary shortened agent id, and rename updates
+an open tab immediately. This keeps the Session Manager row and editor tab recognisably paired
+without changing title derivation or adding title records outside the existing session store
+([p_0.46.81](../../roadmaps/v0.x/m_0.46/p_0.46.81.vscode.md)).
+
+## 70. Restored Plans stay folded until new work appears
+
+The live task Plan is supporting context, so reopening a chat should not let retained history
+occupy the composer area immediately. Its initial DOM shape is collapsed, conversation reset
+restores that shape, and transcript replay records Plan history without expanding it.
+
+A distinct Plan revision arriving from a live run expands automatically so new work is visible.
+Status-only updates replace the existing revision in place and preserve a manual fold; they are
+progress changes, not a reason to take screen space back from the user. The edge handle keeps the
+same tooltip and accessibility state in both directions
+([p_0.46.82](../../roadmaps/v0.x/m_0.46/p_0.46.82.vscode.md)).
+
+## 71. Session Manager is a collapsible function group
+
+The fold boundary is the whole feature, not the individual Today, This week, Earlier and Undated
+buckets. The native tree therefore has a stable `SESSION MANAGER` root whose children are New
+session plus every loading, error, recency and session row. Its chevron folds or restores that
+complete subtree, and VS Code remembers the root by its stable id.
+
+This root is the first function-group node rather than a special title-bar command. Future Anvil
+features can become sibling roots without replacing the native Tree View or mixing their rows into
+session history. The earlier date-group Expand All interpretation is removed
+([p_0.46.84](../../roadmaps/v0.x/m_0.46/p_0.46.84.vscode.md); supersedes
+[p_0.46.83](../../roadmaps/v0.x/m_0.46/p_0.46.83.vscode.md)).
+
+## 72. Archive files sessions without deleting conversation history
+
+Archive is an editor filing preference, not a transcript mutation. The Session Manager remembers
+archived agent ids in workspace state, removes those conversations from the date buckets, and
+places them under an `Archived` group. The same rows remain openable, renameable, forkable and
+deletable; Unarchive returns them to the recency bucket determined by their unchanged timestamp.
+
+An archived parent carries its stored subagent descendants into the same tree. A child explicitly
+archived on its own becomes an archived root while its parent remains active. Stale archive ids are
+pruned after a successful session listing, so removed JSONL records do not accumulate editor state.
+No archive marker is appended to JSONL and no host protocol method is added
+([p_0.46.85](../../roadmaps/v0.x/m_0.46/p_0.46.85.vscode.md)).

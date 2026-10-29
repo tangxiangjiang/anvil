@@ -152,6 +152,43 @@ test('a title of only whitespace falls back to the agent id', () => {
   assert.equal(rowFor(nodes, 'blank').label, 'blank');
 });
 
+test('archived sessions leave recency and remain available under Archived', () => {
+  const sessions = [
+    session({ agent_id: 'active', updated_at: at(2026, 9, 16, 9), title: 'Active work' }),
+    session({ agent_id: 'filed', updated_at: at(2026, 9, 16, 8), title: 'Filed work' }),
+  ];
+  const nodes = buildSessionView(sessions, { now: NOW, archivedAgentIds: ['filed'] });
+  assert.deepEqual(groupOf(nodes, 'Today').rows.map((row) => row.agentId), ['active']);
+  const archived = groupOf(nodes, 'Archived');
+  assert.deepEqual(archived.rows.map((row) => row.agentId), ['filed']);
+  assert.equal(archived.rows[0].contextValue, 'session.archived');
+  assert.equal(archived.rows[0].archived, true);
+
+  const restored = buildSessionView(sessions, { now: NOW, archivedAgentIds: [] });
+  assert.deepEqual(groupOf(restored, 'Today').rows.map((row) => row.agentId), ['active', 'filed']);
+  assert.equal(restored.some((node) => node.kind === 'group' && node.label === 'Archived'), false);
+});
+
+test('archiving a parent carries its subagent tree without filing the child separately', () => {
+  const nodes = buildSessionView(
+    [
+      session({ agent_id: 'parent', updated_at: at(2026, 9, 16, 9) }),
+      session({
+        agent_id: 'child',
+        updated_at: at(2026, 9, 16, 8),
+        subagent: true,
+        parent_agent_id: 'parent',
+        task_title: 'Research',
+      }),
+    ],
+    { now: NOW, archivedAgentIds: ['parent'] },
+  );
+  const archived = groupOf(nodes, 'Archived');
+  assert.deepEqual(archived.rows.map((row) => row.agentId), ['parent']);
+  assert.deepEqual(archived.rows[0].children.map((row) => row.agentId), ['child']);
+  assert.equal(archived.rows[0].children[0].contextValue, 'session.archived');
+});
+
 test('the description carries the model and the run count, and pluralises it', () => {
   const nodes = buildSessionView(
     [

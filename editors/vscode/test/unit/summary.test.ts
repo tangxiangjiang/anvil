@@ -46,14 +46,16 @@ test('a title is prose taken off a line, or nothing at all', () => {
   assert.match(title, /slice\(0, 79\) \+ '…'/);
 });
 
-test('the body is the answer without the line the title now carries', () => {
+test('the body removes a complete title but preserves a clipped first line', () => {
   const parts = bodyOf(CHAT_JS, 'summaryParts');
   // Leading blank lines are skipped before the title is chosen.
   assert.match(parts, /while \(i < lines\.length && lines\[i\]\.trim\(\) === ''\) i \+= 1/);
   assert.match(parts, /const title = summaryTitle\(lines\[i\]\)/);
   assert.match(parts, /if \(title === ''\) return null/);
-  // Every line after the title, with the blank lines that followed it dropped.
-  assert.match(parts, /lines\.slice\(i \+ 1\)\.join\('\\n'\)/);
+  // A short title is removed, but a clipped title is only a preview: the full
+  // source line stays in the body so rendering and Copy carry the same answer.
+  assert.match(parts, /const bodyFrom = title\.endsWith\('…'\) \? i : i \+ 1/);
+  assert.match(parts, /lines\.slice\(bodyFrom\)\.join\('\\n'\)/);
   assert.match(parts, /replace\(\/\^\(\?:\[ \\t\]\*\\r\?\\n\)\+\/, ''\)/);
   assert.match(parts, /return \{ title, body \}/);
 });

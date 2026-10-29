@@ -104,12 +104,12 @@ test('approval controls are a group named by the question above them', () => {
   assert.match(CHAT_JS, /head\.id = headId;/);
   assert.match(CHAT_JS, /buttons\.setAttribute\('role', 'group'\);/);
   assert.match(CHAT_JS, /buttons\.setAttribute\('aria-labelledby', headId\);/);
-  // The task list's label was on a generic div, where it is not exposed.
-  assert.match(CHAT_PANEL, /id="todoList" class="todo-list" role="list" aria-label="Task list"/);
+  // Current and historical plans expose list semantics independently.
+  assert.match(CHAT_PANEL, /id="todoList" class="todo-list" role="list" aria-label="Current task plan"/);
   assert.match(CHAT_JS, /row\.setAttribute\('role', 'listitem'\);/);
-  // The close control is a picture, so it carries a name of its own.
-  assert.match(CHAT_PANEL, /id="todosClose"[^>]*aria-label="Hide the task list"/);
-  assert.match(CHAT_JS, /todosClose\.addEventListener\('click'/);
+  assert.match(CHAT_PANEL, /id="todosToggle"[^>]*aria-expanded="false"[^>]*aria-controls="todosBody"/);
+  assert.match(CHAT_JS, /todosToggle\.addEventListener\('click'/);
+  assert.match(CHAT_JS, /rows\.setAttribute\('aria-label', `Plan \$\{number\}`\)/);
 });
 
 test('focus is visible in the ordinary and the high-contrast themes', () => {

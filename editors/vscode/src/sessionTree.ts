@@ -34,8 +34,6 @@ export interface SessionSource {
   isHostUp(): boolean;
   /** Reveals the tab already showing a stored agent. */
   openSession(agentId: string): Promise<void>;
-  /** Continues a stored agent in a new chat tab. */
-  openSessionInNewTab(agentId: string): Promise<void>;
   /** Fires when the list or the markers on it could have changed. */
   onSessionsChanged(listener: () => void): vscode.Disposable;
   /** Fires when a tab opened, closed, or changed which agent it shows. */
@@ -44,11 +42,42 @@ export interface SessionSource {
 
 /** How long to wait for a burst of state changes to settle before re-listing. */
 const SETTLE_MS = 400;
+const ARCHIVED_KEY = 'anvil.archivedSessions';
 
-export class SessionTreeProvider implements vscode.TreeDataProvider<SessionNode> {
+interface SessionSection {
+  kind: 'section';
+  id: string;
+  label: string;
+}
+
+interface SessionAction {
+  kind: 'action';
+  id: string;
+  label: string;
+  command: string;
+  icon: string;
+}
+
+type SessionTreeNode = SessionNode | SessionSection | SessionAction;
+
+const SESSION_SECTION: SessionSection = {
+  kind: 'section',
+  id: 'section:sessions',
+  label: 'SESSION MANAGER',
+};
+
+const NEW_SESSION_ACTION: SessionAction = {
+  kind: 'action',
+  id: 'session-action:new',
+  label: 'New session',
+  command: 'anvil.newSession',
+  icon: 'add',
+};
+
+export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeNode> {
   public static readonly viewType = 'anvil.sessions';
 
-  private readonly changed = new vscode.EventEmitter<SessionNode | undefined>();
+  private readonly changed = new vscode.EventEmitter<SessionTreeNode | undefined>();
   readonly onDidChangeTreeData = this.changed.event;
 
   /** The last successful listing, so a refresh never blanks the tree. */
@@ -57,14 +86,36 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionNode>
   private failure: string | undefined;
   private loading = false;
   private timer: ReturnType<typeof setTimeout> | undefined;
+  private readonly archived: Set<string>;
   /** A tab opening or closing changes only the markers, so it is a redraw. */
   private readonly tabWatch: vscode.Disposable;
 
-  constructor(private readonly source: SessionSource) {
+  constructor(
+    private readonly source: SessionSource,
+    private readonly workspaceState: vscode.Memento,
+  ) {
+    const stored = workspaceState.get<unknown>(ARCHIVED_KEY, []);
+    this.archived = new Set(
+      Array.isArray(stored) ? stored.filter((agentId): agentId is string => typeof agentId === 'string') : [],
+    );
     this.tabWatch = source.onTabsChanged(() => this.changed.fire(undefined));
   }
 
-  getTreeItem(node: SessionNode): vscode.TreeItem {
+  getTreeItem(node: SessionTreeNode): vscode.TreeItem {
+    if (node.kind === 'section') {
+      const item = new vscode.TreeItem(node.label, vscode.TreeItemCollapsibleState.Expanded);
+      item.id = node.id;
+      item.contextValue = 'anvilSessionSection';
+      return item;
+    }
+    if (node.kind === 'action') {
+      const item = new vscode.TreeItem(node.label, vscode.TreeItemCollapsibleState.None);
+      item.id = node.id;
+      item.contextValue = 'anvilSessionAction';
+      item.iconPath = new vscode.ThemeIcon(node.icon);
+      item.command = { command: node.command, title: node.label };
+      return item;
+    }
     if (node.kind === 'note') return noteItem(node);
     if (node.kind === 'group') {
       const item = new vscode.TreeItem(node.label, vscode.TreeItemCollapsibleState.Expanded);
@@ -77,7 +128,28 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionNode>
     return sessionItem(node);
   }
 
-  async getChildren(element?: SessionNode): Promise<SessionNode[]> {
+  async getChildren(element?: SessionTreeNode): Promise<SessionTreeNode[]> {
+    // Function groups are the stable top level. Session Manager is the first;
+    // future groups can sit beside it without replacing the native Tree View.
+    if (!element) return [SESSION_SECTION];
+
+    if (element.kind === 'section') {
+      // Checked before the call rather than after it fails: an untrusted
+      // workspace cannot start the host at all, and asking would be a spawn
+      // attempt whose only outcome is the same message.
+      if (!vscode.workspace.isTrusted) return [NEW_SESSION_ACTION, sessionNote('untrusted')];
+
+      if (this.failure !== undefined) return [NEW_SESSION_ACTION, sessionNote('error', this.failure)];
+      if (this.cached === undefined) {
+        // Nothing to show and nothing in flight: this is the one moment a host
+        // is started by the sidebar alone, and it is the user who opened the
+        // function group.
+        void this.load();
+        return [NEW_SESSION_ACTION, sessionNote('loading')];
+      }
+      return [NEW_SESSION_ACTION, ...this.view()];
+    }
+
     if (element) {
       if (element.kind === 'group') return element.rows;
       // A parent's children are subagent sessions: the spawn calls this agent
@@ -86,19 +158,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionNode>
       return [];
     }
 
-    // Checked before the call rather than after it fails: an untrusted
-    // workspace cannot start the host at all, and asking would be a spawn
-    // attempt whose only outcome is the same message.
-    if (!vscode.workspace.isTrusted) return [sessionNote('untrusted')];
-
-    if (this.failure !== undefined) return [sessionNote('error', this.failure)];
-    if (this.cached === undefined) {
-      // Nothing to show and nothing in flight: this is the one moment a host is
-      // started by the sidebar alone, and it is the user who opened the view.
-      void this.load();
-      return [sessionNote('loading')];
-    }
-    return this.view();
+    return [];
   }
 
   /**
@@ -109,6 +169,14 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionNode>
   async refresh(): Promise<void> {
     this.failure = undefined;
     await this.load();
+  }
+
+  /** Files a conversation without touching its transcript or live tab. */
+  async setArchived(agentId: string, archived: boolean): Promise<void> {
+    if (archived) this.archived.add(agentId);
+    else this.archived.delete(agentId);
+    await this.workspaceState.update(ARCHIVED_KEY, [...this.archived]);
+    this.changed.fire(undefined);
   }
 
   /**
@@ -148,6 +216,13 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionNode>
     this.changed.fire(undefined);
     try {
       this.cached = await this.source.listSessions();
+      const present = new Set(this.cached.map((session) => session.agent_id));
+      const kept = [...this.archived].filter((agentId) => present.has(agentId));
+      if (kept.length !== this.archived.size) {
+        this.archived.clear();
+        for (const agentId of kept) this.archived.add(agentId);
+        await this.workspaceState.update(ARCHIVED_KEY, kept);
+      }
       this.failure = undefined;
     } catch (err) {
       this.failure = (err as Error).message;
@@ -162,6 +237,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionNode>
       now: Date.now(),
       openAgentIds: this.source.openAgentIds(),
       runningAgentIds: this.source.runningAgentIds(),
+      archivedAgentIds: [...this.archived],
     };
     return buildSessionView(this.cached ?? [], options);
   }

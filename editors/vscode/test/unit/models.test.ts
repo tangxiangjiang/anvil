@@ -90,6 +90,17 @@ test('chat model selection uses the curated list and remains a session option', 
   assert.match(CHAT_JS, /type: 'effort', effort: button\.dataset\.effort/);
 });
 
+test('chat model and effort choices persist per conversation', () => {
+  assert.match(CHAT, /const COMPOSER_OPTIONS_KEY = 'anvil\.composerOptionsByAgent'/);
+  assert.match(CHAT, /workspaceState\.get<Record<string, StoredComposerOptions>>\(COMPOSER_OPTIONS_KEY, \{\}\)\[agentId\]/);
+  assert.match(CHAT, /const savedComposer = storedComposerOptions\(context, this\.agentId\)/);
+  assert.match(CHAT, /if \(savedComposer\.model\) this\.overrides\.model = savedComposer\.model/);
+  assert.match(CHAT, /this\.overrides\.effort = savedComposer\.effort \?\?/);
+  assert.match(CHAT, /await this\.rememberComposerOptions\(\);[\s\S]*?this\.postModels\(\)/);
+  assert.match(CHAT, /await this\.rememberComposerOptions\(\);[\s\S]*?this\.postEffort\(\)/);
+  assert.match(CHAT, /Object\.fromEntries\(entries\.slice\(-COMPOSER_OPTIONS_KEPT\)\)/);
+});
+
 test('the models manager owns workspace subagent profile CRUD', () => {
   assert.match(PANEL, /id="profiles" class="profile-list"/);
   assert.match(PANEL, /id="profileInstructions"/);

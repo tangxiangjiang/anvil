@@ -46,6 +46,8 @@ export interface SessionRow {
    * and the newest one is the whole conversation the row describes.
    */
   lastRunId?: string;
+  /** Filed outside the recency buckets without changing the stored transcript. */
+  archived?: boolean;
 }
 
 /** A recency heading over rows. */
@@ -82,6 +84,8 @@ export interface SessionViewOptions {
    */
   openAgentIds?: readonly string[];
   runningAgentIds?: readonly string[];
+  /** Workspace-local filing state; descendants of an archived parent follow it. */
+  archivedAgentIds?: readonly string[];
 }
 
 /** Longest agent id shown as a label; the tooltip always carries the whole one. */
@@ -107,7 +111,30 @@ export function buildSessionView(
   options: SessionViewOptions,
 ): SessionNode[] {
   if (sessions.length === 0) return [sessionNote('empty')];
+  const archivedIds = archivedClosure(sessions, options.archivedAgentIds ?? []);
+  const active = sessions.filter((session) => !archivedIds.has(session.agent_id));
+  const archived = sessions.filter((session) => archivedIds.has(session.agent_id));
+  const entries = buildVisibleSessionView(active, options, false);
+  if (archived.length > 0) {
+    const archivedRows = buildVisibleSessionView(archived, options, true).flatMap((node) =>
+      node.kind === 'group' ? node.rows : node.kind === 'session' ? [node] : [],
+    );
+    entries.push({
+      kind: 'group',
+      id: 'group:archived',
+      label: 'Archived',
+      rows: archivedRows,
+    });
+  }
+  return entries;
+}
 
+function buildVisibleSessionView(
+  sessions: SessionInfo[],
+  options: SessionViewOptions,
+  archived: boolean,
+): SessionNode[] {
+  if (sessions.length === 0) return [];
   const childrenOf = childrenByParent(sessions);
   // A child is nested only when its parent is in this listing. Otherwise it is a
   // root: the store can hold a child whose parent was deleted, and a row that
@@ -128,13 +155,13 @@ export function buildSessionView(
       .map((child) => {
         const next = new Set(seen);
         next.add(child.agent_id);
-        return sessionRow(child, options, nestChildren(child.agent_id, next));
+        return sessionRow(child, options, nestChildren(child.agent_id, next), archived);
       });
   };
 
   const roots = sortSessionsByRecency(sessions.filter((session) => !isNested(session)));
   const rootRow = (session: SessionInfo): SessionRow =>
-    sessionRow(session, options, nestChildren(session.agent_id, new Set([session.agent_id])));
+    sessionRow(session, options, nestChildren(session.agent_id, new Set([session.agent_id])), archived);
 
   const dated = sessions.some((session) => timestampOf(session) !== undefined);
   // With nothing to group by, headings would be decoration: one bucket labelled
@@ -155,6 +182,30 @@ export function buildSessionView(
     });
   }
   return entries;
+}
+
+function archivedClosure(
+  sessions: readonly SessionInfo[],
+  selected: readonly string[],
+): Set<string> {
+  const present = new Set(sessions.map((session) => session.agent_id));
+  const archived = new Set(selected.filter((agentId) => present.has(agentId)));
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const session of sessions) {
+      if (
+        session.subagent === true &&
+        session.parent_agent_id &&
+        archived.has(session.parent_agent_id) &&
+        !archived.has(session.agent_id)
+      ) {
+        archived.add(session.agent_id);
+        changed = true;
+      }
+    }
+  }
+  return archived;
 }
 
 /** The sessions each agent spawned, whether or not the parent is present. */
@@ -319,6 +370,7 @@ function sessionRow(
   session: SessionInfo,
   options: SessionViewOptions,
   children: SessionRow[],
+  archived = false,
 ): SessionRow {
   const agentId = session.agent_id;
   const running = options.runningAgentIds?.includes(agentId) === true;
@@ -342,12 +394,13 @@ function sessionRow(
     id: agentId,
     label: rowLabel(session),
     children,
+    archived,
     title: title ? title : undefined,
     lastRunId: lastRunId ? lastRunId : undefined,
     description: parts.join(' · '),
     tooltip: tooltipFor(session, { running, current }),
     icon: running ? 'sync~spin' : STATUS_ICONS[session.last_status ?? ''] ?? 'history',
-    contextValue: running ? 'session.running' : current ? 'session.open' : 'session',
+    contextValue: archived ? 'session.archived' : running ? 'session.running' : current ? 'session.open' : 'session',
     agentId,
   };
 }
