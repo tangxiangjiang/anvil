@@ -2,9 +2,13 @@ import { randomBytes } from 'node:crypto';
 import * as vscode from 'vscode';
 import { catalogBaseUrl, normalizeModelIds, validModelId } from './models';
 import { ModelEntry, SubagentProfile, SubagentsResult } from './protocol';
-import { readSettings, saveDefaultModel } from './settings';
+import {
+  readSettings,
+  saveAvailableModels,
+  saveDefaultModel,
+  saveModelCatalogUrl,
+} from './settings';
 import { mediaAsset } from './webviewAsset';
-import { rootUri } from './workspaceRoot';
 
 export const ModelsViewType = 'anvil.models';
 
@@ -14,6 +18,7 @@ export interface ModelsPanelHost {
   upsertSubagentProfile(profile: SubagentProfile): Promise<SubagentsResult>;
   removeSubagentProfile(id: string): Promise<SubagentsResult>;
   modelsChanged(): void;
+  openModelConnection(): void;
 }
 
 export class ModelsPanels implements vscode.Disposable {
@@ -88,15 +93,16 @@ export class ModelsPanels implements vscode.Disposable {
         return;
       case 'backSettings':
         this.panel?.dispose();
-        await vscode.commands.executeCommand(
-          'workbench.action.openSettings',
-          '@ext:anvil-dev.anvil-vscode',
-        );
+        this.host.openModelConnection();
         return;
     }
   }
 
   private async discover(value: unknown): Promise<void> {
+    if (readSettings().models.mode !== 'gateway') {
+      await this.post({ type: 'error', message: 'Switch Model Mode to Gateway before fetching models.' });
+      return;
+    }
     const endpoint = typeof value === 'string' ? value.trim() : '';
     let base: string;
     try {
@@ -106,7 +112,7 @@ export class ModelsPanels implements vscode.Disposable {
       return;
     }
     try {
-      await this.configuration().update('modelCatalogUrl', endpoint, this.target());
+      await saveModelCatalogUrl(this.context, endpoint);
       this.discovered = await this.host.listModels({ base_url: base });
       await this.sendState('Models loaded. Add the ones this workspace may use.');
     } catch (err) {
@@ -121,26 +127,27 @@ export class ModelsPanels implements vscode.Disposable {
       return;
     }
     const settings = readSettings().models;
-    const available = normalizeModelIds([...settings.available, id]);
-    await this.configuration().update('availableModels', available, this.target());
+    const available = normalizeModelIds([...settings.gatewayAvailable, id]);
+    await saveAvailableModels(this.context, available);
+    this.host.modelsChanged();
     await this.sendState(`${id} is now available.`);
   }
 
   private async remove(value: unknown): Promise<void> {
     const id = typeof value === 'string' ? value : '';
     const settings = readSettings().models;
-    const available = settings.available.filter((model) => model !== id);
-    await this.configuration().update('availableModels', available, this.target());
-    if (settings.defaultModel === id) {
+    const available = settings.gatewayAvailable.filter((model) => model !== id);
+    await saveAvailableModels(this.context, available);
+    if (settings.gatewayDefaultModel === id) {
       await saveDefaultModel(this.context, '');
-      this.host.modelsChanged();
     }
+    this.host.modelsChanged();
     await this.sendState(`${id} was removed.`);
   }
 
   private async setDefault(value: unknown): Promise<void> {
     const id = typeof value === 'string' ? value.trim() : '';
-    const available = readSettings().models.available;
+    const available = readSettings().models.gatewayAvailable;
     if (id !== '' && !available.includes(id)) {
       await this.post({ type: 'error', message: 'The default model must be in the available list.' });
       return;
@@ -188,19 +195,13 @@ export class ModelsPanels implements vscode.Disposable {
     await this.post({
       type: 'state',
       ...settings,
+      available: settings.gatewayAvailable,
+      defaultModel: settings.gatewayDefaultModel,
       discovered: this.discovered,
       subagents: this.profiles,
       profileSaved,
       note,
     });
-  }
-
-  private configuration(): vscode.WorkspaceConfiguration {
-    return vscode.workspace.getConfiguration('anvil', rootUri());
-  }
-
-  private target(): vscode.ConfigurationTarget {
-    return rootUri() ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global;
   }
 
   private post(message: unknown): Thenable<boolean> {
@@ -226,16 +227,16 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
   <link rel="stylesheet" href="${asset('tokens.css')}">
   <link rel="stylesheet" href="${asset('panel.css')}">
   <link rel="stylesheet" href="${asset('models.css')}">
-  <title>Models</title>
+  <title>Model Manager</title>
 </head>
 <body>
   <header class="panel-header">
     <div>
-      <h1>Models</h1>
-      <p>Choose the models this workspace offers to conversations.</p>
+      <h1>Model Manager</h1>
+      <p>Choose the gateway models this workspace offers to conversations.</p>
     </div>
     <div class="header-actions">
-      <button id="backSettings" type="button" class="secondary">← Anvil Settings</button>
+      <button id="backSettings" type="button" class="secondary">← Model settings</button>
       <button id="reload" type="button" class="icon-button" aria-label="Reload models" title="Reload">↻</button>
     </div>
   </header>
@@ -253,14 +254,15 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
         </div>
         <form id="manual" class="inline-form" hidden>
           <label class="field"><span>Model id</span><input id="manualId" type="text" placeholder="gpt-5.2" autocomplete="off"></label>
+          <button id="closeManual" type="button" class="icon-button" aria-label="Close model input" title="Close">×</button>
           <button type="submit" class="primary">Add</button>
         </form>
         <div id="available" class="model-list list-box" role="list" aria-label="Available models"></div>
       </section>
       <section class="model-pane gateway-pane">
-        <div class="section-head"><div><h2>Gateway models</h2><p>Fetch, then add selected models to the left.</p></div></div>
+        <div class="section-head"><div><h2>Gateway models</h2><p>Fetch the Model List API, then add selected models to the left.</p></div></div>
         <form id="discover" class="catalog-form">
-          <label class="field"><span>Models API endpoint</span><input id="catalogUrl" type="url" spellcheck="false"></label>
+          <label class="field"><span>Model List API</span><input id="catalogUrl" type="url" spellcheck="false" placeholder="https://gateway.example.com/v1/models"></label>
           <button id="fetch" type="submit" class="primary">Fetch</button>
         </form>
         <div id="discovered" class="model-list list-box discovered" role="list" aria-label="Gateway models"></div>

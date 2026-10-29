@@ -137,8 +137,16 @@ export function activate(context: vscode.ExtensionContext): void {
       hub.openModels();
     }),
 
+    vscode.commands.registerCommand('anvil.configureModels', () => {
+      hub.openModelConnection();
+    }),
+
     vscode.commands.registerCommand('anvil.selectDefaultModel', async () => {
       const models = readSettings().models;
+      if (models.mode === 'single') {
+        hub.openModelConnection();
+        return;
+      }
       const picked = await vscode.window.showQuickPick(
         [
           { label: 'Host default', id: '' },

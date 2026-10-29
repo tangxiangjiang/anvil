@@ -2,10 +2,28 @@
   "name": "anvil-vscode",
   "displayName": "Anvil",
   "description": "Anvil agent in VS Code: streaming chat, tool cards, per-call approvals.",
-  "version": "0.46.81",
+  "version": "0.46.85",
   "publisher": "anvil-dev",
+  "author": {
+    "name": "Xiangjiang Tang",
+    "url": "https://github.com/tangxiangjiang"
+  },
   "license": "MIT",
   "icon": "media/icon.png",
+  "homepage": "https://github.com/tangxiangjiang/anvil",
+  "bugs": {
+    "url": "https://github.com/tangxiangjiang/anvil/issues"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "coding",
+    "assistant",
+    "llm",
+    "openai",
+    "anthropic",
+    "mcp"
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/tangxiangjiang/anvil.git",
@@ -168,7 +186,12 @@
       },
       {
         "command": "anvil.openModels",
-        "title": "Anvil: Manage Models",
+        "title": "Anvil: Open Model Manager",
+        "category": "Anvil"
+      },
+      {
+        "command": "anvil.configureModels",
+        "title": "Anvil: Configure Models",
         "category": "Anvil"
       },
       {
@@ -291,236 +314,191 @@
     },
     "configuration": [
       {
-      "title": "Anvil: Runtime",
-      "properties": {
-        "anvil.hostPath": {
-          "type": "string",
-          "default": "",
-          "markdownDescription": "Path to the `anvil-host` sidecar binary. Empty uses the binary bundled in the extension, then `anvil-host` on `PATH`. A relative path is resolved against the workspace folder. Set this only to run a host you built yourself."
+        "title": "Anvil: Runtime",
+        "properties": {
+          "anvil.hostPath": {
+            "type": "string",
+            "default": "",
+            "markdownDescription": "Path to the `anvil-host` sidecar binary. Empty uses the binary bundled in the extension, then `anvil-host` on `PATH`. A relative path is resolved against the workspace folder. Set this only to run a host you built yourself."
+          }
         }
-      }
       },
       {
-      "title": "Anvil: Models",
-      "properties": {
-        "anvil.provider": {
-          "type": "string",
-          "enum": [
-            "openai",
-            "anthropic"
-          ],
-          "default": "openai",
-          "description": "Model provider. Sent in session.new, not through the environment."
-        },
-        "anvil.baseUrl": {
-          "type": "string",
-          "default": "",
-          "markdownDescription": "OpenAI-compatible base URL, for example `https://api.openai.com/v1`. Empty means the provider default."
-        },
-        "anvil.effort": {
-          "type": "string",
-          "enum": [
-            "low",
-            "medium",
-            "high"
-          ],
-          "default": "medium",
-          "description": "Default reasoning effort for new chat turns."
-        },
-        "anvil.modelCatalogUrl": {
-          "type": "string",
-          "scope": "resource",
-          "default": "https://athenai.mihoyo.com/v1/models",
-          "markdownDescription": "Exact OpenAI-compatible model catalog endpoint. [Open Model Manager](command:anvil.openModels) to fetch it with the stored Anvil API key."
-        },
-        "anvil.availableModels": {
-          "type": "array",
-          "scope": "resource",
-          "default": [],
-          "uniqueItems": true,
-          "items": {
-            "type": "string"
+        "title": "Anvil: Agent and Context",
+        "properties": {
+          "anvil.maxSteps": {
+            "type": "number",
+            "default": 0,
+            "minimum": 0,
+            "description": "Maximum agent steps per turn. 0 uses the host default."
           },
-          "markdownDescription": "Curated model ids shown in chat. [Open Model Manager](command:anvil.openModels) to edit this list, or [Select Default Model](command:anvil.selectDefaultModel)."
+          "anvil.contextWindow": {
+            "type": "number",
+            "default": 128000,
+            "minimum": 0,
+            "markdownDescription": "The context budget the token meter measures against, in tokens. The conservative 128k default prevents an unconfigured conversation from growing without bound; set the model's real window to use more capacity. Set 0 explicitly to disable automatic compaction and show cumulative counts without a fraction."
+          },
+          "anvil.autoCompactAt": {
+            "type": "number",
+            "default": 0.8,
+            "minimum": 0.1,
+            "maximum": 1,
+            "markdownDescription": "How full the context budget may get before the host summarizes the conversation on its own, as a fraction of `anvil.contextWindow`. The meter marks this point and counts down to it. Ignored while the window is 0."
+          },
+          "anvil.contextKeepRecent": {
+            "type": "number",
+            "default": 8,
+            "minimum": 2,
+            "markdownDescription": "Messages a compaction keeps verbatim; everything older may be summarized. A transcript needs the recent turns as they were, or the model loses the thread it is holding."
+          },
+          "anvil.cacheTtlSeconds": {
+            "type": "number",
+            "default": 0,
+            "minimum": 0,
+            "markdownDescription": "How long the provider keeps its prompt cache, in seconds, for the meter's countdown. 0 means the provider's default: 300 seconds for Anthropic, and no countdown for a provider whose cache lifetime is unknown. The countdown appears only after a run reports cached tokens."
+          }
         }
-      }
       },
       {
-      "title": "Anvil: Agent and Context",
-      "properties": {
-        "anvil.maxSteps": {
-          "type": "number",
-          "default": 0,
-          "minimum": 0,
-          "description": "Maximum agent steps per turn. 0 uses the host default."
-        },
-        "anvil.contextWindow": {
-          "type": "number",
-          "default": 128000,
-          "minimum": 0,
-          "markdownDescription": "The context budget the token meter measures against, in tokens. The conservative 128k default prevents an unconfigured conversation from growing without bound; set the model's real window to use more capacity. Set 0 explicitly to disable automatic compaction and show cumulative counts without a fraction."
-        },
-        "anvil.autoCompactAt": {
-          "type": "number",
-          "default": 0.8,
-          "minimum": 0.1,
-          "maximum": 1,
-          "markdownDescription": "How full the context budget may get before the host summarizes the conversation on its own, as a fraction of `anvil.contextWindow`. The meter marks this point and counts down to it. Ignored while the window is 0."
-        },
-        "anvil.contextKeepRecent": {
-          "type": "number",
-          "default": 8,
-          "minimum": 2,
-          "markdownDescription": "Messages a compaction keeps verbatim; everything older may be summarized. A transcript needs the recent turns as they were, or the model loses the thread it is holding."
-        },
-        "anvil.cacheTtlSeconds": {
-          "type": "number",
-          "default": 0,
-          "minimum": 0,
-          "markdownDescription": "How long the provider keeps its prompt cache, in seconds, for the meter's countdown. 0 means the provider's default: 300 seconds for Anthropic, and no countdown for a provider whose cache lifetime is unknown. The countdown appears only after a run reports cached tokens."
+        "title": "Anvil: Editor",
+        "properties": {
+          "anvil.chatFontSize": {
+            "type": "number",
+            "default": 15,
+            "minimum": 10,
+            "maximum": 24,
+            "markdownDescription": "The chat view's base text size, in pixels. Display only: changing it updates open conversations immediately and does not restart the agent. The default is two pixels larger than the editor's usual 13px UI font."
+          }
         }
-      }
       },
       {
-      "title": "Anvil: Editor",
-      "properties": {
-        "anvil.chatFontSize": {
-          "type": "number",
-          "default": 15,
-          "minimum": 10,
-          "maximum": 24,
-          "markdownDescription": "The chat view's base text size, in pixels. Display only: changing it updates open conversations immediately and does not restart the agent. The default is two pixels larger than the editor's usual 13px UI font."
-        }
-      }
-      },
-      {
-      "title": "Anvil: Sessions and Tools",
-      "properties": {
-        "anvil.store": {
-          "type": "string",
-          "enum": [
-            "",
-            "jsonl",
-            "sqlite"
-          ],
-          "default": "",
-          "description": "Session store kind. Empty uses the host default."
-        },
-        "anvil.vision": {
-          "type": "boolean",
-          "default": true,
-          "markdownDescription": "Let the session accept pasted images. On by default: a screenshot pasted into a chat is a request to send it, and the session then also advertises the `read_image` tool. Off means the composer warns on a paste and the host refuses the attachment, naming this setting. The model still has to accept images."
-        },
-        "anvil.rules": {
-          "type": "boolean",
-          "default": true,
-          "markdownDescription": "Load this workspace's own rules into the session: `AGENTS.md`, then `.anvil/rules/*.md` in name order."
-        },
-        "anvil.cursorRules": {
-          "type": "boolean",
-          "default": true,
-          "markdownDescription": "Also load `.cursor/rules/*.md` and `*.mdc`, so an existing Cursor setup carries over. Off means only Anvil's own rule files are read."
-        },
-        "anvil.permissions": {
-          "type": "boolean",
-          "default": true,
-          "markdownDescription": "Read this workspace's `.anvil/permissions.json`: the rules that let a tool call run, stop to ask about it, or refuse it outright. Off means the session ignores the file, and an approval card has nothing to offer under \"always allow\" — a rule written into a file this session does not read would not be in force."
-        },
-        "anvil.subagents": {
-          "type": "boolean",
-          "default": false,
-          "markdownDescription": "Let a session hand work to child agents: `spawn_agent` runs a brief in its own conversation, and `background: true` starts it in the task table. Children inherit the parent's tools and permissions, and a child's mutating call still stops for approval. Off by default; the tool is then not registered at all, so the model is told it does not exist."
-        },
-        "anvil.lsp.enabled": {
-          "type": "boolean",
-          "default": false,
-          "markdownDescription": "Give the session the language tools: `definition`, `references`, `hover`, `rename_symbol` and the rest. Off by default. A workspace's `.anvil/lsp.json` is read independently when the project layer is loaded, so this switch is for servers the editor declares; the two lists are appended."
-        },
-        "anvil.lsp.servers": {
-          "type": "array",
-          "default": [],
-          "markdownDescription": "Language servers to start, each `{language, pattern, command, args}`. A command that cannot start removes its tools and never refuses the session. The command runs with the host's privileges in a workspace you have trusted, and it is never handed to a shell.",
-          "items": {
-            "type": "object",
-            "required": [
-              "command"
+        "title": "Anvil: Sessions and Tools",
+        "properties": {
+          "anvil.store": {
+            "type": "string",
+            "enum": [
+              "",
+              "jsonl",
+              "sqlite"
             ],
-            "properties": {
-              "language": {
-                "type": "string",
-                "description": "Language id, for example `go`."
-              },
-              "pattern": {
-                "type": "string",
-                "description": "Glob the server applies to, for example `**/*.go`."
-              },
-              "command": {
-                "type": "string",
-                "description": "Executable to start. Arguments travel separately."
-              },
-              "args": {
-                "type": "array",
-                "items": {
-                  "type": "string"
+            "default": "",
+            "description": "Session store kind. Empty uses the host default."
+          },
+          "anvil.vision": {
+            "type": "boolean",
+            "default": true,
+            "markdownDescription": "Let the session accept pasted images. On by default: a screenshot pasted into a chat is a request to send it, and the session then also advertises the `read_image` tool. Off means the composer warns on a paste and the host refuses the attachment, naming this setting. The model still has to accept images."
+          },
+          "anvil.rules": {
+            "type": "boolean",
+            "default": true,
+            "markdownDescription": "Load this workspace's own rules into the session: `AGENTS.md`, then `.anvil/rules/*.md` in name order."
+          },
+          "anvil.cursorRules": {
+            "type": "boolean",
+            "default": true,
+            "markdownDescription": "Also load `.cursor/rules/*.md` and `*.mdc`, so an existing Cursor setup carries over. Off means only Anvil's own rule files are read."
+          },
+          "anvil.permissions": {
+            "type": "boolean",
+            "default": true,
+            "markdownDescription": "Read this workspace's `.anvil/permissions.json`: the rules that let a tool call run, stop to ask about it, or refuse it outright. Off means the session ignores the file, and an approval card has nothing to offer under \"always allow\" — a rule written into a file this session does not read would not be in force."
+          },
+          "anvil.subagents": {
+            "type": "boolean",
+            "default": false,
+            "markdownDescription": "Let a session hand work to child agents: `spawn_agent` runs a brief in its own conversation, and `background: true` starts it in the task table. Children inherit the parent's tools and permissions, and a child's mutating call still stops for approval. Off by default; the tool is then not registered at all, so the model is told it does not exist."
+          },
+          "anvil.lsp.enabled": {
+            "type": "boolean",
+            "default": false,
+            "markdownDescription": "Give the session the language tools: `definition`, `references`, `hover`, `rename_symbol` and the rest. Off by default. A workspace's `.anvil/lsp.json` is read independently when the project layer is loaded, so this switch is for servers the editor declares; the two lists are appended."
+          },
+          "anvil.lsp.servers": {
+            "type": "array",
+            "default": [],
+            "markdownDescription": "Language servers to start, each `{language, pattern, command, args}`. A command that cannot start removes its tools and never refuses the session. The command runs with the host's privileges in a workspace you have trusted, and it is never handed to a shell.",
+            "items": {
+              "type": "object",
+              "required": [
+                "command"
+              ],
+              "properties": {
+                "language": {
+                  "type": "string",
+                  "description": "Language id, for example `go`."
                 },
-                "description": "Arguments passed verbatim."
+                "pattern": {
+                  "type": "string",
+                  "description": "Glob the server applies to, for example `**/*.go`."
+                },
+                "command": {
+                  "type": "string",
+                  "description": "Executable to start. Arguments travel separately."
+                },
+                "args": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Arguments passed verbatim."
+                }
               }
             }
+          },
+          "anvil.testCommand": {
+            "type": "array",
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "markdownDescription": "The argv of the workspace's test command, for example `[\"go\", \"test\", \"./...\"]`. Setting it registers the `run_tests` tool. Empty leaves the tool unregistered."
+          },
+          "anvil.buildCommand": {
+            "type": "array",
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "markdownDescription": "The argv of the workspace's build command. Setting it registers the `build` tool. Empty leaves the tool unregistered."
+          },
+          "anvil.mcp.project": {
+            "type": "boolean",
+            "default": true,
+            "markdownDescription": "Read `.cursor/mcp.json` in the workspace and load the MCP servers it declares. The file can start processes, which is why it is read only from this workspace, and why the extension refuses untrusted workspaces. Tool calls through MCP stay behind the `mcp` permission group."
+          },
+          "anvil.mcp.user": {
+            "type": "boolean",
+            "default": false,
+            "markdownDescription": "Also read `~/.cursor/mcp.json` and load the servers it declares. Off by default: a home-directory file is shared by every project, so turning it on is a wider act than reading the workspace's own file. Project entries win over user entries with the same name."
+          },
+          "anvil.webSearch.enabled": {
+            "type": "boolean",
+            "default": false,
+            "markdownDescription": "Give the session the web tools: `web_search`, and `fetch_url` for pages it finds. Off by default, and off means the tools are not registered at all — a tool the model can see but cannot authenticate is worse than one it never finds. Calls stay behind the `web` permission group. The key is set with **Anvil: Set Web Search Key** and stored in SecretStorage, never in settings."
+          },
+          "anvil.webSearch.provider": {
+            "type": "string",
+            "enum": [
+              "http",
+              "mcp"
+            ],
+            "default": "http",
+            "markdownDescription": "How a search runs. `http` calls the JSON endpoint in `anvil.webSearch.baseUrl` with the stored key. `mcp` registers no built-in tools and expects a web-search MCP server from this workspace's `.cursor/mcp.json` to provide one."
+          },
+          "anvil.webSearch.baseUrl": {
+            "type": "string",
+            "default": "",
+            "markdownDescription": "The search endpoint for the `http` provider, for example `https://gateway.example.com/v1/web/search`. A request is a JSON `POST` with `{\"query\", \"max_results\"}` and a bearer token from the stored key. Required when the provider is `http`; the session refuses to open without it."
+          },
+          "anvil.webSearch.maxResults": {
+            "type": "number",
+            "default": 0,
+            "minimum": 0,
+            "maximum": 10,
+            "description": "Results per search, 1–10. 0 uses the provider default (5)."
           }
-        },
-        "anvil.testCommand": {
-          "type": "array",
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "markdownDescription": "The argv of the workspace's test command, for example `[\"go\", \"test\", \"./...\"]`. Setting it registers the `run_tests` tool. Empty leaves the tool unregistered."
-        },
-        "anvil.buildCommand": {
-          "type": "array",
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "markdownDescription": "The argv of the workspace's build command. Setting it registers the `build` tool. Empty leaves the tool unregistered."
-        },
-        "anvil.mcp.project": {
-          "type": "boolean",
-          "default": true,
-          "markdownDescription": "Read `.cursor/mcp.json` in the workspace and load the MCP servers it declares. The file can start processes, which is why it is read only from this workspace, and why the extension refuses untrusted workspaces. Tool calls through MCP stay behind the `mcp` permission group."
-        },
-        "anvil.mcp.user": {
-          "type": "boolean",
-          "default": false,
-          "markdownDescription": "Also read `~/.cursor/mcp.json` and load the servers it declares. Off by default: a home-directory file is shared by every project, so turning it on is a wider act than reading the workspace's own file. Project entries win over user entries with the same name."
-        },
-        "anvil.webSearch.enabled": {
-          "type": "boolean",
-          "default": false,
-          "markdownDescription": "Give the session the web tools: `web_search`, and `fetch_url` for pages it finds. Off by default, and off means the tools are not registered at all — a tool the model can see but cannot authenticate is worse than one it never finds. Calls stay behind the `web` permission group. The key is set with **Anvil: Set Web Search Key** and stored in SecretStorage, never in settings."
-        },
-        "anvil.webSearch.provider": {
-          "type": "string",
-          "enum": [
-            "http",
-            "mcp"
-          ],
-          "default": "http",
-          "markdownDescription": "How a search runs. `http` calls the JSON endpoint in `anvil.webSearch.baseUrl` with the stored key. `mcp` registers no built-in tools and expects a web-search MCP server from this workspace's `.cursor/mcp.json` to provide one."
-        },
-        "anvil.webSearch.baseUrl": {
-          "type": "string",
-          "default": "",
-          "markdownDescription": "The search endpoint for the `http` provider, for example `https://gateway.example.com/v1/web/search`. A request is a JSON `POST` with `{\"query\", \"max_results\"}` and a bearer token from the stored key. Required when the provider is `http`; the session refuses to open without it."
-        },
-        "anvil.webSearch.maxResults": {
-          "type": "number",
-          "default": 0,
-          "minimum": 0,
-          "maximum": 10,
-          "description": "Results per search, 1–10. 0 uses the provider default (5)."
         }
-      }
       }
     ]
   },

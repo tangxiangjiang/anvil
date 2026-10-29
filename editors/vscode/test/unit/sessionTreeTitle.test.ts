@@ -21,9 +21,13 @@ test('Session Manager is a collapsible function-group root', () => {
     TREE,
     /if \(node\.kind === 'section'\)[\s\S]*?vscode\.TreeItemCollapsibleState\.Expanded/,
   );
-  assert.match(TREE, /if \(!element\) return \[SESSION_SECTION\]/);
+  assert.match(TREE, /if \(!element\) return \[SESSION_SECTION, MODEL_SETTINGS_ACTION\]/);
   assert.match(TREE, /label: 'New session'[\s\S]*?command: 'anvil\.newSession'/);
-  assert.match(TREE, /if \(element\.kind === 'section'\)[\s\S]*?return \[NEW_SESSION_ACTION, \.\.\.this\.view\(\)\]/);
+  assert.match(TREE, /label: 'Model Settings'[\s\S]*?command: 'anvil\.configureModels'/);
+  assert.match(
+    TREE,
+    /if \(element\.kind === 'section'\)[\s\S]*?return \[NEW_SESSION_ACTION, \.\.\.this\.view\(\)\]/,
+  );
   assert.equal(
     PACKAGE.contributes.menus['view/title'].some((entry) => entry.command === 'anvil.newSession'),
     false,

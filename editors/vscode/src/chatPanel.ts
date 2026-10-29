@@ -793,7 +793,13 @@ export class ChatPanel implements HostListener {
   private ensureSession(): Promise<ChatSession> {
     if (this.session) return Promise.resolve(this.session);
     if (this.opening) return this.opening;
-    const config: SessionConfig = { ...readSettings().session, ...this.overrides };
+    const settings = readSettings();
+    if (settings.models.problem) {
+      this.post({ type: 'notice', level: 'error', message: `Configure models: ${settings.models.problem}` });
+      this.hub.openModelConnection();
+      return Promise.reject(new Error(settings.models.problem));
+    }
+    const config: SessionConfig = { ...settings.session, ...this.overrides };
     if (this.mode !== undefined) config.permission_mode = this.mode;
     this.opening = this.hub.manager.open(config, this).then(
       async (session) => {

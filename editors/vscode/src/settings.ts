@@ -12,7 +12,15 @@ import * as vscode from 'vscode';
 import { ApiKeyStore, applyApiKeyEnv, forgetApiKey, loadApiKey, saveApiKey } from './apiKeyStore';
 import { argv, lspParams } from './languageTools';
 import { McpSettings, settingSourcesFor } from './mcp';
-import { DEFAULT_MODEL_CATALOG_URL, ModelSettings, normalizeModelIds } from './models';
+import {
+  DEFAULT_MODEL_CATALOG_URL,
+  ModelConnectionMode,
+  ModelSettings,
+  connectionMode,
+  connectionProblem,
+  normalizeModelIds,
+  validModelId,
+} from './models';
 import { Effort } from './protocol';
 import { SessionConfig } from './session';
 import { WebSearchSettings, webSearchParams } from './webSearch';
@@ -25,7 +33,27 @@ const WEB_ENV_KEY = 'ANVIL_WEB_SEARCH_API_KEY';
 /** Global state only. Not registered with `setKeysForSync`, so it stays on this machine. */
 const SAVED_KEY = 'anvil.apiKey';
 const DEFAULT_MODEL_KEY = 'anvil.defaultModel';
+const MODEL_SETUP_KEY = 'anvil.modelSetup';
+const AVAILABLE_MODELS_KEY = 'anvil.availableModels';
+const MODEL_CATALOG_KEY = 'anvil.modelCatalogUrl';
 let selectedDefaultModel = '';
+let modelSetup: ModelSetup = {
+  mode: 'gateway',
+  provider: 'openai',
+  baseUrl: '',
+  singleModelId: '',
+  effort: 'medium',
+};
+let availableModels: string[] = [];
+let modelCatalogUrl = DEFAULT_MODEL_CATALOG_URL;
+
+export interface ModelSetup {
+  mode: ModelConnectionMode;
+  provider: 'openai' | 'anthropic';
+  baseUrl: string;
+  singleModelId: string;
+  effort: Effort;
+}
 
 /**
  * Loads the workspace's curated default and migrates the former free-text
@@ -35,6 +63,40 @@ let selectedDefaultModel = '';
 export function initDefaultModel(context: vscode.ExtensionContext): void {
   const cfg = vscode.workspace.getConfiguration(SECTION, rootUri());
   const legacy = (cfg.get<string>('model', '') ?? '').trim();
+  const savedConnection = cfg.get<unknown>('modelConnection');
+  const connection =
+    savedConnection && typeof savedConnection === 'object'
+      ? savedConnection as Record<string, unknown>
+      : undefined;
+  const legacyProvider = connection?.provider ?? cfg.get<string>('provider', 'openai');
+  const migratedSetup: ModelSetup = {
+    mode: connectionMode(connection?.mode ?? cfg.get<unknown>('modelMode', 'gateway')),
+    provider: legacyProvider === 'anthropic' ? 'anthropic' : 'openai',
+    baseUrl: (
+      typeof connection?.baseUrl === 'string'
+        ? connection.baseUrl
+        : cfg.get<string>('baseUrl', '') ?? ''
+    ).trim(),
+    singleModelId: (
+      typeof connection?.singleModelId === 'string'
+        ? connection.singleModelId
+        : cfg.get<string>('singleModelId', '') ?? ''
+    ).trim(),
+    effort: readEffort(cfg.get<string>('effort', 'medium')),
+  };
+  modelSetup = normalizeModelSetup(context.workspaceState.get<ModelSetup>(MODEL_SETUP_KEY) ?? migratedSetup);
+  availableModels = normalizeModelIds(
+    context.workspaceState.get<unknown>(AVAILABLE_MODELS_KEY)
+      ?? cfg.get<unknown>('availableModels', []),
+  );
+  modelCatalogUrl = (
+    context.workspaceState.get<string>(MODEL_CATALOG_KEY)
+      ?? cfg.get<string>('modelCatalogUrl', DEFAULT_MODEL_CATALOG_URL)
+      ?? DEFAULT_MODEL_CATALOG_URL
+  ).trim();
+  void context.workspaceState.update(MODEL_SETUP_KEY, modelSetup);
+  void context.workspaceState.update(AVAILABLE_MODELS_KEY, availableModels);
+  void context.workspaceState.update(MODEL_CATALOG_KEY, modelCatalogUrl);
   selectedDefaultModel = context.workspaceState.get<string>(DEFAULT_MODEL_KEY, legacy);
   if (selectedDefaultModel !== '') {
     void context.workspaceState.update(DEFAULT_MODEL_KEY, selectedDefaultModel);
@@ -52,6 +114,31 @@ export function initDefaultModel(context: vscode.ExtensionContext): void {
     clears.push(cfg.update('model', undefined, vscode.ConfigurationTarget.Global));
   }
   void Promise.all(clears);
+}
+
+export async function saveModelSetup(context: vscode.ExtensionContext, value: ModelSetup): Promise<void> {
+  modelSetup = normalizeModelSetup(value);
+  await context.workspaceState.update(MODEL_SETUP_KEY, modelSetup);
+}
+
+export async function saveAvailableModels(context: vscode.ExtensionContext, value: string[]): Promise<void> {
+  availableModels = normalizeModelIds(value);
+  await context.workspaceState.update(AVAILABLE_MODELS_KEY, availableModels);
+}
+
+export async function saveModelCatalogUrl(context: vscode.ExtensionContext, value: string): Promise<void> {
+  modelCatalogUrl = value.trim();
+  await context.workspaceState.update(MODEL_CATALOG_KEY, modelCatalogUrl);
+}
+
+function normalizeModelSetup(value: ModelSetup): ModelSetup {
+  return {
+    mode: connectionMode(value.mode),
+    provider: value.provider === 'anthropic' ? 'anthropic' : 'openai',
+    baseUrl: typeof value.baseUrl === 'string' ? value.baseUrl.trim() : '',
+    singleModelId: typeof value.singleModelId === 'string' ? value.singleModelId.trim() : '',
+    effort: readEffort(value.effort),
+  };
 }
 
 export async function saveDefaultModel(
@@ -132,17 +219,27 @@ export function readSettings(): ResolvedSettings {
   const store = (cfg.get<string>('store', '') ?? '').trim();
   const loadProject = cfg.get<boolean>('rules', true) ?? true;
   const loadCursor = cfg.get<boolean>('cursorRules', true) ?? true;
+  const { mode, provider, baseUrl, singleModelId, effort } = normalizeModelSetup(modelSetup);
+  const effectiveModel = mode === 'single' ? singleModelId : selectedDefaultModel;
   const session: SessionConfig = {
-    provider: emptyToUndefined(cfg.get<string>('provider', '')),
-    model: emptyToUndefined(selectedDefaultModel),
-    base_url: emptyToUndefined(cfg.get<string>('baseUrl', '')),
-    effort: readEffort(cfg.get<string>('effort', 'medium')),
+    provider,
+    model: emptyToUndefined(effectiveModel),
+    base_url: emptyToUndefined(baseUrl),
+    effort,
   };
   const defaultModel = session.model ?? '';
+  const curated = availableModels;
   const models: ModelSettings = {
-    catalogUrl: (cfg.get<string>('modelCatalogUrl', DEFAULT_MODEL_CATALOG_URL) ?? DEFAULT_MODEL_CATALOG_URL).trim(),
-    available: normalizeModelIds(cfg.get<unknown>('availableModels', [])),
+    mode,
+    provider,
+    baseUrl,
+    singleModelId,
+    catalogUrl: modelCatalogUrl,
+    gatewayAvailable: curated,
+    gatewayDefaultModel: selectedDefaultModel,
+    available: mode === 'single' && validModelId(singleModelId) ? [singleModelId] : curated,
     defaultModel,
+    problem: connectionProblem(mode, baseUrl, singleModelId),
   };
   if (maxSteps > 0) session.max_steps = maxSteps;
   if (store !== '') session.store = store;
@@ -225,8 +322,8 @@ export function readSettings(): ResolvedSettings {
   // read the same way the host reads it: the session setting first, the
   // environment second. An unset provider is OpenAI, which is the host's
   // default too, and it makes no caching promise a client could count on.
-  const provider = (session.provider ?? emptyToUndefined(process.env.ANVIL_PROVIDER) ?? '').toLowerCase();
-  const cacheTtlSeconds = cacheTtlOf(configuredTtl, provider);
+  const cacheProvider = (session.provider ?? emptyToUndefined(process.env.ANVIL_PROVIDER) ?? '').toLowerCase();
+  const cacheTtlSeconds = cacheTtlOf(configuredTtl, cacheProvider);
   // Display only, so it is clamped here rather than trusted: the panel writes
   // the number into the document, and a value outside the range the setting
   // offers would be a document nobody could size back.

@@ -199,10 +199,17 @@
     vscode.postMessage({ type: 'backSettings' });
   });
   addManualButton.addEventListener('click', () => {
-    const opening = manualForm.hidden;
-    manualForm.hidden = !opening;
-    addManualButton.setAttribute('aria-expanded', String(opening));
-    if (opening) manualId.focus();
+    if (manualForm.hidden) {
+      manualForm.hidden = false;
+      addManualButton.setAttribute('aria-expanded', 'true');
+    }
+    manualId.focus();
+  });
+  document.getElementById('closeManual').addEventListener('click', () => {
+    manualForm.hidden = true;
+    addManualButton.setAttribute('aria-expanded', 'false');
+    manualId.value = '';
+    addManualButton.focus();
   });
   manualForm.addEventListener('submit', (event) => {
     event.preventDefault();

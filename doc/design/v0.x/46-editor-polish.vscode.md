@@ -1450,3 +1450,55 @@ archived on its own becomes an archived root while its parent remains active. St
 pruned after a successful session listing, so removed JSONL records do not accumulate editor state.
 No archive marker is appended to JSONL and no host protocol method is added
 ([p_0.46.85](../../roadmaps/v0.x/m_0.46/p_0.46.85.vscode.md)).
+
+## 73. Model connections distinguish fixed APIs from gateways
+
+A provider name and HTTP(S) Base URL are required connection facts, while the
+source of model ids is an explicit choice. Single API mode takes one required
+Model ID and exposes only that id to the composer. Gateway mode retains the
+existing discovered catalogue, workspace allow-list, and default-model flow.
+Existing workspaces resolve to Gateway mode so their curated lists keep their
+meaning.
+
+The command **Configure Model Connection** opens one dynamic form: changing the
+mode swaps the Model ID field for **Open Model Manager**. The manager owns the
+gateway-only Model List API and model curation; subagent profiles remain there.
+The connection is saved atomically, and an invalid connection opens this form
+instead of silently starting a session
+([p_0.46.86](../../roadmaps/v0.x/m_0.46/p_0.46.86.vscode.md)).
+
+## 74. Model setup is one task, not a settings scavenger hunt
+
+Provider configuration belongs on one focused page: required Base URL, API-key
+action, Provider, Default Effort, and Model Mode. Mode is a selector whose
+dependent area contains either the Single API Model ID or the Gateway entry to
+Model Manager. The backing connection, gateway catalogue, and allow-list move
+to workspace state after a one-time read of their former settings values, so
+native Settings no longer exposes duplicate or object-shaped editors.
+
+Model Manager remains the gateway workbench. Its manual `+ Add` is an opening
+and focus action, never a second toggle that unexpectedly discards the row.
+Once open, repeated clicks focus the existing field; a separate `×` closes it
+([p_0.46.87](../../roadmaps/v0.x/m_0.46/p_0.46.87.vscode.md)).
+
+## 75. Model Settings is navigation, and mode changes one control
+
+Model configuration is a product destination rather than another native
+setting. Session Manager therefore places **Model Settings** directly below
+**New session**, opening the focused setup page without restoring duplicate
+configuration fields.
+
+Within that page, Model Mode controls one stable detail position. Single API
+puts Model ID there; Gateway replaces it with **Open Model Manager**. The
+reader sees one next step for the selected mode instead of a retained field
+plus a second explanatory panel
+([p_0.46.88](../../roadmaps/v0.x/m_0.46/p_0.46.88.vscode.md)).
+
+## 76. Model Settings is a top-level function
+
+Model Settings configures the whole Anvil window; it is not a session-history
+operation. The navigation therefore places it beside the collapsible Session
+Manager root rather than among New session and the dated conversation groups.
+Its label, gear icon, and command remain the same while the hierarchy states
+the correct ownership
+([p_0.46.89](../../roadmaps/v0.x/m_0.46/p_0.46.89.vscode.md)).

@@ -23,6 +23,7 @@ import { HostManager } from './hostManager';
 import { HostRpcError } from './hostClient';
 import { McpSettings } from './mcp';
 import { McpPanels } from './mcpPanel';
+import { ModelConnectionPanel } from './modelConnectionPanel';
 import { ModelsPanels } from './modelsPanel';
 import { PermissionsPanels } from './permissionsPanel';
 import { PlanDocuments } from './planDocument';
@@ -76,6 +77,8 @@ export class Hub {
   private readonly mcp: McpPanels;
   /** The window's curated model manager. */
   private readonly models: ModelsPanels;
+  /** The provider, endpoint, and mutually exclusive model-source configuration. */
+  private readonly modelConnection: ModelConnectionPanel;
   /** The window's Tasks panel; one table of background work, revealed the same. */
   private readonly tasks: TasksPanels;
   /**
@@ -138,6 +141,7 @@ export class Hub {
     });
     this.permissions = new PermissionsPanels(context.extensionUri, this);
     this.mcp = new McpPanels(context.extensionUri, this);
+    this.modelConnection = new ModelConnectionPanel(context, this);
     this.models = new ModelsPanels(context, this);
     this.tasks = new TasksPanels(context.extensionUri, {
       listTasks: () => this.listTasks(),
@@ -621,8 +625,14 @@ export class Hub {
     this.models.open();
   }
 
+  /** Opens the connection mode, provider, and required endpoint configuration. */
+  openModelConnection(): void {
+    this.modelConnection.open();
+  }
+
   /** Native settings changed: refresh the manager and every composer's list. */
   modelsChanged(): void {
+    this.modelConnection.configurationChanged();
     this.models.configurationChanged();
     for (const panel of this.panels) panel.modelsChanged();
   }
@@ -848,6 +858,7 @@ export class Hub {
     this.permissions.dispose();
     this.tasks.dispose();
     this.mcp.dispose();
+    this.modelConnection.dispose();
     this.models.dispose();
     for (const panel of panels) await panel.dispose().catch(() => undefined);
     await this.manager.dispose();

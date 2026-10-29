@@ -74,6 +74,14 @@ const NEW_SESSION_ACTION: SessionAction = {
   icon: 'add',
 };
 
+const MODEL_SETTINGS_ACTION: SessionAction = {
+  kind: 'action',
+  id: 'session-action:model-settings',
+  label: 'Model Settings',
+  command: 'anvil.configureModels',
+  icon: 'settings-gear',
+};
+
 export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeNode> {
   public static readonly viewType = 'anvil.sessions';
 
@@ -131,15 +139,19 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeN
   async getChildren(element?: SessionTreeNode): Promise<SessionTreeNode[]> {
     // Function groups are the stable top level. Session Manager is the first;
     // future groups can sit beside it without replacing the native Tree View.
-    if (!element) return [SESSION_SECTION];
+    if (!element) return [SESSION_SECTION, MODEL_SETTINGS_ACTION];
 
     if (element.kind === 'section') {
       // Checked before the call rather than after it fails: an untrusted
       // workspace cannot start the host at all, and asking would be a spawn
       // attempt whose only outcome is the same message.
-      if (!vscode.workspace.isTrusted) return [NEW_SESSION_ACTION, sessionNote('untrusted')];
+      if (!vscode.workspace.isTrusted) {
+        return [NEW_SESSION_ACTION, sessionNote('untrusted')];
+      }
 
-      if (this.failure !== undefined) return [NEW_SESSION_ACTION, sessionNote('error', this.failure)];
+      if (this.failure !== undefined) {
+        return [NEW_SESSION_ACTION, sessionNote('error', this.failure)];
+      }
       if (this.cached === undefined) {
         // Nothing to show and nothing in flight: this is the one moment a host
         // is started by the sidebar alone, and it is the user who opened the

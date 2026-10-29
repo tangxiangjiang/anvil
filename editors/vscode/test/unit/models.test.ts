@@ -4,7 +4,10 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import {
   DEFAULT_MODEL_CATALOG_URL,
+  baseUrlProblem,
   catalogBaseUrl,
+  connectionMode,
+  connectionProblem,
   normalizeModelIds,
   validModelId,
 } from '../../src/models';
@@ -14,6 +17,8 @@ const ROOT = join(__dirname, '..', '..', '..');
 const PACKAGE = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
 const PANEL = readFileSync(join(ROOT, 'src', 'modelsPanel.ts'), 'utf8');
 const MODELS_JS = readFileSync(join(ROOT, 'media', 'models.js'), 'utf8');
+const CONNECTION = readFileSync(join(ROOT, 'src', 'modelConnectionPanel.ts'), 'utf8');
+const CONNECTION_JS = readFileSync(join(ROOT, 'media', 'model-connection.js'), 'utf8');
 const CHAT = readFileSync(join(ROOT, 'src', 'chatPanel.ts'), 'utf8');
 const CHAT_JS = readFileSync(join(ROOT, 'media', 'chat.js'), 'utf8');
 const SETTINGS = readFileSync(join(ROOT, 'src', 'settings.ts'), 'utf8');
@@ -36,14 +41,25 @@ test('an exact models endpoint is normalized for the existing host RPC', () => {
   assert.throws(() => catalogBaseUrl('file:///models'), /http or https/);
 });
 
-test('native settings are grouped and declare the curated model settings', () => {
+test('model connection modes require their effective endpoint and model', () => {
+  assert.equal(connectionMode('single'), 'single');
+  assert.equal(connectionMode('gateway'), 'gateway');
+  assert.equal(connectionMode('legacy'), 'gateway');
+  assert.match(baseUrlProblem('') ?? '', /required/);
+  assert.equal(baseUrlProblem('https://gateway.example/v1'), undefined);
+  assert.match(baseUrlProblem('file:///models') ?? '', /http/);
+  assert.equal(connectionProblem('gateway', 'https://gateway.example/v1', ''), undefined);
+  assert.match(connectionProblem('single', 'https://api.example/v1', '') ?? '', /Model ID/);
+  assert.equal(connectionProblem('single', 'https://api.example/v1', 'claude-sonnet-5-5'), undefined);
+});
+
+test('native settings omit model state managed by the focused setup pages', () => {
   const sections = PACKAGE.contributes.configuration;
   assert.ok(Array.isArray(sections));
   assert.deepEqual(
     sections.map((section: { title: string }) => section.title),
     [
       'Anvil: Runtime',
-      'Anvil: Models',
       'Anvil: Agent and Context',
       'Anvil: Editor',
       'Anvil: Sessions and Tools',
@@ -51,9 +67,11 @@ test('native settings are grouped and declare the curated model settings', () =>
   );
   const properties = configurationProperties(PACKAGE);
   assert.equal(properties['anvil.model'], undefined);
-  assert.equal(properties['anvil.modelCatalogUrl'].default, DEFAULT_MODEL_CATALOG_URL);
-  assert.equal(properties['anvil.availableModels'].uniqueItems, true);
+  for (const key of ['modelConnection', 'provider', 'baseUrl', 'modelMode', 'singleModelId', 'effort', 'modelCatalogUrl', 'availableModels']) {
+    assert.equal(properties[`anvil.${key}`], undefined);
+  }
   assert.ok(PACKAGE.contributes.commands.some((command: { command: string }) => command.command === 'anvil.openModels'));
+  assert.ok(PACKAGE.contributes.commands.some((command: { command: string }) => command.command === 'anvil.configureModels'));
   assert.ok(PACKAGE.contributes.commands.some((command: { command: string }) => command.command === 'anvil.selectDefaultModel'));
 });
 
@@ -64,12 +82,16 @@ test('the manager curates fetched models without sending credentials to its webv
   assert.match(PANEL, /case 'remove'/);
   assert.match(PANEL, /case 'setDefault'/);
   assert.match(PANEL, /case 'backSettings'/);
-  assert.match(PANEL, /workbench\.action\.openSettings/);
+  assert.match(PANEL, /this\.host\.openModelConnection\(\)/);
+  assert.match(PANEL, /Switch Model Mode to Gateway before fetching models/);
   assert.match(PANEL, /class="model-workbench"/);
   assert.match(PANEL, /id="available" class="model-list list-box"/);
   assert.match(PANEL, /id="discovered" class="model-list list-box discovered"/);
   assert.doesNotMatch(PANEL, /api[_A-Z]?key/i);
-  assert.match(PANEL, /settings\.defaultModel === id[\s\S]*?saveDefaultModel\(this\.context, ''\)/);
+  assert.match(PANEL, /settings\.gatewayDefaultModel === id[\s\S]*?saveDefaultModel\(this\.context, ''\)/);
+  assert.match(PANEL, /id="closeManual"/);
+  assert.match(MODELS_JS, /if \(manualForm\.hidden\)[\s\S]*?manualId\.focus\(\)/);
+  assert.doesNotMatch(MODELS_JS, /manualForm\.hidden = !/);
 });
 
 test('the default picker uses only curated models and migrates the old text setting', () => {
@@ -77,7 +99,39 @@ test('the default picker uses only curated models and migrates the old text sett
   assert.match(EXTENSION, /\.\.\.models\.available\.map\(\(id\) => \(\{ label: id, id \}\)\)/);
   assert.match(SETTINGS, /context\.workspaceState\.get<string>\(DEFAULT_MODEL_KEY, legacy\)/);
   assert.match(SETTINGS, /cfg\.update\('model', undefined, vscode\.ConfigurationTarget\.Workspace\)/);
-  assert.match(SETTINGS, /model: emptyToUndefined\(selectedDefaultModel\)/);
+  assert.match(SETTINGS, /workspaceState\.get<ModelSetup>\(MODEL_SETUP_KEY\) \?\? migratedSetup/);
+  assert.match(SETTINGS, /cfg\.get<unknown>\('availableModels', \[\]\)/);
+  assert.match(SETTINGS, /cfg\.get<string>\('modelCatalogUrl', DEFAULT_MODEL_CATALOG_URL\)/);
+  assert.match(SETTINGS, /workspaceState\.update\(MODEL_SETUP_KEY, modelSetup\)/);
+  assert.match(SETTINGS, /const effectiveModel = mode === 'single' \? singleModelId : selectedDefaultModel/);
+  assert.match(SETTINGS, /model: emptyToUndefined\(effectiveModel\)/);
+});
+
+test('the model setup page keeps the five setup controls together', () => {
+  assert.match(CONNECTION, /Model settings/);
+  assert.match(CONNECTION, /id="baseUrl"[^>]*required/);
+  assert.match(CONNECTION, /id="setApiKey"/);
+  assert.match(CONNECTION, /id="provider"/);
+  assert.match(CONNECTION, /id="effort"/);
+  assert.match(CONNECTION, /id="mode"/);
+  assert.match(CONNECTION, /<option value="single">Single API/);
+  assert.match(CONNECTION, /<option value="gateway">Gateway/);
+  assert.match(CONNECTION, /id="singleModelId"/);
+  assert.match(CONNECTION, /id="openManager"/);
+  assert.match(CONNECTION, /connectionProblem\(mode, baseUrl, singleModelId\)/);
+  assert.match(CONNECTION, /saveModelSetup\(this\.context, setup\)/);
+  assert.match(CONNECTION, /executeCommand\('anvil\.setApiKey'\)/);
+  assert.match(CONNECTION_JS, /singleFields\.hidden = !single/);
+  assert.match(CONNECTION_JS, /gatewayFields\.hidden = single/);
+  assert.match(CONNECTION_JS, /singleModelId\.required = single/);
+  assert.match(CONNECTION_JS, /payload\('openManager'\)/);
+});
+
+test('invalid model connection opens configuration before a session starts', () => {
+  const ensure = CHAT.slice(CHAT.indexOf('private ensureSession()'), CHAT.indexOf('private async liveSession()'));
+  assert.match(ensure, /settings\.models\.problem/);
+  assert.match(ensure, /this\.hub\.openModelConnection\(\)/);
+  assert.ok(ensure.indexOf('settings.models.problem') < ensure.indexOf('this.hub.manager.open'));
 });
 
 test('chat model selection uses the curated list and remains a session option', () => {
