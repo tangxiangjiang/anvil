@@ -255,10 +255,10 @@ func TestMCPRuntimeRetiresAfterInFlightCalls(t *testing.T) {
 // Disabled entries are shown, not started, and a disabled project entry keeps
 // shadowing the user file.
 func TestMCPRuntimeReportsDisabledEntries(t *testing.T) {
+	exe := buildRuntimeFixture(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
-	exe := buildRuntimeFixture(t)
 	pidFile := filepath.Join(t.TempDir(), "shadowed.pid")
 	writeRuntimeConfig(t, home, map[string]map[string]any{
 		"shadowed": {"command": exe, "env": map[string]string{"FAKE_MCP_PIDFILE": pidFile}},

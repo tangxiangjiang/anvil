@@ -284,6 +284,7 @@ func TestTasksRPCsOverABackgroundShell(t *testing.T) {
 	sessionID, _ := sess["session_id"].(string)
 
 	out := promptRun(t, h, sessionID, "start a job", autoApprove)
+	taskNotes := append([]map[string]any(nil), out.tasks...)
 	firstID := taskIDFromText(t, toolResultText(t, out, "call_bg"))
 
 	row := waitTaskStatus(t, h, sessionID, firstID, "finished")
@@ -319,6 +320,7 @@ func TestTasksRPCsOverABackgroundShell(t *testing.T) {
 
 	// Start a job that will still be running, and stop it through the RPC.
 	out = promptRun(t, h, sessionID, "start the long one", autoApprove)
+	taskNotes = append(taskNotes, out.tasks...)
 	longID := taskIDFromText(t, toolResultText(t, out, "call_long"))
 	cancelled := resultOf(t, h.callOK(MethodTasksCancel, TasksCancelParams{SessionID: sessionID, TaskID: longID}))
 	task, _ := cancelled["task"].(map[string]any)
@@ -335,22 +337,32 @@ func TestTasksRPCsOverABackgroundShell(t *testing.T) {
 		t.Fatalf("cancelled output=%q, want the cancellation note", got)
 	}
 
-	// The `task` notification reported both edges of both tasks.
-	var starts, ends int
-	for _, n := range out.tasks {
+	// The `task` notifications can arrive after a run's terminal `done`, so
+	// drain them separately and require both edges of both tasks.
+	starts := map[string]bool{}
+	ends := map[string]bool{}
+	record := func(n map[string]any) {
 		p := paramsOf(t, n)
 		row, _ := p["task"].(map[string]any)
+		id, _ := row["id"].(string)
 		if row["status"] == "running" {
-			starts++
+			starts[id] = true
 		} else {
-			ends++
+			ends[id] = true
 		}
 		if p["session_id"] != sessionID {
 			t.Fatalf("task notification routed to %v, want %s", p["session_id"], sessionID)
 		}
 	}
-	if starts == 0 || ends == 0 {
-		t.Fatalf("task notifications: %d starts, %d ends; want both", starts, ends)
+	for _, n := range taskNotes {
+		record(n)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for !(starts[firstID] && ends[firstID] && starts[longID] && ends[longID]) {
+		n := h.next(time.Until(deadline))
+		if n["method"] == NotifyTask {
+			record(n)
+		}
 	}
 }
 

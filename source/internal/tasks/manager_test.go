@@ -157,12 +157,20 @@ func TestShellTimeoutIsFailureWithNote(t *testing.T) {
 	if final.Status != StatusFailed {
 		t.Fatalf("status = %s, want failed", final.Status)
 	}
-	out, err := m.Output(info.ID, 0, 0)
-	if err != nil {
-		t.Fatalf("Output: %v", err)
+	var output strings.Builder
+	for offset := 0; ; {
+		out, err := m.Output(info.ID, offset, 0)
+		if err != nil {
+			t.Fatalf("Output: %v", err)
+		}
+		output.WriteString(out.Text)
+		if !out.More {
+			break
+		}
+		offset = int(out.NextOffset)
 	}
-	if !strings.Contains(out.Text, "command killed after 150ms") {
-		t.Fatalf("output = %q", out.Text)
+	if !strings.Contains(output.String(), "command killed after 150ms") {
+		t.Fatalf("output does not contain the timeout note")
 	}
 }
 
