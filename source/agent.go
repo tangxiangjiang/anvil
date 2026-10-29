@@ -79,6 +79,12 @@ type Agent struct {
 	plugins      *plugin.Manager
 	lsp          *lsp.Supervisor
 	systemPrompt string
+	// rootAgentID and rootRunID are a child's tree root, set when its run starts (0.50+).
+	rootAgentID string
+	rootRunID   string
+	// promptSpec is the layers systemPrompt was composed from; a run composes again from
+	// it to add its matched skills and directive before the closing line.
+	promptSpec prompt.Spec
 	hookFile     *hooks.File
 }
 
@@ -153,6 +159,11 @@ func createAgent(ctx context.Context, opts Options, ident subagentIdentity) (*Ag
 		Depth:            ident.Depth,
 		TaskTitle:        ident.TaskTitle,
 	}
+	if ident.Brief != nil {
+		if raw, err := json.Marshal(ident.Brief); err == nil {
+			meta.Brief = raw
+		}
+	}
 	if ident.ParentAgentID != "" {
 		meta.Kind = "subagent"
 	}
@@ -161,7 +172,7 @@ func createAgent(ctx context.Context, opts Options, ident subagentIdentity) (*Ag
 		cleanupRegistry(sessions, plugMgr, lspSup)
 		return nil, newError("persist agent meta", false, err)
 	}
-	sysPrompt, err := buildSystemPrompt(cwd, opts)
+	spec, err := buildPromptSpec(cwd, opts)
 	if err != nil {
 		// The meta record is already on disk. A session that failed to start must
 		// not stay behind as a meta-only entry that lists as a session with no runs
@@ -188,7 +199,8 @@ func createAgent(ctx context.Context, opts Options, ident subagentIdentity) (*Ag
 		plugins:      plugMgr,
 		lsp:          lspSup,
 		history:      nil,
-		systemPrompt: sysPrompt,
+		systemPrompt: prompt.Compose(spec),
+			promptSpec:   spec,
 		hookFile:     hookFile,
 	}, nil
 }
@@ -274,7 +286,7 @@ func Resume(ctx context.Context, agentID string, opts Options) (*Agent, error) {
 		}
 		return nil, newError("lock agent store", false, err)
 	}
-	sysPrompt, err := buildSystemPrompt(cwd, opts)
+	spec, err := buildPromptSpec(cwd, opts)
 	if err != nil {
 		_ = lock.Release()
 		_ = st.Close()
@@ -300,12 +312,27 @@ func Resume(ctx context.Context, agentID string, opts Options) (*Agent, error) {
 		plugins:      plugMgr,
 		lsp:          lspSup,
 		history:      historyFromRecords(records),
-		systemPrompt: sysPrompt,
+		systemPrompt: prompt.Compose(spec),
+			promptSpec:   spec,
 		hookFile:     hookFile,
 	}, nil
 }
 
+// buildSystemPrompt composes the agent's system prompt. It is the one place a prompt
+// is built: the safety layer is prepended here for every agent, whatever Role and
+// SystemPrompt say (chapter 49).
 func buildSystemPrompt(cwd string, opts Options) (string, error) {
+	spec, err := buildPromptSpec(cwd, opts)
+	if err != nil {
+		return "", err
+	}
+	return prompt.Compose(spec), nil
+}
+
+// buildPromptSpec assembles the layers that last as long as the agent: role, project
+// rules, session notes, plugin hints and always-on skills. A run adds its matched
+// skills and directive to a copy of it.
+func buildPromptSpec(cwd string, opts Options) (prompt.Spec, error) {
 	loadProject := opts.Local.LoadRules
 	loadCursor := opts.Local.LoadCursorRules || opts.Local.HasSettingSource(SettingSourceProject)
 	rulesText := ""
@@ -316,31 +343,33 @@ func buildSystemPrompt(cwd string, opts Options) (string, error) {
 			LoadCursor:  loadCursor,
 		})
 		if err != nil {
-			return "", err
+			return prompt.Spec{}, err
 		}
 	}
-	var base string
-	if opts.SystemPrompt != "" {
-		if rulesText == "" {
-			base = opts.SystemPrompt
-		} else {
-			base = opts.SystemPrompt + "\n\n# Project rules\n" + rulesText
-		}
-	} else {
-		base = prompt.SystemWithOptions(cwd, rulesText, prompt.Options{
-			AllowShell: opts.Local.AllowShellEnabled(),
-		})
+	// L2 in today's order. SystemPrompt replaces the role text (L1) only; the safety
+	// layer is prepended by Compose.
+	var project []string
+	if rulesText != "" {
+		project = append(project, "# Project rules\n"+rulesText)
 	}
 	if notes := sessionStartNotes(cwd, opts); notes != "" {
-		base += "\n\n# Session notes\n" + notes
+		project = append(project, "# Session notes\n"+notes)
 	}
 	if pluginNotes := pluginSessionHints(opts); pluginNotes != "" {
-		base += "\n\n# Plugins\n" + pluginNotes
+		project = append(project, "# Plugins\n"+pluginNotes)
 	}
 	if always := alwaysSkillsText(cwd, opts); always != "" {
-		base += "\n\n# Skills (always)\n" + always
+		project = append(project, "# Skills (always)\n"+always)
 	}
-	return base, nil
+	return prompt.Spec{
+		CWD:        cwd,
+		AllowShell: opts.Local.AllowShellEnabled(),
+		Role:       prompt.Role(opts.Role),
+		RoleText:   opts.SystemPrompt,
+		Multi:      opts.Mode != ModeSingle,
+		Brief:      opts.brief,
+		Project:    strings.Join(project, "\n\n"),
+	}, nil
 }
 
 func pluginSessionHints(opts Options) string {
@@ -532,7 +561,7 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 		anvilHome, _ := permissions.AnvilHome()
 		reg.SetPermissionRulesSource(permissions.NewSource(
 			cwd, userPath, permissions.HomeDir(), anvilHome,
-			permissionRules(opts.PermissionRules), permRules,
+			codeRules(opts), permRules,
 		))
 	}
 	// What is left here is the caller's own callback: the file hooks are checked in
@@ -641,7 +670,11 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 	if opts.Subagents.Enabled && opts.depth+1 < subagentMaxDepth(opts.Subagents) {
 		// run_workflow orchestrates the same children spawn_agent creates, so it
 		// shares the depth rule: a workflow cannot be used to get around it.
-		for _, tool := range []*tools.FuncTool{subagentTool(reg, opts.Subagents.Profiles), workflowTool(reg)} {
+		agentTools := []*tools.FuncTool{subagentTool(reg, opts.Subagents.Profiles), workflowTool(reg)}
+		if opts.Mode != ModeSingle {
+			agentTools = append(agentTools, delegateTool(reg))
+		}
+		for _, tool := range agentTools {
 			if err := reg.Register(tool); err != nil {
 				if lspSup != nil {
 					lspSup.Close()
@@ -911,7 +944,7 @@ func toToolPreview(p tools.Preview) ToolPreview {
 func buildPermissionRules(cwd string, opts Options) (*permissions.Set, error) {
 	// Validated on its own first, so an error names a rule the caller can count
 	// rather than a position in the merged list.
-	code, err := permissions.New(permissionRules(opts.PermissionRules))
+	code, err := permissions.New(codeRules(opts))
 	if err != nil {
 		return nil, newError("permission rules", false, err)
 	}
@@ -945,6 +978,14 @@ func buildPermissionRules(cwd string, opts Options) (*permissions.Set, error) {
 		})
 	}
 	return set, nil
+}
+
+// codeRules are the rules a program passes in: the caller's own, then the generated
+// deny a delegated child carries. Order matters for the citation only, since a deny
+// beats an allow wherever it sits; the generated rules come after the caller's so the
+// caller's rules are always the ones a reader meets first.
+func codeRules(opts Options) []permissions.Rule {
+	return append(permissionRules(opts.PermissionRules), opts.confine...)
 }
 
 func permissionRules(rules []PermissionRule) []permissions.Rule {
@@ -1044,6 +1085,16 @@ func (a *Agent) Send(ctx context.Context, message string, opts ...SendOption) (*
 			opt(&cfg)
 		}
 	}
+	if a.opts.Mode == ModeComplex {
+		// Refused before anything is created or sent: no stage starts for a run that
+		// cannot finish.
+		if why := a.complexRefusal(); why != "" {
+			return nil, newError(why, false, nil)
+		}
+		if len(cfg.Attachments) > 0 {
+			return nil, newError("mode complex does not take image attachments: the stages work from the message and the workspace", false, nil)
+		}
+	}
 
 	if cfg.Force {
 		a.mu.Lock()
@@ -1085,13 +1136,23 @@ func (a *Agent) Send(ctx context.Context, message string, opts ...SendOption) (*
 	}
 	a.running = true
 	historyCopy := append([]llm.Message(nil), a.history...)
+	// A provider's tool-loop state belongs to the run that produced it. A resumed session has
+	// none (the store keeps none), so a live one starts each run without it too, and the two
+	// send the same history.
+	for i := range historyCopy {
+		historyCopy[i].ProviderState = nil
+	}
 	wall := a.opts.MaxWallTime
 	runCtx, cancelCause := context.WithCancelCause(ctx)
 	run := newRun("run-"+id.New(), cancelCause)
 	a.activeRun = run
 	a.mu.Unlock()
 
-	go a.executeRun(runCtx, cancelCause, wall, run, message, historyCopy, parts)
+	if a.opts.Mode == ModeComplex {
+		go a.executeComplex(runCtx, cancelCause, wall, run, message, cfg.Directive)
+		return run, nil
+	}
+	go a.executeRun(runCtx, cancelCause, wall, run, message, cfg.Directive, historyCopy, parts)
 	return run, nil
 }
 
@@ -1126,7 +1187,7 @@ func (a *Agent) Reload(ctx context.Context) error {
 		cleanupRegistry(sessions, plugMgr, lspSup)
 		return err
 	}
-	sysPrompt, err := buildSystemPrompt(cwd, opts)
+	spec, err := buildPromptSpec(cwd, opts)
 	if err != nil {
 		cleanupRegistry(sessions, plugMgr, lspSup)
 		return newError("load project rules", false, err)
@@ -1157,7 +1218,8 @@ func (a *Agent) Reload(ctx context.Context) error {
 	}
 	a.plugins = plugMgr
 	a.lsp = lspSup
-	a.systemPrompt = sysPrompt
+	a.systemPrompt = prompt.Compose(spec)
+	a.promptSpec = spec
 	a.hookFile = hookFile
 	return nil
 }
@@ -1257,7 +1319,7 @@ func compactInfo(in *runtime.CompactInfo) *CompactInfo {
 	}
 }
 
-func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseFunc, wall time.Duration, run *Run, message string, history []llm.Message, userParts []llm.ContentPart) {
+func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseFunc, wall time.Duration, run *Run, message, directive string, history []llm.Message, userParts []llm.ContentPart) {
 	defer func() {
 		// The run is over, so its pre-images stop being written: a tool call made
 		// outside a run — a resumed tab replaying, a direct Execute — belongs to no
@@ -1284,11 +1346,23 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 	a.persist(store.Record{Type: store.TypeRunStart, RunID: run.id})
 
 	sysPrompt := a.systemPrompt
-	if routed := routerSkillsText(a.cwd, a.opts, message); routed != "" {
-		sysPrompt += "\n\n# Skills (matched)\n" + routed
+	routed := routerSkillsText(a.cwd, a.opts, message)
+	if routed != "" || directive != "" {
+		// Matched skills and the directive belong before the closing line, so the run's
+		// prompt is composed again from the agent's layers rather than appended to.
+		spec := a.promptSpec
+		if routed != "" {
+			if spec.Project != "" {
+				spec.Project += "\n\n"
+			}
+			spec.Project += "# Skills (matched)\n" + routed
+		}
+		spec.Directive = directive
+		sysPrompt = prompt.Compose(spec)
 	}
 
 	a.registry.SetRunContext(a.id, run.id)
+	a.adoptTreeRoot(loopCtx)
 	result := runtime.Loop(loopCtx, a.complete, a.registry, runtime.Config{
 		CWD:               a.cwd,
 		Model:             a.opts.Model.ID,
@@ -1306,6 +1380,8 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 			KeepRecent:    a.opts.Context.KeepRecent,
 		},
 		PromptCache:       promptCacheEnabled(a.opts),
+		Effort:            llm.Effort(a.opts.Effort),
+		MaxOutputTokens:   a.opts.MaxOutputTokens,
 		SystemPrompt:      sysPrompt,
 		RequireFinishTask: a.opts.RequireFinishTask,
 		ParallelTools:     a.opts.ParallelTools,
@@ -1323,6 +1399,8 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 			Step:           ev.Step,
 			MaxSteps:       ev.MaxSteps,
 			Code:           Code(ev.Code),
+			Attempt:        ev.Attempt,
+			Delay:          ev.Delay,
 			Rule:           permissionRuleMatch(ev.Rule),
 			Protected:      ev.Protected,
 			Usage:          usageInfo(ev.Usage),
@@ -1364,6 +1442,7 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 		Usage:         usageInfo(result.Usage),
 		Err:           result.Err,
 		Code:          Code(result.Code),
+		Truncated:     result.Truncated,
 		LastRequestAt: result.LastRequestAt,
 	}
 	if rr.ID == "" {
@@ -1575,10 +1654,28 @@ func normalizeOptions(opts Options) (Options, string, error) {
 	default:
 		return opts, "", newError("unsupported provider: "+string(opts.Provider), false, nil)
 	}
-	switch opts.Effort {
-	case EffortDefault, EffortLow, EffortMedium, EffortHigh:
+	if !llm.Effort(opts.Effort).Valid() {
+		return opts, "", newError("unsupported effort: "+string(opts.Effort)+" (use low, medium or high, or leave it empty)", false, nil)
+	}
+	switch opts.Mode {
+	case ModeSingle:
+	case ModeMulti:
+		if !opts.Subagents.Enabled {
+			return opts, "", newError("mode multi needs Subagents.Enabled: delegate creates a child agent", false, nil)
+		}
+	case ModeComplex:
+		if !opts.Subagents.Enabled {
+			return opts, "", newError("mode complex needs Subagents.Enabled: its stages are child agents", false, nil)
+		}
+		c := opts.Complex
+		if !llm.Effort(c.Decision.Effort).Valid() || !llm.Effort(c.Analyze.Effort).Valid() || !llm.Effort(c.Worker.Effort).Valid() {
+			return opts, "", newError("complex stage effort must be low, medium or high, or empty", false, nil)
+		}
 	default:
-		return opts, "", newError("unsupported effort: "+string(opts.Effort), false, nil)
+		return opts, "", newError("unsupported mode: "+string(opts.Mode)+" (use multi or complex, or leave it empty)", false, nil)
+	}
+	if !prompt.Role(opts.Role).Valid() {
+		return opts, "", newError("unsupported role: "+string(opts.Role), false, nil)
 	}
 	if opts.APIKey == "" {
 		opts.APIKey = os.Getenv("ANVIL_API_KEY")
@@ -1634,10 +1731,18 @@ func newCompleter(opts Options) (llm.Completer, error) {
 		BaseURL: opts.BaseURL,
 		Model:   opts.Model.ID,
 	}
+	var inner llm.Completer
 	switch opts.Provider {
 	case ProviderAnthropic:
-		return llm.NewAnthropic(cfg), nil
+		inner = llm.NewAnthropic(cfg)
 	default:
-		return llm.NewOpenAI(cfg), nil
+		inner = llm.NewOpenAI(cfg)
 	}
+	// Wrapped once, here: a child agent reuses its parent's completer (Options.completer),
+	// so a retry under a subagent is not multiplied.
+	return llm.WithRetry(inner, llm.RetryPolicy{
+		MaxAttempts: opts.Retry.MaxAttempts,
+		BaseDelay:   opts.Retry.BaseDelay,
+		MaxDelay:    opts.Retry.MaxDelay,
+	}), nil
 }

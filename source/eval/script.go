@@ -16,6 +16,12 @@ import (
 type Reply struct {
 	Message llm.Message
 	Expect  func(llm.Request) error
+	// Fail, when non-nil, is returned instead of Message: the scripted provider
+	// fails this call. It consumes the reply like any other, so a retried call sees
+	// the next one.
+	Fail error
+	// StopReason is returned with Message, as a provider's finish_reason would be.
+	StopReason llm.StopReason
 }
 
 // Replies keeps fixtures that need no predicates concise.
@@ -48,6 +54,8 @@ func NewScript(replies []Reply) *ScriptCompleter {
 			break
 		}
 		s.replies[i].Expect = reply.Expect
+		s.replies[i].Fail = reply.Fail
+		s.replies[i].StopReason = reply.StopReason
 	}
 	return s
 }
@@ -82,7 +90,10 @@ func (s *ScriptCompleter) Complete(ctx context.Context, req llm.Request) (*llm.R
 			return nil, s.err
 		}
 	}
-	body, err := json.Marshal(llm.Response{Message: reply.Message})
+	if reply.Fail != nil {
+		return nil, reply.Fail
+	}
+	body, err := json.Marshal(llm.Response{Message: reply.Message, StopReason: reply.StopReason})
 	if err != nil {
 		s.err = err
 		return nil, err

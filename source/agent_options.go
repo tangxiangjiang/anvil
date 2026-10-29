@@ -6,13 +6,60 @@ package anvil
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/anvil-dev/anvil/internal/llm"
+	"github.com/anvil-dev/anvil/internal/permissions"
 	"github.com/anvil-dev/anvil/internal/tasks"
 )
 
 // Provider selects the LLM wire protocol.
+// RetryPolicy bounds provider retries. See Options.Retry.
+type RetryPolicy struct {
+	MaxAttempts int           // 0 means 3; 1 means no retry
+	BaseDelay   time.Duration // 0 means 500ms
+	MaxDelay    time.Duration // 0 means 8s
+}
+
+// Effort is how hard a model is asked to think before it answers (0.48+). Three
+// named levels and an empty default, not a number: the providers spell effort in
+// different units, and each adapter converts the level to its own.
+type Effort string
+
+const (
+	// EffortDefault sends nothing; the provider uses its own default.
+	EffortDefault Effort = ""
+	EffortLow     Effort = "low"
+	EffortMedium  Effort = "medium"
+	EffortHigh    Effort = "high"
+)
+
+// Role names the system prompt's role layer (0.49+). A role changes the prompt and
+// nothing else: tools, permissions, budget and model are Options fields of their own.
+type Role string
+
+const (
+	RoleMain     Role = ""         // the default agent
+	RoleSubagent Role = "subagent" // a child answering its parent
+	RoleWorker   Role = "worker"   // a child executing a brief
+	RoleDecision Role = "decision" // the first stage of a staged run
+	RoleAnalyze  Role = "analyze"  // the second stage of a staged run
+)
+
+// Mode is how a session divides its work (0.50+): Single is today's agent, Multi adds
+// the delegate tool and the prompt paragraph that says when to use it. It is set at
+// Create or Resume and does not change for the life of an Agent; it is not a
+// SendOption and is not persisted. A container that wants another mode resumes the
+// session with new Options.
+type Mode string
+
+const (
+	ModeSingle  Mode = ""
+	ModeMulti   Mode = "multi"
+	ModeComplex Mode = "complex"
+)
+
 type Provider string
 
 const (
@@ -53,6 +100,23 @@ type Options struct {
 	// When exceeded, the run ends with StatusCancelled and CodeMaxWallTime.
 	// Parent context deadline → CodeContextDeadline; explicit Cancel → CodeCancelled.
 	MaxWallTime time.Duration
+
+	// Effort is how hard the model is asked to think (0.48+). Empty sends nothing and
+	// the request is exactly what it was before this option existed. The SDK holds no
+	// table of which model accepts which level: the container that knows the model sets
+	// this, and a provider that rejects the field reports it as an error.
+	Effort Effort
+
+	// Retry bounds how a failed provider call is retried (0.48+). The zero value is on:
+	// three attempts with exponential backoff and jitter, honouring Retry-After. A
+	// transport error, a 429 or a 5xx is retried; any other 4xx is not, and a stream
+	// that has already shown text is not. MaxAttempts 1 restores a single attempt.
+	Retry RetryPolicy
+
+	// MaxOutputTokens caps the length of an answer (0.48+). Zero sends nothing and the
+	// provider's own limit applies. With Effort set on Anthropic the limit is never sent
+	// below what the thinking budget needs. A cut answer ends the run with Truncated set.
+	MaxOutputTokens int
 
 	// Tools are caller-registered tools merged with built-ins (0.3+).
 	Tools []ToolSpec
@@ -125,6 +189,19 @@ type Options struct {
 	// enable this; false preserves the SDK's historical plain-text completion.
 	RequireFinishTask bool
 
+	// Mode selects Single (default) or Multi (0.50+). Multi needs Subagents.Enabled and
+	// registers the delegate tool. An unknown mode is refused by Create and Resume.
+	Mode Mode
+
+	// Complex configures the stages of Mode == ModeComplex (0.50+): per-stage model,
+	// effort, tools and step ceiling. The container fills it from its own configuration.
+	Complex ComplexOptions
+
+	// Role selects the role layer of the system prompt (0.49+). Empty is the main
+	// agent. An unknown role is refused by Create. SystemPrompt, when set, replaces the
+	// role's text; the safety layer is prepended to either.
+	Role Role
+
 	// BuiltinTools, when non-empty, is an allow-list of built-in tool names or groups (0.10+).
 	// Groups: shell, read, write, edit, search, skills, web, lsp, git, verify, vision, mcp. Custom Tools entries are never filtered out.
 	BuiltinTools []string
@@ -188,6 +265,14 @@ type Options struct {
 	agentID string
 	depth   int
 	budget  *subagentBudget
+	// brief is the rendered task layer (L3) a delegated child's prompt carries. Only the
+	// delegate tool sets it, so a model's own text never reaches L3 except through the
+	// SDK's rendering.
+	brief string
+	// confine are generated deny rules a delegated child carries after the parent's own
+	// (Unless rules cannot be written in the public PermissionRule, which stays
+	// comparable). Unexported: only the delegate tool sets them.
+	confine []permissions.Rule
 	// skipFileMCP tells Create to discard servers loaded from .cursor/mcp.json.
 	// A child without the mcp selector inherits SettingSources (they also carry
 	// rules and hooks) but must not start the file's servers.
@@ -529,6 +614,14 @@ type SendOption func(*sendConfig)
 type sendConfig struct {
 	Force       bool
 	Attachments []ImageAttachment
+	Directive   string
+}
+
+// WithDirective adds a per-run instruction to the end of this run's system prompt,
+// after the project layer and before the closing safety line (0.49+). It does not
+// displace the safety layer and is not persisted; the next Send starts without it.
+func WithDirective(text string) SendOption {
+	return func(c *sendConfig) { c.Directive = strings.TrimSpace(text) }
 }
 
 // WithForce cancels an in-flight run (if any) before accepting the new Send (0.10+).

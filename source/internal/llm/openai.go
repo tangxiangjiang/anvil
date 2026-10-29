@@ -38,10 +38,13 @@ func NewOpenAI(cfg Config) *OpenAI {
 }
 
 type openAIRequest struct {
-	Model           string          `json:"model"`
-	Messages        []openAIMessage `json:"messages"`
-	Tools           []openAITool    `json:"tools,omitempty"`
-	ReasoningEffort Effort          `json:"reasoning_effort,omitempty"`
+	Model    string          `json:"model"`
+	Messages []openAIMessage `json:"messages"`
+	Tools    []openAITool    `json:"tools,omitempty"`
+	// ReasoningEffort is a request parameter (a level word), not reasoning text.
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+	// MaxCompletionTokens caps the answer; omitted when zero.
+	MaxCompletionTokens int `json:"max_completion_tokens,omitempty"`
 }
 
 type openAIMessage struct {
@@ -106,7 +109,8 @@ func (u *openAIUsageWire) usage() *Usage {
 
 type openAIResponse struct {
 	Choices []struct {
-		Message openAIMessage `json:"message"`
+		Message      openAIMessage `json:"message"`
+		FinishReason string        `json:"finish_reason"`
 	} `json:"choices"`
 	Usage *openAIUsageWire `json:"usage"`
 	Error *struct {
@@ -118,7 +122,7 @@ type openAIResponse struct {
 // Complete implements Completer.
 func (c *OpenAI) Complete(ctx context.Context, req Request) (*Response, error) {
 	if c.cfg.APIKey == "" {
-		return nil, &HTTPError{Status: 401, Message: "missing API key", Retryable: false}
+		return nil, NewHTTPError(401, "missing API key")
 	}
 	body := openAIRequest{
 		Model:           firstNonEmpty(req.Model, c.cfg.Model),
@@ -126,6 +130,8 @@ func (c *OpenAI) Complete(ctx context.Context, req Request) (*Response, error) {
 		Tools:           toOpenAITools(req.Tools),
 		ReasoningEffort: req.Effort,
 	}
+	body.ReasoningEffort = string(req.Effort)
+	body.MaxCompletionTokens = req.MaxOutputTokens
 	raw, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
@@ -140,7 +146,7 @@ func (c *OpenAI) Complete(ctx context.Context, req Request) (*Response, error) {
 
 	httpResp, err := c.client.Do(httpReq)
 	if err != nil {
-		return nil, &HTTPError{Status: 0, Message: "openai request failed", Retryable: true, Cause: err}
+		return nil, newTransportError("openai request failed", err)
 	}
 	defer httpResp.Body.Close()
 	respBody, err := io.ReadAll(io.LimitReader(httpResp.Body, 8<<20))
@@ -148,20 +154,20 @@ func (c *OpenAI) Complete(ctx context.Context, req Request) (*Response, error) {
 		return nil, err
 	}
 	if httpResp.StatusCode >= 400 {
-		return nil, mapHTTPStatus(httpResp.StatusCode, string(respBody))
+		return nil, withRetryAfter(mapHTTPStatus(httpResp.StatusCode, string(respBody)), httpResp.Header)
 	}
 	var parsed openAIResponse
 	if err := json.Unmarshal(respBody, &parsed); err != nil {
 		return nil, fmt.Errorf("decode openai response: %w", err)
 	}
 	if parsed.Error != nil {
-		return nil, &HTTPError{Status: httpResp.StatusCode, Message: parsed.Error.Message, Retryable: false}
+		return nil, NewHTTPError(httpResp.StatusCode, parsed.Error.Message)
 	}
 	if len(parsed.Choices) == 0 {
-		return nil, &HTTPError{Status: httpResp.StatusCode, Message: "no choices in response", Retryable: false}
+		return nil, NewHTTPError(httpResp.StatusCode, "no choices in response")
 	}
 	msg := fromOpenAIMessage(parsed.Choices[0].Message)
-	out := &Response{Message: msg, Usage: parsed.Usage.usage()}
+	out := &Response{Message: msg, Usage: parsed.Usage.usage(), StopReason: openAIStop(parsed.Choices[0].FinishReason)}
 	return out, nil
 }
 

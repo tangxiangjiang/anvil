@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/anvil-dev/anvil/internal/prompt"
 	"github.com/anvil-dev/anvil/internal/tools"
 )
 
@@ -126,9 +127,18 @@ func TestSpawnProfileDefaultsAndPrompt(t *testing.T) {
 	if got.Model != "special-model" || got.MaxSteps != 12 || len(got.Tools) != 2 {
 		t.Fatalf("resolved=%+v", got)
 	}
-	prompt := subagentSystemPrompt([]string{instructions})
-	if !strings.HasPrefix(prompt, subagentBrief) || !strings.Contains(prompt, instructions) {
-		t.Fatalf("system prompt=%q", prompt)
+	// The profile's instructions travel in the brief layer, so the role text and the
+	// safety layer stay in the child's prompt around them.
+	brief := subagentProfileBrief([]string{instructions})
+	if !strings.HasPrefix(brief, "Profile instructions:\n") || !strings.Contains(brief, instructions) {
+		t.Fatalf("brief=%q", brief)
+	}
+	if subagentProfileBrief(nil) != "" || subagentProfileBrief([]string{"  "}) != "" {
+		t.Fatal("a child without profile instructions got a brief")
+	}
+	sys := prompt.Compose(prompt.Spec{CWD: "/ws", Role: prompt.RoleSubagent, Brief: brief})
+	if !strings.HasPrefix(sys, prompt.Safety(prompt.Options{})) || !strings.Contains(sys, instructions) || !strings.HasSuffix(sys, prompt.Closing) {
+		t.Fatalf("a profiled child's prompt lost a layer:\n%s", sys)
 	}
 }
 

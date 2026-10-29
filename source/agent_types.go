@@ -40,6 +40,15 @@ const (
 	// the estimate on either side. The summary itself is stored, so a replayed
 	// conversation draws the same boundary without this event.
 	EventCompact EventType = "compact"
+	// EventRetry reports that a provider call failed and will be tried again (0.48+).
+	// Attempt is the attempt that failed, Delay the wait before the next, Text the
+	// provider's message. It lets a client show "provider busy, retrying" instead of a
+	// frozen spinner. It is not stored and has no replay.
+	EventRetry EventType = "retry"
+	// EventTruncated reports that the provider cut the final answer off at the output
+	// limit (0.48+). It comes just before EventDone, which still follows; the partial
+	// answer is the result. Nothing is re-requested: a container decides what to do.
+	EventTruncated EventType = "truncated"
 )
 
 // CompactInfo is one history compaction's numbers, set on EventCompact.
@@ -91,9 +100,22 @@ const (
 	CodeContextDeadline Code = "context_deadline"
 	CodeMaxWallTime     Code = "max_wall_time"
 	CodeProvider        Code = "provider"
-	CodeEmptyResponse   Code = "empty_response"
-	CodeFinishProtocol  Code = "finish_protocol"
-	CodeToolPanic       Code = "tool_panic"
+	// CodeProviderMidStream is a provider failure after text had reached the user.
+	// It is never retried: a retry would show the answer twice.
+	CodeProviderMidStream Code = "provider_mid_stream"
+	// CodeProviderBusy is a 429 that outlasted the retries.
+	CodeProviderBusy Code = "provider_busy"
+	// CodeRequestRejected is a 4xx that names the request itself: an unknown parameter,
+	// a context overflow, an invalid tool schema. The provider's text is in Err.
+	CodeRequestRejected Code = "request_rejected"
+	// CodeAuth is a 401 or 403.
+	CodeAuth      Code = "auth"
+	CodeToolPanic Code = "tool_panic"
+	// CodeEmptyResponse is a provider that kept returning neither text nor a tool call
+	// after bounded recovery. CodeFinishProtocol is a run that required finish_task and
+	// never called it.
+	CodeEmptyResponse  Code = "empty_response"
+	CodeFinishProtocol Code = "finish_protocol"
 )
 
 // RunResult is the authoritative outcome of a Run (from Wait).
@@ -105,6 +127,9 @@ type RunResult struct {
 	Usage  *Usage
 	Err    string
 	Code   Code // set on error/cancelled when classifiable (0.7+)
+	// Truncated is true when the provider cut the final answer off at the output limit
+	// (0.48+). The run still finished and Result is the partial answer.
+	Truncated bool
 	// LastRequestAt is when the run's most recent model request completed
 	// (0.43+). Zero when the run never reached the provider. A client uses it
 	// with a TTL it knows to draw a cache countdown; the SDK does not know any
@@ -124,9 +149,14 @@ type Event struct {
 	Step       int  // 1-based LLM round; set on EventProgress
 	MaxSteps   int  // configured limit; set on EventProgress
 	Code       Code // set on EventError when classifiable (0.7+)
-	// Usage is authoritative on terminal events. While a streamed model request
-	// is in flight it may carry a live estimate, explicitly marked by
-	// UsageEstimated; clients must replace that estimate with RunResult.Usage.
+	// Attempt and Delay are set on EventRetry (0.48+): the attempt that failed and the
+	// wait before the next one.
+	Attempt int
+	Delay   time.Duration
+	// Usage is authoritative on terminal events (set when the provider reported any
+	// counts; nil means "unknown", which a client must not draw as zero). While a
+	// streamed model request is in flight it may carry a live estimate, explicitly marked
+	// by UsageEstimated; clients must replace that estimate with RunResult.Usage.
 	Usage          *Usage
 	UsageEstimated bool
 	// Rule is the workspace rule that decided this call, set on EventToolResult

@@ -121,7 +121,9 @@ the way `run_workflow` does.
   rendering is the SDK's, so a model cannot smuggle an instruction into the layer by formatting
   it oddly.
 - **A write allowlist**: `PermissionRules` gains a generated deny for `write`, `edit` and
-  `apply_patch` on every path outside `files`, placed after the parent's own rules. The parent's
+  `apply_patch` on every path outside `files`, placed after the parent's own rules (the engine's
+  code-only `Unless` field, added in p_0.50.1: a deny that covers a write when any touched path is
+  outside the listed globs or cannot be read). The parent's
   rules still apply first, so a path the parent may not touch stays untouchable whatever the
   brief says. The rule is generated from `files`, not from the prompt, and chapter
   [36](36-tool-permissions.vscode.md)'s engine is what enforces it.

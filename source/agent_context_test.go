@@ -376,7 +376,7 @@ func TestContextUsageReportsEstimateAndMark(t *testing.T) {
 		t.Fatalf("EstimatedTokens = %d", u.EstimatedTokens)
 	}
 	if u.EstimatedTokens != compress.Estimate([]llm.Message{
-		{Role: llm.RoleSystem, Content: "sys"},
+		{Role: llm.RoleSystem, Content: a.systemPrompt},
 		{Role: llm.RoleUser, Content: strings.Repeat("x", 20)},
 		{Role: llm.RoleAssistant, Content: strings.Repeat("y", 20)},
 		{Role: llm.RoleUser, Content: strings.Repeat("z", 20)},

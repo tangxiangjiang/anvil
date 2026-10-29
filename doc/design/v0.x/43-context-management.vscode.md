@@ -10,7 +10,7 @@ persisted its marker since 0.9 ([p_0.9.1](../../roadmaps/v0.x/m_0.9/p_0.9.1.md))
 narrow:
 
 - `Options.HistoryMaxChars` (a **character** budget) and `HistoryKeepRecent`
-  ([options.go](../../../source/options.go), [compress.go](../../../source/internal/compress/compress.go)).
+  ([options.go](../../../source/agent_options.go), [compress.go](../../../source/internal/compress/compress.go)).
 - The runtime applies it **once**, before the first model call of a run
   ([loop.go](../../../source/internal/runtime/loop.go)); a run with many tool calls grows afterwards
   unchecked.
@@ -18,14 +18,14 @@ narrow:
   summarized away.
 - The summary is a `user` message named `anvil.summary`, persisted as a `summary` record; Resume
   loads the last marker plus the messages after it ([agent.go](../../../source/agent.go),
-  [transcript.go](../../../source/transcript.go)).
+  [transcript.go](../../../source/session_transcript.go)).
 
 The editor never enables any of it: `buildOptions` sets no `HistoryMaxChars`, and `SessionParams`
 has no field for one ([server.go](../../../source/internal/editorhost/server.go),
 [proto.go](../../../source/internal/editorhost/proto.go)). The 0.40.8 meter reports what a run
 cost against `anvil.contextWindow`, but nothing reports what room is left, and a person cannot
 ask for a compaction. Provider cache usage is not parsed at all: usage carries only
-input/output/total ([types.go](../../../source/types.go)), and the Anthropic client sends no
+input/output/total ([types.go](../../../source/agent_types.go)), and the Anthropic client sends no
 `cache_control` ([anthropic.go](../../../source/internal/llm/anthropic.go)).
 
 So a long editor session has one outcome: it reaches the window and the provider refuses the

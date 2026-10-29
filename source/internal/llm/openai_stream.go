@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -22,18 +23,21 @@ type openAIStreamOptions struct {
 }
 
 type openAIStreamRequest struct {
-	Model           string               `json:"model"`
-	Messages        []openAIMessage      `json:"messages"`
-	Tools           []openAITool         `json:"tools,omitempty"`
-	ReasoningEffort Effort               `json:"reasoning_effort,omitempty"`
-	Stream          bool                 `json:"stream"`
-	StreamOptions   *openAIStreamOptions `json:"stream_options,omitempty"`
+	Model         string               `json:"model"`
+	Messages      []openAIMessage      `json:"messages"`
+	Tools         []openAITool         `json:"tools,omitempty"`
+	Stream        bool                 `json:"stream"`
+	StreamOptions *openAIStreamOptions `json:"stream_options,omitempty"`
+	// ReasoningEffort is a request parameter (a level word), not reasoning text.
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+	// MaxCompletionTokens caps the answer; omitted when zero.
+	MaxCompletionTokens int `json:"max_completion_tokens,omitempty"`
 }
 
 // CompleteStream implements StreamCompleter for OpenAI-compatible SSE.
 func (c *OpenAI) CompleteStream(ctx context.Context, req Request, onDelta func(Delta)) (*Response, error) {
 	if c.cfg.APIKey == "" {
-		return nil, &HTTPError{Status: 401, Message: "missing API key", Retryable: false}
+		return nil, NewHTTPError(401, "missing API key")
 	}
 	if onDelta == nil {
 		onDelta = func(Delta) {}
@@ -46,6 +50,8 @@ func (c *OpenAI) CompleteStream(ctx context.Context, req Request, onDelta func(D
 		Stream:          true,
 		StreamOptions:   &openAIStreamOptions{IncludeUsage: true},
 	}
+	body.ReasoningEffort = string(req.Effort)
+	body.MaxCompletionTokens = req.MaxOutputTokens
 	raw, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
@@ -61,17 +67,18 @@ func (c *OpenAI) CompleteStream(ctx context.Context, req Request, onDelta func(D
 
 	httpResp, err := c.client.Do(httpReq)
 	if err != nil {
-		return nil, &HTTPError{Status: 0, Message: "openai stream request failed", Retryable: true, Cause: err}
+		return nil, newTransportError("openai stream request failed", err)
 	}
 	defer httpResp.Body.Close()
 	if httpResp.StatusCode >= 400 {
 		respBody, _ := io.ReadAll(io.LimitReader(httpResp.Body, 1<<20))
-		return nil, mapHTTPStatus(httpResp.StatusCode, string(respBody))
+		return nil, withRetryAfter(mapHTTPStatus(httpResp.StatusCode, string(respBody)), httpResp.Header)
 	}
 
 	var content strings.Builder
 	toolParts := map[int]*openAIToolCall{}
 	var usage *Usage
+	var finish string
 
 	sc := bufio.NewScanner(httpResp.Body)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -86,7 +93,8 @@ func (c *OpenAI) CompleteStream(ctx context.Context, req Request, onDelta func(D
 		}
 		var chunk struct {
 			Choices []struct {
-				Delta struct {
+				FinishReason string `json:"finish_reason"`
+				Delta        struct {
 					Content string `json:"content"`
 					// Reasoning carries the model's chain of thought on the
 					// OpenAI-compatible providers that stream one in a separate
@@ -118,16 +126,22 @@ func (c *OpenAI) CompleteStream(ctx context.Context, req Request, onDelta func(D
 			} `json:"error"`
 		}
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-			continue
+			// A frame that does not decode may have carried text or a tool-call
+			// fragment. Skipping it would return a truncated answer as a success
+			// (audit #16 fixed this for Anthropic; this is the same defect).
+			return nil, fmt.Errorf("openai stream: malformed chunk: %w", err)
 		}
 		if chunk.Error != nil {
-			return nil, &HTTPError{Status: httpResp.StatusCode, Message: chunk.Error.Message, Retryable: false}
+			return nil, NewHTTPError(httpResp.StatusCode, chunk.Error.Message)
 		}
 		if chunk.Usage != nil {
 			usage = chunk.Usage.usage()
 		}
 		if len(chunk.Choices) == 0 {
 			continue
+		}
+		if fr := chunk.Choices[0].FinishReason; fr != "" {
+			finish = fr
 		}
 		delta := chunk.Choices[0].Delta
 		// Reasoning is streamed, never accumulated into msg below: it is shown
@@ -177,7 +191,7 @@ func (c *OpenAI) CompleteStream(ctx context.Context, req Request, onDelta func(D
 			Args: args,
 		})
 	}
-	return &Response{Message: msg, Usage: usage}, nil
+	return &Response{Message: msg, Usage: usage, StopReason: openAIStop(finish)}, nil
 }
 
 // Ensure OpenAI implements StreamCompleter.

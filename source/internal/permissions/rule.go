@@ -98,6 +98,12 @@ type Rule struct {
 	Tool    string `json:"tool"`
 	Pattern string `json:"pattern,omitempty"`
 	Reason  string `json:"reason,omitempty"`
+	// Unless makes a deny rule cover a write whose paths are not all inside these
+	// globs: the rule fires when any path a call touches is outside them, and when
+	// the paths cannot be read at all. It is how a delegated child is confined to its
+	// brief's files. It is a deny only, and the file parsers refuse the key (json:"-"
+	// with DisallowUnknownFields), so it exists for rules a program passes in code.
+	Unless []string `json:"-"`
 
 	// Source and Index are where the rule was read from, not part of the file:
 	// they are filled by a reader and ignored when writing. Index is one-based,
@@ -244,12 +250,14 @@ type Set struct {
 // does no string comparisons of its own. source and index are where it was read
 // from; index is zero-based and counted inside that source.
 type rule struct {
-	effect  Effect
-	tool    string // a glob over the tool name
-	pattern string // as written; what it is compared against depends on the call
-	reason  string
-	source  string
-	index   int
+	effect          Effect
+	tool            string   // a glob over the tool name
+	pattern         string   // as written; what it is compared against depends on the call
+	unless          []string // cleaned globs; the rule covers a call with a path outside them
+	unlessAsWritten []string // the same globs as given, so Rules() round-trips through New
+	reason          string
+	source          string
+	index           int
 }
 
 // Rules returns the rules as written, in the order they decide, each carrying
@@ -265,6 +273,7 @@ func (s *Set) Rules() []Rule {
 			Tool:    r.tool,
 			Pattern: r.pattern,
 			Reason:  r.reason,
+			Unless:  append([]string(nil), r.unlessAsWritten...),
 			Source:  r.source,
 			Index:   r.index + 1,
 		})

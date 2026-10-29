@@ -122,7 +122,7 @@ func agentFixtures() []agentFixture {
 					}
 				}
 				return fmt.Errorf("child did not read and report")
-			}}, options: anvil.Options{BuiltinTools: []string{"read", "spawn_agent"}, Subagents: anvil.SubagentOptions{Enabled: true}},
+			}}, options: anvil.Options{BuiltinTools: []string{"read_file", "glob", "spawn_agent"}, Subagents: anvil.SubagentOptions{Enabled: true}},
 			answer: func(_ context.Context, req llm.Request) (*llm.Response, error) {
 				user, round := userAndTools(req)
 				if user == "read note.txt and report" {
@@ -148,7 +148,7 @@ func agentFixtures() []agentFixture {
 					}
 				}
 				return fmt.Errorf("workflow did not finish both steps")
-			}}, options: anvil.Options{BuiltinTools: []string{"read", "run_workflow"}, Subagents: anvil.SubagentOptions{Enabled: true}},
+			}}, options: anvil.Options{BuiltinTools: []string{"read_file", "glob", "run_workflow"}, Subagents: anvil.SubagentOptions{Enabled: true}},
 			answer: func(_ context.Context, req llm.Request) (*llm.Response, error) {
 				user, round := userAndTools(req)
 				switch user {
@@ -162,6 +162,128 @@ func agentFixtures() []agentFixture {
 				}
 				return textAnswer("workflow done"), nil
 			}, steps: 2,
+		},
+		{
+			// Complex: decide, analyze, then a two-item roadmap where item b waits for item a.
+			task: Task{Name: "complex_two_items", UserMsg: "make both files new", Setup: func(dir string) error {
+				if err := os.MkdirAll(filepath.Join(dir, "pkg"), 0o755); err != nil {
+					return err
+				}
+				return writeFiles(dir, map[string]string{"pkg/a.txt": "old", "pkg/b.txt": "old"})
+			}, Check: func(dir string, result runtime.Result) error {
+				for _, name := range []string{"a", "b"} {
+					if data, _ := os.ReadFile(filepath.Join(dir, "pkg", name+".txt")); string(data) != "new" {
+						return fmt.Errorf("pkg/%s.txt=%q, want the worker's edit", name, data)
+					}
+				}
+				if result.Status != "finished" || !strings.Contains(result.Result, "workflow complex: finished (3 steps)") {
+					return fmt.Errorf("the complex run did not finish its three steps: %s", result.Result)
+				}
+				return nil
+			}}, options: anvil.Options{Mode: anvil.ModeComplex, Subagents: anvil.SubagentOptions{Enabled: true, MaxDepth: 3, MaxAgents: 8},
+				Checkpoints: &anvil.CheckpointOptions{}},
+			answer: func(_ context.Context, req llm.Request) (*llm.Response, error) {
+				sys := ""
+				for _, m := range req.Messages {
+					if m.Role == llm.RoleSystem {
+						sys = m.Content
+					}
+				}
+				user, round := userAndTools(req)
+				switch {
+				case strings.Contains(sys, "You are the decision stage"):
+					return textAnswer(`{"summary":"edit both files","options":[{"name":"A","rationale":"simple"}],"chosen":"A"}`), nil
+				case strings.Contains(sys, "You are the analysis stage"):
+					return textAnswer(`{"items":[{"id":"a","goal":"edit a","plan":["edit"],"files":["pkg/a.txt"],"acceptance":["a says new"],"depends_on":[]},` +
+						`{"id":"b","goal":"edit b","plan":["edit"],"files":["pkg/b.txt"],"acceptance":["b says new"],"depends_on":["a"]}]}`), nil
+				case strings.Contains(sys, "The brief below is your task"):
+					name := "pkg/a.txt"
+					if strings.Contains(sys, "Goal: edit b") {
+						name = "pkg/b.txt"
+					}
+					if round == 0 {
+						return toolAnswer("w-"+name, "edit_file", `{"path":"`+name+`","old_string":"old","new_string":"new"}`), nil
+					}
+					return textAnswer("[met] " + strings.TrimSuffix(strings.TrimPrefix(name, "pkg/"), ".txt") + " says new"), nil
+				}
+				return textAnswer("unexpected " + user), nil
+			}, steps: 3,
+		},
+		{
+			// Multi: the main agent delegates one item and the worker meets both acceptance lines.
+			task: Task{Name: "multi_delegate_met", UserMsg: "delegate the edit of pkg/a.txt", Setup: func(dir string) error {
+				if err := os.MkdirAll(filepath.Join(dir, "pkg"), 0o755); err != nil {
+					return err
+				}
+				return writeFiles(dir, map[string]string{"pkg/a.txt": "old"})
+			}, Check: func(dir string, result runtime.Result) error {
+				if err := finished(dir, result); err != nil {
+					return err
+				}
+				if data, _ := os.ReadFile(filepath.Join(dir, "pkg", "a.txt")); string(data) != "new" {
+					return fmt.Errorf("pkg/a.txt=%q, want the worker's edit", data)
+				}
+				for _, message := range result.Messages {
+					if message.Name == "delegate" && strings.Count(message.Content, "\n  [met]") == 2 && !strings.Contains(message.Content, "\n  [not met]") &&
+						strings.Contains(message.Content, "changed: pkg/a.txt") {
+						return nil
+					}
+				}
+				return fmt.Errorf("the parent did not read two [met] report lines and the changed file")
+			}}, options: anvil.Options{Mode: anvil.ModeMulti, BuiltinTools: []string{"read", "edit", "delegate"}, Subagents: anvil.SubagentOptions{Enabled: true},
+				Checkpoints: &anvil.CheckpointOptions{}},
+			answer: func(_ context.Context, req llm.Request) (*llm.Response, error) {
+				user, round := userAndTools(req)
+				if strings.HasPrefix(user, "Do the work in your brief") {
+					if round == 0 {
+						return toolAnswer("w-edit", "edit_file", `{"path":"pkg/a.txt","old_string":"old","new_string":"new"}`), nil
+					}
+					return textAnswer("[met] pkg/a.txt says new\n[met] only pkg changed"), nil
+				}
+				if round == 0 {
+					return toolAnswer("delegate", "delegate", `{"goal":"edit pkg/a.txt","plan":["replace old with new"],"files":["pkg/"],"acceptance":["pkg/a.txt says new","only pkg changed"],"tools":["read","edit"]}`), nil
+				}
+				return textAnswer("delegated and read the report"), nil
+			}, steps: 2,
+		},
+		{
+			// Multi: the worker tries a file outside files, the rule refuses it, and the
+			// parent's report shows the item that did not hold. Exactly one refusal.
+			task: Task{Name: "multi_delegate_refused", UserMsg: "delegate the edit of pkg/a.txt", Setup: func(dir string) error {
+				if err := os.MkdirAll(filepath.Join(dir, "pkg"), 0o755); err != nil {
+					return err
+				}
+				return writeFiles(dir, map[string]string{"pkg/a.txt": "old", "README.md": "old"})
+			}, Check: func(dir string, result runtime.Result) error {
+				if err := finished(dir, result); err != nil {
+					return err
+				}
+				if data, _ := os.ReadFile(filepath.Join(dir, "README.md")); string(data) != "old" {
+					return fmt.Errorf("README.md changed: %q", data)
+				}
+				for _, message := range result.Messages {
+					if message.Name == "delegate" && strings.Contains(message.Content, "[not met]") {
+						return nil
+					}
+				}
+				return fmt.Errorf("the parent's report does not show a [not met] item")
+			}}, options: anvil.Options{Mode: anvil.ModeMulti, BuiltinTools: []string{"read", "edit", "delegate"}, Subagents: anvil.SubagentOptions{Enabled: true}},
+			answer: func(_ context.Context, req llm.Request) (*llm.Response, error) {
+				user, round := userAndTools(req)
+				if strings.HasPrefix(user, "Do the work in your brief") {
+					switch round {
+					case 0:
+						return toolAnswer("w-out", "edit_file", `{"path":"README.md","old_string":"old","new_string":"new"}`), nil
+					case 1:
+						return toolAnswer("w-in", "edit_file", `{"path":"pkg/a.txt","old_string":"old","new_string":"new"}`), nil
+					}
+					return textAnswer("[met] pkg/a.txt says new\n[not met] README.md was edited: refused by the allowlist"), nil
+				}
+				if round == 0 {
+					return toolAnswer("delegate", "delegate", `{"goal":"edit pkg/a.txt","plan":["replace old with new"],"files":["pkg/"],"acceptance":["pkg/a.txt says new","README.md was edited"],"tools":["read","edit"]}`), nil
+				}
+				return textAnswer("read the report"), nil
+			}, steps: 2, refused: 1,
 		},
 		{
 			task: Task{Name: "permission_deny_no_callback", UserMsg: "attempt a denied write", Check: func(dir string, result runtime.Result) error {

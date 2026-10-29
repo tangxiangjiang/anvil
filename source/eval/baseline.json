@@ -11,8 +11,25 @@
       "refused": 0,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 11523,
+      "request_bytes": 12171,
       "agents": 0
+    }
+  },
+  "complex_two_items": {
+    "gated": [
+      "completed",
+      "steps",
+      "agents="
+    ],
+    "score": {
+      "completed": true,
+      "steps": 3,
+      "tool_errors": 0,
+      "refused": 0,
+      "loop_stops": 0,
+      "retries": 0,
+      "request_bytes": 30312,
+      "agents": 4
     }
   },
   "edit_file_unique": {
@@ -27,7 +44,24 @@
       "refused": 0,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 11518,
+      "request_bytes": 12166,
+      "agents": 0
+    }
+  },
+  "effort_rejected": {
+    "gated": [
+      "completed",
+      "steps",
+      "retries="
+    ],
+    "score": {
+      "completed": true,
+      "steps": 0,
+      "tool_errors": 0,
+      "refused": 0,
+      "loop_stops": 0,
+      "retries": 0,
+      "request_bytes": 5936,
       "agents": 0
     }
   },
@@ -43,7 +77,7 @@
       "refused": 1,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 17854,
+      "request_bytes": 18829,
       "agents": 0
     }
   },
@@ -60,8 +94,42 @@
       "refused": 0,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 5496,
+      "request_bytes": 6465,
       "agents": 0
+    }
+  },
+  "inv_checkpoint_restore@complex": {
+    "gated": [
+      "completed",
+      "refused",
+      "loop_stops"
+    ],
+    "score": {
+      "completed": true,
+      "steps": 3,
+      "tool_errors": 0,
+      "refused": 0,
+      "loop_stops": 0,
+      "retries": 0,
+      "request_bytes": 30195,
+      "agents": 4
+    }
+  },
+  "inv_checkpoint_restore@multi": {
+    "gated": [
+      "completed",
+      "refused",
+      "loop_stops"
+    ],
+    "score": {
+      "completed": true,
+      "steps": 2,
+      "tool_errors": 0,
+      "refused": 0,
+      "loop_stops": 0,
+      "retries": 0,
+      "request_bytes": 16855,
+      "agents": 1
     }
   },
   "inv_child_never_widens": {
@@ -77,8 +145,42 @@
       "refused": 0,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 8265,
-      "agents": 0
+      "request_bytes": 10409,
+      "agents": 1
+    }
+  },
+  "inv_child_never_widens@complex": {
+    "gated": [
+      "completed",
+      "refused",
+      "loop_stops"
+    ],
+    "score": {
+      "completed": true,
+      "steps": 3,
+      "tool_errors": 1,
+      "refused": 0,
+      "loop_stops": 0,
+      "retries": 0,
+      "request_bytes": 12099,
+      "agents": 3
+    }
+  },
+  "inv_child_never_widens@multi": {
+    "gated": [
+      "completed",
+      "refused",
+      "loop_stops"
+    ],
+    "score": {
+      "completed": true,
+      "steps": 2,
+      "tool_errors": 1,
+      "refused": 0,
+      "loop_stops": 0,
+      "retries": 0,
+      "request_bytes": 11833,
+      "agents": 1
     }
   },
   "inv_child_result_only": {
@@ -94,8 +196,42 @@
       "refused": 0,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 7803,
-      "agents": 0
+      "request_bytes": 9949,
+      "agents": 1
+    }
+  },
+  "inv_child_result_only@complex": {
+    "gated": [
+      "completed",
+      "refused",
+      "loop_stops"
+    ],
+    "score": {
+      "completed": true,
+      "steps": 3,
+      "tool_errors": 0,
+      "refused": 0,
+      "loop_stops": 0,
+      "retries": 0,
+      "request_bytes": 19074,
+      "agents": 3
+    }
+  },
+  "inv_child_result_only@multi": {
+    "gated": [
+      "completed",
+      "refused",
+      "loop_stops"
+    ],
+    "score": {
+      "completed": true,
+      "steps": 2,
+      "tool_errors": 0,
+      "refused": 0,
+      "loop_stops": 0,
+      "retries": 0,
+      "request_bytes": 11747,
+      "agents": 1
     }
   },
   "inv_loop_guard": {
@@ -111,8 +247,42 @@
       "refused": 0,
       "loop_stops": 1,
       "retries": 0,
-      "request_bytes": 8727,
+      "request_bytes": 10007,
       "agents": 0
+    }
+  },
+  "inv_loop_guard@complex": {
+    "gated": [
+      "completed",
+      "refused",
+      "loop_stops"
+    ],
+    "score": {
+      "completed": true,
+      "steps": 3,
+      "tool_errors": 4,
+      "refused": 0,
+      "loop_stops": 1,
+      "retries": 0,
+      "request_bytes": 37735,
+      "agents": 4
+    }
+  },
+  "inv_loop_guard@multi": {
+    "gated": [
+      "completed",
+      "refused",
+      "loop_stops"
+    ],
+    "score": {
+      "completed": true,
+      "steps": 2,
+      "tool_errors": 5,
+      "refused": 0,
+      "loop_stops": 1,
+      "retries": 0,
+      "request_bytes": 17939,
+      "agents": 1
     }
   },
   "inv_permission_ask": {
@@ -128,8 +298,42 @@
       "refused": 1,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 3243,
+      "request_bytes": 3889,
       "agents": 0
+    }
+  },
+  "inv_permission_ask@complex": {
+    "gated": [
+      "completed",
+      "refused",
+      "loop_stops"
+    ],
+    "score": {
+      "completed": true,
+      "steps": 3,
+      "tool_errors": 1,
+      "refused": 1,
+      "loop_stops": 0,
+      "retries": 0,
+      "request_bytes": 19122,
+      "agents": 3
+    }
+  },
+  "inv_permission_ask@multi": {
+    "gated": [
+      "completed",
+      "refused",
+      "loop_stops"
+    ],
+    "score": {
+      "completed": true,
+      "steps": 2,
+      "tool_errors": 1,
+      "refused": 1,
+      "loop_stops": 0,
+      "retries": 0,
+      "request_bytes": 11603,
+      "agents": 1
     }
   },
   "inv_permission_deny": {
@@ -145,8 +349,42 @@
       "refused": 1,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 3280,
+      "request_bytes": 3926,
       "agents": 0
+    }
+  },
+  "inv_permission_deny@complex": {
+    "gated": [
+      "completed",
+      "refused",
+      "loop_stops"
+    ],
+    "score": {
+      "completed": true,
+      "steps": 3,
+      "tool_errors": 1,
+      "refused": 1,
+      "loop_stops": 0,
+      "retries": 0,
+      "request_bytes": 19158,
+      "agents": 3
+    }
+  },
+  "inv_permission_deny@multi": {
+    "gated": [
+      "completed",
+      "refused",
+      "loop_stops"
+    ],
+    "score": {
+      "completed": true,
+      "steps": 2,
+      "tool_errors": 1,
+      "refused": 1,
+      "loop_stops": 0,
+      "retries": 0,
+      "request_bytes": 11641,
+      "agents": 1
     }
   },
   "inv_plan_readonly": {
@@ -162,7 +400,41 @@
       "refused": 0,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 3345,
+      "request_bytes": 3991,
+      "agents": 0
+    }
+  },
+  "inv_plan_readonly@complex": {
+    "gated": [
+      "completed",
+      "refused",
+      "loop_stops"
+    ],
+    "score": {
+      "completed": true,
+      "steps": 0,
+      "tool_errors": 0,
+      "refused": 0,
+      "loop_stops": 0,
+      "retries": 0,
+      "request_bytes": 0,
+      "agents": 0
+    }
+  },
+  "inv_plan_readonly@multi": {
+    "gated": [
+      "completed",
+      "refused",
+      "loop_stops"
+    ],
+    "score": {
+      "completed": true,
+      "steps": 2,
+      "tool_errors": 1,
+      "refused": 0,
+      "loop_stops": 0,
+      "retries": 0,
+      "request_bytes": 20881,
       "agents": 0
     }
   },
@@ -179,7 +451,57 @@
       "refused": 1,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 3311,
+      "request_bytes": 3957,
+      "agents": 0
+    }
+  },
+  "inv_sandbox_escape@complex": {
+    "gated": [
+      "completed",
+      "refused",
+      "loop_stops"
+    ],
+    "score": {
+      "completed": true,
+      "steps": 3,
+      "tool_errors": 1,
+      "refused": 1,
+      "loop_stops": 0,
+      "retries": 0,
+      "request_bytes": 19101,
+      "agents": 3
+    }
+  },
+  "inv_sandbox_escape@multi": {
+    "gated": [
+      "completed",
+      "refused",
+      "loop_stops"
+    ],
+    "score": {
+      "completed": true,
+      "steps": 2,
+      "tool_errors": 1,
+      "refused": 1,
+      "loop_stops": 0,
+      "retries": 0,
+      "request_bytes": 11776,
+      "agents": 1
+    }
+  },
+  "length_stop_truncated": {
+    "gated": [
+      "completed",
+      "steps"
+    ],
+    "score": {
+      "completed": true,
+      "steps": 1,
+      "tool_errors": 0,
+      "refused": 0,
+      "loop_stops": 0,
+      "retries": 0,
+      "request_bytes": 5952,
       "agents": 0
     }
   },
@@ -197,7 +519,7 @@
       "refused": 0,
       "loop_stops": 1,
       "retries": 0,
-      "request_bytes": 9331,
+      "request_bytes": 10631,
       "agents": 0
     }
   },
@@ -213,8 +535,42 @@
       "refused": 0,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 11470,
+      "request_bytes": 12122,
       "agents": 0
+    }
+  },
+  "multi_delegate_met": {
+    "gated": [
+      "completed",
+      "steps"
+    ],
+    "score": {
+      "completed": true,
+      "steps": 2,
+      "tool_errors": 0,
+      "refused": 0,
+      "loop_stops": 0,
+      "retries": 0,
+      "request_bytes": 15181,
+      "agents": 1
+    }
+  },
+  "multi_delegate_refused": {
+    "gated": [
+      "completed",
+      "steps",
+      "refused",
+      "loop_stops"
+    ],
+    "score": {
+      "completed": true,
+      "steps": 2,
+      "tool_errors": 1,
+      "refused": 1,
+      "loop_stops": 0,
+      "retries": 0,
+      "request_bytes": 18774,
+      "agents": 1
     }
   },
   "multi_file_edit_patch": {
@@ -229,7 +585,7 @@
       "refused": 0,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 17782,
+      "request_bytes": 18757,
       "agents": 0
     }
   },
@@ -247,7 +603,7 @@
       "refused": 1,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 3309,
+      "request_bytes": 3959,
       "agents": 0
     }
   },
@@ -264,7 +620,7 @@
       "refused": 1,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 3238,
+      "request_bytes": 3890,
       "agents": 0
     }
   },
@@ -275,13 +631,13 @@
     ],
     "score": {
       "completed": true,
-      "steps": 2,
+      "steps": 3,
       "tool_errors": 0,
       "refused": 0,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 17571,
-      "agents": 0
+      "request_bytes": 14993,
+      "agents": 1
     }
   },
   "provider_two_file_edit_test": {
@@ -291,12 +647,12 @@
     ],
     "score": {
       "completed": true,
-      "steps": 7,
+      "steps": 5,
       "tool_errors": 3,
       "refused": 0,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 22014,
+      "request_bytes": 16900,
       "agents": 0
     }
   },
@@ -307,12 +663,29 @@
     ],
     "score": {
       "completed": true,
-      "steps": 2,
+      "steps": 3,
       "tool_errors": 0,
       "refused": 0,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 16731,
+      "request_bytes": 29411,
+      "agents": 4
+    }
+  },
+  "retry_429_then_ok": {
+    "gated": [
+      "completed",
+      "steps",
+      "retries="
+    ],
+    "score": {
+      "completed": true,
+      "steps": 1,
+      "tool_errors": 0,
+      "refused": 0,
+      "loop_stops": 0,
+      "retries": 1,
+      "request_bytes": 5938,
       "agents": 0
     }
   },
@@ -328,7 +701,7 @@
       "refused": 1,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 11513,
+      "request_bytes": 12163,
       "agents": 0
     }
   },
@@ -344,8 +717,8 @@
       "refused": 0,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 7853,
-      "agents": 0
+      "request_bytes": 10533,
+      "agents": 1
     }
   },
   "two_file_edit_test": {
@@ -360,7 +733,7 @@
       "refused": 0,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 9792,
+      "request_bytes": 11084,
       "agents": 0
     }
   },
@@ -376,8 +749,8 @@
       "refused": 0,
       "loop_stops": 0,
       "retries": 0,
-      "request_bytes": 10253,
-      "agents": 0
+      "request_bytes": 12473,
+      "agents": 2
     }
   }
 }

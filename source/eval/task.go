@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/anvil-dev/anvil/internal/llm"
 	"github.com/anvil-dev/anvil/internal/runtime"
@@ -25,6 +26,11 @@ type Task struct {
 	Recording string
 	MaxSteps  int // 0 = 8 for normal fixtures
 	Check     func(dir string, res runtime.Result) error
+	// ExpectProviderError, when set, names the one upstream failure this task is about:
+	// the scripted provider returns it, the run is expected to end on it, and Check
+	// judges the result. Any other upstream failure is still a harness error, so a
+	// swallowed auxiliary-call error cannot hide behind this field.
+	ExpectProviderError func(error) bool
 }
 
 type Outcome struct {
@@ -66,12 +72,18 @@ func ExecuteScript(ctx context.Context, dir string, task Task) (Outcome, error) 
 		}
 	}
 	script := NewScript(task.Script)
-	meter := &measuredCompleter{upstream: script}
+	// The wrapper the SDK puts around a real client, on a fast clock, so a scripted
+	// 429 is retried as a real one is and shows up as a retry event.
+	retrying := llm.WithRetry(script, llm.RetryPolicy{MaxAttempts: 3, BaseDelay: time.Millisecond, MaxDelay: 2 * time.Millisecond})
+	meter := &measuredCompleter{upstream: retrying}
 	score := &scorer{}
 	result := runtime.Loop(ctx, meter, tools.NewRegistry(dir, false), runtime.Config{
 		CWD: dir, Model: "eval", UserMsg: task.UserMsg, MaxSteps: task.maxSteps(),
 	}, score.observe)
 	bytes, err := meter.totals()
+	if err != nil && task.ExpectProviderError != nil && task.ExpectProviderError(err) {
+		err = nil
+	}
 	if err == nil {
 		err = script.Err()
 	}

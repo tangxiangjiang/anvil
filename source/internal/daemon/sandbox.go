@@ -6,6 +6,7 @@ package daemon
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -22,8 +23,13 @@ const (
 	sandboxMaxEntries = 2000
 	sandboxMaxFile    = 1 << 20
 	sandboxMaxGit     = 2 << 20
-	sandboxGitTimeout = 10 * time.Second
 )
+
+// sandboxGitTimeout bounds every git invocation. It is a variable so the tests
+// can exercise the timeout path without waiting ten seconds.
+var sandboxGitTimeout = 10 * time.Second
+
+var errGitTimeout = errors.New("git operation timed out")
 
 func (s *Server) sandboxRoot() (string, error) {
 	root := strings.TrimSpace(s.cfg.SandboxDir)
@@ -109,7 +115,56 @@ func canonicalExisting(name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.EvalSymlinks(abs)
+	resolved, err := resolveReparsePoints(abs)
+	if err != nil {
+		return "", err
+	}
+	return filepath.EvalSymlinks(resolved)
+}
+
+// resolveReparsePoints rewrites every component that os.Readlink reports as a
+// reparse point to its target. filepath.EvalSymlinks alone is not enough on
+// Windows: when Go cannot open a junction (for example because another handle
+// lacks sharing), os.Lstat reports the entry as ModeIrregular instead of
+// ModeSymlink and EvalSymlinks leaves the path unresolved, which would let a
+// junction escape the sandbox.
+func resolveReparsePoints(name string) (string, error) {
+	for depth := 0; depth < 40; depth++ {
+		next, changed := resolveFirstReparse(name)
+		if !changed {
+			return next, nil
+		}
+		name = next
+	}
+	return "", fmt.Errorf("too many levels of links in %s", name)
+}
+
+func resolveFirstReparse(name string) (string, bool) {
+	volume := filepath.VolumeName(name)
+	rest := strings.TrimLeft(strings.TrimPrefix(name, volume), `\/`)
+	parts := strings.Split(rest, string(filepath.Separator))
+	current := volume + string(filepath.Separator)
+	if volume == "" {
+		current = string(filepath.Separator)
+	}
+	for i, part := range parts {
+		if part == "" {
+			continue
+		}
+		current = filepath.Join(current, part)
+		target, err := os.Readlink(current)
+		if err != nil {
+			continue
+		}
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(current), target)
+		}
+		if i+1 < len(parts) {
+			target = filepath.Join(target, filepath.Join(parts[i+1:]...))
+		}
+		return target, true
+	}
+	return name, false
 }
 
 func (s *Server) reviewRoot(workerID string) (string, error) {
@@ -402,33 +457,297 @@ func (b *boundedBuffer) Write(p []byte) (int, error) {
 	return n, nil
 }
 
-func runReviewGit(root string, args ...string) ([]byte, bool, string, error) {
+// gitRepo is a repository whose metadata has been proven to live inside the
+// worker's repository. Without that check a .git file or a linked worktree can
+// point git at a host repository outside the sandbox and return its contents.
+type gitRepo struct {
+	root      string
+	gitDir    string
+	commonDir string
+}
+
+func (r *gitRepo) env() []string {
+	// An inherited GIT_* variable could name a different repository, worktree,
+	// index, object store, or config file, so none of them may reach the git
+	// process that runs against the sandbox.
+	env := make([]string, 0, len(os.Environ())+12)
+	for _, kv := range os.Environ() {
+		if strings.HasPrefix(kv, "GIT_") {
+			continue
+		}
+		env = append(env, kv)
+	}
+	return append(env,
+		"GIT_DIR="+r.gitDir,
+		"GIT_WORK_TREE="+r.root,
+		"GIT_TERMINAL_PROMPT=0",
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_CONFIG_SYSTEM="+os.DevNull,
+		"GIT_CONFIG_GLOBAL="+os.DevNull,
+		"GIT_ATTR_NOSYSTEM=1",
+		"GIT_OPTIONAL_LOCKS=0",
+		"GIT_PAGER=cat",
+		"GIT_PROTOCOL_FROM_USER=0",
+	)
+}
+
+func (r *gitRepo) run(args ...string) ([]byte, bool, string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), sandboxGitTimeout)
 	defer cancel()
-	fixed := []string{"-c", "color.ui=false", "-c", "core.quotepath=false", "-c", "diff.external=", "-C", root}
+	// The -c overrides outrank the repository's own config, so the keys that
+	// make git run a program (fsmonitor, hooks, external diff, attribute file)
+	// cannot be supplied by the repository under review.
+	fixed := []string{
+		"--no-pager",
+		"-c", "color.ui=false",
+		"-c", "core.quotepath=false",
+		"-c", "core.fsmonitor=",
+		"-c", "core.hooksPath=",
+		"-c", "core.attributesFile=" + os.DevNull,
+		"-c", "diff.external=",
+		"-C", r.root,
+	}
 	cmd := exec.CommandContext(ctx, "git", append(fixed, args...)...)
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_NOSYSTEM=1")
+	cmd.Env = r.env()
 	stdout, stderr := newBoundedBuffer(sandboxMaxGit), newBoundedBuffer(16<<10)
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	err := cmd.Run()
 	if ctx.Err() != nil {
-		return nil, false, "", fmt.Errorf("git operation timed out")
+		return nil, false, "", errGitTimeout
 	}
 	return stdout.buf.Bytes(), stdout.truncated, strings.TrimSpace(stderr.buf.String()), err
 }
 
-// GitStatusWorker returns bounded porcelain status for an assigned worker.
-func (s *Server) GitStatusWorker(workerID string) ClusterSandboxResultBody {
+// executingConfig returns the first repository config key that makes git run a
+// program named by the repository. Filter drivers are chosen through
+// .gitattributes and their command comes from config, so unlike fsmonitor or
+// diff.external the name is not known in advance and cannot be overridden on
+// the command line; such a repository is refused instead of executed. Config
+// includes and worktree config are read exactly as git reads them, while the
+// global and system scopes are already disabled by env().
+func (r *gitRepo) executingConfig() (string, error) {
+	data, truncated, stderr, err := r.run("config", "--list", "--null")
+	if err != nil {
+		if errors.Is(err, errGitTimeout) || gitUnavailable(err) {
+			return "", err
+		}
+		if stderr == "" {
+			stderr = err.Error()
+		}
+		return "", fmt.Errorf("read repository config: %s", stderr)
+	}
+	if truncated {
+		// An unscanned tail could hide an executing key, so refuse instead of
+		// trusting a partial view of the config.
+		return "", fmt.Errorf("repository config is too large to verify safely")
+	}
+	for _, record := range strings.Split(string(data), "\x00") {
+		if record == "" {
+			continue
+		}
+		key, value, _ := strings.Cut(record, "\n")
+		lower := strings.ToLower(key)
+		if value == "" {
+			continue
+		}
+		if lower == "core.alternaterefscommand" {
+			return key, nil
+		}
+		if !strings.HasPrefix(lower, "filter.") {
+			continue
+		}
+		if strings.HasSuffix(lower, ".clean") || strings.HasSuffix(lower, ".smudge") || strings.HasSuffix(lower, ".process") {
+			return key, nil
+		}
+	}
+	return "", nil
+}
+
+// verifyLayout proves that the object store, refs, index, and config that git
+// will read all live inside the repository. A junction or symlink on one of
+// them would let a crafted repository read another repository's contents.
+func (r *gitRepo) verifyLayout() error {
+	dirs := []string{r.gitDir}
+	if r.commonDir != "" {
+		dirs = append(dirs, r.commonDir)
+	}
+	for _, dir := range dirs {
+		for _, name := range []string{"objects", "refs", "HEAD", "index", "config", "packed-refs", "logs", "info"} {
+			p := filepath.Join(dir, name)
+			if _, err := os.Lstat(p); err != nil {
+				if os.IsNotExist(err) {
+					continue
+				}
+				return err
+			}
+			canonical, err := canonicalExisting(p)
+			if err != nil {
+				return err
+			}
+			if !pathWithin(r.root, canonical) {
+				return fmt.Errorf("repository metadata %s resolves outside the assigned repository", name)
+			}
+		}
+	}
+	objDir := r.gitDir
+	if r.commonDir != "" {
+		objDir = r.commonDir
+	}
+	data, err := os.ReadFile(filepath.Join(objDir, "objects", "info", "alternates"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if !filepath.IsAbs(line) {
+			line = filepath.Join(objDir, "objects", filepath.FromSlash(line))
+		}
+		canonical, err := canonicalExisting(line)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return err
+		}
+		if !pathWithin(r.root, canonical) {
+			return fmt.Errorf("repository alternate object store resolves outside the assigned repository")
+		}
+	}
+	return nil
+}
+
+func gitDirFromFile(root, content string) (string, error) {
+	line, _, _ := strings.Cut(content, "\n")
+	line = strings.TrimSpace(line)
+	const prefix = "gitdir:"
+	if len(line) < len(prefix) || !strings.EqualFold(line[:len(prefix)], prefix) {
+		return "", fmt.Errorf("unrecognized .git file; expected a gitdir line")
+	}
+	target := strings.TrimSpace(line[len(prefix):])
+	if target == "" {
+		return "", fmt.Errorf(".git file names no git directory")
+	}
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(root, filepath.FromSlash(target))
+	}
+	return target, nil
+}
+
+// openGitRepo resolves and validates the repository before any git command
+// runs, and refuses one whose config would execute a program.
+func (s *Server) openGitRepo(request, workerID string) (*gitRepo, *ClusterSandboxResultBody) {
+	fail := func(code string, err error) *ClusterSandboxResultBody {
+		out := reviewError(request, code, err)
+		return &out
+	}
 	root, err := s.reviewRoot(workerID)
 	if err != nil {
-		return reviewError("git_status", "invalid_scope", err)
+		return nil, fail("invalid_scope", err)
 	}
-	data, truncated, stderr, err := runReviewGit(root, "status", "--porcelain=v1", "-z", "--branch", "--untracked-files=all")
+	dotgit := filepath.Join(root, ".git")
+	info, err := os.Stat(dotgit)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fail("not_repository", fmt.Errorf("%s is not a git repository", root))
+		}
+		return nil, fail("invalid_repository", err)
+	}
+	gitDir := dotgit
+	if !info.IsDir() {
+		data, err := os.ReadFile(dotgit)
+		if err != nil {
+			return nil, fail("invalid_repository", err)
+		}
+		gitDir, err = gitDirFromFile(root, string(data))
+		if err != nil {
+			return nil, fail("invalid_repository", err)
+		}
+	}
+	canonical, err := canonicalExisting(gitDir)
+	if err != nil {
+		return nil, fail("invalid_repository", err)
+	}
+	if !pathWithin(root, canonical) {
+		return nil, fail("invalid_repository", fmt.Errorf("repository metadata resolves outside the assigned repository"))
+	}
+	repo := &gitRepo{root: root, gitDir: canonical}
+	switch common, err := os.ReadFile(filepath.Join(canonical, "commondir")); {
+	case err == nil:
+		target := strings.TrimSpace(string(common))
+		if target != "" {
+			if !filepath.IsAbs(target) {
+				target = filepath.Join(canonical, filepath.FromSlash(target))
+			}
+			commonDir, err := canonicalExisting(target)
+			if err != nil {
+				return nil, fail("invalid_repository", err)
+			}
+			if !pathWithin(root, commonDir) {
+				return nil, fail("invalid_repository", fmt.Errorf("repository metadata resolves outside the assigned repository"))
+			}
+			repo.commonDir = commonDir
+		}
+	case !os.IsNotExist(err):
+		return nil, fail("invalid_repository", err)
+	}
+	if err := repo.verifyLayout(); err != nil {
+		return nil, fail("invalid_repository", err)
+	}
+	key, err := repo.executingConfig()
+	if err != nil {
+		return nil, fail(gitFailureCode(err, "invalid_repository"), err)
+	}
+	if key != "" {
+		return nil, fail("unsafe_repository", fmt.Errorf("repository config %q runs an external program, which read-only review refuses to execute", key))
+	}
+	return repo, nil
+}
+
+func gitUnavailable(err error) bool {
+	var execErr *exec.Error
+	return errors.Is(err, exec.ErrNotFound) || errors.As(err, &execErr)
+}
+
+func gitFailureCode(err error, fallback string) string {
+	if errors.Is(err, errGitTimeout) {
+		return "git_timeout"
+	}
+	if gitUnavailable(err) {
+		return "git_unavailable"
+	}
+	return fallback
+}
+
+// reviewPrivateGlobs keeps credential-bearing paths out of a whole-repository
+// diff; an explicit path is already refused by reviewGitPath.
+var reviewPrivateGlobs = []string{
+	":(exclude,glob)**/.env",
+	":(exclude,glob)**/.env.*",
+	":(exclude,glob)**/.netrc",
+	":(exclude,glob)**/.ssh",
+	":(exclude,glob)**/.aws",
+	":(exclude,glob)**/.gnupg",
+	":(exclude,glob)**/credentials",
+}
+
+// GitStatusWorker returns bounded porcelain status for an assigned worker.
+func (s *Server) GitStatusWorker(workerID string) ClusterSandboxResultBody {
+	repo, failure := s.openGitRepo("git_status", workerID)
+	if failure != nil {
+		return *failure
+	}
+	data, truncated, stderr, err := repo.run("status", "--porcelain=v1", "-z", "--branch", "--untracked-files=all")
 	if err != nil {
 		if stderr == "" {
 			stderr = err.Error()
 		}
-		return reviewError("git_status", "not_repository", fmt.Errorf("%s", stderr))
+		return reviewError("git_status", gitFailureCode(err, "not_repository"), fmt.Errorf("%s", stderr))
 	}
 	out := ClusterSandboxResultBody{OK: true, Request: "git_status", Truncated: truncated}
 	records := bytes.Split(data, []byte{0})
@@ -452,6 +771,9 @@ func (s *Server) GitStatusWorker(workerID string) ClusterSandboxResultBody {
 			i++
 			item.OrigPath = string(records[i])
 		}
+		if credentialPath(item.Path) || credentialPath(item.OrigPath) {
+			continue
+		}
 		out.Status = append(out.Status, item)
 		if len(out.Status) == sandboxMaxEntries {
 			out.Truncated = i+1 < len(records)
@@ -463,34 +785,40 @@ func (s *Server) GitStatusWorker(workerID string) ClusterSandboxResultBody {
 
 // GitDiffWorker runs only a fixed read-only git diff, optionally for one safe path.
 func (s *Server) GitDiffWorker(workerID, relPath string, staged bool) ClusterSandboxResultBody {
-	root, err := s.reviewRoot(workerID)
-	if err != nil {
-		return reviewError("git_diff", "invalid_scope", err)
+	repo, failure := s.openGitRepo("git_diff", workerID)
+	if failure != nil {
+		return *failure
 	}
 	args := []string{"diff", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/"}
 	if staged {
 		args = append(args, "--cached")
 	}
-	if strings.TrimSpace(relPath) != "" {
+	relPath = strings.TrimSpace(relPath)
+	if relPath != "" {
 		var pathErr error
-		root, relPath, pathErr = s.reviewGitPath(workerID, relPath)
+		_, relPath, pathErr = s.reviewGitPath(workerID, relPath)
 		if pathErr != nil {
 			return reviewError("git_diff", "invalid_path", pathErr)
 		}
 		args = append(args, "--", relPath)
+	} else {
+		// A whole-repository diff hides credential-bearing files too, so the
+		// viewer and the status list agree on what is reviewable.
+		args = append(args, "--")
+		args = append(args, reviewPrivateGlobs...)
 	}
-	data, truncated, stderr, err := runReviewGit(root, args...)
+	data, truncated, stderr, err := repo.run(args...)
 	if err != nil {
 		if stderr == "" {
 			stderr = err.Error()
 		}
-		return reviewError("git_diff", "git_failed", fmt.Errorf("%s", stderr))
+		return reviewError("git_diff", gitFailureCode(err, "git_failed"), fmt.Errorf("%s", stderr))
 	}
 	out := ClusterSandboxResultBody{
 		OK: true, Request: "git_diff", Path: relPath, Diff: string(data), Encoding: "utf-8", Truncated: truncated,
 	}
 	if !staged && relPath != "" && len(data) == 0 {
-		status, _, _, statusErr := runReviewGit(root, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--", relPath)
+		status, _, _, statusErr := repo.run("status", "--porcelain=v1", "-z", "--untracked-files=all", "--", relPath)
 		if statusErr == nil && bytes.HasPrefix(status, []byte("?? ")) {
 			read := s.ReadWorkerSandbox(workerID, relPath)
 			if read.OK && read.Binary {

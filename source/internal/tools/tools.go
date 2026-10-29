@@ -104,6 +104,11 @@ type Registry struct {
 	// capture off, so a bare Registry stays unaffected.
 	cpAgent string
 	cpRun   string
+	// cpRootAgent and cpRootRun, when set, are the root of the tree this registry's agent
+	// belongs to: its captures are filed under that run (0.50+), as a child's own agent
+	// and run, so restoring the root run undoes the whole tree.
+	cpRootAgent string
+	cpRootRun   string
 	// agentID and depth identify the agent this registry executes for, so a
 	// permission request can say which agent is asking and how deep it is
 	// nested. Set once at creation; runID comes from SetRunContext.
@@ -206,6 +211,25 @@ func (r *Registry) SetRunContext(agentID, runID string) {
 		r.cpAgent = agentID
 		r.cpRun = runID
 	}
+}
+
+// SetCheckpointRoot makes this registry's captures part of a tree: they are filed under
+// the root agent's run, and each entry records the agent and run that made it. Empty ids
+// switch it off, which is a root agent's own registry.
+func (r *Registry) SetCheckpointRoot(rootAgentID, rootRunID string) {
+	if r != nil {
+		r.cpRootAgent = rootAgentID
+		r.cpRootRun = rootRunID
+	}
+}
+
+// capture files one path under the right run: the tree's root run when this agent is a
+// child of one, its own run otherwise.
+func (r *Registry) capture(rel, abs string) error {
+	if r.cpRootAgent != "" && r.cpRootRun != "" {
+		return checkpoint.CaptureFor(r.cpDir, r.cpRootAgent, r.cpRootRun, r.cpAgent, r.cpRun, rel, abs)
+	}
+	return checkpoint.Capture(r.cpDir, r.cpAgent, r.cpRun, rel, abs)
 }
 
 // SetIdentity names the agent this registry serves and its nesting depth. It is
@@ -545,7 +569,7 @@ func (r *Registry) captureBefore(name string, args json.RawMessage) error {
 		// A write whose pre-image cannot be saved is refused: the run could not be
 		// undone, and the caller must be told rather than left to assume it can be
 		// (audit #6).
-		if err := checkpoint.Capture(r.cpDir, r.cpAgent, r.cpRun, filepath.ToSlash(rel), abs); err != nil {
+		if err := r.capture(filepath.ToSlash(rel), abs); err != nil {
 			return fmt.Errorf("cannot save a checkpoint for %s, so the change is refused: %w", rel, err)
 		}
 	}
@@ -559,7 +583,7 @@ func (r *Registry) captureAbs(abs string) error {
 	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return nil
 	}
-	if err := checkpoint.Capture(r.cpDir, r.cpAgent, r.cpRun, filepath.ToSlash(rel), abs); err != nil {
+	if err := r.capture(filepath.ToSlash(rel), abs); err != nil {
 		return fmt.Errorf("cannot save a checkpoint for %s, so the rename is refused: %w", rel, err)
 	}
 	return nil

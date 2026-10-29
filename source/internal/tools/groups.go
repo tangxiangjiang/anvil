@@ -27,7 +27,7 @@ var groupTools = map[string][]string{
 	// agent covers the tools that create or manage other agents. They are gateable
 	// like any other built-in so a session can require a card before it spends
 	// tokens on a subagent; see doc/design/v0.x/41-subagents-and-tasks.md.
-	"agent": {"spawn_agent", "run_workflow", "task_list", "task_output", "task_cancel"},
+	"agent": {"spawn_agent", "delegate", "run_workflow", "task_list", "task_output", "task_cancel"},
 }
 
 // mcpSentinel marks "every tool whose name starts with mcp_".

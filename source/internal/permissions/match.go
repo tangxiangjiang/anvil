@@ -33,6 +33,9 @@ func (r rule) covers(f CallFacts, goos string) bool {
 	if !matchGlob(r.tool, f.Tool) {
 		return false
 	}
+	if r.unless != nil {
+		return outsideAll(r.unless, f.Paths)
+	}
 	if r.pattern == "" {
 		// An omission matches by name alone. It is not a wildcard in the
 		// dangerous direction: it is the broad rule the user wrote down.
@@ -147,6 +150,29 @@ func matchPaths(pattern string, paths []string) bool {
 		}
 	}
 	return true
+}
+
+// outsideAll reports whether a call touches a path that none of the globs covers. A
+// call with no readable paths counts as outside: an allowlist that a malformed patch
+// could slip past would not confine anything.
+func outsideAll(globs, paths []string) bool {
+	if len(paths) == 0 {
+		return true
+	}
+	for _, p := range paths {
+		clean := cleanPath(p)
+		covered := false
+		for _, g := range globs {
+			if matchGlob(g, clean) {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			return true
+		}
+	}
+	return false
 }
 
 // cleanPath puts a path into the form globs are written in: `/` separators, no

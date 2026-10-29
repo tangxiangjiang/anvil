@@ -131,11 +131,11 @@ it as narrow as the protocol allows:
   `ProviderState` is encoded as the provider's own block type, which the test asserts carries a
   signature and is only ever the provider's own bytes.
 
-**待定.** The exact wire requirement is to be confirmed against the provider's current
-documentation before p_0.48.1 is marked done. If the provider has dropped the requirement, the
-`ProviderState` field is not added and this section is reduced to a note saying so. What is
-needed: one request/response pair from the live tier (chapter [47](47-evaluation.md) §4.3)
-showing a tool loop with thinking enabled.
+**已定（p_0.48.1）.** 官方文档（Thinking with tool use / Preserving thinking blocks）写明：工具调用轮次内必须把 thinking 块完整、不改动地传回，"Required: within a tool-use turn, pass thinking blocks back"。`Message.ProviderState` 已按本节实现：Anthropic 适配器（普通与流式）把响应里的 `thinking` 与 `redacted_thinking` 块按原顺序保存为不透明字节，并在同一 assistant 轮的下一次请求里放在最前面；流式路径由增量重建每个块，包含签名。该字段 `omitempty`，没有它的消息编码不变，所以已录制请求的摘要不变。OpenAI 编码器没有放它的位置；它不落盘，每个新 run 开始时清空。
+
+实测补充：对一个 Anthropic 协议网关做过一次真实交换，响应含带签名的思考块；省略该块的续写被接受。这不推翻文档：该网关也接受了低于文档下限 1024 的 `budget_tokens`，还接受了文档说会返回 400 的 `thinking.type: enabled`（Haiku 5.5），所以它比 Anthropic 自己的校验宽松。以文档为准。
+
+遗留（不在本章阶段内）：文档说 Claude 4.7 及以后拒绝 `thinking.enabled` + `budget_tokens`，改用 `thinking.adaptive` + `output_config.effort`。适配器目前只发前一种，需要一张"哪些模型用哪种"的表，另开阶段处理。
 
 ### 3.5 What effort does not do
 

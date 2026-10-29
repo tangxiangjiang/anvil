@@ -82,6 +82,8 @@ type Record struct {
 	Depth            int    `json:"depth,omitempty"`
 	Kind             string `json:"kind,omitempty"`       // "subagent" for a child
 	TaskTitle        string `json:"task_title,omitempty"` // the brief's description
+	// Brief is the validated delegate brief a worker was given (0.50+), as JSON.
+	Brief json.RawMessage `json:"brief,omitempty"`
 
 	// message
 	Role       string     `json:"role,omitempty"`

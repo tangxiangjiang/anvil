@@ -53,7 +53,8 @@ The rules that make the layering a guarantee rather than a convention:
 3. **L0 is last word as well as first.** One closing line after L4 restates that the safety
    clauses outrank everything above it. Models weight both ends of a prompt; with the clauses
    only at the start, a long L2 is the most recent instruction the model read.
-4. **The default composition is byte-identical to today's.** With no role set and no
+4. **The default composition keeps every sentence of today's** (amended in p_0.49.1: byte identity conflicts with rule 1, because today's safety sentences sit inside the main text; L0 leads and the golden check is sentence-level).
+   Original wording: the default composition is byte-identical to today's. With no role set and no
    `SystemPrompt`, L0 + L1(main) + L2 equals what `prompt.SystemWithOptions` plus
    `buildSystemPrompt` produce now. L0 is today's safety sentences moved, not new sentences. A
    golden file records today's output before the split, and the split is not merged until it

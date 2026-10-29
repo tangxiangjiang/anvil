@@ -768,3 +768,20 @@ func TestRecorderConcurrentLinesAndCancellation(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A delegate result opens with the same generated "agent-<id> finished in N steps."
+// heading spawn_agent's does; only that heading is volatile, never the report under it.
+func TestDigestDelegateHeadingIsVolatileButReportIsNot(t *testing.T) {
+	result := func(id, report string) llm.Request {
+		r := recordingRequest(filepath.Join(os.TempDir(), "delegate-test"))
+		r.Messages = append(r.Messages, llm.Message{Role: llm.RoleTool, Name: "delegate",
+			Content: "agent-" + id + " finished in 2 steps.\nacceptance:\n  [met]       " + report + "\nchanged: pkg/a.go\n"})
+		return r
+	}
+	if RequestDigest(result("aaaaaaaaaaaaaaaa", "a is changed")) != RequestDigest(result("bbbbbbbbbbbbbbbb", "a is changed")) {
+		t.Fatal("the generated agent id in a delegate heading made two runs differ")
+	}
+	if RequestDigest(result("aaaaaaaaaaaaaaaa", "a is changed")) == RequestDigest(result("aaaaaaaaaaaaaaaa", "b is changed")) {
+		t.Fatal("the acceptance report under a delegate heading was normalized away")
+	}
+}

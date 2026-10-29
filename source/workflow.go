@@ -25,6 +25,8 @@ import (
 	"sync"
 	"unicode/utf8"
 
+	"github.com/anvil-dev/anvil/internal/llm"
+	"github.com/anvil-dev/anvil/internal/prompt"
 	"github.com/anvil-dev/anvil/internal/tasks"
 	"github.com/anvil-dev/anvil/internal/tools"
 )
@@ -78,6 +80,42 @@ type workflowStep struct {
 	DependsOn   []string        `json:"depends_on"`
 	ForEach     *workflowFanOut `json:"for_each"`
 	MaxParallel int             `json:"max_parallel"`
+	// Role, Effort and ResultSchema are what a staged run adds to a step (0.50+). Role is
+	// the child's Options.Role, Effort its Options.Effort (default: the parent's), and
+	// ResultSchema names a schema the step's final message must satisfy: a message that
+	// does not parse or fails it fails the step, and its dependants do not run.
+	Role         string `json:"role"`
+	Effort       string `json:"effort"`
+	ResultSchema string `json:"result_schema"`
+	// BriefFromItem makes each fan-out item a delegate brief: the child is created the way
+	// delegate creates one, so the file allowlist and the acceptance report apply.
+	BriefFromItem bool `json:"brief_from_item"`
+	// literal marks a prompt the SDK built from text it does not control, such as a
+	// user's message: its braces are not tokens and nothing is substituted into it.
+	literal bool
+	// directive is the caller's per-run instruction (WithDirective) for a staged run. It is
+	// appended to the child's brief layer, so every stage sees it and a Worker that edits
+	// files is bound by it. Unexported: a model-written workflow cannot set it.
+	directive string
+	// skills is the router's matched-skills text for the user's message, handed to every
+	// stage the way Single hands it to the main agent. Unexported for the same reason.
+	skills string
+}
+
+// tokens are the {{...}} references in the step's prompt; a literal prompt has none.
+func (s workflowStep) tokens() []string {
+	if s.literal {
+		return nil
+	}
+	return workflowTokens(s.Prompt)
+}
+
+// substitute fills the step's tokens, or returns a literal prompt untouched.
+func (w *workflowRun) substitute(s workflowStep, values map[string]string) string {
+	if s.literal {
+		return s.Prompt
+	}
+	return workflowSubstitute(s.Prompt, values)
 }
 
 type workflowFanOut struct {
@@ -252,7 +290,7 @@ func validateWorkflow(spec workflowSpec) error {
 					add("step %q: for_each.from %q is listed later; a step may only fan out over steps before it", id, from)
 				}
 			}
-			for _, tok := range workflowTokens(step.Prompt) {
+			for _, tok := range step.tokens() {
 				ref, isResult := workflowResultToken(tok)
 				if !isResult {
 					continue
@@ -275,10 +313,22 @@ func validateWorkflow(spec workflowSpec) error {
 		if step.MaxSteps < 0 {
 			add("step %q: max_steps cannot be negative", id)
 		}
+		if !prompt.Role(step.Role).Valid() {
+			add("step %q: role %q is not one of subagent, worker, decision, analyze", id, step.Role)
+		}
+		if !llm.Effort(step.Effort).Valid() {
+			add("step %q: effort %q is not low, medium or high", id, step.Effort)
+		}
+		if step.ResultSchema != "" && !knownSchema(step.ResultSchema) {
+			add("step %q: result_schema %q is not one of %s, %s", id, step.ResultSchema, schemaDecision, schemaRoadmap)
+		}
+		if step.BriefFromItem && step.ForEach == nil {
+			add("step %q: brief_from_item needs for_each", id)
+		}
 		if step.MaxParallel < 0 || step.MaxParallel > workflowMaxParallel {
 			add("step %q: max_parallel must be between 1 and %d", id, workflowMaxParallel)
 		}
-		for _, tok := range workflowTokens(step.Prompt) {
+		for _, tok := range step.tokens() {
 			switch tok {
 			case "item", "index":
 				if step.ForEach == nil {
@@ -424,7 +474,7 @@ func workflowDependencyIDs(step workflowStep) []string {
 			out = append(out, from)
 		}
 	}
-	for _, tok := range workflowTokens(step.Prompt) {
+	for _, tok := range step.tokens() {
 		if ref, ok := workflowResultToken(tok); ok && ref != "" {
 			out = append(out, ref)
 		}
@@ -697,7 +747,7 @@ func (w *workflowRun) values(i int, outcomes []workflowOutcome) map[string]strin
 func (w *workflowRun) runStep(ctx context.Context, i int, values map[string]string) workflowOutcome {
 	step := w.plan.spec.Steps[i]
 	if step.ForEach == nil {
-		item := w.runChild(ctx, i, -1, workflowSubstitute(step.Prompt, values))
+		item := w.runChild(ctx, i, -1, w.substitute(step, values))
 		return workflowOutcome{
 			status:  item.status,
 			agentID: item.agentID,
@@ -727,6 +777,16 @@ func (w *workflowRun) runFanOut(ctx context.Context, i int, values map[string]st
 	limit := step.MaxParallel
 	if limit <= 0 {
 		limit = w.plan.parallel
+	}
+	// Items that name their own order (an id and a depends_on, as a roadmap's do) run in
+	// that order. A fan-out whose items name none takes the path below, unchanged.
+	if order, problems := itemOrder(items); len(problems) > 0 {
+		return workflowOutcome{
+			status:  workflowFailed,
+			errText: fmt.Sprintf("for_each over %s: the items' own order is invalid:\n- %s", sourceID, strings.Join(problems, "\n- ")),
+		}
+	} else if order != nil {
+		return w.runOrderedFanOut(ctx, i, values, items, order, limit)
 	}
 	out := make([]workflowItemOutcome, len(items))
 	sem := make(chan struct{}, limit)
@@ -758,7 +818,107 @@ func (w *workflowRun) runFanOut(ctx context.Context, i int, values map[string]st
 			}
 			vars["item"] = items[idx]
 			vars["index"] = strconv.Itoa(idx)
-			out[idx] = w.runChild(ctx, i, idx, workflowSubstitute(step.Prompt, vars))
+			out[idx] = w.runChild(ctx, i, idx, w.substitute(step, vars))
+		}(idx)
+	}
+	wg.Wait()
+	return aggregateWorkflowItems(out)
+}
+
+// itemOrder reads the order the items declare for themselves. It returns deps[i], the
+// indices item i waits for, or nil when no item declares a dependency, which is every
+// fan-out that existed before. An item is an object with a string id and an optional
+// depends_on list; one that is not has no id and so cannot be depended on.
+func itemOrder(items []string) ([][]int, []string) {
+	ids := make([]string, len(items))
+	deps := make([][]string, len(items))
+	any := false
+	for i, text := range items {
+		var it struct {
+			ID        string   `json:"id"`
+			DependsOn []string `json:"depends_on"`
+		}
+		if json.Unmarshal([]byte(text), &it) != nil {
+			continue
+		}
+		ids[i], deps[i] = it.ID, it.DependsOn
+		if len(it.DependsOn) > 0 {
+			any = true
+		}
+	}
+	if !any {
+		return nil, nil
+	}
+	index := map[string]int{}
+	for i, id := range ids {
+		if id != "" {
+			if _, dup := index[id]; !dup {
+				index[id] = i
+			}
+		}
+	}
+	// A depended-on item must have an id: otherwise "unknown item" would hide that the
+	// item exists but cannot be named.
+	problems := itemOrderProblems(ids, deps)
+	if len(problems) > 0 {
+		return nil, problems
+	}
+	order := make([][]int, len(items))
+	for i, list := range deps {
+		for _, dep := range list {
+			order[i] = append(order[i], index[dep])
+		}
+	}
+	return order, nil
+}
+
+// runOrderedFanOut runs the items of a fan-out whose items depend on one another. An item
+// starts when the items it names have finished and a slot is free; one whose dependency
+// did not finish is skipped, as a step is. Slots are taken after the wait, so an item
+// that is waiting never holds one a runnable item needs.
+func (w *workflowRun) runOrderedFanOut(ctx context.Context, i int, values map[string]string, items []string, deps [][]int, limit int) workflowOutcome {
+	step := w.plan.spec.Steps[i]
+	out := make([]workflowItemOutcome, len(items))
+	finished := make([]chan struct{}, len(items))
+	for idx := range finished {
+		finished[idx] = make(chan struct{})
+	}
+	sem := make(chan struct{}, limit)
+	var wg sync.WaitGroup
+	for idx := range items {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			defer close(finished[idx])
+			for _, dep := range deps[idx] {
+				select {
+				case <-finished[dep]:
+				case <-ctx.Done():
+					out[idx] = workflowItemOutcome{index: idx, status: workflowCancelled,
+						errText: "the workflow was cancelled before this item started"}
+					return
+				}
+				if out[dep].status != workflowFinished {
+					out[idx] = workflowItemOutcome{index: idx, status: workflowSkipped,
+						errText: fmt.Sprintf("depends on item %d, which %s", dep, out[dep].status)}
+					return
+				}
+			}
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				out[idx] = workflowItemOutcome{index: idx, status: workflowCancelled,
+					errText: "the workflow was cancelled before this item started"}
+				return
+			}
+			defer func() { <-sem }()
+			vars := make(map[string]string, len(values)+2)
+			for k, v := range values {
+				vars[k] = v
+			}
+			vars["item"] = items[idx]
+			vars["index"] = strconv.Itoa(idx)
+			out[idx] = w.runChild(ctx, i, idx, w.substitute(step, vars))
 		}(idx)
 	}
 	wg.Wait()
@@ -789,20 +949,55 @@ func (w *workflowRun) runChild(ctx context.Context, stepIndex, itemIndex int, pr
 	}
 	defer func() { <-w.children }()
 
-	opts := w.parent.childOptions(spawnParams{
-		Prompt:      prompt,
-		Description: description,
-		Model:       step.Model,
-		MaxSteps:    step.MaxSteps,
-	}, w.plan.selectors[stepIndex], w.depth)
+	var opts Options
+	var worker *Brief
+	if step.BriefFromItem {
+		// The item is a brief: the child is created the way delegate creates one, so the
+		// allowlist and the acceptance report apply. The item was validated when the
+		// roadmap was, but a hand-written workflow gets the same check here.
+		brief, problems := briefFromItem(w.parent.cwd, prompt)
+		if len(problems) > 0 {
+			w.parent.budget.give()
+			out.status = workflowFailed
+			out.errText = "the item is not a valid brief:\n- " + strings.Join(problems, "\n- ")
+			return out
+		}
+		worker = brief
+		if step.Effort != "" && worker.Effort == "" {
+			worker.Effort = step.Effort
+		}
+		opts = w.parent.workerOptions(worker, w.plan.selectors[stepIndex], w.depth)
+		if step.Model != "" {
+			opts.Model = Model{ID: step.Model}
+		}
+		prompt = workerPrompt
+	} else {
+		opts = w.parent.childOptions(spawnParams{
+			Prompt:      prompt,
+			Description: description,
+			Model:       step.Model,
+			MaxSteps:    step.MaxSteps,
+		}, w.plan.selectors[stepIndex], w.depth)
+		if step.Role != "" {
+			opts.SystemPrompt = ""
+			opts.Role = Role(step.Role)
+		}
+		if step.Effort != "" {
+			opts.Effort = Effort(step.Effort)
+		}
+		// A stage that must answer in a schema is told the shape in its own brief layer.
+		opts.brief = schemaBrief(step.ResultSchema)
+	}
+	opts.brief = withRunLayers(opts.brief, step.directive, step.skills)
 	ident := subagentIdentity{
 		ParentAgentID:    w.parent.id,
 		ParentRunID:      w.parentRunID,
 		ParentToolCallID: w.toolCallID,
 		TaskTitle:        description,
 		Depth:            w.depth,
+		Brief:            worker,
 	}
-	callCtx := withSubagentOrigin(ctx, ident.ParentAgentID, ident.ParentRunID, ident.ParentToolCallID)
+	callCtx := withSubagentOrigin(ctx, w.parent, ident.ParentRunID, ident.ParentToolCallID)
 	child, err := createSubagent(callCtx, opts, ident)
 	if err != nil {
 		out.status = workflowFailed
@@ -833,6 +1028,18 @@ func (w *workflowRun) runChild(ctx context.Context, stepIndex, itemIndex int, pr
 	case StatusFinished:
 		out.status = workflowFinished
 		out.result = res.Result
+		if worker != nil {
+			changed, recorded := child.changedFiles()
+			out.result = report(worker, res.Result, changed, recorded) + res.Result
+		}
+		if step.ResultSchema != "" {
+			env := schemaEnv{cwd: w.parent.cwd, budgetLeft: w.parent.budget.remaining()}
+			if problems := validateSchema(step.ResultSchema, res.Result, env); len(problems) > 0 {
+				out.status = workflowFailed
+				out.errText = fmt.Sprintf("the %s stage's answer does not satisfy the %s schema:\n- %s",
+					w.plan.ids[stepIndex], step.ResultSchema, strings.Join(problems, "\n- "))
+			}
+		}
 	case StatusCancelled:
 		out.status = workflowCancelled
 		out.errText = firstNonEmpty(res.Err, "the run stopped")
@@ -851,7 +1058,7 @@ func aggregateWorkflowItems(items []workflowItemOutcome) workflowOutcome {
 	var results, errs []string
 	for _, item := range items {
 		switch item.status {
-		case workflowFailed:
+		case workflowFailed, workflowSkipped:
 			out.status = workflowFailed
 		case workflowCancelled:
 			if out.status != workflowFailed {

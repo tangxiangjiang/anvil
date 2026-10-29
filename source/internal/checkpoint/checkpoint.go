@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -54,6 +55,13 @@ type Entry struct {
 	// from it: the user changed it after the run. Empty means no post-state was
 	// recorded (a checkpoint from before this field), and Restore warns instead.
 	PostSHA256 string `json:"post_sha256,omitempty"`
+	// AgentID and ChildRunID name the child that captured the path when it was not the
+	// run's own agent (0.50+). Empty means the root agent captured it, which is every
+	// entry written before trees existed. They are a record, not a key: a restore of
+	// the root run puts back every entry whoever captured it, and the child's run id is
+	// kept so a per-child restore remains possible later.
+	AgentID    string `json:"agent_id,omitempty"`
+	ChildRunID string `json:"child_run_id,omitempty"`
 }
 
 // Manifest is one run's record, stored beside its captured files.
@@ -158,10 +166,42 @@ func saveManifest(dir string, m Manifest) error {
 // A directory is not captured: the tools that can change the workspace write
 // files, and restoring a directory's listing would be a different feature.
 func Capture(root, agentID, runID, relPath, absPath string) error {
+	return capture(root, agentID, runID, "", "", relPath, absPath)
+}
+
+// CaptureFor is Capture for a child agent in a tree: the path is filed under the root's
+// run (rootAgentID, rootRunID), so one restore of that run undoes the whole tree, and the
+// entry records which child captured it and in which of its own runs. The first
+// pre-image of a path is still the tree's pre-image, whichever agent reached it first.
+func CaptureFor(root, rootAgentID, rootRunID, childAgentID, childRunID, relPath, absPath string) error {
+	if err := safeName(childAgentID); err != nil {
+		return err
+	}
+	if err := safeName(childRunID); err != nil {
+		return err
+	}
+	return capture(root, rootAgentID, rootRunID, childAgentID, childRunID, relPath, absPath)
+}
+
+// manifestLocks serialises the read-modify-write of one run's manifest. A tree's Workers
+// run in parallel in one process and all file into the root's run, so two captures of
+// different paths would otherwise read the same manifest and the later write would drop
+// the earlier entry; on Windows the rename also fails while another writer holds the file.
+var manifestLocks sync.Map // run directory -> *sync.Mutex
+
+func lockRun(dir string) func() {
+	m, _ := manifestLocks.LoadOrStore(dir, &sync.Mutex{})
+	mu := m.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
+
+func capture(root, agentID, runID, childAgentID, childRunID, relPath, absPath string) error {
 	dir, err := runDir(root, agentID, runID)
 	if err != nil {
 		return err
 	}
+	defer lockRun(dir)()
 	relPath = filepath.ToSlash(relPath)
 	if relPath == "" || relPath == "." || strings.HasPrefix(relPath, "../") {
 		return fmt.Errorf("%w: %q", errUnsafe, relPath)
@@ -184,7 +224,7 @@ func Capture(root, agentID, runID, relPath, absPath string) error {
 		if !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("checkpoint: stat %s: %w", relPath, err)
 		}
-		m.Files = append(m.Files, Entry{Path: relPath, Existed: false})
+		m.Files = append(m.Files, Entry{Path: relPath, Existed: false, AgentID: childAgentID, ChildRunID: childRunID})
 		return saveManifest(dir, m)
 	}
 	if info.IsDir() {
@@ -207,6 +247,9 @@ func Capture(root, agentID, runID, relPath, absPath string) error {
 		Existed: true,
 		Size:    int64(len(data)),
 		SHA256:  hex.EncodeToString(sum[:]),
+
+		AgentID:    childAgentID,
+		ChildRunID: childRunID,
 	})
 	return saveManifest(dir, m)
 }
@@ -351,6 +394,7 @@ func Finish(root, agentID, runID string, resolve func(rel string) (string, error
 	if err != nil {
 		return err
 	}
+	defer lockRun(dir)()
 	m, err := loadManifest(dir, agentID, runID)
 	if err != nil {
 		return err

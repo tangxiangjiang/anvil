@@ -12,17 +12,10 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/anvil-dev/anvil/internal/permissions"
 	"github.com/anvil-dev/anvil/internal/tasks"
 	"github.com/anvil-dev/anvil/internal/tools"
 )
-
-// subagentBrief is the system prompt every child agent gets instead of the main
-// agent's. It is deliberately short: a child's job is the task it was handed,
-// and its answer is read by the agent that called it, not by a person.
-const subagentBrief = `You are a subagent. The agent that created you gave you one task and is waiting for \
-your answer. Work with the tools you have. Do not ask a question and stop; if something is missing, \
-say what you could not determine. Your final message is the entire result: write it for the agent \
-that called you, not for a person, and do not repeat the task.`
 
 // subagentIdentity is what Create stamps onto a child's meta record. A top-level
 // session passes the zero value and writes exactly the record it wrote before.
@@ -32,6 +25,9 @@ type subagentIdentity struct {
 	ParentToolCallID string
 	TaskTitle        string
 	Depth            int
+	// Brief is the validated delegate brief, written to the child's meta record so a
+	// replay of the parent shows what the child was asked (0.50+). Nil for spawn_agent.
+	Brief *Brief
 }
 
 // subagentBudget bounds how many agents one root run tree may create. The
@@ -78,6 +74,16 @@ func (b *subagentBudget) give() {
 	}
 }
 
+// remaining is how many more agents the tree may create; negative means unbounded.
+func (b *subagentBudget) remaining() int {
+	if b == nil {
+		return -1
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.max - b.used
+}
+
 // reset starts a new root run's tree budget.
 func (b *subagentBudget) reset() {
 	if b == nil {
@@ -119,18 +125,50 @@ type subagentOrigin struct {
 	parentAgentID string
 	parentRunID   string
 	toolCallID    string
+	// rootAgentID and rootRunID are the root of the tree this child belongs to: the
+	// agent whose Send started it all and that Send's run. Checkpoints are filed there.
+	rootAgentID string
+	rootRunID   string
 }
 
 type subagentOriginKey struct{}
 
 // withSubagentOrigin tags the context a child's run derives from with where it
 // came from. The child's executeRun reads it to build SubagentEvent envelopes.
-func withSubagentOrigin(ctx context.Context, parentAgentID, parentRunID, toolCallID string) context.Context {
+func withSubagentOrigin(ctx context.Context, parent *Agent, parentRunID, toolCallID string) context.Context {
+	rootAgent, rootRun := parent.treeRoot()
 	return context.WithValue(ctx, subagentOriginKey{}, subagentOrigin{
-		parentAgentID: parentAgentID,
+		parentAgentID: parent.id,
 		parentRunID:   parentRunID,
 		toolCallID:    toolCallID,
+		rootAgentID:   rootAgent,
+		rootRunID:     rootRun,
 	})
+}
+
+// treeRoot is the root of the tree this agent belongs to. A top-level agent is its own
+// root, and the run in progress is the root run; a child carries what its own run was
+// started with.
+func (a *Agent) treeRoot() (agentID, runID string) {
+	if a.depth == 0 {
+		return a.id, a.currentRunID()
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.rootAgentID, a.rootRunID
+}
+
+// adoptTreeRoot is called when a run starts: a child files its captures under the root's
+// run (as its origin says), a top-level agent under its own.
+func (a *Agent) adoptTreeRoot(ctx context.Context) {
+	if origin, ok := subagentOriginFromContext(ctx); ok && a.depth > 0 && origin.rootAgentID != "" && origin.rootRunID != "" {
+		a.mu.Lock()
+		a.rootAgentID, a.rootRunID = origin.rootAgentID, origin.rootRunID
+		a.mu.Unlock()
+		a.registry.SetCheckpointRoot(origin.rootAgentID, origin.rootRunID)
+		return
+	}
+	a.registry.SetCheckpointRoot("", "")
 }
 
 func subagentOriginFromContext(ctx context.Context) (subagentOrigin, bool) {
@@ -204,7 +242,7 @@ func subagentTool(reg *tools.Registry, profiles []SubagentProfile) *tools.FuncTo
 			"prompt":      map[string]any{"type": "string", "description": "The whole task. The subagent sees nothing else from this conversation."},
 			"description": map[string]any{"type": "string", "description": "A short name for the task, shown on its card. Not sent to the subagent."},
 			"profile":     profileProperty,
-			"tools":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Group or tool names the subagent may use. An explicit value overrides the profile."},
+			"tools":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Group or tool names the subagent may use: read, search, write, edit, shell, verify, web, lsp, git, vision, mcp. Default: read, search, skills, git, vision. An explicit value overrides the profile."},
 			"model":       map[string]any{"type": "string", "description": "Model id. An explicit value overrides the profile; empty inherits this session's model."},
 			"max_steps":   map[string]any{"type": "integer", "minimum": 0, "description": "Optional step ceiling. An explicit value overrides the profile; zero inherits this session's limit."},
 			"background":  map[string]any{"type": "boolean", "description": "Return a task id immediately instead of waiting."},
@@ -262,7 +300,7 @@ func spawnAgent(ctx context.Context, reg *tools.Registry, raw json.RawMessage) (
 		TaskTitle:        strings.TrimSpace(in.Description),
 		Depth:            depth,
 	}
-	callCtx := withSubagentOrigin(ctx, parent.id, ident.ParentRunID, ident.ParentToolCallID)
+	callCtx := withSubagentOrigin(ctx, parent, ident.ParentRunID, ident.ParentToolCallID)
 	child, err := createSubagent(callCtx, opts, ident)
 	if err != nil {
 		return "", fmt.Errorf("start subagent: %w", err)
@@ -326,7 +364,7 @@ func spawnBackground(ctx context.Context, reg *tools.Registry, parent *Agent, in
 		ParentRunID:      ident.ParentRunID,
 		ParentToolCallID: ident.ParentToolCallID,
 		Run: func(taskCtx context.Context) (string, string, error) {
-			callCtx := withSubagentOrigin(taskCtx, ident.ParentAgentID, ident.ParentRunID, ident.ParentToolCallID)
+			callCtx := withSubagentOrigin(taskCtx, parent, ident.ParentRunID, ident.ParentToolCallID)
 			child, err := createSubagent(callCtx, opts, ident)
 			if err != nil {
 				parent.budget.give()
@@ -395,11 +433,14 @@ func resolveSubagentProfile(profiles []SubagentProfile, in spawnParams) (spawnPa
 	return in, selected.Instructions, nil
 }
 
-func subagentSystemPrompt(profileInstructions []string) string {
+// subagentProfileBrief is the brief layer (L3) a profiled child carries: the profile's
+// instructions, under the role text and the safety layer rather than in place of them.
+// A child spawned without a profile has no brief.
+func subagentProfileBrief(profileInstructions []string) string {
 	if len(profileInstructions) == 0 || strings.TrimSpace(profileInstructions[0]) == "" {
-		return subagentBrief
+		return ""
 	}
-	return subagentBrief + "\n\nProfile instructions:\n" + strings.TrimSpace(profileInstructions[0])
+	return "Profile instructions:\n" + strings.TrimSpace(profileInstructions[0])
 }
 
 // resolveSubagentSelectors validates the caller's tool list against the session
@@ -498,6 +539,9 @@ func (a *Agent) childOptions(in spawnParams, selectors []string, depth int, prof
 		Effort:           a.opts.Effort,
 		MaxSteps:         a.opts.MaxSteps,
 		MaxWallTime:      a.opts.MaxWallTime,
+		Effort:           a.opts.Effort,
+		Retry:            a.opts.Retry,
+		MaxOutputTokens:  a.opts.MaxOutputTokens,
 		Permission:       a.opts.Permission,
 		PermissionGroups: append([]string(nil), a.opts.PermissionGroups...),
 		PermissionRules:  append([]PermissionRule(nil), a.opts.PermissionRules...),
@@ -507,7 +551,8 @@ func (a *Agent) childOptions(in spawnParams, selectors []string, depth int, prof
 		// A command hook that denies in the parent denies in the child too, so the child
 		// must carry the same switch that lets command hooks run (audit #25).
 		AllowHookCommands: a.opts.AllowHookCommands,
-		SystemPrompt:      subagentSystemPrompt(profileInstructions),
+		Role:              RoleSubagent,
+		brief:             subagentProfileBrief(profileInstructions),
 		RequireFinishTask: a.opts.RequireFinishTask,
 		BuiltinTools:      selectors,
 		DisallowedTools:   append([]string(nil), a.opts.DisallowedTools...),
@@ -515,6 +560,9 @@ func (a *Agent) childOptions(in spawnParams, selectors []string, depth int, prof
 		completer:         a.complete,
 		budget:            a.budget,
 		taskMgr:           a.taskMgr,
+		// A child of a confined worker is confined to the same files: spawn_agent must not be
+		// a way around the allowlist a brief set.
+		confine: append([]permissions.Rule(nil), a.opts.confine...),
 		depth:             depth,
 		Local: LocalOptions{
 			CWD:             a.cwd,

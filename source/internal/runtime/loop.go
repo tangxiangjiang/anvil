@@ -33,6 +33,10 @@ type Event struct {
 	Step       int
 	MaxSteps   int // 0 = unlimited
 	Code       string
+	// Attempt and Delay describe a `retry` event (0.48+): the attempt that just
+	// failed (1-based) and how long the wrapper waits before the next one.
+	Attempt int
+	Delay   time.Duration
 	// Usage is authoritative on terminal events and an estimate on streamed
 	// events when UsageEstimated is true.
 	Usage *llm.Usage
@@ -240,14 +244,17 @@ func (b *backgroundComposition) needsCheckpoint() bool {
 
 // Result is the terminal run result.
 type Result struct {
-	ID       string
-	Status   string
-	Result   string
-	Steps    int
-	Usage    *llm.Usage
-	Err      string
-	Code     string
-	Messages []llm.Message // full conversation incl. system prompt
+	ID     string
+	Status string
+	Result string
+	Steps  int
+	Usage  *llm.Usage
+	Err    string
+	Code   string
+	// Truncated is true when the provider cut the final answer off at the output limit
+	// (0.48+). The run still finishes; nothing is re-requested.
+	Truncated bool
+	Messages  []llm.Message // full conversation incl. system prompt
 	// LastRequestAt is when the most recent model request completed; zero when
 	// none did.
 	LastRequestAt time.Time
@@ -276,6 +283,10 @@ type Config struct {
 	// PromptCache asks the adapter to place provider cache breakpoints (0.43+).
 	// Only Anthropic acts on it.
 	PromptCache bool
+	// Effort is sent on every request of the run (0.48+). Empty sends nothing.
+	Effort llm.Effort
+	// MaxOutputTokens caps an answer; zero sends nothing.
+	MaxOutputTokens int
 	// Sink, if set, receives each conversation message as it is appended
 	// (user, assistant, tool) so callers can persist them durably.
 	Sink func(llm.Message)
@@ -396,13 +407,12 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 		var streamedText strings.Builder
 		var resp *llm.Response
 		var err error
-		requestedFinishOnly := finishOnlyNext
-		requestTools := toolDefs
-		if requestedFinishOnly {
-			requestTools = []llm.ToolDef{finishTaskDef()}
-		}
-		finishOnlyNext = false
-		req := llm.Request{Model: cfg.Model, Messages: messages, Tools: requestTools, Effort: cfg.Effort, PromptCache: cfg.PromptCache}
+		// The retrying completer reports through the context, so the Completer
+		// interface keeps its shape and the runtime still knows nothing about HTTP.
+		callCtx := llm.WithRetryObserver(ctx, func(info llm.RetryInfo) {
+			emit(Event{Type: "retry", Attempt: info.Attempt, Delay: info.Delay, Text: info.Message})
+		})
+		req := llm.Request{Model: cfg.Model, Messages: messages, Tools: toolDefs, PromptCache: cfg.PromptCache, Effort: cfg.Effort, MaxOutputTokens: cfg.MaxOutputTokens}
 		roundInput := compress.Estimate(req.Messages)
 		liveUsage := func(roundOutput int) *llm.Usage {
 			u := &llm.Usage{InputTokens: roundInput, OutputTokens: roundOutput}
@@ -439,7 +449,7 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 				})
 				reasoning.Reset()
 			}
-			resp, err = sc.CompleteStream(ctx, req, func(d llm.Delta) {
+			resp, err = sc.CompleteStream(callCtx, req, func(d llm.Delta) {
 				if d.Reasoning != "" {
 					reasoning.WriteString(d.Reasoning)
 					streamedOutput.WriteString(d.Reasoning)
@@ -466,7 +476,7 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 			})
 			flushReasoning() // the round boundary
 		} else {
-			resp, err = completer.Complete(ctx, req)
+			resp, err = completer.Complete(callCtx, req)
 		}
 		forceNonStreaming = false
 		// A corrective retry sees the rejected assistant turn and an internal
@@ -480,8 +490,15 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 				return cancelledResult(ctx, runID, step, usageAcc, messages, ctx.Err(), lastRequestAt, emit)
 			}
 			msg := err.Error()
-			emit(Event{Type: "error", Text: msg, Code: CodeProvider, Usage: usageAcc, LastRequestAt: lastRequestAt})
-			return Result{ID: runID, Status: "error", Steps: step, Usage: usageAcc, Err: msg, Code: CodeProvider, Messages: messages, LastRequestAt: lastRequestAt}
+			code := CodeProvider
+			switch {
+			case llm.IsMidStream(err):
+				code = CodeProviderMidStream
+			case llm.KindOf(err) != llm.KindUnknown:
+				code = llm.KindCode(llm.KindOf(err))
+			}
+			emit(Event{Type: "error", Text: msg, Code: code, Usage: usageAcc, LastRequestAt: lastRequestAt})
+			return Result{ID: runID, Status: "error", Steps: step, Usage: usageAcc, Err: msg, Code: code, Messages: messages, LastRequestAt: lastRequestAt}
 		}
 		lastRequestAt = time.Now()
 		if resp == nil {
@@ -633,6 +650,12 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 		sink(assistant)
 
 		if len(assistant.ToolCalls) == 0 {
+			// The provider cut the answer off at the output limit. Say so and stop: an
+			// automatic continuation would be a second completion nobody budgeted for.
+			truncated := resp.StopReason == llm.StopLength
+			if truncated {
+				emit(Event{Type: "truncated", Text: assistant.Content})
+			}
 			emit(Event{Type: "done", Text: assistant.Content, Usage: usageAcc, LastRequestAt: lastRequestAt})
 			return Result{
 				ID:            runID,
@@ -640,6 +663,7 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 				Result:        assistant.Content,
 				Steps:         step + 1,
 				Usage:         usageAcc,
+				Truncated:     truncated,
 				Messages:      messages,
 				LastRequestAt: lastRequestAt,
 			}

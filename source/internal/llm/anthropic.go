@@ -44,6 +44,22 @@ type anthropicRequest struct {
 	System    any                `json:"system,omitempty"`
 	Messages  []anthropicMessage `json:"messages"`
 	Tools     []anthropicTool    `json:"tools,omitempty"`
+	Thinking  *anthropicThink    `json:"thinking,omitempty"`
+}
+
+// anthropicThink is the request-side thinking switch. It carries a token budget,
+// never any thinking text.
+type anthropicThink struct {
+	Type         string `json:"type"`
+	BudgetTokens int    `json:"budget_tokens"`
+}
+
+func thinkingFor(e Effort) *anthropicThink {
+	budget, ok := anthropicThinking(e)
+	if !ok {
+		return nil
+	}
+	return &anthropicThink{Type: "enabled", BudgetTokens: budget}
 }
 
 type anthropicThinking struct {
@@ -106,9 +122,10 @@ func (u *anthropicUsageWire) usage() *Usage {
 }
 
 type anthropicResponse struct {
-	Content []json.RawMessage   `json:"content"`
-	Usage   *anthropicUsageWire `json:"usage"`
-	Error   *struct {
+	StopReason string              `json:"stop_reason"`
+	Content    []json.RawMessage   `json:"content"`
+	Usage      *anthropicUsageWire `json:"usage"`
+	Error      *struct {
 		Type    string `json:"type"`
 		Message string `json:"message"`
 	} `json:"error"`
@@ -117,7 +134,7 @@ type anthropicResponse struct {
 // Complete implements Completer.
 func (c *Anthropic) Complete(ctx context.Context, req Request) (*Response, error) {
 	if c.cfg.APIKey == "" {
-		return nil, &HTTPError{Status: 401, Message: "missing API key", Retryable: false}
+		return nil, NewHTTPError(401, "missing API key")
 	}
 	system, messages, err := toAnthropicMessages(req.Messages, req.PromptCache)
 	if err != nil {
@@ -126,11 +143,11 @@ func (c *Anthropic) Complete(ctx context.Context, req Request) (*Response, error
 	thinking, maxTokens := anthropicThinkingFor(req.Effort)
 	body := anthropicRequest{
 		Model:     firstNonEmpty(req.Model, c.cfg.Model),
-		MaxTokens: maxTokens,
-		Thinking:  thinking,
+		MaxTokens: anthropicMaxTokens(req.Effort, req.MaxOutputTokens),
 		System:    system,
 		Messages:  messages,
 		Tools:     toAnthropicTools(req.Tools),
+		Thinking:  thinkingFor(req.Effort),
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {
@@ -147,7 +164,7 @@ func (c *Anthropic) Complete(ctx context.Context, req Request) (*Response, error
 
 	httpResp, err := c.client.Do(httpReq)
 	if err != nil {
-		return nil, &HTTPError{Status: 0, Message: "anthropic request failed", Retryable: true, Cause: err}
+		return nil, newTransportError("anthropic request failed", err)
 	}
 	defer httpResp.Body.Close()
 	respBody, err := io.ReadAll(io.LimitReader(httpResp.Body, 8<<20))
@@ -155,20 +172,20 @@ func (c *Anthropic) Complete(ctx context.Context, req Request) (*Response, error
 		return nil, err
 	}
 	if httpResp.StatusCode >= 400 {
-		return nil, mapHTTPStatus(httpResp.StatusCode, string(respBody))
+		return nil, withRetryAfter(mapHTTPStatus(httpResp.StatusCode, string(respBody)), httpResp.Header)
 	}
 	var parsed anthropicResponse
 	if err := json.Unmarshal(respBody, &parsed); err != nil {
 		return nil, fmt.Errorf("decode anthropic response: %w", err)
 	}
 	if parsed.Error != nil {
-		return nil, &HTTPError{Status: httpResp.StatusCode, Message: parsed.Error.Message, Retryable: false}
+		return nil, NewHTTPError(httpResp.StatusCode, parsed.Error.Message)
 	}
 	msg, err := fromAnthropicContent(parsed.Content)
 	if err != nil {
 		return nil, err
 	}
-	out := &Response{Message: msg, Usage: parsed.Usage.usage()}
+	out := &Response{Message: msg, Usage: parsed.Usage.usage(), StopReason: anthropicStop(parsed.StopReason)}
 	return out, nil
 }
 
@@ -207,10 +224,8 @@ func toAnthropicMessages(in []Message, promptCache bool) (system any, out []anth
 			})
 		case RoleAssistant:
 			flushTools()
-			blocks := make([]any, 0, len(m.ProviderState)+1+len(m.ToolCalls))
-			for _, raw := range m.ProviderState {
-				blocks = append(blocks, raw)
-			}
+			// The signed thinking blocks of this turn go first, as the provider produced them.
+			blocks := append(make([]any, 0, 1+len(m.ToolCalls)), providerBlocks(m.ProviderState)...)
 			if m.Content != "" {
 				blocks = append(blocks, map[string]any{"type": "text", "text": m.Content})
 			}
@@ -318,6 +333,7 @@ func anthropicUserContent(m Message) []any {
 
 func fromAnthropicContent(blocks []json.RawMessage) (Message, error) {
 	msg := Message{Role: RoleAssistant}
+	var kept []json.RawMessage
 	for _, raw := range blocks {
 		var meta struct {
 			Type string `json:"type"`
@@ -350,9 +366,45 @@ func fromAnthropicContent(blocks []json.RawMessage) (Message, error) {
 				args = json.RawMessage(`{}`)
 			}
 			msg.ToolCalls = append(msg.ToolCalls, ToolCall{ID: t.ID, Name: t.Name, Args: args})
+		case "thinking", "redacted_thinking":
+			// Kept whole and in order: the provider rejects a turn whose thinking blocks were
+			// edited, reordered or partly dropped.
+			kept = append(kept, append(json.RawMessage(nil), raw...))
 		}
 	}
+	msg.ProviderState = encodeProviderState(kept)
 	return msg, nil
+}
+
+// encodeProviderState is the list of a response's thinking blocks, or nil when it had none, so
+// a response without thinking is exactly what it was before this field existed.
+func encodeProviderState(blocks []json.RawMessage) []byte {
+	if len(blocks) == 0 {
+		return nil
+	}
+	data, err := json.Marshal(blocks)
+	if err != nil {
+		return nil
+	}
+	return data
+}
+
+// providerBlocks reads ProviderState back into blocks to write at the start of an assistant
+// turn. State that does not parse is dropped, never sent: a malformed block would turn a
+// working request into a rejected one.
+func providerBlocks(state []byte) []any {
+	if len(state) == 0 {
+		return nil
+	}
+	var raw []json.RawMessage
+	if err := json.Unmarshal(state, &raw); err != nil {
+		return nil
+	}
+	out := make([]any, 0, len(raw))
+	for _, b := range raw {
+		out = append(out, b)
+	}
+	return out
 }
 
 func toAnthropicTools(in []ToolDef) []anthropicTool {
