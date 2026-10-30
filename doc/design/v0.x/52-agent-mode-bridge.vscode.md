@@ -1,6 +1,6 @@
 # 52 — Editor-host bridge for Single, Multi, and Complex
 
-**Milestone focus:** 0.52. **Design status:** planned.
+**Milestone focus:** 0.52. **Design status:** in_progress.
 
 ## 1. Today / problem
 

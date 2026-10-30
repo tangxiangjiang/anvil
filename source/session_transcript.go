@@ -23,6 +23,8 @@ const (
 	// turns before it. The turns themselves are still listed — compaction is a
 	// marker in an append-only store, not a deletion.
 	TranscriptSummary = "summary"
+	// TranscriptStage is a durable Multi/Complex orchestration node update.
+	TranscriptStage = "stage"
 )
 
 // DefaultTranscriptLimit caps LoadTranscript when the caller asks for no
@@ -60,6 +62,7 @@ type TranscriptEntry struct {
 	Protected    []string
 	PathAnalysis string
 	PathProblem  string
+	Stage        *StageEvent
 
 	// Run-end fields.
 	Status string
@@ -182,6 +185,16 @@ func transcriptFromRecords(recs []store.Record, limit int) TranscriptResult {
 				}
 			}
 			entries = append(entries, entry)
+		case store.TypeStage:
+			var stage StageEvent
+			if len(rec.Stage) == 0 || json.Unmarshal(rec.Stage, &stage) != nil {
+				continue
+			}
+			entries = append(entries, TranscriptEntry{
+				Kind:  TranscriptStage,
+				RunID: rec.RunID,
+				Stage: &stage,
+			})
 		}
 	}
 

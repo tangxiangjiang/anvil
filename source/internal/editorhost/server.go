@@ -339,6 +339,12 @@ func (s *Server) handleSessionResume(ctx context.Context, params json.RawMessage
 	if strings.TrimSpace(p.AgentID) == "" {
 		return nil, errInvalidParams("session.resume: agent_id is required")
 	}
+	if open, ok := s.sessionForAgent(p.AgentID); ok {
+		if _, runID := open.activeRun(); runID != "" {
+			return nil, errCode(CodeRunInProgress, "agent already has an active run: "+runID)
+		}
+		return nil, errInvalidParams("session.resume: agent already has an open session: " + open.id)
+	}
 	// Resume takes the same road to a mode as new does: an agent's transcript does
 	// not record the mode it ran under, and a workspace that declares a starting
 	// mode means it for the next session as much as for the first.
@@ -598,6 +604,7 @@ func (s *Server) handleSessionTranscript(ctx context.Context, params json.RawMes
 			Err:          in.Err,
 			Code:         string(in.Code),
 		}
+		applyStageTranscript(&entry, in.Stage)
 		for _, tc := range in.ToolCalls {
 			entry.ToolCalls = append(entry.ToolCalls, TranscriptCall{
 				ID:   tc.ID,
@@ -816,7 +823,9 @@ func (s *Server) drain(sess *session, run *anvil.Run) {
 	// Run.Stream ignores its context; ranging to close is the documented contract.
 	for ev := range run.Stream(context.Background()) {
 		if p, ok := projectEvent(sess.id, runID, ev); ok {
-			p.AgentID = sess.agentIdentity()
+			if p.AgentID == "" {
+				p.AgentID = sess.agentIdentity()
+			}
 			s.notify(NotifyEvent, p)
 		}
 	}
@@ -1477,11 +1486,16 @@ func ruleProblem(err error) *RuleProblem {
 // does not cross the protocol.
 func (s *Server) buildOptions(ctx context.Context, p SessionParams, sess *session) (anvil.Options, *RPCError) {
 	groups := groupsForMode(sess.mode, p.PermissionGroups)
+	agentMode, rpcErr := agentModeFrom(p.AgentMode, p.Subagents)
+	if rpcErr != nil {
+		return anvil.Options{}, rpcErr
+	}
 	// loadPermissions was resolved by the caller, before the mode, because the
 	// mode resolution reads the same file. It is read here, not recomputed: two
 	// computations of one flag is how the option and the mode start disagreeing
 	// about whether this session has read the workspace's policy.
 	opts := anvil.Options{
+		Mode:              agentMode,
 		PermissionGroups:  groups,
 		Provider:          anvil.Provider(firstNonEmpty(p.Provider, s.cfg.Provider, os.Getenv("ANVIL_PROVIDER"))),
 		BaseURL:           firstNonEmpty(p.BaseURL, s.cfg.BaseURL, os.Getenv("ANVIL_BASE_URL")),
@@ -1680,6 +1694,29 @@ func boolOr(v *bool, def bool) bool {
 		return def
 	}
 	return *v
+}
+
+// agentModeFrom resolves the protocol spelling onto the SDK's Mode values.
+// Single is the wire default even though its SDK representation is the empty
+// value. Multi and Complex cannot run without child-agent infrastructure, so a
+// contradictory explicit request is rejected here rather than left for Create.
+func agentModeFrom(value string, subagents *bool) (anvil.Mode, *RPCError) {
+	switch value {
+	case "", AgentModeSingle:
+		return anvil.ModeSingle, nil
+	case AgentModeMulti:
+		if subagents != nil && !*subagents {
+			return anvil.ModeSingle, errInvalidParams("agent_mode multi requires subagents")
+		}
+		return anvil.ModeMulti, nil
+	case AgentModeComplex:
+		if subagents != nil && !*subagents {
+			return anvil.ModeSingle, errInvalidParams("agent_mode complex requires subagents")
+		}
+		return anvil.ModeComplex, nil
+	default:
+		return anvil.ModeSingle, errInvalidParams("unknown agent_mode: " + value)
+	}
 }
 
 // planDisallowedTools is what plan mode withholds. Everything else stays
@@ -2075,9 +2112,21 @@ func sessionResult(sess *session, opts anvil.Options) SessionResult {
 		CWD:                   opts.Local.CWD,
 		Provider:              string(opts.Provider),
 		Model:                 opts.Model.ID,
+		AgentMode:             agentModeWire(opts.Mode),
 		PermissionMode:        sess.mode,
 		PermissionModeSource:  sess.modeSource,
 		PermissionModeRefused: sess.modeRefused,
+	}
+}
+
+func agentModeWire(mode anvil.Mode) string {
+	switch mode {
+	case anvil.ModeMulti:
+		return AgentModeMulti
+	case anvil.ModeComplex:
+		return AgentModeComplex
+	default:
+		return AgentModeSingle
 	}
 }
 
@@ -2097,6 +2146,17 @@ func (s *Server) session(id string) (*session, bool) {
 	defer s.mu.Unlock()
 	sess, ok := s.sessions[id]
 	return sess, ok
+}
+
+func (s *Server) sessionForAgent(agentID string) (*session, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, sess := range s.sessions {
+		if sess.agentIdentity() == agentID {
+			return sess, true
+		}
+	}
+	return nil, false
 }
 
 // takeSession removes a session from the registry.

@@ -929,6 +929,7 @@ func (w *workflowRun) runOrderedFanOut(ctx context.Context, i int, values map[st
 // origin and the step's description as its task title.
 func (w *workflowRun) runChild(ctx context.Context, stepIndex, itemIndex int, prompt string) workflowItemOutcome {
 	step := w.plan.spec.Steps[stepIndex]
+	itemText := prompt
 	out := workflowItemOutcome{index: itemIndex}
 	description := workflowTitle(w.plan.spec.Name) + " / " + w.plan.ids[stepIndex]
 	if itemIndex >= 0 {
@@ -1006,6 +1007,10 @@ func (w *workflowRun) runChild(ctx context.Context, stepIndex, itemIndex int, pr
 	}
 	defer child.Close()
 	out.agentID = child.AgentID()
+	stage := w.complexStageEvent(stepIndex, itemIndex, itemText, worker, child.AgentID())
+	if stage != nil {
+		w.parent.emitStage(*stage)
+	}
 
 	run, err := child.Send(callCtx, prompt)
 	if err != nil {
@@ -1030,7 +1035,12 @@ func (w *workflowRun) runChild(ctx context.Context, stepIndex, itemIndex int, pr
 		out.result = res.Result
 		if worker != nil {
 			changed, recorded := child.changedFiles()
-			out.result = report(worker, res.Result, changed, recorded) + res.Result
+			reportText, acceptance := report(worker, res.Result, changed, recorded)
+			out.result = reportText + res.Result
+			if stage != nil {
+				stage.Acceptance = acceptance
+				w.parent.emitStage(*stage)
+			}
 		}
 		if step.ResultSchema != "" {
 			env := schemaEnv{cwd: w.parent.cwd, budgetLeft: w.parent.budget.remaining()}
@@ -1048,6 +1058,49 @@ func (w *workflowRun) runChild(ctx context.Context, stepIndex, itemIndex int, pr
 		out.errText = firstNonEmpty(res.Err, res.Result, "the run failed")
 	}
 	return out
+}
+
+// complexStageEvent gives the SDK-built workflow stable node identities. A
+// model-written run_workflow may use the same name, so the internal complex
+// call-id prefix is also required before presentation metadata is emitted.
+func (w *workflowRun) complexStageEvent(stepIndex, itemIndex int, itemText string, brief *Brief, agentID string) *StageEvent {
+	if w.plan.spec.Name != "complex" || !strings.HasPrefix(w.toolCallID, "complex-") {
+		return nil
+	}
+	id := w.plan.ids[stepIndex]
+	event := &StageEvent{Stage: id, AgentID: agentID, Brief: briefView(brief)}
+	switch id {
+	case "decide":
+		event.Role = RoleDecision
+		event.NodeID = "stage:decide"
+	case "analyze":
+		event.Role = RoleAnalyze
+		event.NodeID = "stage:analyze"
+		event.ParentNodeID = "stage:decide"
+		event.DependsOn = []string{"stage:decide"}
+	case "work":
+		event.Role = RoleWorker
+		var item struct {
+			ID        string   `json:"id"`
+			DependsOn []string `json:"depends_on"`
+		}
+		_ = json.Unmarshal([]byte(itemText), &item)
+		node := strings.TrimSpace(item.ID)
+		if node == "" {
+			node = strconv.Itoa(itemIndex)
+		}
+		event.NodeID = "work:" + node
+		event.ParentNodeID = "stage:analyze"
+		event.DependsOn = []string{"stage:analyze"}
+		for _, dep := range item.DependsOn {
+			if dep = strings.TrimSpace(dep); dep != "" {
+				event.DependsOn = append(event.DependsOn, "work:"+dep)
+			}
+		}
+	default:
+		return nil
+	}
+	return event
 }
 
 // aggregateWorkflowItems folds the items of one fan-out step into the step's

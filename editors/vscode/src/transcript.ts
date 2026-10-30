@@ -105,6 +105,26 @@ export function replayOf(entries: TranscriptEntry[], sessionId = ''): ReplayStep
       continue;
     }
 
+    if (entry.kind === 'stage') {
+      steps.push({
+        kind: 'event',
+        event: {
+          session_id: sessionId,
+          run_id: runId,
+          type: 'stage',
+          node_id: entry.node_id,
+          parent_node_id: entry.parent_node_id,
+          depends_on: entry.depends_on,
+          agent_id: entry.agent_id,
+          agent_role: entry.agent_role,
+          stage: entry.stage,
+          brief: entry.brief,
+          acceptance: entry.acceptance,
+        },
+      });
+      continue;
+    }
+
     if (entry.kind !== 'message') continue;
 
     if (entry.role === 'user') {

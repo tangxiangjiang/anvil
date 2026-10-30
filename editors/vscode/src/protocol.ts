@@ -215,6 +215,8 @@ export interface SessionParams {
   disallowed_tools?: string[];
   skills?: string[];
   plugins?: string[];
+  /** SDK orchestration mode. Omitted is the legacy-compatible Single mode. */
+  agent_mode?: AgentMode;
   permission_mode?: PermissionMode;
   permission_groups?: string[];
   approval_timeout_ms?: number;
@@ -257,6 +259,7 @@ export interface SessionParams {
 }
 
 export type Effort = 'low' | 'medium' | 'high';
+export type AgentMode = 'single' | 'multi' | 'complex';
 
 /**
  * The language servers a session may start. Presence is the switch: the
@@ -305,6 +308,8 @@ export interface SessionResult {
   cwd: string;
   provider: string;
   model: string;
+  /** Always resolved by the host, including for legacy requests that omitted it. */
+  agent_mode: AgentMode;
   permission_mode: PermissionMode;
   /**
    * Where that mode came from: `request` when this client named it, `file` when
@@ -857,7 +862,7 @@ export interface TranscriptCall {
  * nothing to replay it from.
  */
 export interface TranscriptEntry {
-  kind: 'message' | 'run_end' | 'summary';
+  kind: 'message' | 'run_end' | 'summary' | 'stage';
   run_id?: string;
 
   /** message, and summary for its text */
@@ -870,6 +875,15 @@ export interface TranscriptEntry {
   protected?: string[];
   path_analysis?: PathAnalysis;
   path_problem?: string;
+  /** Durable Multi/Complex orchestration node update. */
+  node_id?: string;
+  parent_node_id?: string;
+  depends_on?: string[];
+  agent_id?: string;
+  agent_role?: 'subagent' | 'worker' | 'decision' | 'analyze';
+  stage?: 'decide' | 'analyze' | 'work';
+  brief?: BriefInfo;
+  acceptance?: AcceptanceInfo;
 
   /** run_end */
   status?: RunStatus;
@@ -1234,7 +1248,9 @@ export type EventType =
    * became a summary. The replay draws the same row from the stored `summary`
    * entry, which carries no counts and therefore no figures in the row.
    */
-  | 'compact';
+  | 'compact'
+  /** Durable Multi/Complex orchestration node update. */
+  | 'stage';
 
 /** One streamed unit of a run. */
 export interface HostEvent {
@@ -1284,6 +1300,14 @@ export interface HostEvent {
   /** Shell path analysis preserved on live and replayed tool results. */
   path_analysis?: PathAnalysis;
   path_problem?: string;
+  /** Present only when `type` is `stage`. */
+  node_id?: string;
+  parent_node_id?: string;
+  depends_on?: string[];
+  agent_role?: 'subagent' | 'worker' | 'decision' | 'analyze';
+  stage?: 'decide' | 'analyze' | 'work';
+  brief?: BriefInfo;
+  acceptance?: AcceptanceInfo;
   /**
    * The complete task list on a `todo` event (0.40.9). Present as [] when a
    * call cleared it — which is different from the field being absent on every
@@ -1296,6 +1320,19 @@ export interface HostEvent {
    * exists to say a compaction happened.
    */
   compact?: CompactInfo;
+}
+
+export interface BriefInfo {
+  goal: string;
+  plan: string[];
+  files: string[];
+  acceptance: string[];
+}
+
+export interface AcceptanceInfo {
+  items: Array<{ text: string; status: 'met' | 'not_met' | 'unreported' }>;
+  changed?: string[];
+  changes_recorded: boolean;
 }
 
 /** One row of the model's plan, as `todo_write` wrote it. */

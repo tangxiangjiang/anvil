@@ -399,6 +399,7 @@ function newSession(params) {
     cwd: process.env.FAKE_HOST_CWD || process.cwd(),
     provider: params.provider || 'openai',
     model: params.model || 'fake-model',
+    agent_mode: params.agent_mode || 'single',
     permission_mode: resolved.mode,
     permission_mode_source: resolved.source,
     permission_mode_refused: resolved.refused,

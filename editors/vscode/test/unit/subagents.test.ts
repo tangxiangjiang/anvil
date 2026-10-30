@@ -316,10 +316,8 @@ test('the task panel and the spawn card render output as text only', () => {
   assert.match(handle[1], /HostManager\.assertTrusted\(\)/);
 });
 
-test('the setting and the command exist for the two new surfaces', () => {
+test('the task command remains while Agent mode is conversation-local', () => {
   const commands = PACKAGE_JSON.contributes.commands.map((entry) => entry.command);
   assert.ok(commands.includes('anvil.openTasks'));
-  const subagents = configurationProperties(PACKAGE_JSON)['anvil.subagents'];
-  assert.ok(subagents, 'anvil.subagents is a setting');
-  assert.equal(subagents.default, false);
+  assert.equal(configurationProperties(PACKAGE_JSON)['anvil.subagents'], undefined);
 });

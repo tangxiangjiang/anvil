@@ -4,6 +4,7 @@
 package store_test
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -32,6 +33,13 @@ func TestSQLiteRoundTripAndList(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	stage := json.RawMessage(`{"node_id":"stage:decide","stage":"decide"}`)
+	if err := st.Append(id, store.Record{
+		Type: store.TypeStage, RunID: "run-1", Stage: stage,
+		Time: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := st.Append(id, store.Record{
 		Type: store.TypeRunEnd, RunID: "run-1", Status: "finished", Steps: 1,
 		Usage: &store.Usage{InputTokens: 2, OutputTokens: 3, TotalTokens: 5},
@@ -44,8 +52,11 @@ func TestSQLiteRoundTripAndList(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(recs) != 3 {
+	if len(recs) != 4 {
 		t.Fatalf("len=%d", len(recs))
+	}
+	if recs[2].Type != store.TypeStage || string(recs[2].Stage) != string(stage) {
+		t.Fatalf("stage=%+v", recs[2])
 	}
 	ids, err := st.ListIDs()
 	if err != nil {

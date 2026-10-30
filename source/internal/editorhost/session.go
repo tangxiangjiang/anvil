@@ -161,7 +161,7 @@ func projectEvent(sessionID, runID string, ev anvil.Event) (EventParams, bool) {
 	switch ev.Type {
 	case anvil.EventProgress, anvil.EventAssistant, anvil.EventReasoning,
 		anvil.EventToolCall, anvil.EventToolResult, anvil.EventError, anvil.EventTodo,
-		anvil.EventCompact:
+		anvil.EventCompact, anvil.EventStage:
 	default:
 		return EventParams{}, false
 	}
@@ -173,7 +173,7 @@ func projectEvent(sessionID, runID string, ev anvil.Event) (EventParams, bool) {
 		}
 		items = &list
 	}
-	return EventParams{
+	out := EventParams{
 		SessionID:      sessionID,
 		RunID:          runID,
 		Type:           string(ev.Type),
@@ -194,7 +194,66 @@ func projectEvent(sessionID, runID string, ev anvil.Event) (EventParams, bool) {
 		UsageEstimated: ev.UsageEstimated,
 		Items:          items,
 		Compact:        compactWire(ev.Compact),
-	}, true
+	}
+	applyStageEvent(&out, ev.Stage)
+	return out, true
+}
+
+func applyStageEvent(out *EventParams, stage *anvil.StageEvent) {
+	if stage == nil {
+		return
+	}
+	out.NodeID = stage.NodeID
+	out.ParentNodeID = stage.ParentNodeID
+	out.DependsOn = append([]string(nil), stage.DependsOn...)
+	out.AgentID = stage.AgentID
+	out.AgentRole = string(stage.Role)
+	out.Stage = stage.Stage
+	out.Brief = briefWire(stage.Brief)
+	out.Acceptance = acceptanceWire(stage.Acceptance)
+}
+
+func applyStageTranscript(out *TranscriptEntry, stage *anvil.StageEvent) {
+	if stage == nil {
+		return
+	}
+	out.NodeID = stage.NodeID
+	out.ParentNodeID = stage.ParentNodeID
+	out.DependsOn = append([]string(nil), stage.DependsOn...)
+	out.AgentID = stage.AgentID
+	out.AgentRole = string(stage.Role)
+	out.Stage = stage.Stage
+	out.Brief = briefWire(stage.Brief)
+	out.Acceptance = acceptanceWire(stage.Acceptance)
+}
+
+func briefWire(brief *anvil.BriefView) *BriefInfo {
+	if brief == nil {
+		return nil
+	}
+	return &BriefInfo{
+		Goal:       brief.Goal,
+		Plan:       append([]string(nil), brief.Plan...),
+		Files:      append([]string(nil), brief.Files...),
+		Acceptance: append([]string(nil), brief.Acceptance...),
+	}
+}
+
+func acceptanceWire(acceptance *anvil.AcceptanceView) *AcceptanceInfo {
+	if acceptance == nil {
+		return nil
+	}
+	out := &AcceptanceInfo{
+		Changed:         append([]string(nil), acceptance.Changed...),
+		ChangesRecorded: acceptance.ChangesRecorded,
+		Items:           make([]AcceptanceItemInfo, 0, len(acceptance.Items)),
+	}
+	for _, item := range acceptance.Items {
+		out.Items = append(out.Items, AcceptanceItemInfo{
+			Text: item.Text, Status: string(item.Status),
+		})
+	}
+	return out
 }
 
 // compactWire projects one compaction onto the wire shape. It is nil in, nil

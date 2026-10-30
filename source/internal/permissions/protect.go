@@ -107,12 +107,38 @@ func relativeToRoot(root, abs string) (string, bool) {
 	if rel, err := filepath.Rel(root, abs); err == nil && inside(rel) {
 		return rel, true
 	}
-	if resolved, err := filepath.EvalSymlinks(root); err == nil {
-		if rel, err := filepath.Rel(filepath.Clean(resolved), abs); err == nil && inside(rel) {
+	resolvedRoot, rootErr := resolveExistingPrefix(root)
+	resolvedAbs, absErr := resolveExistingPrefix(abs)
+	if rootErr == nil && absErr == nil {
+		if rel, err := filepath.Rel(resolvedRoot, resolvedAbs); err == nil && inside(rel) {
 			return rel, true
 		}
 	}
 	return "", false
+}
+
+// resolveExistingPrefix canonicalizes the existing part of path and then puts
+// back any missing suffix. Protected targets commonly do not exist yet, while
+// Windows may spell their existing ancestor with either a short (8.3) or long
+// name; resolving only the workspace root leaves those forms incomparable.
+func resolveExistingPrefix(path string) (string, error) {
+	current := filepath.Clean(path)
+	var suffix []string
+	for {
+		resolved, err := filepath.EvalSymlinks(current)
+		if err == nil {
+			for i := len(suffix) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, suffix[i])
+			}
+			return filepath.Clean(resolved), nil
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", err
+		}
+		suffix = append(suffix, filepath.Base(current))
+		current = parent
+	}
 }
 
 // protectedRelative applies the fixed list and the user's globs to a path in

@@ -2,7 +2,7 @@
   "name": "anvil-vscode",
   "displayName": "Anvil",
   "description": "Anvil agent in VS Code: streaming chat, tool cards, per-call approvals.",
-  "version": "0.46.87",
+  "version": "0.52.3",
   "publisher": "anvil-dev",
   "author": {
     "name": "Xiangjiang Tang",
@@ -403,11 +403,6 @@
             "type": "boolean",
             "default": true,
             "markdownDescription": "Read this workspace's `.anvil/permissions.json`: the rules that let a tool call run, stop to ask about it, or refuse it outright. Off means the session ignores the file, and an approval card has nothing to offer under \"always allow\" — a rule written into a file this session does not read would not be in force."
-          },
-          "anvil.subagents": {
-            "type": "boolean",
-            "default": false,
-            "markdownDescription": "Let a session hand work to child agents: `spawn_agent` runs a brief in its own conversation, and `background: true` starts it in the task table. Children inherit the parent's tools and permissions, and a child's mutating call still stops for approval. Off by default; the tool is then not registered at all, so the model is told it does not exist."
           },
           "anvil.lsp.enabled": {
             "type": "boolean",

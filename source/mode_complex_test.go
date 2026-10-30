@@ -5,6 +5,7 @@ package anvil
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -110,6 +111,28 @@ func TestComplexSend(t *testing.T) {
 	if res.Status != StatusFinished {
 		t.Fatalf("status=%s err=%s result=%s", res.Status, res.Err, res.Result)
 	}
+	stages := map[string]*StageEvent{}
+	for ev := range run.Stream(context.Background()) {
+		if ev.Type == EventStage && ev.Stage != nil {
+			stages[ev.Stage.NodeID] = ev.Stage
+		}
+	}
+	for _, id := range []string{"stage:decide", "stage:analyze", "work:a", "work:b"} {
+		if stages[id] == nil {
+			t.Fatalf("missing stage %q in %+v", id, stages)
+		}
+	}
+	if got := stages["stage:analyze"]; got.ParentNodeID != "stage:decide" ||
+		len(got.DependsOn) != 1 || got.DependsOn[0] != "stage:decide" {
+		t.Fatalf("analyze relation=%+v", got)
+	}
+	if got := stages["work:b"]; got.ParentNodeID != "stage:analyze" ||
+		!containsString(got.DependsOn, "stage:analyze") ||
+		!containsString(got.DependsOn, "work:a") ||
+		got.Brief == nil || got.Acceptance == nil ||
+		got.Acceptance.Items[0].Status != AcceptanceMet {
+		t.Fatalf("worker b metadata=%+v", got)
+	}
 	for _, name := range []string{"a", "b"} {
 		if got, _ := os.ReadFile(filepath.Join(dir, "pkg", name+".txt")); string(got) != "new" {
 			t.Fatalf("pkg/%s.txt = %q", name, got)
@@ -149,6 +172,40 @@ func TestComplexSend(t *testing.T) {
 	if !strings.Contains(parent.systemPrompt, "delegate") {
 		t.Log("complex is multi plus stages; the main prompt carries the delegate paragraph")
 	}
+	agentID := parent.AgentID()
+	if err := parent.Close(); err != nil {
+		t.Fatal(err)
+	}
+	transcript, err := LoadTranscript(context.Background(), agentID, TranscriptOptions{Local: LocalOptions{CWD: dir}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed := map[string]*StageEvent{}
+	for _, entry := range transcript.Entries {
+		if entry.Kind == TranscriptStage && entry.Stage != nil {
+			replayed[entry.Stage.NodeID] = entry.Stage
+		}
+	}
+	for id, live := range stages {
+		got := replayed[id]
+		if got == nil {
+			t.Fatalf("replay lacks %s", id)
+		}
+		liveJSON, _ := json.Marshal(live)
+		gotJSON, _ := json.Marshal(got)
+		if string(gotJSON) != string(liveJSON) {
+			t.Fatalf("replay[%s]=%s, live=%s", id, gotJSON, liveJSON)
+		}
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 // WithDirective reaches every stage's prompt, so the Worker that edits files is bound by
@@ -221,7 +278,7 @@ func TestComplexDirectiveReachesEveryStage(t *testing.T) {
 func TestComplexMatchedSkillsReachEveryStage(t *testing.T) {
 	dir := t.TempDir()
 	writeFiles(t, dir, map[string]string{
-		"pkg/a.txt": "old",
+		"pkg/a.txt":                           "old",
 		".anvil/skills/tidy-imports/SKILL.md": "---\nname: tidy-imports\ndescription: tidy imports\n---\nSKILL_BODY_TIDY_77\n",
 	})
 	opts := complexOptions(dir)

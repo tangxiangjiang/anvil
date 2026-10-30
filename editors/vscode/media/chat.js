@@ -54,7 +54,7 @@
     ? collaborationButton.querySelector('.collaboration-dot')
     : null;
   const collaborationRows = collaborationMenu
-    ? Array.from(collaborationMenu.querySelectorAll('.collaboration-row:not(:disabled)'))
+    ? Array.from(collaborationMenu.querySelectorAll('.collaboration-row'))
     : [];
   const agentMapButton = document.getElementById('agentMap');
   const modelPicker = document.getElementById('modelPicker');
@@ -147,6 +147,8 @@
   /** Prompt recall, from `media/history.js` — another plain global script. */
   const historyMath = self.anvilHistory;
   const history = historyMath.create();
+  /** Stable Multi/Complex stage state, shared by live events and replay. */
+  const stageMath = self.anvilStages;
   /**
    * The value the history last put in the box, or null. It is how the input
    * handler tells the user editing a recalled prompt from the walk itself
@@ -170,7 +172,10 @@
   let replayPinsBottom = false;
   let replayAsyncBlocks = 0;
   let replayGeneration = 0;
-  let collaborationMode = 'multi';
+  let collaborationMode = 'single';
+  /** One orchestration view model and rendered board per run. */
+  const stageRuns = new Map();
+  const stageBoards = new Map();
   let agentMapDialog = null;
   let agentMapState = null;
   let replayLoadingAnimations = [];
@@ -207,7 +212,7 @@
   const completedSubagentSpawns = new Set();
 
   function syncCollaborationActivity() {
-    const working = collaborationMode === 'multi' && activeSubagents.size > 0;
+    const working = collaborationMode !== 'single' && activeSubagents.size > 0;
     if (collaborationDot) collaborationDot.classList.toggle('active', working);
     if (collaborationButton) {
       collaborationButton.title = working
@@ -1087,6 +1092,8 @@
     endRound(true);
     toolCards.clear();
     callFacts.clear();
+    stageRuns.clear();
+    stageBoards.clear();
     approvals.clear();
     checkpointBlocks.clear();
     forkBlocks.clear();
@@ -2930,6 +2937,211 @@
     return lines.join('\n');
   }
 
+  function stageTitle(node) {
+    if (node.stage === 'decide') return 'Decision';
+    if (node.stage === 'analyze') return 'Analyze';
+    if (node.stage === 'work') return 'Worker';
+    return node.role === 'worker' ? 'Worker' : 'Agent stage';
+  }
+
+  function stageStatus(status) {
+    switch (status) {
+      case 'completed':
+        return 'Completed';
+      case 'failed':
+        return 'Failed';
+      case 'cancelled':
+        return 'Cancelled';
+      default:
+        return 'Running';
+    }
+  }
+
+  function stageList(className, label, items, ordered) {
+    if (!Array.isArray(items) || items.length === 0) return null;
+    const wrap = el('section', 'stage-detail ' + className);
+    wrap.appendChild(el('h4', '', label));
+    const list = el(ordered ? 'ol' : 'ul');
+    for (const item of items) list.appendChild(el('li', '', item));
+    wrap.appendChild(list);
+    return wrap;
+  }
+
+  function renderBrief(node, body) {
+    const brief = node.brief;
+    if (!brief) return;
+    if (brief.goal) {
+      const goal = el('section', 'stage-detail stage-goal');
+      goal.appendChild(el('h4', '', 'Goal'));
+      goal.appendChild(el('p', '', brief.goal));
+      body.appendChild(goal);
+    }
+    const files = stageList('stage-files', 'Allowed files', brief.files, false);
+    if (files) body.appendChild(files);
+    const plan = stageList('stage-plan', 'Plan', brief.plan, true);
+    if (plan) body.appendChild(plan);
+    const requirements = stageList(
+      'stage-requirements',
+      'Acceptance requirements',
+      brief.acceptance,
+      false,
+    );
+    if (requirements) body.appendChild(requirements);
+  }
+
+  function renderAcceptance(node, body) {
+    const acceptance = node.acceptance;
+    if (!acceptance) return;
+    const wrap = el('section', 'stage-detail stage-acceptance');
+    wrap.appendChild(el('h4', '', 'Worker-reported acceptance'));
+    const list = el('ul', 'acceptance-list');
+    for (const item of acceptance.items) {
+      const status =
+        item.status === 'met' ? 'Met' : item.status === 'not_met' ? 'Not met' : 'Unreported';
+      const row = el('li', 'acceptance-item ' + item.status);
+      const badge = el('span', 'acceptance-status', status);
+      badge.setAttribute('aria-label', 'Worker report: ' + status);
+      row.appendChild(badge);
+      row.appendChild(el('span', 'acceptance-text', item.text));
+      list.appendChild(row);
+    }
+    wrap.appendChild(list);
+    if (!acceptance.changesRecorded) {
+      wrap.appendChild(el('p', 'changes-note', 'Changes not recorded.'));
+    } else if (acceptance.changed.length === 0) {
+      wrap.appendChild(el('p', 'changes-note', 'No changed files recorded.'));
+    } else {
+      const changed = stageList('stage-changed', 'Recorded changed files', acceptance.changed, false);
+      if (changed) wrap.appendChild(changed);
+    }
+    body.appendChild(wrap);
+  }
+
+  function stageBoard(runId) {
+    let board = stageBoards.get(runId);
+    if (board) return board;
+    endRound();
+    const wrap = el('details', 'agent-stages');
+    wrap.open = true;
+    const summary = el('summary', 'agent-stages-summary');
+    const title = el('span', 'agent-stages-title', 'Agent workflow');
+    const state = el('span', 'agent-stages-state');
+    summary.appendChild(title);
+    summary.appendChild(state);
+    const body = el('div', 'agent-stages-body');
+    body.setAttribute('role', 'list');
+    body.setAttribute('aria-label', 'Agent workflow stages');
+    wrap.appendChild(summary);
+    wrap.appendChild(body);
+    board = { wrap, body, state, openNodes: new Map() };
+    stageBoards.set(runId, board);
+    append(wrap);
+    return board;
+  }
+
+  function renderStageBoard(runId) {
+    const model = stageRuns.get(runId);
+    if (!model) return;
+    const board = stageBoard(runId);
+    for (const current of board.body.querySelectorAll('.stage-node')) {
+      if (current.dataset.nodeId) board.openNodes.set(current.dataset.nodeId, current.open);
+    }
+    const nodes = stageMath.snapshot(model);
+    const running = nodes.filter((node) => node.status === 'running').length;
+    const failed = nodes.filter((node) => node.status === 'failed').length;
+    const cancelled = nodes.filter((node) => node.status === 'cancelled').length;
+    const state =
+      failed > 0
+        ? failed + ' failed'
+        : cancelled > 0
+          ? cancelled + ' cancelled'
+          : running > 0
+            ? running + ' running'
+            : 'complete';
+    board.state.textContent = nodes.length + (nodes.length === 1 ? ' stage · ' : ' stages · ') + state;
+    const fragment = document.createDocumentFragment();
+    for (const node of nodes) {
+      const level = Math.min(4, Math.max(0, node.level || 0));
+      const card = el('details', 'stage-node level-' + level + ' status-' + node.status);
+      card.dataset.nodeId = node.id;
+      card.setAttribute('role', 'listitem');
+      const remembered = board.openNodes.get(node.id);
+      card.open =
+        remembered !== undefined
+          ? remembered
+          : node.status === 'running' || node.stage !== 'work';
+      card.addEventListener('toggle', () => board.openNodes.set(node.id, card.open));
+
+      const summary = el('summary', 'stage-node-summary');
+      summary.appendChild(el('span', 'stage-status-dot'));
+      const heading = el('span', 'stage-node-title', stageTitle(node));
+      summary.appendChild(heading);
+      if (node.brief && node.brief.goal) {
+        summary.appendChild(el('span', 'stage-node-goal', node.brief.goal));
+      }
+      const status = stageStatus(node.status);
+      summary.appendChild(el('span', 'stage-node-status', status));
+      card.setAttribute('aria-label', stageTitle(node) + ': ' + status);
+      card.appendChild(summary);
+
+      const body = el('div', 'stage-node-body');
+      const relations = [];
+      if (node.parentId) relations.push('Parent: ' + node.parentId);
+      if (node.dependsOn.length > 0) relations.push('Depends on: ' + node.dependsOn.join(', '));
+      if (relations.length > 0) body.appendChild(el('p', 'stage-relations', relations.join(' · ')));
+      renderBrief(node, body);
+      renderAcceptance(node, body);
+      if (node.reason) body.appendChild(el('p', 'stage-terminal-reason', node.reason));
+      card.appendChild(body);
+      fragment.appendChild(card);
+    }
+    board.body.replaceChildren(fragment);
+  }
+
+  function renderStage(event) {
+    if (!stageMath || !event || !event.node_id) return;
+    const runId = event.run_id || 'current';
+    let model = stageRuns.get(runId);
+    if (!model) {
+      model = stageMath.create();
+      stageRuns.set(runId, model);
+    }
+    stageMath.update(model, event);
+    renderStageBoard(runId);
+  }
+
+  function finishStages(done, failure) {
+    const runId = done && done.run_id ? done.run_id : 'current';
+    const model = stageRuns.get(runId);
+    if (!model) return;
+    let status = done && done.status;
+    if (!status && failure && failure.kind === 'cancelled') status = 'cancelled';
+    else if (!status && failure && failure.isError) status = 'error';
+    if (!status) status = 'finished';
+    const reason =
+      (done && typeof done.err === 'string' && done.err) ||
+      (failure && typeof failure.message === 'string' ? failure.message : '');
+    stageMath.finish(model, status, reason);
+    renderStageBoard(runId);
+  }
+
+  function failStagesFromTool(event) {
+    if (
+      !event ||
+      event.is_error !== true ||
+      (event.name !== 'run_workflow' && event.name !== 'delegate')
+    ) return;
+    const runId = event.run_id || 'current';
+    const model = stageRuns.get(runId);
+    if (!model) return;
+    stageMath.finish(
+      model,
+      'error',
+      typeof event.content === 'string' ? event.content : 'The orchestration call failed.',
+    );
+    renderStageBoard(runId);
+  }
+
   function addToolCall(event, reviewable, anchor) {
     endRound();
     const spawn = event.name === 'spawn_agent';
@@ -4664,16 +4876,26 @@
   // --- collaboration and Agent Map -----------------------------------------
 
   function showCollaboration(msg) {
-    collaborationMode = msg.mode === 'single' ? 'single' : 'multi';
+    collaborationMode =
+      msg.mode === 'multi' || msg.mode === 'complex' ? msg.mode : 'single';
+    const label =
+      collaborationMode === 'complex'
+        ? 'Complex'
+        : collaborationMode === 'multi'
+          ? 'Multi'
+          : 'Single';
     if (collaborationLabel) {
-      collaborationLabel.textContent = collaborationMode === 'single' ? 'Single' : 'Multi';
+      collaborationLabel.textContent = label;
+    }
+    if (collaborationButton) {
+      collaborationButton.setAttribute('aria-label', 'Agent mode: ' + label);
     }
     for (const row of collaborationRows) {
       const selected = row.dataset.collaboration === collaborationMode;
       row.classList.toggle('selected', selected);
       row.setAttribute('aria-checked', selected ? 'true' : 'false');
     }
-    if (agentMapButton) agentMapButton.hidden = collaborationMode !== 'multi';
+    if (agentMapButton) agentMapButton.hidden = collaborationMode === 'single';
     syncCollaborationActivity();
   }
 
@@ -5345,9 +5567,8 @@
     // they remain available so an Enqueue or Steer message can capture them;
     // the extension applies the snapshot only after this run is terminal.
     if (modeButton) modeButton.disabled = false;
-    if (collaborationButton) collaborationButton.disabled = running;
+    if (collaborationButton) collaborationButton.disabled = false;
     if (modelPicker) modelPicker.disabled = false;
-    if (running) closeCollaborationMenu(false);
     if (!running) closeSendModeMenu(false);
     input.focus();
   }
@@ -5799,6 +6020,7 @@
     // reading "running…" is a call whose result never arrived, and leaving it
     // in flight forever reads as a stuck turn rather than as a lost event.
     stopRunningCards();
+    finishStages(done, failure);
     // The answer that ended the turn is its summary. A run that ended on a tool
     // call has no concluding text, and a failed or stopped run's last words are
     // not a conclusion, so both keep the ending they had. `failure` is always
@@ -5834,6 +6056,7 @@
     const round = currentRound();
     endRound();
     stopRunningCards();
+    finishStages(done);
     recordUsage(done);
     const status = done && done.status;
     const word = status === 'error' ? 'Run failed' : status === 'cancelled' ? 'Run stopped' : 'Run finished';
@@ -6690,8 +6913,10 @@
       addToolCall(e, msg.reviewable === true, msg.edit);
     } else if (e.type === 'tool_result') {
       addToolResult(e);
+      failStagesFromTool(e);
       if (active === mainScope) setWorkingActivity(DEFAULT_WORKING_WORD);
     }
+    else if (e.type === 'stage') renderStage(e);
     else if (e.type === 'todo') setTodos(e.items, e.run_id);
     else if (e.type === 'compact') addCompact(e.compact);
     // A root run's terminal error is repeated authoritatively by `done`; draw

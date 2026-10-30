@@ -51,6 +51,7 @@ const SESSION_RESULT: SessionResult = {
   cwd: '/workspace',
   provider: 'openai',
   model: 'test-model',
+  agent_mode: 'single',
   permission_mode: 'ask',
   permission_mode_source: 'default',
 };
@@ -70,10 +71,15 @@ function build(config: Record<string, unknown> = {}): Built {
   const transport = new FakeTransport()
     .answer('session.new', () => SESSION_RESULT)
     .answer('session.resume', (params) => {
-      const asked = params as { agent_id?: string };
+      const asked = params as { agent_id?: string; agent_mode?: SessionResult['agent_mode'] };
       // A resume answers with the agent that was asked for, under a new session
       // id: the session is new, the conversation is not.
-      return { ...SESSION_RESULT, session_id: 's2', agent_id: asked.agent_id ?? 'a1' };
+      return {
+        ...SESSION_RESULT,
+        session_id: 's2',
+        agent_id: asked.agent_id ?? 'a1',
+        agent_mode: asked.agent_mode ?? SESSION_RESULT.agent_mode,
+      };
     })
     .answer('prompt', () => ({ session_id: 's1', run_id: 'r1', agent_id: 'a1' }))
     .answer('cancel', () => ({ cancelled: true }))
@@ -405,6 +411,27 @@ test('reopen() re-opens the same agent under the new options', async () => {
   assert.equal(reopened?.agent_id, 'a1');
   assert.equal(built.session.agent, 'a1');
   assert.equal(built.session.currentState, 'idle');
+});
+
+test('Agent mode is fixed for the active run and reaches the resumed session afterwards', async () => {
+  const built = build({ agent_mode: 'single', subagents: false });
+  await built.session.send('go');
+
+  await assert.rejects(
+    () => built.session.reopen({ agent_mode: 'complex', subagents: true }),
+    /running/,
+  );
+  assert.equal(built.session.settings.agent_mode, 'single');
+  assert.deepEqual(built.transport.methods(), ['session.new', 'prompt']);
+
+  built.session.handle(Notify.Done, { session_id: 's1', run_id: 'r1', status: 'finished' });
+  await built.session.reopen({ agent_mode: 'complex', subagents: true });
+  assert.deepEqual(built.transport.calls.at(-1)?.params, {
+    agent_id: 'a1',
+    agent_mode: 'complex',
+    subagents: true,
+  });
+  assert.equal(built.session.settings.agent_mode, 'complex');
 });
 
 test('reopen() before the first prompt only changes what will be sent', async () => {

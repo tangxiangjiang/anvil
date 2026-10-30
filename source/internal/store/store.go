@@ -34,6 +34,7 @@ const (
 	TypeSummary  = "summary" // compression marker (0.9+); prior messages are ignored on Resume
 	TypeRunStart = "run_start"
 	TypeRunEnd   = "run_end"
+	TypeStage    = "stage" // durable Multi/Complex orchestration node (0.52+)
 )
 
 // ErrNotFound is returned by Load when the agent has no store file.
@@ -95,6 +96,9 @@ type Record struct {
 	Protected   []string   `json:"protected,omitempty"`
 	PathState   string     `json:"path_analysis,omitempty"`
 	PathProblem string     `json:"path_problem,omitempty"`
+
+	// stage
+	Stage json.RawMessage `json:"stage,omitempty"`
 
 	// run_start / run_end
 	RunID  string `json:"run_id,omitempty"`

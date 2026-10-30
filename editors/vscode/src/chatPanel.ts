@@ -50,6 +50,7 @@ import {
   RootChoiceCancelled, resolveWorkspaceRoot, rootFolder, rootInfo, rootUri,
 } from './workspaceRoot';
 import {
+  AgentMode,
   ApprovalRequest,
   CodeMethodNotFound,
   CompactInfo,
@@ -76,6 +77,12 @@ import { webSearchNeedsKey } from './webSearch';
 import { mediaAsset } from './webviewAsset';
 import { AgentMapState, buildAgentMap } from './agentMap';
 import { TurnQueue } from './turnQueue';
+import {
+  agentModeOptions,
+  isAgentMode,
+  saveAgentMode,
+  storedAgentMode,
+} from './agentMode';
 
 interface TurnPayload {
   text: string;
@@ -93,6 +100,7 @@ interface QueuedTurn {
   model: string;
   effort: Effort;
   permissionMode: PermissionMode | null;
+  agentMode: AgentMode;
 }
 
 /** A message from the webview. */
@@ -113,7 +121,7 @@ type Inbound =
   | { type: 'mode'; mode: string }
   | { type: 'selectModel'; model: string }
   | { type: 'effort'; effort: Effort }
-  | { type: 'collaboration'; mode: 'single' | 'multi' }
+  | { type: 'collaboration'; mode: AgentMode }
   | { type: 'agentMap' }
   | { type: 'agentDetail'; agentId: string }
   | { type: 'openAgent'; agentId: string }
@@ -331,7 +339,7 @@ type Outbound =
   | { type: 'commands'; commands: SlashCommand[] }
   | { type: 'help'; commands: SlashCommand[] }
   | { type: 'mode'; mode: PermissionMode | ''; resolved: PermissionMode; source: PermissionModeSource }
-  | { type: 'collaboration'; mode: 'single' | 'multi' }
+  | { type: 'collaboration'; mode: AgentMode }
   | { type: 'agentMap'; state: AgentMapState }
   | {
       type: 'agentDetail';
@@ -423,8 +431,6 @@ type Outbound =
 
 /** Where the chosen permission mode is remembered between windows. */
 const MODE_KEY = 'anvil.permissionMode';
-/** Collaboration belongs to a conversation, not to the workspace default. */
-const COLLABORATION_KEY = 'anvil.collaborationByAgent';
 /** Composer choices belong to a conversation and survive reconstructed tabs. */
 const COMPOSER_OPTIONS_KEY = 'anvil.composerOptionsByAgent';
 /** Prevent abandoned conversation ids from growing workspace state forever. */
@@ -449,6 +455,16 @@ const MODE_LABELS: Record<PermissionMode, string> = {
   dont_ask: 'No asking',
   bypass: 'Bypass',
 };
+
+const AGENT_MODE_LABELS: Record<AgentMode, string> = {
+  single: 'Single',
+  multi: 'Multi',
+  complex: 'Complex',
+};
+
+function modeLabel(mode: AgentMode): string {
+  return AGENT_MODE_LABELS[mode];
+}
 
 function isPermissionMode(value: string): value is PermissionMode {
   return (PermissionModes as readonly string[]).includes(value);
@@ -481,15 +497,6 @@ function modeNotice(mode: PermissionMode | undefined): string {
 function readMode(context: vscode.ExtensionContext): PermissionMode | undefined {
   const stored = context.workspaceState.get<string>(MODE_KEY);
   return stored !== undefined && isPermissionMode(stored) ? stored : undefined;
-}
-
-function storedCollaboration(
-  context: vscode.ExtensionContext,
-  agentId: string | undefined,
-): 'single' | 'multi' | undefined {
-  if (!agentId) return undefined;
-  const modes = context.workspaceState.get<Record<string, string>>(COLLABORATION_KEY, {});
-  return modes[agentId] === 'single' || modes[agentId] === 'multi' ? modes[agentId] : undefined;
 }
 
 interface StoredComposerOptions {
@@ -597,8 +604,8 @@ export class ChatPanel implements HostListener {
    * decides, which is what makes a team's choice something it can commit.
    */
   private mode: PermissionMode | undefined;
-  /** Whether this conversation exposes subagent tools. Complex is reserved. */
-  private collaboration: 'single' | 'multi';
+  /** SDK orchestration selected for this conversation. */
+  private collaboration: AgentMode;
   /**
    * The last resolved mode a notice was posted for, so a session re-opened for
    * an unrelated reason (a model change) does not repeat what the user already
@@ -646,10 +653,8 @@ export class ChatPanel implements HostListener {
     this.agentId = agentId === '' ? undefined : agentId;
     const settings = readSettings();
     const savedComposer = storedComposerOptions(context, this.agentId);
-    this.collaboration =
-      storedCollaboration(context, this.agentId) ??
-      (settings.session.subagents === false ? 'single' : 'multi');
-    this.overrides.subagents = this.collaboration === 'multi';
+    this.collaboration = storedAgentMode(context.workspaceState, this.agentId);
+    Object.assign(this.overrides, agentModeOptions(this.collaboration));
     if (savedComposer.model) this.overrides.model = savedComposer.model;
     this.overrides.effort = savedComposer.effort ?? settings.session.effort ?? 'medium';
     this.partialReviews = new ReviewPanels(context.extensionUri);
@@ -882,6 +887,11 @@ export class ChatPanel implements HostListener {
       source: result.permission_mode_source,
       refused: result.permission_mode_refused,
     };
+    const agentMode = isAgentMode(result.agent_mode) ? result.agent_mode : 'single';
+    this.collaboration = agentMode;
+    Object.assign(this.overrides, agentModeOptions(agentMode));
+    void this.rememberCollaboration();
+    this.postCollaboration();
   }
 
   private async onMessage(msg: Inbound): Promise<void> {
@@ -949,6 +959,7 @@ export class ChatPanel implements HostListener {
           model: this.overrides.model ?? '',
           effort: this.overrides.effort ?? 'medium',
           permissionMode: this.mode ?? null,
+          agentMode: this.collaboration,
         });
         return;
       case 'enqueue':
@@ -1267,6 +1278,7 @@ export class ChatPanel implements HostListener {
       model: this.overrides.model ?? '',
       effort: this.overrides.effort ?? 'medium',
       permissionMode: this.mode ?? null,
+      agentMode: this.collaboration,
     };
   }
 
@@ -1511,33 +1523,39 @@ export class ChatPanel implements HostListener {
     this.post({ type: 'collaboration', mode: this.collaboration });
   }
 
-  private async setCollaboration(mode: 'single' | 'multi'): Promise<void> {
-    if (mode === this.collaboration) return;
+  private async setCollaboration(mode: AgentMode): Promise<void> {
+    if (!isAgentMode(mode) || mode === this.collaboration) return;
     if (this.session?.currentState === 'running') {
-      this.post({ type: 'notice', level: 'warn', message: 'Stop the turn before changing Agent mode.' });
+      this.collaboration = mode;
+      Object.assign(this.overrides, agentModeOptions(mode));
+      await this.rememberCollaboration();
       this.postCollaboration();
+      this.post({
+        type: 'notice',
+        level: 'info',
+        message: `${modeLabel(mode)} will apply to the next turn; the running turn is unchanged.`,
+      });
+      this.postState();
       return;
     }
+    const previous = this.collaboration;
     try {
-      await this.applyOptions({ subagents: mode === 'multi' });
+      await this.applyOptions(agentModeOptions(mode));
       this.collaboration = mode;
+      Object.assign(this.overrides, agentModeOptions(mode));
       await this.rememberCollaboration();
       this.postCollaboration();
       this.postState();
     } catch (err) {
+      this.collaboration = previous;
+      Object.assign(this.overrides, agentModeOptions(previous));
       this.post({ type: 'notice', level: 'error', message: `Could not change Agent mode: ${(err as Error).message}` });
       this.postCollaboration();
     }
   }
 
   private async rememberCollaboration(): Promise<void> {
-    const agentId = this.currentAgentId();
-    if (!agentId) return;
-    const modes = this.context.workspaceState.get<Record<string, string>>(COLLABORATION_KEY, {});
-    await this.context.workspaceState.update(COLLABORATION_KEY, {
-      ...modes,
-      [agentId]: this.collaboration,
-    });
+    await saveAgentMode(this.context.workspaceState, this.currentAgentId(), this.collaboration);
   }
 
   private async rememberComposerOptions(): Promise<void> {
@@ -1697,13 +1715,25 @@ export class ChatPanel implements HostListener {
     const settings = readSettings().models;
     const model = turn.model === '' ? settings.defaultModel || undefined : turn.model;
     const permissionMode = turn.permissionMode ?? undefined;
+    const agentOptions = agentModeOptions(turn.agentMode);
     const current = session.settings;
     if (permissionMode === 'plan' && current.permission_mode !== 'plan') {
       this.modeBeforePlan =
         current.permission_mode ?? this.resolvedMode?.mode ?? this.mode ?? 'ask';
     }
-    if (current.model === model && current.effort === turn.effort && current.permission_mode === permissionMode) return;
-    const result = await session.reopen({ model, effort: turn.effort, permission_mode: permissionMode });
+    if (
+      current.model === model &&
+      current.effort === turn.effort &&
+      current.permission_mode === permissionMode &&
+      current.agent_mode === agentOptions.agent_mode &&
+      current.subagents === agentOptions.subagents
+    ) return;
+    const result = await session.reopen({
+      model,
+      effort: turn.effort,
+      permission_mode: permissionMode,
+      ...agentOptions,
+    });
     if (result) {
       this.noteResolvedMode(result);
       this.resolvedModel = result.model;
@@ -1718,7 +1748,7 @@ export class ChatPanel implements HostListener {
       this.post({
         type: 'notice',
         level: 'error',
-        message: `Could not apply the queued model, effort, or mode: ${(err as Error).message}`,
+        message: `Could not apply the queued model, effort, permission mode, or Agent mode: ${(err as Error).message}`,
       });
       this.postState();
       return;
@@ -2804,8 +2834,8 @@ export class ChatPanel implements HostListener {
    * wrong thing until now.
    */
   onSession = (result: SessionResult): void => {
-    this.rememberAgent(result.agent_id);
     this.noteResolvedMode(result);
+    this.rememberAgent(result.agent_id);
     this.resolvedModel = result.model;
     this.postMode();
     this.postModels();
@@ -3498,17 +3528,18 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri, focus = f
         <span class="mode-row-check" aria-hidden="true">✓</span>
       </button>
     </div>
-    <div id="collaborationMenu" class="collaboration-menu" role="menu" aria-label="Agent collaboration mode" hidden>
+    <div id="collaborationMenu" class="collaboration-menu" role="menu" aria-label="Agent mode" hidden>
       <button type="button" class="collaboration-row" role="menuitemradio" data-collaboration="single">
-        <span class="collaboration-row-copy"><strong>Single</strong><small>One Agent works directly on the task</small></span>
+        <span class="collaboration-row-copy"><strong>Single</strong><small>One Agent works directly · lowest cost</small></span>
         <span class="collaboration-row-check" aria-hidden="true">✓</span>
       </button>
       <button type="button" class="collaboration-row" role="menuitemradio" data-collaboration="multi">
-        <span class="collaboration-row-copy"><strong>Multi</strong><small>Main Agent may delegate work to subagents</small></span>
+        <span class="collaboration-row-copy"><strong>Multi</strong><small>Main Agent delegates focused work · higher cost</small></span>
         <span class="collaboration-row-check" aria-hidden="true">✓</span>
       </button>
-      <button type="button" class="collaboration-row" role="menuitemradio" data-collaboration="complex" aria-disabled="true" disabled>
-        <span class="collaboration-row-copy"><strong>Complex</strong><small>Advanced orchestration · coming later</small></span>
+      <button type="button" class="collaboration-row" role="menuitemradio" data-collaboration="complex">
+        <span class="collaboration-row-copy"><strong>Complex</strong><small>Decision → Analyze → Workers · highest cost</small></span>
+        <span class="collaboration-row-check" aria-hidden="true">✓</span>
       </button>
     </div>
     <div id="modelMenu" class="model-menu" role="dialog" aria-label="Select model and effort" hidden>
@@ -3565,9 +3596,9 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri, focus = f
           </svg>
         </button>
         <div class="collaboration-control">
-          <button id="collaboration" type="button" class="collaboration-trigger" aria-label="Agent collaboration mode" aria-expanded="false" aria-controls="collaborationMenu" title="Choose Agent collaboration mode">
+          <button id="collaboration" type="button" class="collaboration-trigger" aria-label="Agent mode: Single" aria-expanded="false" aria-controls="collaborationMenu" title="Choose Agent mode">
             <span class="collaboration-dot" aria-hidden="true"></span>
-            <span id="collaborationLabel">Multi</span>
+            <span id="collaborationLabel">Single</span>
           </button>
           <button id="agentMap" type="button" class="agent-map-trigger" aria-label="Open Agent Map" title="Open Agent Map">
             <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -3648,6 +3679,7 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri, focus = f
   <script nonce="${nonce}" src="${asset('markdown.js')}"></script>
   <script nonce="${nonce}" src="${asset('meter.js')}"></script>
   <script nonce="${nonce}" src="${asset('history.js')}"></script>
+  <script nonce="${nonce}" src="${asset('stageModel.js')}"></script>
   <script nonce="${nonce}" src="${asset('chat.js')}"></script>
 </body>
 </html>`;

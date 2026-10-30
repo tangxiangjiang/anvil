@@ -1537,6 +1537,25 @@ func (a *Agent) persistMessage(runID string, m llm.Message) {
 	a.persist(rec)
 }
 
+// emitStage publishes and stores one orchestration-node update. Stage events
+// bypass the model runtime, so keeping both operations here prevents live and
+// replay projections from acquiring different shapes.
+func (a *Agent) emitStage(stage StageEvent) {
+	raw, err := json.Marshal(stage)
+	if err != nil {
+		a.recordPersistError(err)
+		return
+	}
+	a.mu.Lock()
+	run := a.activeRun
+	a.mu.Unlock()
+	if run == nil {
+		return
+	}
+	a.persist(store.Record{Type: store.TypeStage, RunID: run.ID(), Stage: raw})
+	run.emit(Event{Type: EventStage, Stage: &stage})
+}
+
 // persist writes one record to the session. The store is read under the lock,
 // because Close clears it under the same lock. A failed write is recorded on
 // the agent rather than dropped, so a run whose transcript did not reach the

@@ -16,6 +16,8 @@ package editorhost
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/anvil-dev/anvil"
 )
 
 // ProtocolVersion is the editor host protocol revision. A breaking change to a
@@ -23,11 +25,9 @@ import (
 // protocol in doc/design/v0.x/11-worker-daemon.md).
 const ProtocolVersion = 1
 
-// Version is the host build version, overridable at link time. It carries the
-// product line, not the protocol revision (that is ProtocolVersion): the
-// extension compares the dotted minor it packaged with against this string and
-// warns on a mismatch, so the two have to be released together (0.46).
-var Version = "0.46.87"
+// Version is the Host build version. It is sourced from the Agent SDK so the
+// extension, Host, and Agent cannot drift onto separate product versions.
+var Version = anvil.Version
 
 // Client to host request methods.
 const (
@@ -269,6 +269,10 @@ type SessionParams struct {
 	Skills          []string `json:"skills,omitempty"`
 	Plugins         []string `json:"plugins,omitempty"`
 
+	// AgentMode selects SDK orchestration. Empty is the legacy-compatible
+	// Single mode; explicit Multi and Complex require Subagents not to be false.
+	AgentMode string `json:"agent_mode,omitempty"`
+
 	// PermissionMode selects the approval policy. Empty means ModeAsk.
 	PermissionMode string `json:"permission_mode,omitempty"`
 	// PermissionGroups narrows or widens what ModeAsk / ModeAcceptEdits gate.
@@ -370,6 +374,9 @@ type SessionResult struct {
 	CWD       string `json:"cwd"`
 	Provider  string `json:"provider"`
 	Model     string `json:"model"`
+	// AgentMode is always resolved: legacy clients omit the request field but
+	// still receive "single", never the SDK's empty zero-value spelling.
+	AgentMode string `json:"agent_mode"`
 	// PermissionMode is the mode the session was actually created with, after
 	// defaults were applied and after the workspace file had its say.
 	PermissionMode string `json:"permission_mode"`
@@ -385,6 +392,12 @@ type SessionResult struct {
 	// saying so is what keeps that from being a silent drop.
 	PermissionModeRefused string `json:"permission_mode_refused,omitempty"`
 }
+
+const (
+	AgentModeSingle  = "single"
+	AgentModeMulti   = "multi"
+	AgentModeComplex = "complex"
+)
 
 // Where a session's mode came from. See resolveMode.
 const (
@@ -942,6 +955,16 @@ type TranscriptEntry struct {
 	PathAnalysis string           `json:"path_analysis,omitempty"`
 	PathProblem  string           `json:"path_problem,omitempty"`
 
+	// stage
+	NodeID       string          `json:"node_id,omitempty"`
+	ParentNodeID string          `json:"parent_node_id,omitempty"`
+	DependsOn    []string        `json:"depends_on,omitempty"`
+	AgentID      string          `json:"agent_id,omitempty"`
+	AgentRole    string          `json:"agent_role,omitempty"`
+	Stage        string          `json:"stage,omitempty"`
+	Brief        *BriefInfo      `json:"brief,omitempty"`
+	Acceptance   *AcceptanceInfo `json:"acceptance,omitempty"`
+
 	// run_end
 	Status string `json:"status,omitempty"`
 	Steps  int    `json:"steps,omitempty"`
@@ -1444,6 +1467,14 @@ type EventParams struct {
 	Protected    []string `json:"protected,omitempty"`
 	PathAnalysis string   `json:"path_analysis,omitempty"`
 	PathProblem  string   `json:"path_problem,omitempty"`
+	// Orchestration identity is set on a durable `stage` event.
+	NodeID       string          `json:"node_id,omitempty"`
+	ParentNodeID string          `json:"parent_node_id,omitempty"`
+	DependsOn    []string        `json:"depends_on,omitempty"`
+	AgentRole    string          `json:"agent_role,omitempty"`
+	Stage        string          `json:"stage,omitempty"`
+	Brief        *BriefInfo      `json:"brief,omitempty"`
+	Acceptance   *AcceptanceInfo `json:"acceptance,omitempty"`
 	// Items is the complete task list on a `todo` event (0.40.9). It is a
 	// pointer so that an empty list reaches the client as [] — clearing the
 	// panel — while every other event omits the field entirely.
@@ -1461,6 +1492,24 @@ type EventParams struct {
 	AgentID          string `json:"agent_id,omitempty"`
 	ParentToolCallID string `json:"parent_tool_call_id,omitempty"`
 	Depth            int    `json:"depth,omitempty"`
+}
+
+type BriefInfo struct {
+	Goal       string   `json:"goal"`
+	Plan       []string `json:"plan"`
+	Files      []string `json:"files"`
+	Acceptance []string `json:"acceptance"`
+}
+
+type AcceptanceInfo struct {
+	Items           []AcceptanceItemInfo `json:"items"`
+	Changed         []string             `json:"changed,omitempty"`
+	ChangesRecorded bool                 `json:"changes_recorded"`
+}
+
+type AcceptanceItemInfo struct {
+	Text   string `json:"text"`
+	Status string `json:"status"`
 }
 
 // TodoItem is one row of the model's plan.

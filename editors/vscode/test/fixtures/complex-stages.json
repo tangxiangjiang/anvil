@@ -1,0 +1,123 @@
+{
+  "run_id": "run-complex",
+  "events": [
+    {
+      "type": "stage",
+      "run_id": "run-complex",
+      "node_id": "stage:decide",
+      "agent_id": "agent-decide",
+      "agent_role": "decision",
+      "stage": "decide"
+    },
+    {
+      "type": "stage",
+      "run_id": "run-complex",
+      "node_id": "stage:analyze",
+      "parent_node_id": "stage:decide",
+      "depends_on": ["stage:decide"],
+      "agent_id": "agent-analyze",
+      "agent_role": "analyze",
+      "stage": "analyze"
+    },
+    {
+      "type": "stage",
+      "run_id": "run-complex",
+      "node_id": "work:b",
+      "parent_node_id": "stage:analyze",
+      "depends_on": ["stage:analyze", "work:a"],
+      "agent_id": "agent-b",
+      "agent_role": "worker",
+      "stage": "work",
+      "brief": {
+        "goal": "Update B after A",
+        "files": ["b.ts"],
+        "plan": ["Read A output", "Update B", "Run B tests"],
+        "acceptance": ["B uses A", "B tests pass"]
+      }
+    },
+    {
+      "type": "stage",
+      "run_id": "run-complex",
+      "node_id": "work:c",
+      "parent_node_id": "stage:analyze",
+      "depends_on": ["stage:analyze"],
+      "agent_id": "agent-c",
+      "agent_role": "worker",
+      "stage": "work",
+      "brief": {
+        "goal": "Document the change",
+        "files": ["README.md"],
+        "plan": ["Update docs"],
+        "acceptance": ["Docs describe the behavior"]
+      }
+    },
+    {
+      "type": "stage",
+      "run_id": "run-complex",
+      "node_id": "work:a",
+      "parent_node_id": "stage:analyze",
+      "depends_on": ["stage:analyze"],
+      "agent_id": "agent-a",
+      "agent_role": "worker",
+      "stage": "work",
+      "brief": {
+        "goal": "Implement A",
+        "files": ["a.ts", "a.test.ts"],
+        "plan": ["Add A", "Test A"],
+        "acceptance": ["A works", "A tests pass"]
+      }
+    },
+    {
+      "type": "stage",
+      "run_id": "run-complex",
+      "node_id": "work:a",
+      "parent_node_id": "stage:analyze",
+      "depends_on": ["stage:analyze"],
+      "agent_id": "agent-a",
+      "agent_role": "worker",
+      "stage": "work",
+      "acceptance": {
+        "items": [
+          { "text": "A works", "status": "met" },
+          { "text": "A tests pass", "status": "met" }
+        ],
+        "changed": ["a.ts", "a.test.ts"],
+        "changes_recorded": true
+      }
+    },
+    {
+      "type": "stage",
+      "run_id": "run-complex",
+      "node_id": "work:b",
+      "parent_node_id": "stage:analyze",
+      "depends_on": ["stage:analyze", "work:a"],
+      "agent_id": "agent-b",
+      "agent_role": "worker",
+      "stage": "work",
+      "acceptance": {
+        "items": [
+          { "text": "B uses A", "status": "not_met" },
+          { "text": "B tests pass", "status": "unreported" }
+        ],
+        "changed": ["b.ts"],
+        "changes_recorded": true
+      }
+    },
+    {
+      "type": "stage",
+      "run_id": "run-complex",
+      "node_id": "work:c",
+      "parent_node_id": "stage:analyze",
+      "depends_on": ["stage:analyze"],
+      "agent_id": "agent-c",
+      "agent_role": "worker",
+      "stage": "work",
+      "acceptance": {
+        "items": [
+          { "text": "Docs describe the behavior", "status": "unreported" }
+        ],
+        "changes_recorded": false
+      }
+    }
+  ]
+}

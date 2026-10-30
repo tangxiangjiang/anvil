@@ -450,3 +450,79 @@ func TestDelegateBriefIsInTheWorkersMeta(t *testing.T) {
 		t.Fatalf("the brief in the meta record: %+v", brief)
 	}
 }
+
+func TestDelegateStageEventsSurviveTranscriptReplay(t *testing.T) {
+	dir := t.TempDir()
+	opts := multiOptions(dir)
+	opts.Checkpoints = &CheckpointOptions{}
+	parent, err := Create(context.Background(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	args := jsonBrief([]string{"a.go"}, []string{"change it"}, []string{"file changed", "tests pass"})
+	parent.complete = completerFunc(func(_ context.Context, req llm.Request) (*llm.Response, error) {
+		if strings.Contains(systemOf(req), "The brief below is your task") {
+			return textResponse("[met] file changed"), nil
+		}
+		if len(trailingToolResults(req)) == 0 {
+			return callResponse("delegate-1", "delegate", args), nil
+		}
+		return textResponse("parent done"), nil
+	})
+
+	run, err := parent.Send(context.Background(), "delegate this")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var live []*StageEvent
+	for ev := range run.Stream(context.Background()) {
+		if ev.Type == EventStage {
+			live = append(live, ev.Stage)
+		}
+	}
+	if len(live) != 2 {
+		t.Fatalf("stage events=%d, want start and acceptance", len(live))
+	}
+	if live[0].NodeID != "delegate:delegate-1" || live[0].Stage != "work" ||
+		live[0].Brief == nil || live[0].Brief.Goal != "change a" {
+		t.Fatalf("start=%+v", live[0])
+	}
+	got := live[1].Acceptance
+	if got == nil || len(got.Items) != 2 ||
+		got.Items[0].Status != AcceptanceMet ||
+		got.Items[1].Status != AcceptanceUnreported ||
+		!got.ChangesRecorded {
+		t.Fatalf("acceptance=%+v", got)
+	}
+
+	agentID := parent.AgentID()
+	if err := parent.Close(); err != nil {
+		t.Fatal(err)
+	}
+	transcript, err := LoadTranscript(context.Background(), agentID, TranscriptOptions{
+		Local: LocalOptions{CWD: dir},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var replay []*StageEvent
+	for _, entry := range transcript.Entries {
+		if entry.Kind == TranscriptStage {
+			replay = append(replay, entry.Stage)
+		}
+	}
+	if len(replay) != len(live) {
+		t.Fatalf("replay stages=%d, want %d", len(replay), len(live))
+	}
+	for i := range live {
+		want, _ := json.Marshal(live[i])
+		got, _ := json.Marshal(replay[i])
+		if string(got) != string(want) {
+			t.Fatalf("replay[%d]=%s, want %s", i, got, want)
+		}
+	}
+}

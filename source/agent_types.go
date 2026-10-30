@@ -49,6 +49,9 @@ const (
 	// limit (0.48+). It comes just before EventDone, which still follows; the partial
 	// answer is the result. Nothing is re-requested: a container decides what to do.
 	EventTruncated EventType = "truncated"
+	// EventStage is a durable orchestration node update (0.52+). It is emitted
+	// by Multi delegation and Complex stages and persisted for transcript replay.
+	EventStage EventType = "stage"
 )
 
 // CompactInfo is one history compaction's numbers, set on EventCompact.
@@ -75,6 +78,46 @@ const (
 	TodoInProgress = "in_progress"
 	TodoDone       = "done"
 )
+
+// BriefView is the presentation-safe part of a validated worker brief.
+type BriefView struct {
+	Goal       string   `json:"goal"`
+	Plan       []string `json:"plan"`
+	Files      []string `json:"files"`
+	Acceptance []string `json:"acceptance"`
+}
+
+type AcceptanceStatus string
+
+const (
+	AcceptanceMet        AcceptanceStatus = "met"
+	AcceptanceNotMet     AcceptanceStatus = "not_met"
+	AcceptanceUnreported AcceptanceStatus = "unreported"
+)
+
+type AcceptanceItem struct {
+	Text   string           `json:"text"`
+	Status AcceptanceStatus `json:"status"`
+}
+
+// AcceptanceView keeps model claims separate from checkpoint-derived changes.
+type AcceptanceView struct {
+	Items           []AcceptanceItem `json:"items"`
+	Changed         []string         `json:"changed,omitempty"`
+	ChangesRecorded bool             `json:"changes_recorded"`
+}
+
+// StageEvent is one stable node in Multi or Complex orchestration.
+type StageEvent struct {
+	NodeID       string          `json:"node_id"`
+	ParentNodeID string          `json:"parent_node_id,omitempty"`
+	DependsOn    []string        `json:"depends_on,omitempty"`
+	Role         Role            `json:"agent_role"`
+	Stage        string          `json:"stage"`
+	AgentID      string          `json:"agent_id,omitempty"`
+	Brief        *BriefView      `json:"brief,omitempty"`
+	Acceptance   *AcceptanceView `json:"acceptance,omitempty"`
+}
 
 // Usage holds optional token counts from the provider.
 type Usage struct {
@@ -173,6 +216,9 @@ type Event struct {
 	// tool_result. Empty for non-shell tools.
 	PathAnalysis string
 	PathProblem  string
+	// Stage is set only on EventStage. Unlike ordinary streamed progress it is
+	// persisted and therefore has an identical transcript representation.
+	Stage *StageEvent
 	// Items is the model's task list, set on EventTodo (0.40.9) and nil on every
 	// other event. It is the complete list the call wrote, not a change: a
 	// client replaces its checklist, and an empty list means the call cleared it.

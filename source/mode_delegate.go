@@ -139,12 +139,17 @@ func confineRules(files []string) []permissions.Rule {
 // acceptanceLine is one `[met] text` / `[not met] text` line a worker ends with.
 var acceptanceLine = regexp.MustCompile(`(?mi)^\s*[-*]?\s*\[(met|not met)\]\s*(.*?)\s*$`)
 
-// report states, per acceptance item, what the worker claimed. An item the worker did
-// not mention is [unreported], which the parent reads as "check it yourself".
-func report(b *Brief, final string, changed []string, recorded bool) string {
+// report states, per acceptance item, what the worker claimed. The text given
+// to the parent and the typed view given to containers come from this one pass.
+func report(b *Brief, final string, changed []string, recorded bool) (string, *AcceptanceView) {
 	claims := map[string]string{}
 	for _, m := range acceptanceLine.FindAllStringSubmatch(final, -1) {
 		claims[normalizeItem(m[2])] = strings.ToLower(m[1])
+	}
+	view := &AcceptanceView{
+		Items:           make([]AcceptanceItem, 0, len(b.Acceptance)),
+		Changed:         append([]string(nil), changed...),
+		ChangesRecorded: recorded,
 	}
 	var sb strings.Builder
 	sb.WriteString("acceptance:\n")
@@ -154,6 +159,14 @@ func report(b *Brief, final string, changed []string, recorded bool) string {
 			state = got
 		}
 		fmt.Fprintf(&sb, "  %-12s%s\n", "["+state+"]", oneLine(item))
+		status := AcceptanceUnreported
+		switch state {
+		case "met":
+			status = AcceptanceMet
+		case "not met":
+			status = AcceptanceNotMet
+		}
+		view.Items = append(view.Items, AcceptanceItem{Text: item, Status: status})
 	}
 	if !recorded {
 		sb.WriteString("changed: (not recorded: checkpoints are off, so check the workspace yourself)\n")
@@ -162,7 +175,19 @@ func report(b *Brief, final string, changed []string, recorded bool) string {
 	} else {
 		sb.WriteString("changed: " + strings.Join(changed, ", ") + "\n")
 	}
-	return sb.String()
+	return sb.String(), view
+}
+
+func briefView(b *Brief) *BriefView {
+	if b == nil {
+		return nil
+	}
+	return &BriefView{
+		Goal:       b.Goal,
+		Plan:       append([]string(nil), b.Plan...),
+		Files:      append([]string(nil), b.Files...),
+		Acceptance: append([]string(nil), b.Acceptance...),
+	}
 }
 
 func normalizeItem(s string) string {
@@ -260,6 +285,14 @@ func delegate(ctx context.Context, reg *tools.Registry, raw json.RawMessage) (st
 		return "", fmt.Errorf("start worker: %w", err)
 	}
 	defer child.Close()
+	stage := StageEvent{
+		NodeID:  "delegate:" + ident.ParentToolCallID,
+		Role:    RoleWorker,
+		Stage:   "work",
+		AgentID: child.AgentID(),
+		Brief:   briefView(&b),
+	}
+	parent.emitStage(stage)
 
 	run, err := child.Send(callCtx, workerPrompt)
 	if err != nil {
@@ -275,13 +308,17 @@ func delegate(ctx context.Context, reg *tools.Registry, raw json.RawMessage) (st
 	changed, recorded := child.changedFiles()
 	switch res.Status {
 	case StatusFinished:
-		return fmt.Sprintf("%s finished in %d steps.\n%s%s", child.AgentID(), res.Steps, report(&b, res.Result, changed, recorded), res.Result), nil
+		reportText, acceptance := report(&b, res.Result, changed, recorded)
+		stage.Acceptance = acceptance
+		parent.emitStage(stage)
+		return fmt.Sprintf("%s finished in %d steps.\n%s%s", child.AgentID(), res.Steps, reportText, res.Result), nil
 	case StatusCancelled:
 		return "", fmt.Errorf("%s was cancelled: %s", child.AgentID(), firstNonEmpty(res.Err, "the run stopped"))
 	default:
 		// A worker that failed still has a report: every item is unreported, and the
 		// files it did change are a fact the parent needs.
-		return "", fmt.Errorf("%s failed: %s\n%s", child.AgentID(), firstNonEmpty(res.Err, res.Result), report(&b, "", changed, recorded))
+		reportText, _ := report(&b, "", changed, recorded)
+		return "", fmt.Errorf("%s failed: %s\n%s", child.AgentID(), firstNonEmpty(res.Err, res.Result), reportText)
 	}
 }
 

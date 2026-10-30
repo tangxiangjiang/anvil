@@ -61,7 +61,7 @@ func main() {
 
 ## Status
 
-Product is at **0.46 delivered** — the editor line is finished for this design cutoff. 0.46 is a polish line that adds no engine: a configured language server and test/build commands are wired through, every message can rewind, a plan opens as a read-only document, live task plans join the composer under one focus frame, start folded until new Plan work appears, collapse to only an edge handle, and retain conversation history, Session Manager keeps one titled tab per session, is itself a collapsible function group, and files conversations under Archived without deleting JSONL, selected transcript text can become role-preserving quote context, each conversation restores its selected composer model, one model setup page reached as a top-level Anvil function separates fixed-model APIs from gateway discovery without duplicating native Settings, Agent Map reports the conversation's selected root model, the transcript has a focus view, formula rendering and `/export`, a full ask → approve → finish cycle works from the keyboard with live regions, permission rules gain a user scope and protected paths, each window names the one root it works in, and the VSIX, the host and the docs agree on 0.46.87. 0.35–0.38 are the editor line (VS Code extension, tool permissions, permission modes, session identity); **0.39** is the Delivery execute/test campaign loop, **0.40** is the editor alignment, **0.41** is auto mode and the permissions manager, **0.42** is subagents, background tasks and workflows, **0.43** is context management, **0.44** is MCP management, and **0.46** is editor polish. Full per-milestone index: [`doc/roadmaps/v0.x/README.md`](doc/roadmaps/v0.x/README.md).
+Product is at **0.52.3** — the Agent SDK, built-in editor Host, VS Code extension, and docs share one product version. The completed editor-polish line includes configured language server and test/build commands, message rewind, plan documents, collapsible live plans and Session Manager groups, archived JSONL conversations, role-preserving quote context, per-conversation model restoration, focused model settings, Agent Map, transcript focus and export, accessible approval flows, scoped permission rules, protected shell paths, and one workspace root per window. Milestone 0.52 bridges the SDK's Single, Multi, and Complex Agent modes into the editor protocol, persists each conversation's selected mode, and presents Complex stages, Worker briefs, dependencies, and worker-reported acceptance in live and restored transcripts. Full per-milestone index: [`doc/roadmaps/v0.x/README.md`](doc/roadmaps/v0.x/README.md).
 
 | Era | Milestones | What |
 |-----|-----------|------|
@@ -95,7 +95,7 @@ by `internal/editorhost/independence_test.go`.
 cd editors/vscode
 npm install
 npm run package:vsix          # this platform; --target <id> / --all for the rest
-code --install-extension anvil-vscode-0.46.87-win32-x64.vsix
+code --install-extension anvil-vscode-0.52.3-win32-x64.vsix
 ```
 
 A platform VSIX carries the matching `anvil-host`, cross-compiled with
