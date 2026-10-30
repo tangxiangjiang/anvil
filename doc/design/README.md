@@ -6,7 +6,7 @@ Design is **versioned by product cutoff**. Each `vX.Y/` tree is the design snaps
 
 | Tree | Role | Index |
 |------|------|--------|
-| [`v0.x/`](v0.x/) | **Current cutoff** — chapters through product **0.50** | [v0.x/README.md](v0.x/README.md) |
+| [`v0.x/`](v0.x/) | **Current cutoff** — chapters through product **0.57** | [v0.x/README.md](v0.x/README.md) |
 
 Matching roadmaps: [`doc/roadmaps/v0.x/`](../roadmaps/v0.x/).
 

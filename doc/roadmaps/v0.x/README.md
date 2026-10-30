@@ -1,8 +1,13 @@
 # Roadmaps v0.x (cutoff)
 
-Versioned delivery for Anvil through milestone **0.50**. Design cutoff: [`doc/design/v0.x/`](../../design/v0.x/).
-Milestone 0.46 closes the VS Code polish line; 0.47–0.50 develop and polish agent capabilities.
+Versioned delivery for Anvil through milestone **0.57**. Design cutoff:
+[`doc/design/v0.x/`](../../design/v0.x/). Milestone 0.46 closes the original VS Code polish
+line; 0.47–0.50 develop the Agent SDK, and 0.51–0.57 secure and productize those capabilities
+in VS Code.
 The shipped VSIX and host version is **0.46.85**; it is not the milestone status.
+Roadmap milestone numbers do not reserve extension versions. Each completed user-visible VS
+Code delivery batch increments the then-current `editors/vscode/package.json` patch exactly
+once.
 
 ## Version index
 
@@ -58,6 +63,13 @@ The shipped VSIX and host version is **0.46.85**; it is not the milestone status
 | 0.48 | LLM calls: effort, retry, stop reasons | done | [m_0.48_llm_calls.md](m_0.48_llm_calls.md) | [48](../../design/v0.x/48-llm-effort-and-retry.md) |
 | 0.49 | Roles and prompts | done | [m_0.49_roles_and_prompts.md](m_0.49_roles_and_prompts.md) | [49](../../design/v0.x/49-roles-and-prompts.md) |
 | 0.50 | Agent modes | done | [m_0.50_agent_modes.md](m_0.50_agent_modes.md) | [50](../../design/v0.x/50-agent-modes.md) |
+| 0.51 | Protected shell paths | planned | [m_0.51_protected_shell_paths.vscode.md](m_0.51_protected_shell_paths.vscode.md) | [51](../../design/v0.x/51-protected-shell-paths.vscode.md) |
+| 0.52 | Agent Mode Bridge | planned | [m_0.52_agent_mode_bridge.vscode.md](m_0.52_agent_mode_bridge.vscode.md) | [52](../../design/v0.x/52-agent-mode-bridge.vscode.md) |
+| 0.53 | Model capabilities and run signals | planned | [m_0.53_model_capabilities.vscode.md](m_0.53_model_capabilities.vscode.md) | [53](../../design/v0.x/53-model-capabilities-and-run-signals.vscode.md) |
+| 0.54 | Durable agent runs | planned | [m_0.54_durable_agent_runs.vscode.md](m_0.54_durable_agent_runs.vscode.md) | [54](../../design/v0.x/54-durable-agent-runs.vscode.md) |
+| 0.55 | Structured plans and workflow control | planned | [m_0.55_structured_plans.vscode.md](m_0.55_structured_plans.vscode.md) | [55](../../design/v0.x/55-structured-plans-and-workflow-control.vscode.md) |
+| 0.56 | Session search and history | planned | [m_0.56_session_search.vscode.md](m_0.56_session_search.vscode.md) | [56](../../design/v0.x/56-session-search-and-history.vscode.md) |
+| 0.57 | Worktree workers | planned | [m_0.57_worktree_workers.vscode.md](m_0.57_worktree_workers.vscode.md) | [57](../../design/v0.x/57-worktree-workers.vscode.md) |
 
 ## Naming
 
@@ -72,6 +84,18 @@ Operational notes from real runs: [LESSONS.md](LESSONS.md).
 1. Pick the active milestone phase (`status: planned` → set `in_progress`).
 2. Implement only that phase's tasks and acceptance criteria.
 3. Mark phase `done`; refresh this index if milestone status changes.
+
+## Next implementation order
+
+Implement strictly in this order:
+
+**0.51** protected-path safety → **0.52** Agent mode bridge → **0.53** model capabilities
+and run signals → **0.54** durable runs → **0.55** structured plans → **0.56** session search
+and history → **0.57** worktree workers.
+
+0.57 depends on every earlier milestone in this line: worktree isolation is not introduced
+until shell policy fails closed, Agent modes have stable identities, events survive reconnect,
+plans have one schema, and stored sessions can be addressed consistently.
 
 ## Post-0.10 scope lock (designs landed)
 

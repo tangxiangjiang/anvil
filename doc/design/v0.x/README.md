@@ -1,8 +1,15 @@
 # Design v0.x (cutoff)
 
-Anvil **local-only** Go Agent SDK design through product milestone **0.50**. The chapters end at **50** (agent modes). 0.39 is the Delivery **execute / test campaign loop**, designed by [39](39-execute.md) on top of the surfaces in [33](33-delivery-ui.md) and the vision in [DELIVERY_PIPELINE_VISION.md](../../../DELIVERY_PIPELINE_VISION.md). Read chapters in order before implementing the matching roadmap phase.
+Anvil **local-only** Agent SDK and VS Code design through product milestone **0.57**. Chapters
+51–57 bridge the agent capabilities delivered through 0.50 into the editor, close the shell
+protected-path gap, and add reliable runs, structured plans, session search, and isolated
+workers. 0.39 is the Delivery **execute / test campaign loop**, designed by
+[39](39-execute.md) on top of the surfaces in [33](33-delivery-ui.md) and the vision in
+[DELIVERY_PIPELINE_VISION.md](../../../DELIVERY_PIPELINE_VISION.md). Read chapters in order
+before implementing the matching roadmap phase.
 
-This tree is the **design cutoff** for 0.1–0.50 delivery. Later product lines get a new `doc/design/v…/` directory.
+This tree is the **design cutoff** for 0.1–0.57 delivery. Later product lines get a new
+`doc/design/v…/` directory.
 
 ## Read order
 
@@ -59,6 +66,13 @@ This tree is the **design cutoff** for 0.1–0.50 delivery. Later product lines 
 | 48 | [48-llm-effort-and-retry.md](48-llm-effort-and-retry.md) | Reasoning effort on both wires, retry with backoff, stop reasons and error kinds; effort vs. reasoning content → **0.48** |
 | 49 | [49-roles-and-prompts.md](49-roles-and-prompts.md) | A layered system prompt with an unremovable safety layer, and five roles → **0.49** |
 | 50 | [50-agent-modes.md](50-agent-modes.md) | Single, Multi, Complex as a ladder; `delegate` and the brief; Complex as a workflow → **0.50** |
+| 51 | [51-protected-shell-paths.vscode.md](51-protected-shell-paths.vscode.md) | Fail-closed shell path analysis keeps remembered allows away from protected paths → **0.51** |
+| 52 | [52-agent-mode-bridge.vscode.md](52-agent-mode-bridge.vscode.md) | Single, Multi, and Complex across editor-host and VS Code, with typed Brief and Acceptance views → **0.52** |
+| 53 | [53-model-capabilities-and-run-signals.vscode.md](53-model-capabilities-and-run-signals.vscode.md) | Explicit model capabilities, adaptive thinking, retry/truncation signals, and controlled continuation → **0.53** |
+| 54 | [54-durable-agent-runs.vscode.md](54-durable-agent-runs.vscode.md) | Sequenced replayable events and honest recovery of background task state → **0.54** |
+| 55 | [55-structured-plans-and-workflow-control.vscode.md](55-structured-plans-and-workflow-control.vscode.md) | One structured plan contract across Plan, todo, and Complex workflow control → **0.55** |
+| 56 | [56-session-search-and-history.vscode.md](56-session-search-and-history.vscode.md) | Local full-text session search and cursor history for JSONL and SQLite → **0.56** |
+| 57 | [57-worktree-workers.vscode.md](57-worktree-workers.vscode.md) | Isolated worktree Workers, attributed checkpoints, conflict review, integration, and cleanup → **0.57** |
 
 Parent index: [`doc/design/README.md`](../README.md).
 
@@ -66,4 +80,7 @@ Parent index: [`doc/design/README.md`](../README.md).
 
 - Design describes **what** and **why** for this cutoff.
 - [`doc/roadmaps/v0.x/`](../../roadmaps/v0.x/) describes **when**.
-- Chapters 11–50 map to [m_0.11](../../roadmaps/v0.x/m_0.11_worker_daemon.md) … [m_0.50](../../roadmaps/v0.x/m_0.50_agent_modes.md). [m_0.39](../../roadmaps/v0.x/m_0.39_execute.md) maps to chapter 39; chapter 33 holds its surfaces and schema.
+- Chapters 11–57 map to [m_0.11](../../roadmaps/v0.x/m_0.11_worker_daemon.md) …
+  [m_0.57](../../roadmaps/v0.x/m_0.57_worktree_workers.vscode.md).
+  [m_0.39](../../roadmaps/v0.x/m_0.39_execute.md) maps to chapter 39; chapter 33 holds its
+  surfaces and schema.
