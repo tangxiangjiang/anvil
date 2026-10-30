@@ -13,12 +13,13 @@ import (
 )
 
 type modelJSON struct {
-	ID            string   `json:"id"`
-	OwnedBy       string   `json:"owned_by,omitempty"`
-	Provider      string   `json:"provider,omitempty"`
-	UpstreamModel string   `json:"upstream_model,omitempty"`
-	Params        []string `json:"params,omitempty"`
-	Vision        bool     `json:"vision,omitempty"`
+	ID            string                   `json:"id"`
+	OwnedBy       string                   `json:"owned_by,omitempty"`
+	Provider      string                   `json:"provider,omitempty"`
+	UpstreamModel string                   `json:"upstream_model,omitempty"`
+	Params        []string                 `json:"params,omitempty"`
+	Vision        bool                     `json:"vision,omitempty"`
+	Capabilities  *anvil.ModelCapabilities `json:"capabilities,omitempty"`
 }
 
 // EnsureDefaultModel picks the first gateway model when none is selected yet.
@@ -90,6 +91,7 @@ func (h *Hub) ListModels(ctx context.Context) ([]modelJSON, error) {
 			UpstreamModel: m.UpstreamModel,
 			Params:        append([]string(nil), m.Params...),
 			Vision:        m.Vision,
+			Capabilities:  m.Capabilities,
 		})
 	}
 	h.modelsMu.Lock()

@@ -43,7 +43,7 @@ const (
 	// EventRetry reports that a provider call failed and will be tried again (0.48+).
 	// Attempt is the attempt that failed, Delay the wait before the next, Text the
 	// provider's message. It lets a client show "provider busy, retrying" instead of a
-	// frozen spinner. It is not stored and has no replay.
+	// frozen spinner. Since 0.53 it is stored for transcript replay.
 	EventRetry EventType = "retry"
 	// EventTruncated reports that the provider cut the final answer off at the output
 	// limit (0.48+). It comes just before EventDone, which still follows; the partial
@@ -146,7 +146,8 @@ const (
 	// CodeProviderMidStream is a provider failure after text had reached the user.
 	// It is never retried: a retry would show the answer twice.
 	CodeProviderMidStream Code = "provider_mid_stream"
-	// CodeProviderBusy is a 429 that outlasted the retries.
+	// CodeProviderBusy is a rate limit or transient server failure that
+	// outlasted the retries.
 	CodeProviderBusy Code = "provider_busy"
 	// CodeRequestRejected is a 4xx that names the request itself: an unknown parameter,
 	// a context overflow, an invalid tool schema. The provider's text is in Err.
@@ -192,10 +193,11 @@ type Event struct {
 	Step       int  // 1-based LLM round; set on EventProgress
 	MaxSteps   int  // configured limit; set on EventProgress
 	Code       Code // set on EventError when classifiable (0.7+)
-	// Attempt and Delay are set on EventRetry (0.48+): the attempt that failed and the
-	// wait before the next one.
-	Attempt int
-	Delay   time.Duration
+	// Attempt, MaxAttempts and Delay are set on EventRetry (0.53+): the attempt
+	// that failed, the resolved maximum, and the wait before the next one.
+	Attempt     int
+	MaxAttempts int
+	Delay       time.Duration
 	// Usage is authoritative on terminal events (set when the provider reported any
 	// counts; nil means "unknown", which a client must not draw as zero). While a
 	// streamed model request is in flight it may carry a live estimate, explicitly marked

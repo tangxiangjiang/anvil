@@ -198,6 +198,8 @@ export interface SessionParams {
   base_url?: string;
   model?: string;
   effort?: Effort;
+  model_capabilities?: ModelCapabilities;
+  max_output_tokens?: number;
   system_prompt?: string;
   max_steps?: number;
   store?: string;
@@ -260,6 +262,18 @@ export interface SessionParams {
 
 export type Effort = 'low' | 'medium' | 'high';
 export type AgentMode = 'single' | 'multi' | 'complex';
+export type ThinkingProtocol =
+  | 'none'
+  | 'openai_effort'
+  | 'anthropic_budget'
+  | 'anthropic_adaptive';
+
+export interface ModelCapabilities {
+  thinking: ThinkingProtocol;
+  effort_levels?: Effort[];
+  max_output_tokens: boolean;
+  vision: boolean;
+}
 
 /**
  * The language servers a session may start. Presence is the switch: the
@@ -669,6 +683,7 @@ export interface Attachment {
 export interface PromptParams {
   session_id: string;
   message: string;
+  continue_from?: string;
   context?: PromptContext;
   attachments?: Attachment[];
 }
@@ -862,12 +877,13 @@ export interface TranscriptCall {
  * nothing to replay it from.
  */
 export interface TranscriptEntry {
-  kind: 'message' | 'run_end' | 'summary' | 'stage';
+  kind: 'message' | 'run_end' | 'summary' | 'stage' | 'retry' | 'truncated';
   run_id?: string;
 
   /** message, and summary for its text */
   role?: 'user' | 'assistant' | 'tool';
   content?: string;
+  continue_from?: string;
   tool_call_id?: string;
   name?: string;
   tool_calls?: TranscriptCall[];
@@ -885,12 +901,19 @@ export interface TranscriptEntry {
   brief?: BriefInfo;
   acceptance?: AcceptanceInfo;
 
+  /** retry / truncated run signals */
+  text?: string;
+  attempt?: number;
+  max_attempts?: number;
+  delay_ms?: number;
+
   /** run_end */
   status?: RunStatus;
   steps?: number;
   usage?: Usage;
   err?: string;
   code?: string;
+  truncated?: boolean;
 }
 
 export interface SessionTranscriptResult {
@@ -1201,6 +1224,7 @@ export interface ModelEntry {
   provider?: string;
   upstream_model?: string;
   vision?: boolean;
+  capabilities?: ModelCapabilities;
 }
 
 export interface SubagentProfile {
@@ -1250,7 +1274,11 @@ export type EventType =
    */
   | 'compact'
   /** Durable Multi/Complex orchestration node update. */
-  | 'stage';
+  | 'stage'
+  /** Provider call failed and is waiting before a bounded retry. */
+  | 'retry'
+  /** The final assistant answer stopped at the output limit. */
+  | 'truncated';
 
 /** One streamed unit of a run. */
 export interface HostEvent {
@@ -1281,6 +1309,10 @@ export interface HostEvent {
   step?: number;
   max_steps?: number;
   code?: string;
+  /** Retry progress; attempt is the failed call and delay_ms precedes the next. */
+  attempt?: number;
+  max_attempts?: number;
+  delay_ms?: number;
   /** Provider usage on terminal errors, or a live estimate when marked below. */
   usage?: Usage;
   /** True only for running input/output estimates; `done.usage` replaces them. */
@@ -1354,6 +1386,8 @@ export interface DoneParams {
   usage?: Usage;
   err?: string;
   code?: string;
+  /** Authoritative terminal marker for a length-limited assistant answer. */
+  truncated?: boolean;
   /**
    * Where the conversation stands after the run (0.43). Omitted when there is
    * no live agent to ask — a shutdown, for instance — because a zero would be

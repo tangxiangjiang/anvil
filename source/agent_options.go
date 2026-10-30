@@ -35,6 +35,33 @@ const (
 	EffortHigh    Effort = "high"
 )
 
+// ThinkingProtocol selects the provider request shape for model reasoning.
+// Empty means compatibility mode: adapters preserve their historical behavior.
+type ThinkingProtocol string
+
+const (
+	ThinkingUnspecified       ThinkingProtocol = ""
+	ThinkingNone              ThinkingProtocol = "none"
+	ThinkingOpenAIEffort      ThinkingProtocol = "openai_effort"
+	ThinkingAnthropicBudget   ThinkingProtocol = "anthropic_budget"
+	ThinkingAnthropicAdaptive ThinkingProtocol = "anthropic_adaptive"
+)
+
+// ModelCapabilities is a complete, container-owned model profile. Its zero
+// value is deliberately "unknown", not "supports nothing".
+type ModelCapabilities struct {
+	Thinking        ThinkingProtocol `json:"thinking,omitempty"`
+	EffortLevels    []Effort         `json:"effort_levels,omitempty"`
+	MaxOutputTokens bool             `json:"max_output_tokens,omitempty"`
+	Vision          bool             `json:"vision,omitempty"`
+}
+
+// Configured reports whether this is an explicit profile rather than the
+// compatibility-preserving zero value.
+func (c ModelCapabilities) Configured() bool {
+	return c.Thinking != "" || len(c.EffortLevels) > 0 || c.MaxOutputTokens || c.Vision
+}
+
 // Role names the system prompt's role layer (0.49+). A role changes the prompt and
 // nothing else: tools, permissions, budget and model are Options fields of their own.
 type Role string
@@ -423,9 +450,10 @@ type WebSearchOptions struct {
 	AllowPrivateURLs bool
 }
 
-// Model identifies the model id for the selected provider.
+// Model identifies a provider model and, when known, its explicit capabilities.
 type Model struct {
-	ID string
+	ID           string
+	Capabilities ModelCapabilities
 }
 
 // LocalOptions applies to the local runtime only.
@@ -605,9 +633,10 @@ type PermissionDecision struct {
 type SendOption func(*sendConfig)
 
 type sendConfig struct {
-	Force       bool
-	Attachments []ImageAttachment
-	Directive   string
+	Force            bool
+	Attachments      []ImageAttachment
+	Directive        string
+	ContinuationFrom string
 }
 
 // WithDirective adds a per-run instruction to the end of this run's system prompt,
@@ -627,4 +656,11 @@ func WithAttachments(atts ...ImageAttachment) SendOption {
 	return func(c *sendConfig) {
 		c.Attachments = append(c.Attachments, atts...)
 	}
+}
+
+// WithContinuationFrom records that this explicit user turn continues the
+// named truncated run. It changes no provider state and grants no tool
+// permission; containers validate the run before calling Send.
+func WithContinuationFrom(runID string) SendOption {
+	return func(c *sendConfig) { c.ContinuationFrom = strings.TrimSpace(runID) }
 }

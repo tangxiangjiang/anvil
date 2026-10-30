@@ -38,27 +38,69 @@ func NewAnthropic(cfg Config) *Anthropic {
 }
 
 type anthropicRequest struct {
-	Model     string             `json:"model"`
-	MaxTokens int                `json:"max_tokens"`
-	System    any                `json:"system,omitempty"`
-	Messages  []anthropicMessage `json:"messages"`
-	Tools     []anthropicTool    `json:"tools,omitempty"`
-	Thinking  *anthropicThink    `json:"thinking,omitempty"`
+	Model        string                 `json:"model"`
+	MaxTokens    int                    `json:"max_tokens"`
+	System       any                    `json:"system,omitempty"`
+	Messages     []anthropicMessage     `json:"messages"`
+	Tools        []anthropicTool        `json:"tools,omitempty"`
+	Thinking     any                    `json:"thinking,omitempty"`
+	OutputConfig *anthropicOutputConfig `json:"output_config,omitempty"`
 }
 
-// anthropicThink is the request-side thinking switch. It carries a token budget,
+// anthropicBudgetThink is the legacy request-side thinking switch. It carries a token budget,
 // never any thinking text.
-type anthropicThink struct {
+type anthropicBudgetThink struct {
 	Type         string `json:"type"`
 	BudgetTokens int    `json:"budget_tokens"`
 }
 
-func thinkingFor(e Effort) *anthropicThink {
+type anthropicAdaptiveThink struct {
+	Type string `json:"type"`
+}
+
+type anthropicOutputConfig struct {
+	Effort string `json:"effort"`
+}
+
+func thinkingFor(e Effort) *anthropicBudgetThink {
 	budget, ok := anthropicThinking(e)
 	if !ok {
 		return nil
 	}
-	return &anthropicThink{Type: "enabled", BudgetTokens: budget}
+	return &anthropicBudgetThink{Type: "enabled", BudgetTokens: budget}
+}
+
+func legacyThinking(e Effort) any {
+	thinking := thinkingFor(e)
+	if thinking == nil {
+		return nil
+	}
+	return thinking
+}
+
+func anthropicControls(req Request) (int, any, *anthropicOutputConfig, error) {
+	if err := validateCapabilities("anthropic", req); err != nil {
+		return 0, nil, nil, err
+	}
+	if req.Capabilities == nil {
+		return anthropicMaxTokens(req.Effort, req.MaxOutputTokens), legacyThinking(req.Effort), nil, nil
+	}
+	switch req.Capabilities.Thinking {
+	case ThinkingAnthropicBudget:
+		return anthropicMaxTokens(req.Effort, req.MaxOutputTokens), legacyThinking(req.Effort), nil, nil
+	case ThinkingAnthropicAdaptive:
+		maxTokens := req.MaxOutputTokens
+		if maxTokens <= 0 {
+			maxTokens = 8192
+		}
+		var output *anthropicOutputConfig
+		if req.Effort != EffortDefault {
+			output = &anthropicOutputConfig{Effort: string(req.Effort)}
+		}
+		return maxTokens, &anthropicAdaptiveThink{Type: "adaptive"}, output, nil
+	default:
+		return anthropicMaxTokens(EffortDefault, req.MaxOutputTokens), nil, nil, nil
+	}
 }
 
 type anthropicMessage struct {
@@ -108,6 +150,10 @@ type anthropicResponse struct {
 
 // Complete implements Completer.
 func (c *Anthropic) Complete(ctx context.Context, req Request) (*Response, error) {
+	maxTokens, thinking, outputConfig, err := anthropicControls(req)
+	if err != nil {
+		return nil, err
+	}
 	if c.cfg.APIKey == "" {
 		return nil, NewHTTPError(401, "missing API key")
 	}
@@ -116,12 +162,13 @@ func (c *Anthropic) Complete(ctx context.Context, req Request) (*Response, error
 		return nil, err
 	}
 	body := anthropicRequest{
-		Model:     firstNonEmpty(req.Model, c.cfg.Model),
-		MaxTokens: anthropicMaxTokens(req.Effort, req.MaxOutputTokens),
-		System:    system,
-		Messages:  messages,
-		Tools:     toAnthropicTools(req.Tools),
-		Thinking:  thinkingFor(req.Effort),
+		Model:        firstNonEmpty(req.Model, c.cfg.Model),
+		MaxTokens:    maxTokens,
+		System:       system,
+		Messages:     messages,
+		Tools:        toAnthropicTools(req.Tools),
+		Thinking:     thinking,
+		OutputConfig: outputConfig,
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {

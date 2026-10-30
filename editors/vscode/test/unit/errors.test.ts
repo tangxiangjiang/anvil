@@ -56,6 +56,14 @@ test('an exhausted empty response does not blame credentials', () => {
   assert.doesNotMatch(failure.message, /API key|model id|baseUrl/i);
 });
 
+test('an exhausted transient provider error does not blame credentials', () => {
+  const detail = 'BedrockException - Internal server error (status=503)';
+  const failure = classifyDone(done({ code: 'provider_busy', err: detail }));
+  assert.equal(failure.kind, 'provider_busy');
+  assert.match(failure.message, /temporarily unavailable/i);
+  assert.doesNotMatch(failure.message, /API key|model id|baseUrl/i);
+});
+
 test('an unknown code keeps whatever the host said', () => {
   const failure = classifyDone(done({ code: 'weird', err: 'something specific broke' }));
   assert.equal(failure.kind, 'unknown');

@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/anvil-dev/anvil"
 )
 
 func startGW(t *testing.T, cfg Config, upstream http.HandlerFunc) (baseURL string, cancel context.CancelFunc) {
@@ -56,6 +58,11 @@ func startGW(t *testing.T, cfg Config, upstream http.HandlerFunc) (baseURL strin
 
 func TestModelsAuthAndCatalog(t *testing.T) {
 	cfg := fixtureConfig()
+	cfg.Models[0].Capabilities = &anvil.ModelCapabilities{
+		Thinking:        anvil.ThinkingOpenAIEffort,
+		EffortLevels:    []anvil.Effort{anvil.EffortLow, anvil.EffortHigh},
+		MaxOutputTokens: true,
+	}
 	base, _ := startGW(t, cfg, nil)
 
 	res, err := http.Get(base + "/v1/models")
@@ -97,6 +104,10 @@ func TestModelsAuthAndCatalog(t *testing.T) {
 	}
 	if list.Data[0].Anvil == nil || list.Data[0].Anvil.UpstreamModel != "real-model" {
 		t.Fatalf("anvil ext %+v", list.Data[0].Anvil)
+	}
+	if list.Data[0].Anvil.Capabilities == nil ||
+		list.Data[0].Anvil.Capabilities.Thinking != anvil.ThinkingOpenAIEffort {
+		t.Fatalf("capabilities %+v", list.Data[0].Anvil.Capabilities)
 	}
 }
 

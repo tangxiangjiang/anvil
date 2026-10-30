@@ -190,6 +190,62 @@ test('a second prompt is a user turn again, because a run end closes the first',
   assert.equal(second.text, 'second');
 });
 
+test('a continuation user turn retains its truncated source', () => {
+  const steps = replayOf(
+    [{
+      kind: 'message',
+      run_id: 'r2',
+      role: 'user',
+      content: 'Continue the previous truncated answer.',
+      continue_from: 'r1',
+    }],
+    's1',
+  );
+  assert.deepEqual(steps, [{
+    kind: 'user',
+    text: 'Continue the previous truncated answer.',
+    continueFrom: 'r1',
+  }]);
+});
+
+test('retry and truncation signals replay with terminal truncation intact', () => {
+  const entries: TranscriptEntry[] = [
+    { kind: 'message', run_id: 'r1', role: 'user', content: 'answer' },
+    {
+      kind: 'retry',
+      run_id: 'r1',
+      text: 'provider unavailable',
+      attempt: 1,
+      max_attempts: 3,
+      delay_ms: 500,
+    },
+    { kind: 'message', run_id: 'r1', role: 'assistant', content: 'partial' },
+    { kind: 'truncated', run_id: 'r1' },
+    { kind: 'run_end', run_id: 'r1', status: 'finished', truncated: true },
+  ];
+
+  const steps = replayOf(entries, 's1');
+  assert.deepEqual(kinds(steps), ['user', 'event', 'event', 'event', 'runEnd']);
+  const retry = steps[1];
+  assert.ok(retry.kind === 'event');
+  assert.deepEqual(retry.event, {
+    session_id: 's1',
+    run_id: 'r1',
+    type: 'retry',
+    text: 'provider unavailable',
+    attempt: 1,
+    max_attempts: 3,
+    delay_ms: 500,
+  });
+  const truncated = steps[3];
+  assert.ok(truncated.kind === 'event');
+  assert.equal(truncated.event.type, 'truncated');
+  assert.equal(truncated.event.text, undefined);
+  const end = steps[4];
+  assert.ok(end.kind === 'runEnd');
+  assert.equal(end.done.truncated, true);
+});
+
 test('replay hides the editor context envelope from the user bubble', () => {
   const entries: TranscriptEntry[] = [
     {

@@ -87,6 +87,9 @@ type workflowStep struct {
 	Role         string `json:"role"`
 	Effort       string `json:"effort"`
 	ResultSchema string `json:"result_schema"`
+	// capabilities is set only by the SDK's built-in Complex plan. A model-written
+	// run_workflow cannot declare provider behavior.
+	capabilities ModelCapabilities
 	// BriefFromItem makes each fan-out item a delegate brief: the child is created the way
 	// delegate creates one, so the file allowlist and the acceptance report apply.
 	BriefFromItem bool `json:"brief_from_item"`
@@ -969,7 +972,7 @@ func (w *workflowRun) runChild(ctx context.Context, stepIndex, itemIndex int, pr
 		}
 		opts = w.parent.workerOptions(worker, w.plan.selectors[stepIndex], w.depth)
 		if step.Model != "" {
-			opts.Model = Model{ID: step.Model}
+			opts.Model = Model{ID: step.Model, Capabilities: step.capabilities}
 		}
 		prompt = workerPrompt
 	} else {
@@ -985,6 +988,9 @@ func (w *workflowRun) runChild(ctx context.Context, stepIndex, itemIndex int, pr
 		}
 		if step.Effort != "" {
 			opts.Effort = Effort(step.Effort)
+		}
+		if step.Model != "" {
+			opts.Model.Capabilities = step.capabilities
 		}
 		// A stage that must answer in a schema is told the shape in its own brief layer.
 		opts.brief = schemaBrief(step.ResultSchema)

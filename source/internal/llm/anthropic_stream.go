@@ -15,17 +15,22 @@ import (
 )
 
 type anthropicStreamRequest struct {
-	Model     string             `json:"model"`
-	MaxTokens int                `json:"max_tokens"`
-	System    any                `json:"system,omitempty"`
-	Messages  []anthropicMessage `json:"messages"`
-	Tools     []anthropicTool    `json:"tools,omitempty"`
-	Stream    bool               `json:"stream"`
-	Thinking  *anthropicThink    `json:"thinking,omitempty"`
+	Model        string                 `json:"model"`
+	MaxTokens    int                    `json:"max_tokens"`
+	System       any                    `json:"system,omitempty"`
+	Messages     []anthropicMessage     `json:"messages"`
+	Tools        []anthropicTool        `json:"tools,omitempty"`
+	Stream       bool                   `json:"stream"`
+	Thinking     any                    `json:"thinking,omitempty"`
+	OutputConfig *anthropicOutputConfig `json:"output_config,omitempty"`
 }
 
 // CompleteStream implements StreamCompleter for Anthropic SSE.
 func (c *Anthropic) CompleteStream(ctx context.Context, req Request, onDelta func(Delta)) (*Response, error) {
+	maxTokens, thinking, outputConfig, err := anthropicControls(req)
+	if err != nil {
+		return nil, err
+	}
 	if c.cfg.APIKey == "" {
 		return nil, NewHTTPError(401, "missing API key")
 	}
@@ -37,13 +42,14 @@ func (c *Anthropic) CompleteStream(ctx context.Context, req Request, onDelta fun
 		return nil, err
 	}
 	body := anthropicStreamRequest{
-		Model:     firstNonEmpty(req.Model, c.cfg.Model),
-		MaxTokens: anthropicMaxTokens(req.Effort, req.MaxOutputTokens),
-		System:    system,
-		Messages:  messages,
-		Tools:     toAnthropicTools(req.Tools),
-		Stream:    true,
-		Thinking:  thinkingFor(req.Effort),
+		Model:        firstNonEmpty(req.Model, c.cfg.Model),
+		MaxTokens:    maxTokens,
+		System:       system,
+		Messages:     messages,
+		Tools:        toAnthropicTools(req.Tools),
+		Stream:       true,
+		Thinking:     thinking,
+		OutputConfig: outputConfig,
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {
@@ -114,6 +120,7 @@ func (c *Anthropic) CompleteStream(ctx context.Context, req Request, onDelta fun
 			Usage *anthropicUsageWire `json:"usage"`
 			Error *struct {
 				Message string `json:"message"`
+				Type    string `json:"type"`
 			} `json:"error"`
 		}
 		if err := json.Unmarshal([]byte(data), &envelope); err != nil {
@@ -123,7 +130,12 @@ func (c *Anthropic) CompleteStream(ctx context.Context, req Request, onDelta fun
 			return nil, fmt.Errorf("anthropic stream: malformed event: %w", err)
 		}
 		if envelope.Error != nil {
-			return nil, NewHTTPError(httpResp.StatusCode, envelope.Error.Message)
+			return nil, newEmbeddedProviderError(
+				httpResp.StatusCode,
+				envelope.Error.Message,
+				"",
+				envelope.Error.Type,
+			)
 		}
 		switch envelope.Type {
 		case "content_block_start":

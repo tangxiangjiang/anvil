@@ -37,7 +37,7 @@ const MESSAGES: Record<Exclude<FailureKind, 'none'>, string> = {
   max_steps: 'The agent hit its step limit before finishing. Raise anvil.maxSteps or ask for a smaller change.',
   provider: 'The model provider rejected the request. Check the API key, the model id, and anvil.baseUrl.',
   auth: 'The model provider refused the credentials. Check the API key and anvil.baseUrl.',
-  provider_busy: 'The model provider is rate limiting this key and the retries ran out. Wait a moment and send it again.',
+  provider_busy: 'The model provider is temporarily unavailable or rate limiting requests, and the retries ran out. Wait a moment and send it again.',
   request_rejected: 'The model provider rejected the request itself. Check the model id and shorten the conversation if it is large.',
   empty_response: 'The model provider repeatedly returned an empty completion. Automatic recovery produced no text or tool call.',
   finish_protocol: 'The model did not send the required finish_task completion signal.',

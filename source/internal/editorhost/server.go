@@ -314,6 +314,7 @@ func (s *Server) handleSessionNew(ctx context.Context, params json.RawMessage) (
 		return nil, rpcErr
 	}
 	sess := newSession(sessID, s.cwdPath(), mode, p.Vision)
+	sess.store = p.Store
 	sess.loadPermissions = loadPermissions
 	sess.modeSource = source
 	sess.modeRefused = refused
@@ -355,6 +356,7 @@ func (s *Server) handleSessionResume(ctx context.Context, params json.RawMessage
 	}
 	sessID := "sess-" + newID()
 	sess := newSession(sessID, s.cwdPath(), mode, p.Vision)
+	sess.store = p.Store
 	sess.loadPermissions = loadPermissions
 	sess.modeSource = source
 	sess.modeRefused = refused
@@ -593,6 +595,7 @@ func (s *Server) handleSessionTranscript(ctx context.Context, params json.RawMes
 			RunID:        in.RunID,
 			Role:         in.Role,
 			Content:      in.Content,
+			ContinueFrom: in.ContinueFrom,
 			ToolCallID:   in.ToolCallID,
 			Name:         in.Name,
 			IsError:      in.IsError,
@@ -603,6 +606,11 @@ func (s *Server) handleSessionTranscript(ctx context.Context, params json.RawMes
 			Steps:        in.Steps,
 			Err:          in.Err,
 			Code:         string(in.Code),
+			Text:         in.Text,
+			Attempt:      in.Attempt,
+			MaxAttempts:  in.MaxAttempts,
+			DelayMS:      in.DelayMS,
+			Truncated:    in.Truncated,
 		}
 		applyStageTranscript(&entry, in.Stage)
 		for _, tc := range in.ToolCalls {
@@ -648,6 +656,8 @@ func (s *Server) handleSessionClose(params json.RawMessage) (any, *RPCError) {
 // prompt / cancel
 // ---------------------------------------------------------------------------
 
+const continuationPrompt = "Continue the previous truncated answer from exactly where it stopped. Do not repeat completed content."
+
 func (s *Server) handlePrompt(ctx context.Context, params json.RawMessage) (any, *RPCError) {
 	p, err := decode[PromptParams](params)
 	if err != nil {
@@ -662,6 +672,17 @@ func (s *Server) handlePrompt(ctx context.Context, params json.RawMessage) (any,
 	}
 	if _, runID := sess.activeRun(); runID != "" {
 		return nil, errCode(CodeRunInProgress, "session already has an active run: "+runID)
+	}
+	if p.ContinueFrom != "" {
+		if p.Message != continuationPrompt {
+			return nil, errInvalidParams("prompt: continuation message does not match the fixed continuation prompt")
+		}
+		if p.Context != nil || len(p.Attachments) > 0 {
+			return nil, errInvalidParams("prompt: continuation cannot add editor context or attachments")
+		}
+		if rpcErr := s.validateContinuation(ctx, sess, p.ContinueFrom); rpcErr != nil {
+			return nil, rpcErr
+		}
 	}
 	agent := sess.sdk()
 	if agent == nil {
@@ -695,6 +716,9 @@ func (s *Server) handlePrompt(ctx context.Context, params json.RawMessage) (any,
 		}
 		sendOpts = append(sendOpts, anvil.WithAttachments(atts...))
 	}
+	if p.ContinueFrom != "" {
+		sendOpts = append(sendOpts, anvil.WithContinuationFrom(p.ContinueFrom))
+	}
 
 	run, err := agent.Send(ctx, message, sendOpts...)
 	if err != nil {
@@ -710,6 +734,28 @@ func (s *Server) handlePrompt(ctx context.Context, params json.RawMessage) (any,
 		RunID:     run.ID(),
 		AgentID:   agent.AgentID(),
 	}, nil
+}
+
+func (s *Server) validateContinuation(ctx context.Context, sess *session, runID string) *RPCError {
+	result, err := anvil.LoadTranscript(ctx, sess.agentIdentity(), anvil.TranscriptOptions{
+		Local: anvil.LocalOptions{CWD: sess.cwd, Store: sess.store},
+	})
+	if err != nil {
+		return errInvalidParams("prompt: continue_from could not be validated: " + err.Error())
+	}
+	var latest *anvil.TranscriptEntry
+	for i := range result.Entries {
+		if result.Entries[i].Kind == anvil.TranscriptRunEnd {
+			latest = &result.Entries[i]
+		}
+	}
+	if latest == nil || latest.RunID != runID {
+		return errInvalidParams("prompt: continue_from must name this session's latest completed run")
+	}
+	if !latest.Truncated {
+		return errInvalidParams("prompt: continue_from run was not truncated")
+	}
+	return nil
 }
 
 func (s *Server) handleCancel(ctx context.Context, params json.RawMessage) (any, *RPCError) {
@@ -1024,9 +1070,42 @@ func (s *Server) handleModelsList(ctx context.Context, params json.RawMessage) (
 			Provider:      m.Provider,
 			UpstreamModel: m.UpstreamModel,
 			Vision:        m.Vision,
+			Capabilities:  capabilitiesToWire(m.Capabilities),
 		})
 	}
 	return out, nil
+}
+
+func capabilitiesToWire(c *anvil.ModelCapabilities) *ModelCapabilitiesParams {
+	if c == nil {
+		return nil
+	}
+	levels := make([]string, len(c.EffortLevels))
+	for i, level := range c.EffortLevels {
+		levels[i] = string(level)
+	}
+	return &ModelCapabilitiesParams{
+		Thinking:        string(c.Thinking),
+		EffortLevels:    levels,
+		MaxOutputTokens: c.MaxOutputTokens,
+		Vision:          c.Vision,
+	}
+}
+
+func capabilitiesFromWire(c *ModelCapabilitiesParams) anvil.ModelCapabilities {
+	if c == nil {
+		return anvil.ModelCapabilities{}
+	}
+	levels := make([]anvil.Effort, len(c.EffortLevels))
+	for i, level := range c.EffortLevels {
+		levels[i] = anvil.Effort(level)
+	}
+	return anvil.ModelCapabilities{
+		Thinking:        anvil.ThinkingProtocol(c.Thinking),
+		EffortLevels:    levels,
+		MaxOutputTokens: c.MaxOutputTokens,
+		Vision:          c.Vision,
+	}
 }
 
 func (s *Server) handleSubagentsGet(params json.RawMessage) (any, *RPCError) {
@@ -1499,6 +1578,8 @@ func (s *Server) buildOptions(ctx context.Context, p SessionParams, sess *sessio
 		PermissionGroups:  groups,
 		Provider:          anvil.Provider(firstNonEmpty(p.Provider, s.cfg.Provider, os.Getenv("ANVIL_PROVIDER"))),
 		BaseURL:           firstNonEmpty(p.BaseURL, s.cfg.BaseURL, os.Getenv("ANVIL_BASE_URL")),
+		Effort:            anvil.Effort(p.Effort),
+		MaxOutputTokens:   p.MaxOutputTokens,
 		SystemPrompt:      p.SystemPrompt,
 		RequireFinishTask: true,
 		MaxSteps:          p.MaxSteps,
@@ -1580,7 +1661,7 @@ func (s *Server) buildOptions(ctx context.Context, p SessionParams, sess *sessio
 	if model == "" {
 		return opts, errInvalidParams("model is required (session model, host config, or ANVIL_MODEL)")
 	}
-	opts.Model = anvil.Model{ID: model}
+	opts.Model = anvil.Model{ID: model, Capabilities: capabilitiesFromWire(p.ModelCapabilities)}
 	sources, rpcErr := settingSourcesFrom(p.SettingSources)
 	if rpcErr != nil {
 		return opts, rpcErr

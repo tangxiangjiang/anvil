@@ -247,16 +247,18 @@ type InitializeResult struct {
 type SessionParams struct {
 	AgentID string `json:"agent_id,omitempty"` // session.resume only
 
-	Provider        string   `json:"provider,omitempty"`
-	BaseURL         string   `json:"base_url,omitempty"`
-	Model           string   `json:"model,omitempty"`
-	Effort          string   `json:"effort,omitempty"`
-	SystemPrompt    string   `json:"system_prompt,omitempty"`
-	MaxSteps        int      `json:"max_steps,omitempty"`
-	Store           string   `json:"store,omitempty"`
-	LoadRules       bool     `json:"load_rules,omitempty"`
-	LoadCursorRules bool     `json:"load_cursor_rules,omitempty"`
-	SettingSources  []string `json:"setting_sources,omitempty"`
+	Provider          string                   `json:"provider,omitempty"`
+	BaseURL           string                   `json:"base_url,omitempty"`
+	Model             string                   `json:"model,omitempty"`
+	Effort            string                   `json:"effort,omitempty"`
+	ModelCapabilities *ModelCapabilitiesParams `json:"model_capabilities,omitempty"`
+	MaxOutputTokens   int                      `json:"max_output_tokens,omitempty"`
+	SystemPrompt      string                   `json:"system_prompt,omitempty"`
+	MaxSteps          int                      `json:"max_steps,omitempty"`
+	Store             string                   `json:"store,omitempty"`
+	LoadRules         bool                     `json:"load_rules,omitempty"`
+	LoadCursorRules   bool                     `json:"load_cursor_rules,omitempty"`
+	SettingSources    []string                 `json:"setting_sources,omitempty"`
 
 	// LoadHooks and LoadPermissions are pointers so that "not sent" is distinct
 	// from "sent as false": both default to ON for a workspace the editor opened,
@@ -325,6 +327,16 @@ type SessionParams struct {
 	// existed: a client that never declares a window cannot have its session
 	// summarized behind its back. Negative values are normalized by the SDK.
 	Context *ContextParams `json:"context,omitempty"`
+}
+
+// ModelCapabilitiesParams is an explicit, complete model profile. Absence is
+// compatibility mode; an object with an unknown or missing thinking protocol
+// is invalid rather than silently treated as unknown.
+type ModelCapabilitiesParams struct {
+	Thinking        string   `json:"thinking"`
+	EffortLevels    []string `json:"effort_levels,omitempty"`
+	MaxOutputTokens bool     `json:"max_output_tokens"`
+	Vision          bool     `json:"vision"`
 }
 
 // LSPParams is the wire form of anvil.LSPOptions. Enabled is explicit because
@@ -938,15 +950,15 @@ type SessionTranscriptResult struct {
 // what can be rendered and nothing else: the reader never had reasoning or an
 // API key to hand back.
 type TranscriptEntry struct {
-	// Kind is "message", "run_end", or "summary" (0.43+). A summary entry is the
-	// compaction boundary: it carries the text the model kept and the run it
-	// belongs to, and the turns before it stay in the replay below it.
+	// Kind is "message", "run_end", "summary", "stage", "retry", or
+	// "truncated". Unknown additive kinds are safe for older clients to skip.
 	Kind  string `json:"kind"`
 	RunID string `json:"run_id,omitempty"`
 
 	// message
 	Role         string           `json:"role,omitempty"`
 	Content      string           `json:"content,omitempty"`
+	ContinueFrom string           `json:"continue_from,omitempty"`
 	ToolCallID   string           `json:"tool_call_id,omitempty"`
 	Name         string           `json:"name,omitempty"`
 	ToolCalls    []TranscriptCall `json:"tool_calls,omitempty"`
@@ -965,12 +977,19 @@ type TranscriptEntry struct {
 	Brief        *BriefInfo      `json:"brief,omitempty"`
 	Acceptance   *AcceptanceInfo `json:"acceptance,omitempty"`
 
+	// retry / truncated run signals
+	Text        string `json:"text,omitempty"`
+	Attempt     int    `json:"attempt,omitempty"`
+	MaxAttempts int    `json:"max_attempts,omitempty"`
+	DelayMS     int64  `json:"delay_ms,omitempty"`
+
 	// run_end
-	Status string `json:"status,omitempty"`
-	Steps  int    `json:"steps,omitempty"`
-	Usage  *Usage `json:"usage,omitempty"`
-	Err    string `json:"err,omitempty"`
-	Code   string `json:"code,omitempty"`
+	Status    string `json:"status,omitempty"`
+	Steps     int    `json:"steps,omitempty"`
+	Usage     *Usage `json:"usage,omitempty"`
+	Err       string `json:"err,omitempty"`
+	Code      string `json:"code,omitempty"`
+	Truncated bool   `json:"truncated,omitempty"`
 }
 
 // TranscriptCall is one tool invocation inside a replayed assistant message.
@@ -1213,6 +1232,9 @@ type SessionRefParams struct {
 type PromptParams struct {
 	SessionID string `json:"session_id"`
 	Message   string `json:"message"`
+	// ContinueFrom makes this an explicit continuation of the session's newest
+	// completed truncated run. The host validates the id before starting work.
+	ContinueFrom string `json:"continue_from,omitempty"`
 	// Context is the editor's ambient material — referenced paths, the current
 	// selection, diagnostics. The host folds it into the message it sends; see
 	// context.go. It is never trusted for path containment: every path in it is
@@ -1391,11 +1413,12 @@ type ModelsParams struct {
 
 // ModelEntry is one catalog row.
 type ModelEntry struct {
-	ID            string `json:"id"`
-	OwnedBy       string `json:"owned_by,omitempty"`
-	Provider      string `json:"provider,omitempty"`
-	UpstreamModel string `json:"upstream_model,omitempty"`
-	Vision        bool   `json:"vision,omitempty"`
+	ID            string                   `json:"id"`
+	OwnedBy       string                   `json:"owned_by,omitempty"`
+	Provider      string                   `json:"provider,omitempty"`
+	UpstreamModel string                   `json:"upstream_model,omitempty"`
+	Vision        bool                     `json:"vision,omitempty"`
+	Capabilities  *ModelCapabilitiesParams `json:"capabilities,omitempty"`
 }
 
 // ModelsResult is the catalog listing.
@@ -1451,6 +1474,11 @@ type EventParams struct {
 	Step       int             `json:"step,omitempty"`
 	MaxSteps   int             `json:"max_steps,omitempty"`
 	Code       string          `json:"code,omitempty"`
+	// Retry progress. Attempt is the failed attempt, MaxAttempts is the resolved
+	// policy denominator, and DelayMS is the bounded wait before the next call.
+	Attempt     int   `json:"attempt,omitempty"`
+	MaxAttempts int   `json:"max_attempts,omitempty"`
+	DelayMS     int64 `json:"delay_ms,omitempty"`
 	// Usage is authoritative on a forwarded terminal error. On streamed events
 	// it may be a live estimate, explicitly marked by UsageEstimated. The
 	// authoritative end-of-run usage is still the `done` notification.
@@ -1543,6 +1571,8 @@ type DoneParams struct {
 	Usage     *Usage `json:"usage,omitempty"`
 	Err       string `json:"err,omitempty"`
 	Code      string `json:"code,omitempty"`
+	// Truncated is authoritative terminal state for a length-limited answer.
+	Truncated bool `json:"truncated,omitempty"`
 	// Context is where the conversation stands after the run, including any
 	// compaction the run itself performed. A meter that redraws from this never
 	// has to follow up with session.context.

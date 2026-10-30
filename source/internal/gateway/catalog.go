@@ -3,7 +3,11 @@
 
 package gateway
 
-import "net/http"
+import (
+	"net/http"
+
+	"github.com/anvil-dev/anvil"
+)
 
 type modelsListResponse struct {
 	Object string       `json:"object"`
@@ -11,17 +15,18 @@ type modelsListResponse struct {
 }
 
 type modelEntry struct {
-	ID      string         `json:"id"`
-	Object  string         `json:"object"`
-	OwnedBy string         `json:"owned_by"`
-	Anvil   *anvilExt      `json:"anvil,omitempty"`
+	ID      string    `json:"id"`
+	Object  string    `json:"object"`
+	OwnedBy string    `json:"owned_by"`
+	Anvil   *anvilExt `json:"anvil,omitempty"`
 }
 
 type anvilExt struct {
-	Provider      string   `json:"provider"`
-	UpstreamModel string   `json:"upstream_model"`
-	Params        []string `json:"params,omitempty"`
-	Vision        bool     `json:"vision,omitempty"`
+	Provider      string                   `json:"provider"`
+	UpstreamModel string                   `json:"upstream_model"`
+	Params        []string                 `json:"params,omitempty"`
+	Vision        bool                     `json:"vision,omitempty"`
+	Capabilities  *anvil.ModelCapabilities `json:"capabilities,omitempty"`
 }
 
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
@@ -42,6 +47,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 				UpstreamModel: m.UpstreamModel,
 				Params:        m.Params,
 				Vision:        m.Vision,
+				Capabilities:  m.Capabilities,
 			},
 		})
 	}

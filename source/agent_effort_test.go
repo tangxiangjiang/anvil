@@ -156,7 +156,7 @@ func TestMaxOutputTokensAndTruncationReachTheCaller(t *testing.T) {
 }
 
 func TestProviderCodesReachRunResult(t *testing.T) {
-	cases := map[int]Code{429: CodeProviderBusy, 400: CodeRequestRejected, 401: CodeAuth, 500: CodeProvider}
+	cases := map[int]Code{429: CodeProviderBusy, 400: CodeRequestRejected, 401: CodeAuth, 500: CodeProviderBusy}
 	for status, want := range cases {
 		a, err := Create(context.Background(), Options{
 			APIKey: "k", Model: Model{ID: "m"}, Local: LocalOptions{CWD: t.TempDir()},

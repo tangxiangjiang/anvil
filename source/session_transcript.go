@@ -25,6 +25,10 @@ const (
 	TranscriptSummary = "summary"
 	// TranscriptStage is a durable Multi/Complex orchestration node update.
 	TranscriptStage = "stage"
+	// TranscriptRetry is one provider retry wait, preserved for replay.
+	TranscriptRetry = "retry"
+	// TranscriptTruncated marks the final assistant answer as length-limited.
+	TranscriptTruncated = "truncated"
 )
 
 // DefaultTranscriptLimit caps LoadTranscript when the caller asks for no
@@ -47,7 +51,7 @@ type TranscriptToolCall struct {
 // summarized or compressed, because a person reading a conversation wants the
 // turns that happened rather than the context the model was given.
 type TranscriptEntry struct {
-	// Kind is TranscriptMessage or TranscriptRunEnd.
+	// Kind is one of the Transcript* constants above.
 	Kind string
 	// RunID is the run this entry belonged to.
 	RunID string
@@ -55,6 +59,7 @@ type TranscriptEntry struct {
 	// Message fields. Role is the store's own word: user, assistant or tool.
 	Role         string
 	Content      string
+	ContinueFrom string
 	ToolCallID   string
 	Name         string
 	ToolCalls    []TranscriptToolCall
@@ -63,13 +68,20 @@ type TranscriptEntry struct {
 	PathAnalysis string
 	PathProblem  string
 	Stage        *StageEvent
+	// Retry signal fields. Content is deliberately not reused: it remains a
+	// message body, while Text is a safe provider summary.
+	Text        string
+	Attempt     int
+	MaxAttempts int
+	DelayMS     int64
 
 	// Run-end fields.
-	Status string
-	Steps  int
-	Usage  *Usage
-	Err    string
-	Code   Code
+	Status    string
+	Steps     int
+	Usage     *Usage
+	Err       string
+	Code      Code
+	Truncated bool
 }
 
 // TranscriptOptions configures LoadTranscript. Only Local.CWD is required.
@@ -135,14 +147,20 @@ func transcriptFromRecords(recs []store.Record, limit int) TranscriptResult {
 		limit = DefaultTranscriptLimit
 	}
 	entries := make([]TranscriptEntry, 0, len(recs))
+	continuations := make(map[string]string)
 	for _, rec := range recs {
 		switch rec.Type {
+		case store.TypeRunStart:
+			if rec.ContinueFrom != "" {
+				continuations[rec.RunID] = rec.ContinueFrom
+			}
 		case store.TypeMessage:
 			entry := TranscriptEntry{
 				Kind:         TranscriptMessage,
 				RunID:        rec.RunID,
 				Role:         rec.Role,
 				Content:      rec.Content,
+				ContinueFrom: continuations[rec.RunID],
 				ToolCallID:   rec.ToolCallID,
 				Name:         rec.Name,
 				IsError:      rec.IsError,
@@ -157,6 +175,11 @@ func transcriptFromRecords(recs []store.Record, limit int) TranscriptResult {
 					Args: tc.Args,
 				})
 			}
+			if rec.Role != "user" {
+				entry.ContinueFrom = ""
+			} else {
+				delete(continuations, rec.RunID)
+			}
 			entries = append(entries, entry)
 		case store.TypeSummary:
 			entries = append(entries, TranscriptEntry{
@@ -168,12 +191,13 @@ func transcriptFromRecords(recs []store.Record, limit int) TranscriptResult {
 			})
 		case store.TypeRunEnd:
 			entry := TranscriptEntry{
-				Kind:   TranscriptRunEnd,
-				RunID:  rec.RunID,
-				Status: rec.Status,
-				Steps:  rec.Steps,
-				Err:    rec.Err,
-				Code:   Code(rec.Code),
+				Kind:      TranscriptRunEnd,
+				RunID:     rec.RunID,
+				Status:    rec.Status,
+				Steps:     rec.Steps,
+				Err:       rec.Err,
+				Code:      Code(rec.Code),
+				Truncated: rec.Truncated,
 			}
 			if rec.Usage != nil {
 				entry.Usage = &Usage{
@@ -194,6 +218,20 @@ func transcriptFromRecords(recs []store.Record, limit int) TranscriptResult {
 				Kind:  TranscriptStage,
 				RunID: rec.RunID,
 				Stage: &stage,
+			})
+		case store.TypeRetry:
+			entries = append(entries, TranscriptEntry{
+				Kind:        TranscriptRetry,
+				RunID:       rec.RunID,
+				Text:        rec.Text,
+				Attempt:     rec.Attempt,
+				MaxAttempts: rec.MaxAttempts,
+				DelayMS:     rec.DelayMS,
+			})
+		case store.TypeTruncated:
+			entries = append(entries, TranscriptEntry{
+				Kind:  TranscriptTruncated,
+				RunID: rec.RunID,
 			})
 		}
 	}

@@ -281,6 +281,55 @@ body {
   gap: 5px;
 }
 
+.continuation-origin {
+  padding: 1px 5px;
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
+  border-radius: 999px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.9em;
+  font-weight: 400;
+}
+
+.msg.truncation-notice {
+  margin: 6px 0;
+}
+
+.msg.truncation-notice .body {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border-left: 2px solid var(--vscode-editorWarning-foreground, #cca700);
+  color: var(--vscode-descriptionForeground);
+  background: color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 8%, transparent);
+}
+
+.continue-generating {
+  flex: 0 0 auto;
+  padding: 3px 8px;
+  border: 1px solid var(--vscode-button-border, transparent);
+  border-radius: 4px;
+  color: var(--vscode-button-foreground);
+  background: var(--vscode-button-background);
+  font: inherit;
+  cursor: pointer;
+}
+
+.continue-generating:hover:not(:disabled) {
+  background: var(--vscode-button-hoverBackground);
+}
+
+.continue-generating:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
+
+.continue-generating:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
 .message-quote {
   box-sizing: border-box;
   width: 20px;
@@ -3163,6 +3212,62 @@ body.drop-target {
 .model-effort > span span {
   color: var(--vscode-descriptionForeground);
   font-weight: 400;
+}
+
+.model-output-limit {
+  margin-top: 5px;
+  padding: 7px 8px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 4px 8px;
+  border-radius: 6px;
+  background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.14));
+  font-size: 0.8em;
+}
+
+.model-output-limit label {
+  font-weight: 600;
+}
+
+.model-output-limit input {
+  box-sizing: border-box;
+  width: 112px;
+  min-width: 0;
+  padding: 3px 6px;
+  border: 1px solid var(--vscode-input-border, transparent);
+  border-radius: 3px;
+  color: var(--vscode-input-foreground);
+  background: var(--vscode-input-background);
+  font: inherit;
+}
+
+.model-output-limit input:focus-visible,
+.model-output-limit button:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 1px;
+}
+
+.model-output-limit button {
+  justify-self: end;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 3px;
+  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+  background: var(--vscode-button-secondaryBackground, transparent);
+  font: inherit;
+  cursor: pointer;
+}
+
+.model-output-limit button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.model-output-limit small {
+  grid-column: 1 / -1;
+  color: var(--vscode-descriptionForeground);
+  line-height: 1.25;
 }
 
 .effort-control {

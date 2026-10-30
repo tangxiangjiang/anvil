@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/anvil-dev/anvil"
 	"github.com/anvil-dev/anvil/internal/configfile"
 )
 
@@ -20,13 +21,14 @@ type UpstreamConfig struct {
 
 // ModelRoute maps a public model id to an upstream.
 type ModelRoute struct {
-	ID            string   `json:"id" yaml:"id"`
-	Upstream      string   `json:"upstream" yaml:"upstream"`
-	UpstreamModel string   `json:"upstream_model" yaml:"upstream_model"`
-	Provider      string   `json:"provider" yaml:"provider"` // advisory: openai (default)
-	Params        []string `json:"params,omitempty" yaml:"params,omitempty"`
-	Vision        bool     `json:"vision,omitempty" yaml:"vision,omitempty"` // advisory: model accepts image parts (0.19+)
-	OwnedBy       string   `json:"owned_by,omitempty" yaml:"owned_by,omitempty"`
+	ID            string                   `json:"id" yaml:"id"`
+	Upstream      string                   `json:"upstream" yaml:"upstream"`
+	UpstreamModel string                   `json:"upstream_model" yaml:"upstream_model"`
+	Provider      string                   `json:"provider" yaml:"provider"` // advisory: openai (default)
+	Params        []string                 `json:"params,omitempty" yaml:"params,omitempty"`
+	Vision        bool                     `json:"vision,omitempty" yaml:"vision,omitempty"` // advisory: model accepts image parts (0.19+)
+	Capabilities  *anvil.ModelCapabilities `json:"capabilities,omitempty" yaml:"capabilities,omitempty"`
+	OwnedBy       string                   `json:"owned_by,omitempty" yaml:"owned_by,omitempty"`
 }
 
 // Config is anvil-gateway configuration (JSON or YAML).
@@ -41,8 +43,8 @@ type Config struct {
 // DefaultConfig returns defaults.
 func DefaultConfig() Config {
 	return Config{
-		Listen:   "127.0.0.1:8080",
-		TokenEnv: "ANVIL_GATEWAY_TOKEN",
+		Listen:    "127.0.0.1:8080",
+		TokenEnv:  "ANVIL_GATEWAY_TOKEN",
 		Upstreams: map[string]UpstreamConfig{},
 	}
 }
@@ -111,6 +113,11 @@ func (c *Config) Normalize() error {
 		}
 		if m.Provider == "" {
 			m.Provider = "openai"
+		}
+		if m.Capabilities != nil {
+			if err := m.Capabilities.ValidateFor(anvil.Provider(m.Provider), anvil.EffortDefault, 0); err != nil {
+				return fmt.Errorf("models[%d] (%s): capabilities: %w", i, m.ID, err)
+			}
 		}
 		if m.OwnedBy == "" {
 			m.OwnedBy = "gateway"

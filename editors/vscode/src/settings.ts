@@ -16,12 +16,15 @@ import {
   DEFAULT_MODEL_CATALOG_URL,
   ModelConnectionMode,
   ModelSettings,
+  StoredModelCapabilities,
   connectionMode,
   connectionProblem,
+  normalizeModelCapabilities,
   normalizeModelIds,
   validModelId,
+  withGatewayCapabilities,
 } from './models';
-import { Effort } from './protocol';
+import { Effort, ModelCapabilities } from './protocol';
 import { SessionConfig } from './session';
 import { WebSearchSettings, webSearchParams } from './webSearch';
 import { rootUri } from './workspaceRoot';
@@ -35,6 +38,7 @@ const SAVED_KEY = 'anvil.apiKey';
 const DEFAULT_MODEL_KEY = 'anvil.defaultModel';
 const MODEL_SETUP_KEY = 'anvil.modelSetup';
 const AVAILABLE_MODELS_KEY = 'anvil.availableModels';
+const MODEL_CAPABILITIES_KEY = 'anvil.modelCapabilities';
 const MODEL_CATALOG_KEY = 'anvil.modelCatalogUrl';
 let selectedDefaultModel = '';
 let modelSetup: ModelSetup = {
@@ -45,6 +49,7 @@ let modelSetup: ModelSetup = {
   effort: 'medium',
 };
 let availableModels: string[] = [];
+let modelCapabilities: Record<string, StoredModelCapabilities> = {};
 let modelCatalogUrl = DEFAULT_MODEL_CATALOG_URL;
 
 export interface ModelSetup {
@@ -89,6 +94,9 @@ export function initDefaultModel(context: vscode.ExtensionContext): void {
     context.workspaceState.get<unknown>(AVAILABLE_MODELS_KEY)
       ?? cfg.get<unknown>('availableModels', []),
   );
+  modelCapabilities = normalizeModelCapabilities(
+    context.workspaceState.get<unknown>(MODEL_CAPABILITIES_KEY),
+  );
   modelCatalogUrl = (
     context.workspaceState.get<string>(MODEL_CATALOG_KEY)
       ?? cfg.get<string>('modelCatalogUrl', DEFAULT_MODEL_CATALOG_URL)
@@ -96,6 +104,7 @@ export function initDefaultModel(context: vscode.ExtensionContext): void {
   ).trim();
   void context.workspaceState.update(MODEL_SETUP_KEY, modelSetup);
   void context.workspaceState.update(AVAILABLE_MODELS_KEY, availableModels);
+  void context.workspaceState.update(MODEL_CAPABILITIES_KEY, modelCapabilities);
   void context.workspaceState.update(MODEL_CATALOG_KEY, modelCatalogUrl);
   selectedDefaultModel = context.workspaceState.get<string>(DEFAULT_MODEL_KEY, legacy);
   if (selectedDefaultModel !== '') {
@@ -124,6 +133,21 @@ export async function saveModelSetup(context: vscode.ExtensionContext, value: Mo
 export async function saveAvailableModels(context: vscode.ExtensionContext, value: string[]): Promise<void> {
   availableModels = normalizeModelIds(value);
   await context.workspaceState.update(AVAILABLE_MODELS_KEY, availableModels);
+  modelCapabilities = Object.fromEntries(
+    Object.entries(modelCapabilities).filter(([id]) => availableModels.includes(id)),
+  );
+  await context.workspaceState.update(MODEL_CAPABILITIES_KEY, modelCapabilities);
+}
+
+export async function saveGatewayModelCapabilities(
+  context: vscode.ExtensionContext,
+  id: string,
+  capabilities: ModelCapabilities | undefined,
+): Promise<void> {
+  const key = id.trim();
+  if (!validModelId(key)) return;
+  modelCapabilities = withGatewayCapabilities(modelCapabilities, key, capabilities);
+  await context.workspaceState.update(MODEL_CAPABILITIES_KEY, modelCapabilities);
 }
 
 export async function saveModelCatalogUrl(context: vscode.ExtensionContext, value: string): Promise<void> {
@@ -227,6 +251,8 @@ export function readSettings(): ResolvedSettings {
     base_url: emptyToUndefined(baseUrl),
     effort,
   };
+  const selectedCapabilities = effectiveModel ? modelCapabilities[effectiveModel] : undefined;
+  if (selectedCapabilities) session.model_capabilities = selectedCapabilities.capabilities;
   const defaultModel = session.model ?? '';
   const curated = availableModels;
   const models: ModelSettings = {
@@ -239,6 +265,12 @@ export function readSettings(): ResolvedSettings {
     gatewayDefaultModel: selectedDefaultModel,
     available: mode === 'single' && validModelId(singleModelId) ? [singleModelId] : curated,
     defaultModel,
+    capabilities: Object.fromEntries(
+      Object.entries(modelCapabilities).map(([id, value]) => [id, value.capabilities]),
+    ),
+    capabilitySources: Object.fromEntries(
+      Object.entries(modelCapabilities).map(([id, value]) => [id, value.source]),
+    ),
     problem: connectionProblem(mode, baseUrl, singleModelId),
   };
   if (maxSteps > 0) session.max_steps = maxSteps;

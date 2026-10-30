@@ -36,6 +36,9 @@ type openAIStreamRequest struct {
 
 // CompleteStream implements StreamCompleter for OpenAI-compatible SSE.
 func (c *OpenAI) CompleteStream(ctx context.Context, req Request, onDelta func(Delta)) (*Response, error) {
+	if err := validateCapabilities("openai", req); err != nil {
+		return nil, err
+	}
 	if c.cfg.APIKey == "" {
 		return nil, NewHTTPError(401, "missing API key")
 	}
@@ -122,6 +125,8 @@ func (c *OpenAI) CompleteStream(ctx context.Context, req Request, onDelta func(D
 			Usage *openAIUsageWire `json:"usage"`
 			Error *struct {
 				Message string `json:"message"`
+				Type    string `json:"type"`
+				Code    any    `json:"code"`
 			} `json:"error"`
 		}
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
@@ -131,7 +136,12 @@ func (c *OpenAI) CompleteStream(ctx context.Context, req Request, onDelta func(D
 			return nil, fmt.Errorf("openai stream: malformed chunk: %w", err)
 		}
 		if chunk.Error != nil {
-			return nil, NewHTTPError(httpResp.StatusCode, chunk.Error.Message)
+			return nil, newEmbeddedProviderError(
+				httpResp.StatusCode,
+				chunk.Error.Message,
+				fmt.Sprint(chunk.Error.Code),
+				chunk.Error.Type,
+			)
 		}
 		if chunk.Usage != nil {
 			usage = chunk.Usage.usage()

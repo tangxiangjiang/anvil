@@ -122,9 +122,9 @@ func TestMaxOutputTokens(t *testing.T) {
 			{llm.EffortDefault, 2048, 2048},
 			{llm.EffortDefault, 100000, 100000},
 			{llm.EffortHigh, 0, 24576},
-			{llm.EffortHigh, 4096, 24576},   // the floor wins: the thinking budget must fit
-			{llm.EffortHigh, 50000, 50000},  // a larger ceiling wins
-			{llm.EffortMedium, 1000, 8192},  // under the 4096 budget the provider would refuse it
+			{llm.EffortHigh, 4096, 24576},  // the floor wins: the thinking budget must fit
+			{llm.EffortHigh, 50000, 50000}, // a larger ceiling wins
+			{llm.EffortMedium, 1000, 8192}, // under the 4096 budget the provider would refuse it
 			{llm.EffortLow, 500, 8192},
 		} {
 			t.Run(w.name+"/"+string(c.effort), func(t *testing.T) {
@@ -266,7 +266,7 @@ func rawCall(name, url string) error {
 func TestKindCodeMapping(t *testing.T) {
 	cases := map[llm.Kind]string{
 		llm.KindTransport:   "provider",
-		llm.KindServer:      "provider",
+		llm.KindServer:      "provider_busy",
 		llm.KindRateLimited: "provider_busy",
 		llm.KindRejected:    "request_rejected",
 		llm.KindAuth:        "auth",

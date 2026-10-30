@@ -20,6 +20,9 @@ import (
 type Stage struct {
 	// Model is the stage's model id. Empty uses the session's.
 	Model string
+	// Capabilities describes Model. Empty inherits the session profile only when
+	// Model is also empty; a different model with an empty profile is unknown.
+	Capabilities ModelCapabilities
 	// Effort is how hard the stage thinks. Empty takes the stage's default.
 	Effort Effort
 	// Tools names the groups the stage's children may use. Empty takes the stage's
@@ -36,6 +39,13 @@ type ComplexOptions struct {
 	Worker   Stage
 	// MaxParallel bounds how many Workers run at once. 0 means the workflow default.
 	MaxParallel int
+}
+
+func stageCapabilities(session ModelCapabilities, stage Stage) ModelCapabilities {
+	if stage.Model == "" {
+		return session
+	}
+	return stage.Capabilities
 }
 
 // The stage defaults: Decision is the long chain of reasoning, Analyze maps it onto
@@ -119,13 +129,13 @@ func complexSteps(reg *tools.Registry, o ComplexOptions, message string) workflo
 		Steps: []workflowStep{
 			{ID: "decide", Prompt: message, literal: true, Role: string(RoleDecision), ResultSchema: schemaDecision,
 				Tools: stageTools(reg, o.Decision, decisionTools), Model: o.Decision.Model, MaxSteps: o.Decision.MaxSteps,
-				Effort: string(stageEffort(o.Decision, EffortHigh))},
+				Effort: string(stageEffort(o.Decision, EffortHigh)), capabilities: o.Decision.Capabilities},
 			{ID: "analyze", Prompt: "{{decide.result}}", DependsOn: []string{"decide"}, Role: string(RoleAnalyze), ResultSchema: schemaRoadmap,
 				Tools: stageTools(reg, o.Analyze, analyzeTools), Model: o.Analyze.Model, MaxSteps: o.Analyze.MaxSteps,
-				Effort: string(stageEffort(o.Analyze, EffortMedium))},
+				Effort: string(stageEffort(o.Analyze, EffortMedium)), capabilities: o.Analyze.Capabilities},
 			{ID: "work", Prompt: "{{item}}", DependsOn: []string{"analyze"}, ForEach: &workflowFanOut{From: "analyze", Path: "items"},
 				BriefFromItem: true, Tools: stageTools(reg, o.Worker, delegateTools), Model: o.Worker.Model, MaxSteps: o.Worker.MaxSteps,
-				Effort: string(stageEffort(o.Worker, EffortLow))},
+				Effort: string(stageEffort(o.Worker, EffortLow)), capabilities: o.Worker.Capabilities},
 		},
 	}
 }
@@ -133,7 +143,7 @@ func complexSteps(reg *tools.Registry, o ComplexOptions, message string) workflo
 // executeComplex runs a Complex Send: the three-stage workflow on this agent, rendered as
 // the run's final message. Its children's events reach Subagents.OnEvent exactly as a
 // run_workflow's do, and the run's own stream carries the stage outcome as a message.
-func (a *Agent) executeComplex(ctx context.Context, cancelCause context.CancelCauseFunc, wall time.Duration, run *Run, message, directive string) {
+func (a *Agent) executeComplex(ctx context.Context, cancelCause context.CancelCauseFunc, wall time.Duration, run *Run, message, directive, continuationFrom string) {
 	defer func() {
 		a.registry.SetRunContext("", "")
 		cancelCause(nil)
@@ -148,7 +158,9 @@ func (a *Agent) executeComplex(ctx context.Context, cancelCause context.CancelCa
 	if a.depth == 0 {
 		a.budget.reset()
 	}
-	a.persist(store.Record{Type: store.TypeRunStart, RunID: run.id})
+	a.persist(store.Record{
+		Type: store.TypeRunStart, RunID: run.id, ContinueFrom: continuationFrom,
+	})
 	a.registry.SetRunContext(a.id, run.id)
 	a.persistMessageValue(run.id, "user", message)
 

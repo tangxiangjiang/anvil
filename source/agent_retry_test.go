@@ -77,7 +77,8 @@ func TestRunRetriesAndReportsEvent(t *testing.T) {
 			retries = append(retries, ev)
 		}
 	}
-	if len(retries) != 1 || retries[0].Attempt != 1 || !strings.Contains(retries[0].Text, "slow down") {
+	if len(retries) != 1 || retries[0].Attempt != 1 || retries[0].MaxAttempts != 3 ||
+		retries[0].Delay <= 0 || !strings.Contains(retries[0].Text, "slow down") {
 		t.Fatalf("retry events=%+v", retries)
 	}
 	if res.Usage == nil || res.Usage.InputTokens != 5 {

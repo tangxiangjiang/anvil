@@ -62,6 +62,22 @@ func TestTruncatedOnLengthStop(t *testing.T) {
 	}
 }
 
+func TestLengthStopDoesNotTriggerFinishProtocolRecovery(t *testing.T) {
+	c := &stopCompleter{reply: func(int32) (*llm.Response, error) {
+		return &llm.Response{
+			Message:    llm.Message{Role: llm.RoleAssistant, Content: "partial"},
+			StopReason: llm.StopLength,
+		}, nil
+	}}
+	var events []runtime.Event
+	res := runtime.Loop(context.Background(), c, tools.NewRegistry(t.TempDir(), false), runtime.Config{
+		CWD: t.TempDir(), Model: "m", UserMsg: "answer", MaxSteps: 6, RequireFinishTask: true,
+	}, func(ev runtime.Event) { events = append(events, ev) })
+	if res.Status != "finished" || !res.Truncated || res.Code != "" || c.calls.Load() != 1 {
+		t.Fatalf("result=%+v calls=%d events=%+v", res, c.calls.Load(), events)
+	}
+}
+
 func TestNotTruncatedWhenTheAnswerEnded(t *testing.T) {
 	for _, reason := range []llm.StopReason{llm.StopEnd, llm.StopOther, ""} {
 		c := &stopCompleter{reply: func(int32) (*llm.Response, error) {
@@ -108,7 +124,7 @@ func TestProviderCodes(t *testing.T) {
 		{400, runtime.CodeRequestRejected},
 		{401, runtime.CodeAuth},
 		{403, runtime.CodeAuth},
-		{500, runtime.CodeProvider},
+		{500, runtime.CodeProviderBusy},
 		{0, runtime.CodeProvider},
 	}
 	for _, tc := range cases {

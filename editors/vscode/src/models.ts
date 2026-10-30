@@ -1,3 +1,5 @@
+import type { Effort, ModelCapabilities } from './protocol';
+
 export const DEFAULT_MODEL_CATALOG_URL = 'https://athenai.mihoyo.com/v1/models';
 
 export type ModelConnectionMode = 'single' | 'gateway';
@@ -12,7 +14,91 @@ export interface ModelSettings {
   gatewayDefaultModel: string;
   available: string[];
   defaultModel: string;
+  capabilities: Record<string, ModelCapabilities>;
+  capabilitySources: Record<string, 'explicit' | 'gateway'>;
   problem?: string;
+}
+
+export interface StoredModelCapabilities {
+  capabilities: ModelCapabilities;
+  source: 'explicit' | 'gateway';
+}
+
+export const MAX_OUTPUT_TOKEN_LIMIT = 2_147_483_647;
+
+/**
+ * Validates the composer's per-conversation output ceiling. Zero is Off.
+ * Unknown profiles retain compatibility behavior; an explicit false refuses
+ * the control before a session is reopened.
+ */
+export function outputTokenLimitProblem(
+  value: unknown,
+  capabilities: ModelCapabilities | undefined,
+): string | undefined {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value)) {
+    return 'Output limit must be Off or a whole number.';
+  }
+  if (value < 0 || value > MAX_OUTPUT_TOKEN_LIMIT) {
+    return `Output limit must be between 1 and ${MAX_OUTPUT_TOKEN_LIMIT}, or Off.`;
+  }
+  if (value > 0 && capabilities?.max_output_tokens === false) {
+    return 'The selected model profile does not support an output-token limit.';
+  }
+  return undefined;
+}
+
+export function normalizeCapabilities(value: unknown): ModelCapabilities | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const raw = value as Record<string, unknown>;
+  const protocols = new Set(['none', 'openai_effort', 'anthropic_budget', 'anthropic_adaptive']);
+  if (typeof raw.thinking !== 'string' || !protocols.has(raw.thinking)) return undefined;
+  if (typeof raw.max_output_tokens !== 'boolean' || typeof raw.vision !== 'boolean') return undefined;
+  const rawLevels = raw.effort_levels;
+  if (rawLevels !== undefined && !Array.isArray(rawLevels)) return undefined;
+  const levels: Effort[] = [];
+  for (const level of rawLevels ?? []) {
+    if ((level !== 'low' && level !== 'medium' && level !== 'high') || levels.includes(level)) {
+      return undefined;
+    }
+    levels.push(level);
+  }
+  if (raw.thinking === 'none' && levels.length > 0) return undefined;
+  return {
+    thinking: raw.thinking as ModelCapabilities['thinking'],
+    effort_levels: levels.length > 0 ? levels : undefined,
+    max_output_tokens: raw.max_output_tokens,
+    vision: raw.vision,
+  };
+}
+
+export function normalizeModelCapabilities(value: unknown): Record<string, StoredModelCapabilities> {
+  if (!value || typeof value !== 'object') return {};
+  const out: Record<string, StoredModelCapabilities> = {};
+  for (const [id, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (!validModelId(id) || !entry || typeof entry !== 'object') continue;
+    const raw = entry as Record<string, unknown>;
+    const capabilities = normalizeCapabilities(raw.capabilities);
+    if (!capabilities) continue;
+    out[id] = {
+      capabilities,
+      source: raw.source === 'explicit' ? 'explicit' : 'gateway',
+    };
+  }
+  return out;
+}
+
+export function withGatewayCapabilities(
+  current: Record<string, StoredModelCapabilities>,
+  id: string,
+  capabilities: unknown,
+): Record<string, StoredModelCapabilities> {
+  const key = id.trim();
+  if (!validModelId(key) || current[key]?.source === 'explicit') return { ...current };
+  const next = { ...current };
+  const normalized = normalizeCapabilities(capabilities);
+  if (normalized) next[key] = { capabilities: normalized, source: 'gateway' };
+  else delete next[key];
+  return next;
 }
 
 export function connectionMode(value: unknown): ModelConnectionMode {

@@ -147,6 +147,16 @@ test('a send opens the session first and moves it to running', async () => {
   assert.deepEqual(built.states, ['running']);
 });
 
+test('a continuation sends its source run unchanged', async () => {
+  const built = build();
+  await built.session.send('Continue exactly.', { continueFrom: 'run-truncated-7' });
+  assert.deepEqual(built.transport.calls[1].params, {
+    session_id: 's1',
+    message: 'Continue exactly.',
+    continue_from: 'run-truncated-7',
+  });
+});
+
 test('a second send while a turn is running is refused', async () => {
   const built = build();
   await built.session.send('one');

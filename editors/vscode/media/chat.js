@@ -63,6 +63,9 @@
   const modelMenuList = document.getElementById('modelMenuList');
   const effortMenuLabel = document.getElementById('effortMenuLabel');
   const effortButtons = Array.from(document.querySelectorAll('[data-effort]'));
+  const outputLimitInput = document.getElementById('outputLimitInput');
+  const outputLimitOff = document.getElementById('outputLimitOff');
+  const outputLimitHint = document.getElementById('outputLimitHint');
   const bypassStrip = document.getElementById('bypass');
   const dontAskStrip = document.getElementById('dontAsk');
   const rootLine = document.getElementById('root');
@@ -176,6 +179,7 @@
   /** One orchestration view model and rendered board per run. */
   const stageRuns = new Map();
   const stageBoards = new Map();
+  const continuationButtons = new Map();
   let agentMapDialog = null;
   let agentMapState = null;
   let replayLoadingAnimations = [];
@@ -1094,6 +1098,7 @@
     callFacts.clear();
     stageRuns.clear();
     stageBoards.clear();
+    continuationButtons.clear();
     approvals.clear();
     checkpointBlocks.clear();
     forkBlocks.clear();
@@ -1352,14 +1357,26 @@
     }
   }
 
-  function addUser(text, sentMentions, sentImages, sentQuotes) {
+  function dismissContinuationButtons() {
+    for (const button of continuationButtons.values()) {
+      button.disabled = true;
+      button.hidden = true;
+    }
+    continuationButtons.clear();
+  }
+
+  function addUser(text, sentMentions, sentImages, sentQuotes, continueFrom) {
     // This message opens a new turn: the reply above it folds, and the message
     // itself is never part of a reply.
     if (active === mainScope) closeReply();
+    if (active === mainScope) dismissContinuationButtons();
     const wrap = el('div', 'msg user');
     const candidate = registerQuote('user', text);
     const who = el('div', 'who');
     who.appendChild(el('span', null, 'you'));
+    if (continueFrom) {
+      who.appendChild(el('span', 'continuation-origin', 'continued from truncated answer'));
+    }
     who.appendChild(quoteAction(candidate, 'Quote this message'));
     wrap.appendChild(who);
     const body = el('div', 'body', text);
@@ -5635,6 +5652,22 @@
     }
   }
 
+  function showOutputLimit(msg) {
+    if (!outputLimitInput || !outputLimitHint) return;
+    const value = typeof msg.value === 'number' && Number.isSafeInteger(msg.value) && msg.value > 0
+      ? msg.value
+      : 0;
+    const unsupported = msg.support === 'unsupported';
+    outputLimitInput.value = value > 0 ? String(value) : '';
+    outputLimitInput.disabled = unsupported;
+    if (outputLimitOff) outputLimitOff.disabled = unsupported || value === 0;
+    outputLimitHint.textContent = unsupported
+      ? 'The selected model profile does not support output limits.'
+      : msg.support === 'unknown'
+        ? 'Maximum output tokens for the next turn · model support unverified.'
+        : 'Maximum output tokens for the next turn.';
+  }
+
   function dispatchQueued(msg) {
     const sentMentions = Array.isArray(msg.mentions) ? msg.mentions : [];
     const sentImages = Array.isArray(msg.images) ? msg.images : [];
@@ -6012,6 +6045,27 @@
     return parts;
   }
 
+  function addTruncationNotice(done) {
+    const runId = done && done.run_id ? String(done.run_id) : '';
+    const wrap = el('div', 'msg truncation-notice');
+    const body = el('div', 'body');
+    body.appendChild(el('span', 'truncation-text', 'The answer stopped at the model output limit.'));
+    if (runId) {
+      const button = el('button', 'continue-generating', 'Continue generating');
+      button.type = 'button';
+      button.setAttribute('aria-label', 'Continue the truncated answer as a new turn');
+      button.addEventListener('click', () => {
+        if (button.disabled) return;
+        button.disabled = true;
+        vscode.postMessage({ type: 'continueGenerating', runId });
+      });
+      body.appendChild(button);
+      continuationButtons.set(runId, button);
+    }
+    wrap.appendChild(body);
+    append(wrap);
+  }
+
   function finishRun(done, failure) {
     const round = currentRound();
     endRound();
@@ -6031,6 +6085,7 @@
     const parts = runSummary(done);
     recordUsage(done);
     setStatus(parts.join(' · '));
+    if (done && done.truncated === true) addTruncationNotice(done);
     // "Stopped." is not a failure, but it is still something the user asked
     // for and should see once: a run that ends silently reads as a hang.
     if (failure && failure.message) addNotice(failure.message);
@@ -6065,6 +6120,7 @@
     if (status !== 'error' && status !== 'cancelled') markSummary(round, done && done.run_id);
     finishReply();
     if (status === 'error' && done && done.err) addNotice(done.err);
+    if (done && done.truncated === true) addTruncationNotice(done);
     const line = el('div', 'msg run-end');
     line.appendChild(el('div', 'body', [word].concat(runSummary(done)).join(' · ')));
     append(line);
@@ -6565,6 +6621,36 @@
         vscode.postMessage({ type: 'effort', effort: button.dataset.effort });
       });
     }
+    const commitOutputLimit = () => {
+      if (!outputLimitInput || outputLimitInput.disabled) return;
+      if (outputLimitInput.value !== '' && !outputLimitInput.checkValidity()) {
+        outputLimitInput.reportValidity();
+        return;
+      }
+      const value = outputLimitInput.value === '' ? 0 : Number(outputLimitInput.value);
+      if (!Number.isSafeInteger(value) || value < 0) {
+        outputLimitInput.setCustomValidity('Enter a positive whole number, or leave empty for Off.');
+        outputLimitInput.reportValidity();
+        return;
+      }
+      outputLimitInput.setCustomValidity('');
+      vscode.postMessage({ type: 'outputLimit', value });
+    };
+    if (outputLimitInput) {
+      outputLimitInput.addEventListener('input', () => outputLimitInput.setCustomValidity(''));
+      outputLimitInput.addEventListener('change', commitOutputLimit);
+      outputLimitInput.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter') return;
+        event.preventDefault();
+        commitOutputLimit();
+      });
+    }
+    if (outputLimitOff) {
+      outputLimitOff.addEventListener('click', () => {
+        if (outputLimitInput) outputLimitInput.value = '';
+        vscode.postMessage({ type: 'outputLimit', value: 0 });
+      });
+    }
     modelMenu.addEventListener('keydown', (event) => {
       if (event.key === 'Escape') {
         event.preventDefault();
@@ -6919,6 +7005,22 @@
     else if (e.type === 'stage') renderStage(e);
     else if (e.type === 'todo') setTodos(e.items, e.run_id);
     else if (e.type === 'compact') addCompact(e.compact);
+    else if (e.type === 'retry') {
+      const failed = typeof e.attempt === 'number' && e.attempt > 0 ? e.attempt : 0;
+      const maximum = typeof e.max_attempts === 'number' && e.max_attempts > 0 ? e.max_attempts : 0;
+      const next = failed > 0 ? failed + 1 : 0;
+      const seconds = typeof e.delay_ms === 'number' && e.delay_ms >= 0
+        ? (e.delay_ms / 1000).toFixed(1)
+        : '';
+      const attempt = next > 0 && maximum > 0 ? ` (attempt ${next}/${maximum})` : '';
+      const delay = seconds !== '' ? ` in ${seconds}s` : '';
+      if (active === mainScope) setWorkingActivity(`Provider busy — retrying${delay}${attempt}.`);
+    }
+    // `truncated` is a signal-only event. Its authoritative terminal form is
+    // done.truncated, rendered by finishRun/addRunEnd exactly once.
+    else if (e.type === 'truncated') {
+      // Intentionally no text append: assistant deltas already drew the answer.
+    }
     // A root run's terminal error is repeated authoritatively by `done`; draw
     // it there once. Child errors have no root `done` in this webview, so they
     // still belong inside the expanded subagent transcript.
@@ -7089,6 +7191,14 @@
       case 'effort':
         showEffort(msg);
         return;
+      case 'outputLimit':
+        showOutputLimit(msg);
+        return;
+      case 'continuationCancelled': {
+        const button = continuationButtons.get(String(msg.runId || ''));
+        if (button) button.disabled = false;
+        return;
+      }
       case 'collaboration':
         showCollaboration(msg);
         return;
@@ -7165,7 +7275,7 @@
       case 'user':
         // A replayed turn. The composer does this for a live one, and it is not
         // involved here, so the replay asks for it directly.
-        addUser(msg.text || '');
+        addUser(msg.text || '', undefined, undefined, undefined, msg.continueFrom);
         // Also separate fallback plan identities when an older stored event
         // has no run id.
         todoEpoch += 1;

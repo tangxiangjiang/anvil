@@ -24,10 +24,13 @@ import (
 
 // turn is one scripted model response. Exactly one of content / tool is used.
 type turn struct {
-	content string
-	toolID  string
-	tool    string
-	args    string
+	content      string
+	toolID       string
+	tool         string
+	args         string
+	status       int
+	errorBody    string
+	finishReason string
 }
 
 func textTurn(content string) turn {
@@ -132,6 +135,13 @@ func (s *stubLLM) serve(w http.ResponseWriter, r *http.Request) {
 	s.lastBody = string(body)
 	s.mu.Unlock()
 
+	if current.status >= http.StatusBadRequest {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(current.status)
+		fmt.Fprint(w, current.errorBody)
+		return
+	}
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -158,6 +168,11 @@ func (s *stubLLM) serve(w http.ResponseWriter, r *http.Request) {
 				"delta": map[string]any{"content": chunk},
 			}}})
 		}
+	}
+	if current.finishReason != "" {
+		write(map[string]any{"choices": []any{map[string]any{
+			"delta": map[string]any{}, "finish_reason": current.finishReason,
+		}}})
 	}
 	usage := map[string]any{"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}
 	if cached > 0 {

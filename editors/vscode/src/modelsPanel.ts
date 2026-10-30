@@ -6,6 +6,7 @@ import {
   readSettings,
   saveAvailableModels,
   saveDefaultModel,
+  saveGatewayModelCapabilities,
   saveModelCatalogUrl,
 } from './settings';
 import { mediaAsset } from './webviewAsset';
@@ -128,6 +129,8 @@ export class ModelsPanels implements vscode.Disposable {
     }
     const settings = readSettings().models;
     const available = normalizeModelIds([...settings.gatewayAvailable, id]);
+    const discovered = this.discovered.find((model) => model.id === id);
+    await saveGatewayModelCapabilities(this.context, id, discovered?.capabilities);
     await saveAvailableModels(this.context, available);
     this.host.modelsChanged();
     await this.sendState(`${id} is now available.`);

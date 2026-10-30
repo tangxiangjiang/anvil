@@ -77,7 +77,7 @@ func KindRetryable(k Kind) bool {
 // message text is kept verbatim in the error; the code is what is stable.
 func KindCode(k Kind) string {
 	switch k {
-	case KindRateLimited:
+	case KindRateLimited, KindServer:
 		return "provider_busy"
 	case KindRejected:
 		return "request_rejected"
@@ -109,6 +109,41 @@ func kindOfStatus(status int) Kind {
 func NewHTTPError(status int, message string) *HTTPError {
 	k := kindOfStatus(status)
 	return &HTTPError{Status: status, Message: message, Kind: k, Retryable: KindRetryable(k)}
+}
+
+// newEmbeddedProviderError classifies an error envelope carried by a successful
+// HTTP response. OpenAI-compatible gateways may start an SSE response with 200
+// and report an upstream 4xx/5xx only in a later data frame. Prefer an explicit
+// error code, then recognize the common transient forms that otherwise look
+// like a non-retryable status=200 rejection.
+func newEmbeddedProviderError(httpStatus int, message, code, errorType string) *HTTPError {
+	if embeddedStatus, err := strconv.Atoi(strings.Trim(strings.TrimSpace(code), `"`)); err == nil &&
+		embeddedStatus >= 400 && embeddedStatus <= 599 {
+		return NewHTTPError(embeddedStatus, message)
+	}
+	if httpStatus >= 400 {
+		return NewHTTPError(httpStatus, message)
+	}
+
+	detail := strings.ToLower(errorType + " " + message)
+	switch {
+	case strings.Contains(detail, "rate_limit"),
+		strings.Contains(detail, "rate limit"),
+		strings.Contains(detail, "too many requests"):
+		return NewHTTPError(http.StatusTooManyRequests, message)
+	case strings.Contains(detail, "serviceunavailable"),
+		strings.Contains(detail, "service_unavailable"),
+		strings.Contains(detail, "service unavailable"),
+		strings.Contains(detail, "internal server error"),
+		strings.Contains(detail, "bedrockexception"),
+		strings.Contains(detail, "overloaded"),
+		strings.Contains(detail, "temporarily unavailable"),
+		strings.Contains(detail, "timed out"),
+		strings.Contains(detail, "timeout"):
+		return NewHTTPError(http.StatusServiceUnavailable, message)
+	default:
+		return NewHTTPError(httpStatus, message)
+	}
 }
 
 // kindError builds an error with an explicit kind, for failures with no usable status.

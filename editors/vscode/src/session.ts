@@ -84,7 +84,11 @@ export type SessionConfig = Omit<SessionParams, 'agent_id'>;
 export interface SendOptions {
   context?: PromptContext;
   attachments?: Attachment[];
+  continueFrom?: string;
 }
+
+export const CONTINUATION_PROMPT =
+  'Continue the previous truncated answer from exactly where it stopped. Do not repeat completed content.';
 
 export class ChatSession {
   private result: SessionResult | undefined;
@@ -292,6 +296,9 @@ export class ChatSession {
       session_id: session.session_id,
       message,
     };
+    if (options.continueFrom) {
+      params.continue_from = options.continueFrom;
+    }
     if (options.context && Object.keys(options.context).length > 0) {
       params.context = options.context;
     }

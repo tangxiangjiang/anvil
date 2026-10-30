@@ -34,7 +34,7 @@ import { DoneParams, HostEvent, TodoItem, TranscriptEntry } from './protocol';
  * itself, so the wire shape stays in the panel.
  */
 export type ReplayStep =
-  | { kind: 'user'; text: string }
+  | { kind: 'user'; text: string; continueFrom?: string }
   | { kind: 'notice'; text: string }
   | { kind: 'event'; event: HostEvent }
   | { kind: 'runEnd'; done: DoneParams };
@@ -88,6 +88,7 @@ export function replayOf(entries: TranscriptEntry[], sessionId = ''): ReplayStep
           usage: entry.usage,
           err: entry.err,
           code: entry.code,
+          truncated: entry.truncated,
         },
       });
       awaitingUser = true;
@@ -101,6 +102,30 @@ export function replayOf(entries: TranscriptEntry[], sessionId = ''): ReplayStep
       steps.push({
         kind: 'event',
         event: { session_id: sessionId, run_id: runId, type: 'compact' },
+      });
+      continue;
+    }
+
+    if (entry.kind === 'retry') {
+      steps.push({
+        kind: 'event',
+        event: {
+          session_id: sessionId,
+          run_id: runId,
+          type: 'retry',
+          text: entry.text,
+          attempt: entry.attempt,
+          max_attempts: entry.max_attempts,
+          delay_ms: entry.delay_ms,
+        },
+      });
+      continue;
+    }
+
+    if (entry.kind === 'truncated') {
+      steps.push({
+        kind: 'event',
+        event: { session_id: sessionId, run_id: runId, type: 'truncated' },
       });
       continue;
     }
@@ -132,7 +157,12 @@ export function replayOf(entries: TranscriptEntry[], sessionId = ''): ReplayStep
         awaitingUser = false;
         // Emitted even when empty: a turn that carried only an image is still a
         // turn, and the images themselves were never written down.
-        steps.push({ kind: 'user', text: visibleUserText(content) });
+        const user: ReplayStep = {
+          kind: 'user',
+          text: visibleUserText(content),
+        };
+        if (entry.continue_from) user.continueFrom = entry.continue_from;
+        steps.push(user);
       } else if (content !== '') {
         steps.push({ kind: 'notice', text: content });
       }

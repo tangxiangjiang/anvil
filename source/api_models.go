@@ -23,6 +23,8 @@ type ModelInfo struct {
 	Params        []string
 	// Vision is true when the gateway marks the model as multimodal (anvil.vision).
 	Vision bool
+	// Capabilities is nil when the catalog makes no capability claim.
+	Capabilities *ModelCapabilities
 }
 
 // ListModelsOptions configures ListModels.
@@ -62,10 +64,11 @@ func ListModels(ctx context.Context, opts ListModelsOptions) ([]ModelInfo, error
 			ID      string `json:"id"`
 			OwnedBy string `json:"owned_by"`
 			Anvil   *struct {
-				Provider      string   `json:"provider"`
-				UpstreamModel string   `json:"upstream_model"`
-				Params        []string `json:"params"`
-				Vision        bool     `json:"vision"`
+				Provider      string             `json:"provider"`
+				UpstreamModel string             `json:"upstream_model"`
+				Params        []string           `json:"params"`
+				Vision        bool               `json:"vision"`
+				Capabilities  *ModelCapabilities `json:"capabilities"`
 			} `json:"anvil"`
 		} `json:"data"`
 	}
@@ -80,6 +83,17 @@ func ListModels(ctx context.Context, opts ListModelsOptions) ([]ModelInfo, error
 			m.UpstreamModel = d.Anvil.UpstreamModel
 			m.Params = d.Anvil.Params
 			m.Vision = d.Anvil.Vision
+			m.Capabilities = d.Anvil.Capabilities
+			if m.Capabilities != nil {
+				if err := validateModelSelection(
+					Provider(m.Provider),
+					*m.Capabilities,
+					EffortDefault,
+					0,
+				); err != nil {
+					return nil, fmt.Errorf("model %q capabilities: %w", m.ID, err)
+				}
+			}
 		}
 		out = append(out, m)
 	}

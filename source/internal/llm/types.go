@@ -6,6 +6,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 )
 
 // Role is a chat message role.
@@ -83,6 +84,9 @@ type Request struct {
 	// number: OpenAI-compatible providers take a level, Anthropic takes a token
 	// budget, and each adapter converts. It is never the model's own thinking text.
 	Effort Effort `json:",omitempty"`
+	// Capabilities is nil for compatibility mode. A non-nil profile is complete
+	// and adapters validate it before constructing or sending a request.
+	Capabilities *ModelCapabilities `json:",omitempty"`
 	// MaxOutputTokens caps the answer. Zero sends nothing, so the body is what it was
 	// before this field existed. Anthropic never sends less than its effort floor, so the
 	// thinking budget always fits.
@@ -99,6 +103,23 @@ const (
 	EffortHigh    Effort = "high"
 )
 
+type ThinkingProtocol string
+
+const (
+	ThinkingUnspecified       ThinkingProtocol = ""
+	ThinkingNone              ThinkingProtocol = "none"
+	ThinkingOpenAIEffort      ThinkingProtocol = "openai_effort"
+	ThinkingAnthropicBudget   ThinkingProtocol = "anthropic_budget"
+	ThinkingAnthropicAdaptive ThinkingProtocol = "anthropic_adaptive"
+)
+
+type ModelCapabilities struct {
+	Thinking        ThinkingProtocol `json:"thinking"`
+	EffortLevels    []Effort         `json:"effort_levels,omitempty"`
+	MaxOutputTokens bool             `json:"max_output_tokens"`
+	Vision          bool             `json:"vision"`
+}
+
 // Valid reports whether e is one of the named levels or empty.
 func (e Effort) Valid() bool {
 	switch e {
@@ -106,6 +127,72 @@ func (e Effort) Valid() bool {
 		return true
 	}
 	return false
+}
+
+func (c ModelCapabilities) validate() error {
+	switch c.Thinking {
+	case ThinkingNone, ThinkingOpenAIEffort, ThinkingAnthropicBudget, ThinkingAnthropicAdaptive:
+	case ThinkingUnspecified:
+		return fmt.Errorf("model capabilities: thinking is required")
+	default:
+		return fmt.Errorf("model capabilities: unknown thinking protocol %q", c.Thinking)
+	}
+	seen := map[Effort]bool{}
+	for _, effort := range c.EffortLevels {
+		if effort == EffortDefault || !effort.Valid() {
+			return fmt.Errorf("model capabilities: invalid effort level %q", effort)
+		}
+		if seen[effort] {
+			return fmt.Errorf("model capabilities: duplicate effort level %q", effort)
+		}
+		seen[effort] = true
+	}
+	if c.Thinking == ThinkingNone && len(c.EffortLevels) > 0 {
+		return fmt.Errorf("model capabilities: thinking %q conflicts with effort_levels", c.Thinking)
+	}
+	return nil
+}
+
+func validateCapabilities(provider string, req Request) error {
+	if req.MaxOutputTokens < 0 {
+		return fmt.Errorf("max_output_tokens must be positive or zero")
+	}
+	if req.Capabilities == nil {
+		return nil
+	}
+	c := *req.Capabilities
+	if err := c.validate(); err != nil {
+		return err
+	}
+	switch provider {
+	case "openai":
+		if c.Thinking == ThinkingAnthropicBudget || c.Thinking == ThinkingAnthropicAdaptive {
+			return fmt.Errorf("model capabilities: thinking %q conflicts with OpenAI provider", c.Thinking)
+		}
+	case "anthropic":
+		if c.Thinking == ThinkingOpenAIEffort {
+			return fmt.Errorf("model capabilities: thinking %q conflicts with Anthropic provider", c.Thinking)
+		}
+	}
+	if req.Effort != EffortDefault {
+		if c.Thinking == ThinkingNone {
+			return fmt.Errorf("model capabilities: thinking %q conflicts with effort %q", c.Thinking, req.Effort)
+		}
+		supported := false
+		for _, level := range c.EffortLevels {
+			if level == req.Effort {
+				supported = true
+				break
+			}
+		}
+		if !supported {
+			return fmt.Errorf("model capabilities: effort %q is not in effort_levels", req.Effort)
+		}
+	}
+	if req.MaxOutputTokens > 0 && !c.MaxOutputTokens {
+		return fmt.Errorf("model capabilities: max_output_tokens conflicts with max_output_tokens=false")
+	}
+	return nil
 }
 
 // anthropicThinking is the Anthropic spelling of an effort level. The budgets are

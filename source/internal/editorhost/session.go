@@ -35,6 +35,9 @@ type session struct {
 	// SDK accept an attachment — so it is recorded here rather than read back
 	// from the agent when a prompt arrives.
 	vision bool
+	// store is the persisted backend name used to validate continuation ids
+	// against this session's own transcript.
+	store string
 	// loadPermissions is whether the session reads .anvil/permissions.json. It is
 	// recorded for two reasons: a rule written from a card in a session that does
 	// not read that file would not be in force for the call it was written for,
@@ -161,7 +164,7 @@ func projectEvent(sessionID, runID string, ev anvil.Event) (EventParams, bool) {
 	switch ev.Type {
 	case anvil.EventProgress, anvil.EventAssistant, anvil.EventReasoning,
 		anvil.EventToolCall, anvil.EventToolResult, anvil.EventError, anvil.EventTodo,
-		anvil.EventCompact, anvil.EventStage:
+		anvil.EventCompact, anvil.EventStage, anvil.EventRetry, anvil.EventTruncated:
 	default:
 		return EventParams{}, false
 	}
@@ -186,6 +189,9 @@ func projectEvent(sessionID, runID string, ev anvil.Event) (EventParams, bool) {
 		Step:           ev.Step,
 		MaxSteps:       ev.MaxSteps,
 		Code:           string(ev.Code),
+		Attempt:        ev.Attempt,
+		MaxAttempts:    ev.MaxAttempts,
+		DelayMS:        ev.Delay.Milliseconds(),
 		Rule:           ruleInfo(ev.Rule),
 		Protected:      ev.Protected,
 		PathAnalysis:   ev.PathAnalysis,
@@ -194,6 +200,12 @@ func projectEvent(sessionID, runID string, ev anvil.Event) (EventParams, bool) {
 		UsageEstimated: ev.UsageEstimated,
 		Items:          items,
 		Compact:        compactWire(ev.Compact),
+	}
+	if ev.Type == anvil.EventTruncated {
+		// Assistant deltas already carried and stored the partial answer. The
+		// truncation event is a marker only, otherwise replay/live would append
+		// the same text twice.
+		out.Text = ""
 	}
 	applyStageEvent(&out, ev.Stage)
 	return out, true
@@ -334,6 +346,7 @@ func projectDone(sessionID, runID string, res *anvil.RunResult, runErr error) Do
 		out.Steps = res.Steps
 		out.Err = res.Err
 		out.Code = string(res.Code)
+		out.Truncated = res.Truncated
 		out.Usage = usageWire(res.Usage)
 		// The anchor of the cache countdown. Zero stays empty: a run that never
 		// reached the provider has no cache to count down from.

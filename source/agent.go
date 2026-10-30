@@ -1149,10 +1149,10 @@ func (a *Agent) Send(ctx context.Context, message string, opts ...SendOption) (*
 	a.mu.Unlock()
 
 	if a.opts.Mode == ModeComplex {
-		go a.executeComplex(runCtx, cancelCause, wall, run, message, cfg.Directive)
+		go a.executeComplex(runCtx, cancelCause, wall, run, message, cfg.Directive, cfg.ContinuationFrom)
 		return run, nil
 	}
-	go a.executeRun(runCtx, cancelCause, wall, run, message, cfg.Directive, historyCopy, parts)
+	go a.executeRun(runCtx, cancelCause, wall, run, message, cfg.Directive, cfg.ContinuationFrom, historyCopy, parts)
 	return run, nil
 }
 
@@ -1319,7 +1319,7 @@ func compactInfo(in *runtime.CompactInfo) *CompactInfo {
 	}
 }
 
-func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseFunc, wall time.Duration, run *Run, message, directive string, history []llm.Message, userParts []llm.ContentPart) {
+func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseFunc, wall time.Duration, run *Run, message, directive, continuationFrom string, history []llm.Message, userParts []llm.ContentPart) {
 	defer func() {
 		// The run is over, so its pre-images stop being written: a tool call made
 		// outside a run — a resumed tab replaying, a direct Execute — belongs to no
@@ -1343,7 +1343,9 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 		a.budget.reset()
 	}
 
-	a.persist(store.Record{Type: store.TypeRunStart, RunID: run.id})
+	a.persist(store.Record{
+		Type: store.TypeRunStart, RunID: run.id, ContinueFrom: continuationFrom,
+	})
 
 	sysPrompt := a.systemPrompt
 	routed := routerSkillsText(a.cwd, a.opts, message)
@@ -1380,6 +1382,7 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 		},
 		PromptCache:       promptCacheEnabled(a.opts),
 		Effort:            llm.Effort(a.opts.Effort),
+		Capabilities:      requestCapabilities(a.opts.Model.Capabilities),
 		MaxOutputTokens:   a.opts.MaxOutputTokens,
 		SystemPrompt:      sysPrompt,
 		RequireFinishTask: a.opts.RequireFinishTask,
@@ -1399,6 +1402,7 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 			MaxSteps:       ev.MaxSteps,
 			Code:           Code(ev.Code),
 			Attempt:        ev.Attempt,
+			MaxAttempts:    ev.MaxAttempts,
 			Delay:          ev.Delay,
 			Rule:           permissionRuleMatch(ev.Rule),
 			Protected:      ev.Protected,
@@ -1410,6 +1414,7 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 			Compact:        compactInfo(ev.Compact),
 			LastRequestAt:  ev.LastRequestAt,
 		}
+		a.persistRunSignal(run.id, out)
 		run.emit(out)
 		// A child's events travel to whoever asked for the child, tagged with the
 		// call that started it. They do not travel through the parent's stream:
@@ -1463,13 +1468,14 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 		}
 	}
 	a.persist(store.Record{
-		Type:   store.TypeRunEnd,
-		RunID:  rr.ID,
-		Status: string(rr.Status),
-		Steps:  rr.Steps,
-		Usage:  usage,
-		Err:    rr.Err,
-		Code:   string(rr.Code),
+		Type:      store.TypeRunEnd,
+		RunID:     rr.ID,
+		Status:    string(rr.Status),
+		Steps:     rr.Steps,
+		Usage:     usage,
+		Err:       rr.Err,
+		Code:      string(rr.Code),
+		Truncated: rr.Truncated,
 	})
 
 	var err error
@@ -1554,6 +1560,26 @@ func (a *Agent) emitStage(stage StageEvent) {
 	}
 	a.persist(store.Record{Type: store.TypeStage, RunID: run.ID(), Stage: raw})
 	run.emit(Event{Type: EventStage, Stage: &stage})
+}
+
+// persistRunSignal records the two run signals a replay must distinguish from
+// ordinary progress. Retry text is the provider-safe summary already exposed
+// by the public event. Truncation is a marker only: the partial assistant text
+// is already stored as a message and must not be duplicated.
+func (a *Agent) persistRunSignal(runID string, event Event) {
+	switch event.Type {
+	case EventRetry:
+		a.persist(store.Record{
+			Type:        store.TypeRetry,
+			RunID:       runID,
+			Text:        event.Text,
+			Attempt:     event.Attempt,
+			MaxAttempts: event.MaxAttempts,
+			DelayMS:     event.Delay.Milliseconds(),
+		})
+	case EventTruncated:
+		a.persist(store.Record{Type: store.TypeTruncated, RunID: runID})
+	}
 }
 
 // persist writes one record to the session. The store is read under the lock,
@@ -1681,6 +1707,9 @@ func normalizeOptions(opts Options) (Options, string, error) {
 	if !llm.Effort(opts.Effort).Valid() {
 		return opts, "", newError("unsupported effort: "+string(opts.Effort)+" (use low, medium or high, or leave it empty)", false, nil)
 	}
+	if err := validateModelSelection(opts.Provider, opts.Model.Capabilities, opts.Effort, opts.MaxOutputTokens); err != nil {
+		return opts, "", newError(err.Error(), false, nil)
+	}
 	switch opts.Mode {
 	case ModeSingle:
 	case ModeMulti:
@@ -1694,6 +1723,24 @@ func normalizeOptions(opts Options) (Options, string, error) {
 		c := opts.Complex
 		if !llm.Effort(c.Decision.Effort).Valid() || !llm.Effort(c.Analyze.Effort).Valid() || !llm.Effort(c.Worker.Effort).Valid() {
 			return opts, "", newError("complex stage effort must be low, medium or high, or empty", false, nil)
+		}
+		stages := []struct {
+			name   string
+			stage  Stage
+			effort Effort
+		}{
+			{"decision", c.Decision, stageEffort(c.Decision, EffortHigh)},
+			{"analyze", c.Analyze, stageEffort(c.Analyze, EffortMedium)},
+			{"worker", c.Worker, stageEffort(c.Worker, EffortLow)},
+		}
+		for _, item := range stages {
+			if item.stage.Model == "" && item.stage.Capabilities.Configured() {
+				return opts, "", newError("complex "+item.name+" capabilities require a stage model", false, nil)
+			}
+			capabilities := stageCapabilities(opts.Model.Capabilities, item.stage)
+			if err := validateModelSelection(opts.Provider, capabilities, item.effort, opts.MaxOutputTokens); err != nil {
+				return opts, "", newError("complex "+item.name+": "+err.Error(), false, nil)
+			}
 		}
 	default:
 		return opts, "", newError("unsupported mode: "+string(opts.Mode)+" (use multi or complex, or leave it empty)", false, nil)

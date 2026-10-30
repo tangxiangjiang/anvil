@@ -34,7 +34,7 @@ import { attachmentsFromDataUrls, dataUrlFromBytes, mimeForImagePath } from './a
 import type { Hub } from './hub';
 import { HostListener, HostManager, ResolvedMode } from './hostManager';
 import { HostRpcError } from './hostClient';
-import { ChatSession, SessionConfig, SessionState } from './session';
+import { CONTINUATION_PROMPT, ChatSession, SessionConfig, SessionState } from './session';
 import { PreviewDocuments } from './review';
 import { PLAN_APPROVED_PROMPT } from './plan';
 import { PlanDocuments } from './planDocument';
@@ -77,6 +77,7 @@ import { webSearchNeedsKey } from './webSearch';
 import { mediaAsset } from './webviewAsset';
 import { AgentMapState, buildAgentMap } from './agentMap';
 import { TurnQueue } from './turnQueue';
+import { outputTokenLimitProblem } from './models';
 import {
   agentModeOptions,
   isAgentMode,
@@ -99,8 +100,10 @@ interface QueuedTurn {
   /** Options selected in the composer when this turn was submitted. */
   model: string;
   effort: Effort;
+  maxOutputTokens: number;
   permissionMode: PermissionMode | null;
   agentMode: AgentMode;
+  continueFrom?: string;
 }
 
 /** A message from the webview. */
@@ -121,6 +124,8 @@ type Inbound =
   | { type: 'mode'; mode: string }
   | { type: 'selectModel'; model: string }
   | { type: 'effort'; effort: Effort }
+  | { type: 'outputLimit'; value: number }
+  | { type: 'continueGenerating'; runId: string }
   | { type: 'collaboration'; mode: AgentMode }
   | { type: 'agentMap' }
   | { type: 'agentDetail'; agentId: string }
@@ -264,6 +269,8 @@ type Outbound =
   | { type: 'fontSize'; size: number }
   | { type: 'models'; available: string[]; current: string; defaultModel: string }
   | { type: 'effort'; effort: Effort }
+  | { type: 'outputLimit'; value: number; support: 'supported' | 'unsupported' | 'unknown' }
+  | { type: 'continuationCancelled'; runId: string }
   /**
    * The token meter's inputs. The window is display arithmetic only and never
    * travels to the host; `info` is the live session's own estimate, present
@@ -397,7 +404,7 @@ type Outbound =
    * message on screen, and it is not involved in a replay, so the replay says it
    * itself. It is drawn by the same renderer either way.
    */
-  | { type: 'user'; text: string }
+  | { type: 'user'; text: string; continueFrom?: string }
   /**
    * A line in the transcript for something the user did not type and the model
    * did not say — the loop's own note to the model, replayed. Not a `notice`:
@@ -502,6 +509,7 @@ function readMode(context: vscode.ExtensionContext): PermissionMode | undefined 
 interface StoredComposerOptions {
   model?: string;
   effort?: Effort;
+  maxOutputTokens?: number;
 }
 
 function storedComposerOptions(
@@ -516,9 +524,16 @@ function storedComposerOptions(
   const validModel =
     model !== '' && (settings.models.available.includes(model) || model === settings.models.defaultModel);
   const effort = saved.effort;
+  const maxOutputTokens =
+    typeof saved.maxOutputTokens === 'number' &&
+    Number.isSafeInteger(saved.maxOutputTokens) &&
+    saved.maxOutputTokens >= 0
+      ? saved.maxOutputTokens
+      : undefined;
   return {
     ...(validModel ? { model } : {}),
     ...(effort === 'low' || effort === 'medium' || effort === 'high' ? { effort } : {}),
+    ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
   };
 }
 
@@ -633,6 +648,8 @@ export class ChatPanel implements HostListener {
   private planTurn: { run: string; parts: string[]; fresh: boolean } = { run: '', parts: [], fresh: true };
   /** Plan texts by run id, with the conversation each one belongs to. */
   private readonly planTexts = new Map<string, { agentId: string; text: string }>();
+  /** Truncated runs whose Continue action is awaiting confirmation or send. */
+  private readonly pendingContinuations = new Set<string>();
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -657,6 +674,14 @@ export class ChatPanel implements HostListener {
     Object.assign(this.overrides, agentModeOptions(this.collaboration));
     if (savedComposer.model) this.overrides.model = savedComposer.model;
     this.overrides.effort = savedComposer.effort ?? settings.session.effort ?? 'medium';
+    this.overrides.max_output_tokens = savedComposer.maxOutputTokens ?? settings.session.max_output_tokens ?? 0;
+    const initialModel = savedComposer.model ?? settings.models.defaultModel;
+    if (initialModel && settings.models.capabilities[initialModel]) {
+      this.overrides.model_capabilities = settings.models.capabilities[initialModel];
+      if (settings.models.capabilities[initialModel].max_output_tokens === false) {
+        this.overrides.max_output_tokens = 0;
+      }
+    }
     this.partialReviews = new ReviewPanels(context.extensionUri);
   }
 
@@ -920,6 +945,7 @@ export class ChatPanel implements HostListener {
       this.postCollaboration();
       this.postModels();
       this.postEffort();
+      this.postOutputLimit();
       this.postQueue();
       if (this.rules.length > 0) this.post({ type: 'rules', files: this.rules });
       this.postState();
@@ -958,6 +984,7 @@ export class ChatPanel implements HostListener {
           quotes: msg.quotes ?? [],
           model: this.overrides.model ?? '',
           effort: this.overrides.effort ?? 'medium',
+          maxOutputTokens: this.overrides.max_output_tokens ?? 0,
           permissionMode: this.mode ?? null,
           agentMode: this.collaboration,
         });
@@ -998,6 +1025,12 @@ export class ChatPanel implements HostListener {
         return;
       case 'effort':
         await this.setEffort(msg.effort);
+        return;
+      case 'outputLimit':
+        await this.setOutputLimit(msg.value);
+        return;
+      case 'continueGenerating':
+        await this.continueGenerating(msg.runId);
         return;
       case 'collaboration':
         await this.setCollaboration(msg.mode);
@@ -1277,6 +1310,7 @@ export class ChatPanel implements HostListener {
       quotes: (payload.quotes ?? []).map((quote) => ({ ...quote })),
       model: this.overrides.model ?? '',
       effort: this.overrides.effort ?? 'medium',
+      maxOutputTokens: this.overrides.max_output_tokens ?? 0,
       permissionMode: this.mode ?? null,
       agentMode: this.collaboration,
     };
@@ -1444,6 +1478,17 @@ export class ChatPanel implements HostListener {
   /** Native settings or the manager changed the curated list. */
   modelsChanged(): void {
     this.postModels();
+    const capabilities = this.currentCapabilities();
+    if (capabilities?.max_output_tokens === false && (this.overrides.max_output_tokens ?? 0) > 0) {
+      void this.setOutputLimit(0);
+    } else {
+      this.postOutputLimit();
+    }
+  }
+
+  private currentCapabilities() {
+    const model = this.currentModel();
+    return model ? readSettings().models.capabilities[model] : undefined;
   }
 
   private async setModel(model: string): Promise<void> {
@@ -1458,6 +1503,9 @@ export class ChatPanel implements HostListener {
     if (model === '') delete next.model;
     else next.model = model;
     const configured = model === '' ? settings.defaultModel || undefined : model;
+    const capabilities = configured ? settings.capabilities[configured] : undefined;
+    next.model_capabilities = capabilities;
+    if (capabilities?.max_output_tokens === false) next.max_output_tokens = 0;
     if (this.session?.currentState === 'running') {
       this.overrides = next;
       await this.rememberComposerOptions();
@@ -1467,6 +1515,7 @@ export class ChatPanel implements HostListener {
         level: 'info',
         message: model === '' ? 'Workspace default selected for the next turn.' : `${model} selected for the next turn.`,
       });
+      this.postOutputLimit();
       this.postState();
       return;
     }
@@ -1476,7 +1525,11 @@ export class ChatPanel implements HostListener {
       if (!session) {
         this.overrides = next;
       } else {
-        const result = await session.reopen({ model: configured });
+        const result = await session.reopen({
+          model: configured,
+          model_capabilities: capabilities,
+          max_output_tokens: next.max_output_tokens ?? 0,
+        });
         this.overrides = next;
         reopened = result !== undefined;
         if (result) this.resolvedModel = result.model;
@@ -1484,6 +1537,7 @@ export class ChatPanel implements HostListener {
       if (!reopened) this.resolvedModel = model === '' ? settings.defaultModel || undefined : model;
       await this.rememberComposerOptions();
       this.postModels();
+      this.postOutputLimit();
       this.post({
         type: 'notice',
         level: 'info',
@@ -1493,6 +1547,7 @@ export class ChatPanel implements HostListener {
     } catch (err) {
       this.post({ type: 'notice', level: 'error', message: `Could not change model: ${(err as Error).message}` });
       this.postModels();
+      this.postOutputLimit();
       this.postState();
     }
   }
@@ -1516,6 +1571,46 @@ export class ChatPanel implements HostListener {
     }
     await this.rememberComposerOptions();
     this.postEffort();
+    this.postState();
+  }
+
+  private postOutputLimit(): void {
+    const capabilities = this.currentCapabilities();
+    const support =
+      capabilities === undefined
+        ? 'unknown'
+        : capabilities.max_output_tokens
+          ? 'supported'
+          : 'unsupported';
+    this.post({
+      type: 'outputLimit',
+      value: this.overrides.max_output_tokens ?? 0,
+      support,
+    });
+  }
+
+  private async setOutputLimit(value: unknown): Promise<void> {
+    const capabilities = this.currentCapabilities();
+    const problem = outputTokenLimitProblem(value, capabilities);
+    if (problem) {
+      this.post({ type: 'notice', level: 'warn', message: problem });
+      this.postOutputLimit();
+      return;
+    }
+    const limit = value as number;
+    if (this.session?.currentState === 'running') {
+      this.overrides.max_output_tokens = limit;
+    } else {
+      try {
+        await this.applyOptions({ max_output_tokens: limit });
+      } catch (err) {
+        this.post({ type: 'notice', level: 'error', message: `Could not change output limit: ${(err as Error).message}` });
+        this.postOutputLimit();
+        return;
+      }
+    }
+    await this.rememberComposerOptions();
+    this.postOutputLimit();
     this.postState();
   }
 
@@ -1568,6 +1663,7 @@ export class ChatPanel implements HostListener {
       {
         model: this.overrides.model ?? '',
         effort: this.overrides.effort ?? 'medium',
+        maxOutputTokens: this.overrides.max_output_tokens ?? 0,
       },
     ]);
     await this.context.workspaceState.update(
@@ -1714,6 +1810,7 @@ export class ChatPanel implements HostListener {
     if (!session) return;
     const settings = readSettings().models;
     const model = turn.model === '' ? settings.defaultModel || undefined : turn.model;
+    const capabilities = model ? settings.capabilities[model] : undefined;
     const permissionMode = turn.permissionMode ?? undefined;
     const agentOptions = agentModeOptions(turn.agentMode);
     const current = session.settings;
@@ -1724,6 +1821,8 @@ export class ChatPanel implements HostListener {
     if (
       current.model === model &&
       current.effort === turn.effort &&
+      current.max_output_tokens === turn.maxOutputTokens &&
+      JSON.stringify(current.model_capabilities) === JSON.stringify(capabilities) &&
       current.permission_mode === permissionMode &&
       current.agent_mode === agentOptions.agent_mode &&
       current.subagents === agentOptions.subagents
@@ -1731,6 +1830,8 @@ export class ChatPanel implements HostListener {
     const result = await session.reopen({
       model,
       effort: turn.effort,
+      model_capabilities: capabilities,
+      max_output_tokens: turn.maxOutputTokens,
       permission_mode: permissionMode,
       ...agentOptions,
     });
@@ -1751,6 +1852,10 @@ export class ChatPanel implements HostListener {
         message: `Could not apply the queued model, effort, permission mode, or Agent mode: ${(err as Error).message}`,
       });
       this.postState();
+      return;
+    }
+    if (turn.continueFrom) {
+      await this.sendQuestion(turn.text, [], [], [], turn.continueFrom);
       return;
     }
     // The catalogue is only consulted for a line that could be a command, so an
@@ -2015,7 +2120,9 @@ export class ChatPanel implements HostListener {
     this.post({ type: 'replayStart' });
     try {
       for (const step of steps) {
-        if (step.kind === 'user') this.post({ type: 'user', text: step.text });
+        if (step.kind === 'user') {
+          this.post({ type: 'user', text: step.text, continueFrom: step.continueFrom });
+        }
         else if (step.kind === 'notice') this.post({ type: 'note', text: step.text });
         else if (step.kind === 'runEnd') {
           this.post({ type: 'runEnd', done: step.done });
@@ -2200,9 +2307,15 @@ export class ChatPanel implements HostListener {
     mentions: string[],
     images: string[],
     quotes: Array<{ role: 'user' | 'assistant'; text: string }>,
+    continueFrom?: string,
   ): Promise<void> {
-    const context = buildPromptContext(dedupeMentions(mentions), quotes);
-    const { attachments, errors } = attachmentsFromDataUrls(images);
+    // A continuation is intentionally a clean model turn. In particular it
+    // must not silently capture the editor's current selection after the user
+    // has confirmed the fixed continuation prompt.
+    const context = continueFrom ? undefined : buildPromptContext(dedupeMentions(mentions), quotes);
+    const { attachments, errors } = continueFrom
+      ? { attachments: [], errors: [] }
+      : attachmentsFromDataUrls(images);
     for (const error of errors) {
       this.post({ type: 'notice', level: 'warn', message: `Dropped an attachment: ${error}.` });
     }
@@ -2211,7 +2324,7 @@ export class ChatPanel implements HostListener {
     this.changes.begin();
     this.forgetChanges();
     await this.liveSession()
-      .then((session) => session.send(text, { context, attachments }))
+      .then((session) => session.send(text, { context, attachments, continueFrom }))
       .catch((err: unknown) => {
         // The webview drew this message optimistically, so a refusal that is
         // only logged reads as a turn that vanished. Vision is the usual cause
@@ -2228,6 +2341,30 @@ export class ChatPanel implements HostListener {
     // The session exists now, so what it loaded can be reported. This is the
     // first moment the rules are a fact about a session rather than a guess.
     await this.reportRules();
+  }
+
+  private async continueGenerating(runId: string): Promise<void> {
+    const id = typeof runId === 'string' ? runId.trim() : '';
+    if (id === '' || this.pendingContinuations.has(id)) return;
+    this.pendingContinuations.add(id);
+    const choice = await vscode.window.showInformationMessage(
+      'Continue this truncated answer as a new model turn?',
+      { modal: true },
+      'Continue generating',
+    );
+    if (choice !== 'Continue generating' || this.busy) {
+      this.pendingContinuations.delete(id);
+      this.post({ type: 'continuationCancelled', runId: id });
+      return;
+    }
+    const turn = this.turnPayload({ text: CONTINUATION_PROMPT });
+    turn.continueFrom = id;
+    this.post({ type: 'user', text: CONTINUATION_PROMPT, continueFrom: id });
+    try {
+      await this.sendTurn(turn);
+    } finally {
+      this.pendingContinuations.delete(id);
+    }
   }
 
   /**
@@ -3552,6 +3689,12 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri, focus = f
           <button type="button" role="radio" aria-checked="true" data-effort="medium" title="Medium effort"><span></span></button>
           <button type="button" role="radio" aria-checked="false" data-effort="high" title="High effort"><span></span></button>
         </div>
+      </div>
+      <div class="model-output-limit">
+        <label for="outputLimitInput">Output limit</label>
+        <input id="outputLimitInput" type="number" min="1" max="2147483647" step="1" inputmode="numeric" placeholder="Off" aria-describedby="outputLimitHint">
+        <button id="outputLimitOff" type="button" title="Turn output limit off">Off</button>
+        <small id="outputLimitHint">Maximum output tokens for the next turn.</small>
       </div>
     </div>
     <!--

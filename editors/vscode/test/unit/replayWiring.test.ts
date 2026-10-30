@@ -123,7 +123,7 @@ test('a replayed conversation is drawn by the renderers the live one uses', () =
   // Each case hands off to an existing drawing path: the composer's own user
   // bubble, and the Markdown path for prose — both reached through the event
   // stream, so a replayed tool card gets its review button for free.
-  assert.match(CHAT_JS, /case 'user':[\s\S]{0,200}addUser\(msg\.text \|\| ''\)/);
+  assert.match(CHAT_JS, /case 'user':[\s\S]{0,240}addUser\(msg\.text \|\| ''[\s\S]*?msg\.continueFrom\)/);
   assert.match(CHAT_JS, /case 'note':[\s\S]{0,200}addNote\(msg\.text \|\| ''\)/);
   assert.match(CHAT_JS, /case 'runEnd':[\s\S]{0,200}addRunEnd\(msg\.done\)/);
 });

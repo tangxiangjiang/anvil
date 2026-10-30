@@ -294,6 +294,37 @@ func TestRetryStreamBeforeAnyDeltaIsRetried(t *testing.T) {
 	}
 }
 
+func TestRetryStreamEmbeddedServiceUnavailableThenOK(t *testing.T) {
+	srv, n := streamServer(t,
+		"data: {\"error\":{\"message\":\"litellm.ServiceUnavailableError: BedrockException - Internal server error\"}}\n\n",
+		"data: {\"choices\":[{\"delta\":{\"content\":\"recovered\"}}]}\n\ndata: [DONE]\n\n",
+	)
+	c := llm.NewOpenAI(llm.Config{APIKey: "k", BaseURL: srv.URL, Model: "m"})
+	resp, err := llm.WithRetry(c, quick).(llm.StreamCompleter).CompleteStream(
+		context.Background(),
+		goldenHistory(),
+		func(llm.Delta) {},
+	)
+	if err != nil || n.Load() != 2 || resp.Message.Content != "recovered" {
+		t.Fatalf("err=%v requests=%d response=%+v", err, n.Load(), resp)
+	}
+}
+
+func TestRetryStreamEmbeddedBadRequestIsNotRetried(t *testing.T) {
+	srv, n := streamServer(t,
+		"data: {\"error\":{\"message\":\"invalid request\",\"type\":\"invalid_request_error\",\"code\":\"400\"}}\n\n",
+	)
+	c := llm.NewOpenAI(llm.Config{APIKey: "k", BaseURL: srv.URL, Model: "m"})
+	_, err := llm.WithRetry(c, quick).(llm.StreamCompleter).CompleteStream(
+		context.Background(),
+		goldenHistory(),
+		func(llm.Delta) {},
+	)
+	if err == nil || n.Load() != 1 {
+		t.Fatalf("err=%v requests=%d, want one non-retryable request", err, n.Load())
+	}
+}
+
 // A failure after the user has seen text must not be replayed: the answer would appear twice.
 func TestRetryMidStreamNoRetry(t *testing.T) {
 	// One delta, then the connection dies with a malformed frame the adapter treats as an error.

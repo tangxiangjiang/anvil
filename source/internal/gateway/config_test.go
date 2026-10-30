@@ -6,7 +6,10 @@ package gateway
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/anvil-dev/anvil"
 )
 
 func TestConfigNormalizeRequiresModels(t *testing.T) {
@@ -29,6 +32,26 @@ func TestConfigDuplicateModel(t *testing.T) {
 	cfg.Models = append(cfg.Models, ModelRoute{ID: "demo", Upstream: "u1", UpstreamModel: "x"})
 	if err := cfg.Normalize(); err == nil {
 		t.Fatal("expected duplicate")
+	}
+}
+
+func TestConfigCapabilityProfile(t *testing.T) {
+	cfg := fixtureConfig()
+	cfg.Models[0].Provider = "anthropic"
+	cfg.Models[0].Capabilities = &anvil.ModelCapabilities{
+		Thinking:        anvil.ThinkingAnthropicAdaptive,
+		EffortLevels:    []anvil.Effort{anvil.EffortLow, anvil.EffortHigh},
+		MaxOutputTokens: true,
+	}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Models[0].Capabilities.EffortLevels = append(
+		cfg.Models[0].Capabilities.EffortLevels,
+		anvil.EffortLow,
+	)
+	if err := cfg.Normalize(); err == nil || !strings.Contains(err.Error(), "duplicate effort level") {
+		t.Fatalf("invalid profile error=%v", err)
 	}
 }
 

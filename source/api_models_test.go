@@ -25,8 +25,15 @@ func TestListModels(t *testing.T) {
 			"data": []any{
 				map[string]any{
 					"id": "demo", "object": "model", "owned_by": "gateway",
-					"anvil": map[string]any{"provider": "openai", "upstream_model": "real"},
+					"anvil": map[string]any{
+						"provider": "openai", "upstream_model": "real",
+						"capabilities": map[string]any{
+							"thinking": "openai_effort", "effort_levels": []string{"low", "high"},
+							"max_output_tokens": true, "vision": false,
+						},
+					},
 				},
+				map[string]any{"id": "plain", "object": "model", "owned_by": "upstream"},
 			},
 		})
 	}))
@@ -39,7 +46,11 @@ func TestListModels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(list) != 1 || list[0].ID != "demo" || list[0].UpstreamModel != "real" {
+	if len(list) != 2 || list[0].ID != "demo" || list[0].UpstreamModel != "real" ||
+		list[0].Capabilities == nil ||
+		list[0].Capabilities.Thinking != ThinkingOpenAIEffort ||
+		len(list[0].Capabilities.EffortLevels) != 2 ||
+		list[1].Capabilities != nil {
 		t.Fatalf("%+v", list)
 	}
 }

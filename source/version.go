@@ -5,4 +5,4 @@ package anvil
 
 // Version is the shared Agent product version. First-party clients and hosts
 // ship with this same value so their release identity cannot drift.
-const Version = "0.52.3"
+const Version = "0.52.7"

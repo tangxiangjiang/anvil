@@ -33,10 +33,12 @@ type Event struct {
 	Step       int
 	MaxSteps   int // 0 = unlimited
 	Code       string
-	// Attempt and Delay describe a `retry` event (0.48+): the attempt that just
-	// failed (1-based) and how long the wrapper waits before the next one.
-	Attempt int
-	Delay   time.Duration
+	// Attempt, MaxAttempts and Delay describe a `retry` event (0.53+): the
+	// attempt that just failed (1-based), the resolved policy maximum, and how
+	// long the wrapper waits before the next one.
+	Attempt     int
+	MaxAttempts int
+	Delay       time.Duration
 	// Usage is authoritative on terminal events and an estimate on streamed
 	// events when UsageEstimated is true.
 	Usage *llm.Usage
@@ -282,6 +284,8 @@ type Config struct {
 	PromptCache bool
 	// Effort is sent on every request of the run (0.48+). Empty sends nothing.
 	Effort llm.Effort
+	// Capabilities is nil for compatibility mode.
+	Capabilities *llm.ModelCapabilities
 	// MaxOutputTokens caps an answer; zero sends nothing.
 	MaxOutputTokens int
 	// Sink, if set, receives each conversation message as it is appended
@@ -405,9 +409,16 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 		// The retrying completer reports through the context, so the Completer
 		// interface keeps its shape and the runtime still knows nothing about HTTP.
 		callCtx := llm.WithRetryObserver(ctx, func(info llm.RetryInfo) {
-			emit(Event{Type: "retry", Attempt: info.Attempt, Delay: info.Delay, Text: info.Message})
+			emit(Event{
+				Type: "retry", Attempt: info.Attempt, MaxAttempts: info.Max,
+				Delay: info.Delay, Text: safeRetryMessage(info.Message),
+			})
 		})
-		req := llm.Request{Model: cfg.Model, Messages: messages, Tools: toolDefs, PromptCache: cfg.PromptCache, Effort: cfg.Effort, MaxOutputTokens: cfg.MaxOutputTokens}
+		req := llm.Request{
+			Model: cfg.Model, Messages: messages, Tools: toolDefs,
+			PromptCache: cfg.PromptCache, Effort: cfg.Effort,
+			Capabilities: cfg.Capabilities, MaxOutputTokens: cfg.MaxOutputTokens,
+		}
 		roundInput := compress.Estimate(req.Messages)
 		liveUsage := func(roundOutput int) *llm.Usage {
 			u := &llm.Usage{InputTokens: roundInput, OutputTokens: roundOutput}
@@ -524,19 +535,25 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 		invalidError := ""
 		correctionPrompt := continueTaskPrompt
 		finishSummary, finishPresent, finishProblem := "", false, ""
-		if cfg.RequireFinishTask {
+		// A length stop is a terminal partial answer even when this run normally
+		// requires finish_task. Correcting it would silently spend another
+		// completion and erase the truncation signal the container must present.
+		lengthLimited := resp.StopReason == llm.StopLength &&
+			len(assistant.ToolCalls) == 0 &&
+			strings.TrimSpace(assistant.Content) != ""
+		if cfg.RequireFinishTask && !lengthLimited {
 			finishSummary, finishPresent, finishProblem = finishTaskSummary(assistant.ToolCalls)
 		}
 		switch {
-		case cfg.RequireFinishTask && finishProblem != "":
+		case cfg.RequireFinishTask && !lengthLimited && finishProblem != "":
 			invalidReason = "finish"
 			invalidError = finishProblem
 			correctionPrompt = finishTaskCorrection + " " + finishProblem + "."
-		case cfg.RequireFinishTask && finishPresent && background.pending():
+		case cfg.RequireFinishTask && !lengthLimited && finishPresent && background.pending():
 			invalidReason = "background"
 			invalidError = BackgroundDelegationError
 			correctionPrompt = "Background subagents started by this parent are still running or their terminal output has not been read. Continue the parent task: use task_output to join every delegated task, then integrate those results. Do not call finish_task yet."
-		case cfg.RequireFinishTask && finishPresent && background.needsCheckpoint():
+		case cfg.RequireFinishTask && !lengthLimited && finishPresent && background.needsCheckpoint():
 			invalidReason = "composition"
 			invalidError = BackgroundDelegationError
 			correctionPrompt = "All background subagent results are now available. Re-evaluate the original request and integrate those results. Continue with tools if work remains; otherwise call finish_task alone with the final summary."
@@ -554,7 +571,7 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 				invalidReason = "composition"
 				invalidError = BackgroundDelegationError
 				correctionPrompt = "All background subagent results are now available. Re-evaluate the original user request against those results. If work remains, continue with tools now; otherwise return a concrete final answer describing the completed result. Do not answer with a plan for future work."
-			case cfg.RequireFinishTask:
+			case cfg.RequireFinishTask && !lengthLimited:
 				invalidReason = "finish"
 				invalidError = FinishTaskRequiredError
 				correctionPrompt = finishTaskCorrection
@@ -816,6 +833,20 @@ func IsMaxWallTime(errText string) bool {
 // IsContextDeadline reports whether errText is a parent context deadline failure.
 func IsContextDeadline(errText string) bool {
 	return errText == context.DeadlineExceeded.Error() || errText == "context deadline exceeded"
+}
+
+const retryMessageMaxRunes = 512
+
+// safeRetryMessage is the only retry text that may cross a container boundary
+// or reach durable replay. Provider bodies are untrusted: redact obvious
+// secrets and keep the summary bounded even for an unusually large error.
+func safeRetryMessage(message string) string {
+	message = redact.String(message)
+	runes := []rune(message)
+	if len(runes) <= retryMessageMaxRunes {
+		return message
+	}
+	return string(runes[:retryMessageMaxRunes-1]) + "…"
 }
 
 func cancelledResult(ctx context.Context, runID string, steps int, usage *llm.Usage, messages []llm.Message, err error, lastRequestAt time.Time, emit Emitter) Result {

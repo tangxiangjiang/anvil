@@ -29,12 +29,14 @@ import (
 
 // Record kinds.
 const (
-	TypeMeta     = "meta"
-	TypeMessage  = "message"
-	TypeSummary  = "summary" // compression marker (0.9+); prior messages are ignored on Resume
-	TypeRunStart = "run_start"
-	TypeRunEnd   = "run_end"
-	TypeStage    = "stage" // durable Multi/Complex orchestration node (0.52+)
+	TypeMeta      = "meta"
+	TypeMessage   = "message"
+	TypeSummary   = "summary" // compression marker (0.9+); prior messages are ignored on Resume
+	TypeRunStart  = "run_start"
+	TypeRunEnd    = "run_end"
+	TypeStage     = "stage"     // durable Multi/Complex orchestration node (0.52+)
+	TypeRetry     = "retry"     // provider retry signal for transcript replay (0.53+)
+	TypeTruncated = "truncated" // terminal output-limit marker (0.53+)
 )
 
 // ErrNotFound is returned by Load when the agent has no store file.
@@ -100,13 +102,21 @@ type Record struct {
 	// stage
 	Stage json.RawMessage `json:"stage,omitempty"`
 
+	// retry / truncated run signals
+	Text        string `json:"text,omitempty"`
+	Attempt     int    `json:"attempt,omitempty"`
+	MaxAttempts int    `json:"max_attempts,omitempty"`
+	DelayMS     int64  `json:"delay_ms,omitempty"`
+
 	// run_start / run_end
-	RunID  string `json:"run_id,omitempty"`
-	Status string `json:"status,omitempty"`
-	Steps  int    `json:"steps,omitempty"`
-	Usage  *Usage `json:"usage,omitempty"`
-	Err    string `json:"err,omitempty"`
-	Code   string `json:"code,omitempty"`
+	RunID        string `json:"run_id,omitempty"`
+	ContinueFrom string `json:"continue_from,omitempty"`
+	Status       string `json:"status,omitempty"`
+	Steps        int    `json:"steps,omitempty"`
+	Usage        *Usage `json:"usage,omitempty"`
+	Err          string `json:"err,omitempty"`
+	Code         string `json:"code,omitempty"`
+	Truncated    bool   `json:"truncated,omitempty"`
 }
 
 // Store is a directory-backed JSONL session store.

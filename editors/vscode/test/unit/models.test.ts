@@ -8,7 +8,9 @@ import {
   catalogBaseUrl,
   connectionMode,
   connectionProblem,
+  MAX_OUTPUT_TOKEN_LIMIT,
   normalizeModelIds,
+  outputTokenLimitProblem,
   validModelId,
 } from '../../src/models';
 import { configurationProperties } from '../helpers/package';
@@ -51,6 +53,18 @@ test('model connection modes require their effective endpoint and model', () => 
   assert.equal(connectionProblem('gateway', 'https://gateway.example/v1', ''), undefined);
   assert.match(connectionProblem('single', 'https://api.example/v1', '') ?? '', /Model ID/);
   assert.equal(connectionProblem('single', 'https://api.example/v1', 'claude-sonnet-5-5'), undefined);
+});
+
+test('output token limits accept Off and compatible whole-number ceilings', () => {
+  const supported = { thinking: 'none' as const, max_output_tokens: true, vision: false };
+  const unsupported = { ...supported, max_output_tokens: false };
+  assert.equal(outputTokenLimitProblem(0, unsupported), undefined);
+  assert.equal(outputTokenLimitProblem(1, supported), undefined);
+  assert.equal(outputTokenLimitProblem(MAX_OUTPUT_TOKEN_LIMIT, undefined), undefined);
+  assert.match(outputTokenLimitProblem(1, unsupported) ?? '', /does not support/);
+  for (const value of [-1, 1.5, Number.MAX_SAFE_INTEGER, Number.NaN, '100']) {
+    assert.ok(outputTokenLimitProblem(value, supported));
+  }
 });
 
 test('native settings omit model state managed by the focused setup pages', () => {
@@ -142,17 +156,30 @@ test('chat model selection uses the curated list and remains a session option', 
   assert.match(CHAT_JS, /modelPicker\.addEventListener\('click'/);
   assert.match(CHAT_JS, /type: 'selectModel', model: value/);
   assert.match(CHAT_JS, /type: 'effort', effort: button\.dataset\.effort/);
+  assert.match(CHAT_JS, /type: 'outputLimit', value/);
+  assert.match(CHAT, /id="outputLimitInput"/);
 });
 
-test('chat model and effort choices persist per conversation', () => {
+test('chat model, effort, and output-limit choices persist per conversation', () => {
   assert.match(CHAT, /const COMPOSER_OPTIONS_KEY = 'anvil\.composerOptionsByAgent'/);
   assert.match(CHAT, /workspaceState\.get<Record<string, StoredComposerOptions>>\(COMPOSER_OPTIONS_KEY, \{\}\)\[agentId\]/);
   assert.match(CHAT, /const savedComposer = storedComposerOptions\(context, this\.agentId\)/);
   assert.match(CHAT, /if \(savedComposer\.model\) this\.overrides\.model = savedComposer\.model/);
   assert.match(CHAT, /this\.overrides\.effort = savedComposer\.effort \?\?/);
+  assert.match(CHAT, /maxOutputTokens: this\.overrides\.max_output_tokens \?\? 0/);
+  assert.match(CHAT, /max_output_tokens: turn\.maxOutputTokens/);
   assert.match(CHAT, /await this\.rememberComposerOptions\(\);[\s\S]*?this\.postModels\(\)/);
   assert.match(CHAT, /await this\.rememberComposerOptions\(\);[\s\S]*?this\.postEffort\(\)/);
   assert.match(CHAT, /Object\.fromEntries\(entries\.slice\(-COMPOSER_OPTIONS_KEPT\)\)/);
+});
+
+test('truncated answers expose a guarded continuation as a new turn', () => {
+  assert.match(CHAT_JS, /done && done\.truncated === true\) addTruncationNotice\(done\)/);
+  assert.match(CHAT_JS, /button\.disabled = true;[\s\S]*?type: 'continueGenerating', runId/);
+  assert.match(CHAT, /showInformationMessage\([\s\S]*?\{ modal: true \}/);
+  assert.match(CHAT, /turn\.continueFrom = id/);
+  assert.match(CHAT, /pendingContinuations\.has\(id\)/);
+  assert.match(CHAT, /continuationCancelled/);
 });
 
 test('the models manager owns workspace subagent profile CRUD', () => {

@@ -121,6 +121,9 @@ type openAIResponse struct {
 
 // Complete implements Completer.
 func (c *OpenAI) Complete(ctx context.Context, req Request) (*Response, error) {
+	if err := validateCapabilities("openai", req); err != nil {
+		return nil, err
+	}
 	if c.cfg.APIKey == "" {
 		return nil, NewHTTPError(401, "missing API key")
 	}
