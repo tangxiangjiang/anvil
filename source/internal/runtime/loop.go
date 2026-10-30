@@ -51,6 +51,10 @@ type Event struct {
 	// cover, on tool_result (0.46+). It is a fact about the call, so it is set
 	// even when no rule decided it.
 	Protected []string
+	// PathState and PathProblem are the shell path analyzer's finding, on
+	// tool_result. Empty for non-shell calls.
+	PathState   permissions.PathKnowledge
+	PathProblem string
 	// Items is the model's complete task list, on the `todo` event that follows
 	// a successful todo_write call. It is the whole list rather than a change:
 	// a client replaces what it shows, and an empty list clears it.
@@ -763,8 +767,10 @@ func runToolCalls(
 			// The rule travels with the result rather than with the call: which
 			// rule decides a call is only known once it has been decided, and the
 			// card it explains is the one keyed by this call id.
-			Rule:      results[i].Rule,
-			Protected: results[i].Protected,
+			Rule:        results[i].Rule,
+			Protected:   results[i].Protected,
+			PathState:   results[i].PathState,
+			PathProblem: results[i].PathProblem,
 		})
 		// A checklist is a statement about the session, not about this call, so
 		// it is its own event rather than a field on the result: a client draws
@@ -773,10 +779,14 @@ func runToolCalls(
 			emit(Event{Type: "todo", Items: results[i].Todos})
 		}
 		toolMsg := llm.Message{
-			Role:       llm.RoleTool,
-			Content:    content,
-			ToolCallID: tc.ID,
-			Name:       tc.Name,
+			Role:        llm.RoleTool,
+			Content:     content,
+			ToolCallID:  tc.ID,
+			Name:        tc.Name,
+			IsError:     results[i].IsError,
+			Protected:   results[i].Protected,
+			PathState:   string(results[i].PathState),
+			PathProblem: results[i].PathProblem,
 		}
 		messages = append(messages, toolMsg)
 		sink(toolMsg)

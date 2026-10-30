@@ -344,8 +344,10 @@ func TestCancelReleasesAPendingApproval(t *testing.T) {
 		toolTurn("call_1", "write_file", `{"path":"hello.txt","content":"hi"}`),
 		textTurn("never reached"),
 	)
-	h, _ := initHost(t, llm.baseURL())
-	sessionID := startSession(t, h, SessionParams{ApprovalTimeoutMS: -1}) // wait indefinitely
+	h, dir := initHost(t, llm.baseURL())
+	session := resultOf(t, h.callOK(MethodSessionNew, SessionParams{ApprovalTimeoutMS: -1}))
+	sessionID, _ := session["session_id"].(string)
+	agentID, _ := session["agent_id"].(string)
 
 	ack := resultOf(t, h.callOK(MethodPrompt, PromptParams{SessionID: sessionID, Message: "write"}))
 	runID, _ := ack["run_id"].(string)
@@ -360,6 +362,23 @@ func TestCancelReleasesAPendingApproval(t *testing.T) {
 	out := h.collectRun(15*time.Second, nil)
 	if status := paramsOf(t, out.done)["status"]; status != "cancelled" {
 		t.Fatalf("done status=%v want cancelled", status)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "hello.txt")); !os.IsNotExist(err) {
+		t.Fatal("a cancelled approval must not start the tool")
+	}
+	replay := resultOf(t, h.callOK(MethodSessionTranscript, SessionTranscriptParams{AgentID: agentID}))
+	entries, _ := replay["entries"].([]any)
+	var tool map[string]any
+	for _, raw := range entries {
+		entry, _ := raw.(map[string]any)
+		if entry["role"] == "tool" {
+			tool = entry
+			break
+		}
+	}
+	if tool == nil || tool["is_error"] != true ||
+		!strings.Contains(tool["content"].(string), "cancelled") {
+		t.Fatalf("replayed cancellation lost its reason: %v", tool)
 	}
 }
 

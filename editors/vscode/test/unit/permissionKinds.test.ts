@@ -51,4 +51,16 @@ test('the fields a card and a tool card read are the ones the host sends', () =>
     assert.match(PROTOCOL_GO, new RegExp(`"${field}`), `${field} in proto.go`);
     assert.match(PROTOCOL_TS, new RegExp(`\\b${field}\\b`), `${field} in protocol.ts`);
   }
+  for (const field of ['path_analysis', 'path_problem', 'protected']) {
+    assert.match(PROTOCOL_GO, new RegExp(`"${field}`), `${field} in proto.go`);
+    assert.match(PROTOCOL_TS, new RegExp(`\\b${field}\\b`), `${field} in protocol.ts`);
+    assert.match(CHAT_JS, new RegExp(`(?:request|event)\\.${field}`), `${field} in chat.js`);
+  }
+});
+
+test('protected and indeterminate shell calls explain why they require one-shot approval', () => {
+  assert.match(CHAT_JS, /Touches protected paths — explicit approval is required:/);
+  assert.match(CHAT_JS, /Path analysis incomplete/);
+  assert.match(CHAT_JS, /a saved allow cannot cover this command/);
+  assert.match(CHAT_JS, /!request\.decisions\.includes\('allow_session'\)/);
 });

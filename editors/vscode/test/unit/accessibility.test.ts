@@ -67,7 +67,10 @@ test('the assertive region carries approvals and errors, and only those', () => 
   // interrupt. A count is deliberate — a new use should be a decision, not a
   // drifting default of "say everything urgently".
   assert.equal(alertUses.length, 5);
-  assert.match(CHAT_JS, /announceAlert\('Approval needed: ' \+ toolTitle\(request\.tool\)/);
+  assert.match(CHAT_JS, /let alert = 'Approval needed: ' \+ toolTitle\(request\.tool\)/);
+  assert.match(CHAT_JS, /alert \+= '\. Touches protected paths: ' \+ request\.protected\.join/);
+  assert.match(CHAT_JS, /alert \+= '\. Path analysis incomplete'/);
+  assert.match(CHAT_JS, /announceAlert\(alert\);/);
   assert.match(CHAT_JS, /function addNotice\(text\)[\s\S]{0,200}announceAlert\(text\)/);
   assert.match(CHAT_JS, /if \(level === 'error'\) announceAlert\(message\);/);
 });

@@ -84,9 +84,9 @@ func (s *Source) Read() (*Set, error) {
 		return s.last, err
 	}
 	merged := Merge(user, workspace, code)
-	if merged != nil {
-		merged.Protect(Protection{Root: s.cwd, Home: s.home, AnvilHome: s.anvilHome, Extra: extra})
-	}
+	merged = WithProtection(merged, Protection{
+		Root: s.cwd, Home: s.home, AnvilHome: s.anvilHome, Extra: extra,
+	})
 	s.last = merged
 	return merged, nil
 }

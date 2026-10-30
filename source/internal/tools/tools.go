@@ -61,6 +61,11 @@ type Result struct {
 	// decided — including for a call the mode let through — and a client shows it
 	// after the fact so the record says why no allow covered it.
 	Protected []string
+	// PathState and PathProblem report shell path analysis. They are empty for
+	// non-shell tools; an indeterminate result is why the call required an
+	// explicit decision even when no particular protected path could be named.
+	PathState   permissions.PathKnowledge
+	PathProblem string
 	// Todos is the list a todo_write call left behind. It is read only from a
 	// successful call named that: an empty slice is a list that was cleared,
 	// which is a different statement from a call that wrote none.
@@ -389,6 +394,10 @@ type GatedCall struct {
 	// Set whether or not a rule asked, because "this path is protected" is why an
 	// allow could not have covered the call (0.46+).
 	Protected []string
+	// PathState and PathProblem are the shell analyzer's immutable finding for
+	// this call. Empty for non-shell tools.
+	PathState   permissions.PathKnowledge
+	PathProblem string
 }
 
 var mutatingTools = map[string]bool{
@@ -431,9 +440,16 @@ func (r *Registry) Defs() []llm.ToolDef {
 
 // Execute runs a named tool.
 func (r *Registry) Execute(ctx context.Context, name string, args json.RawMessage) (res Result) {
+	var facts permissions.CallFacts
+	var protected []string
 	defer func() {
 		if rec := recover(); rec != nil {
 			res = Result{Content: fmt.Sprintf("tool panic: %v", rec), IsError: true}
+		}
+		res.PathState = facts.PathState
+		res.PathProblem = facts.PathProblem
+		if len(res.Protected) == 0 && len(protected) > 0 {
+			res.Protected = protected
 		}
 	}()
 	t, ok := r.tools[name]
@@ -463,10 +479,9 @@ func (r *Registry) Execute(ctx context.Context, name string, args json.RawMessag
 		}
 		rules = read // on a failed read, Source.Read has returned the last good policy
 	}
-	var decision permissions.Decision
-	if rules.Len() > 0 {
-		decision = rules.Evaluate(callFacts(name, args), runtime.GOOS)
-	}
+	facts = callFacts(name, args)
+	decision := rules.Evaluate(facts, runtime.GOOS)
+	protected = decision.Protected
 	var decidedBy *permissions.Decision
 	if decision.Matched {
 		decidedBy = &decision
@@ -477,7 +492,9 @@ func (r *Registry) Execute(ctx context.Context, name string, args json.RawMessag
 	// A rule that asks insists on a prompt even for a tool the gate would not
 	// have covered; a rule that allows runs the call without one; and no rule at
 	// all leaves the gate to decide, exactly as before.
-	ask := r.gated(name, t)
+	mustConfirm := facts.Command != "" &&
+		(len(decision.Protected) > 0 || facts.PathState == permissions.PathsIndeterminate)
+	ask := r.gated(name, t) || mustConfirm
 	if decision.Matched {
 		ask = decision.Effect == permissions.Ask
 	}
@@ -493,11 +510,13 @@ func (r *Registry) Execute(ctx context.Context, name string, args json.RawMessag
 			// A denied call is reported to the model as a tool error rather than
 			// aborting the run, so the model can adapt instead of dying.
 			next, err := r.permission(ctx, GatedCall{
-				Name:      name,
-				Args:      args,
-				Preview:   r.PreviewFor(name, args),
-				Rule:      askedBy,
-				Protected: decision.Protected,
+				Name:        name,
+				Args:        args,
+				Preview:     r.PreviewFor(name, args),
+				Rule:        askedBy,
+				Protected:   decision.Protected,
+				PathState:   facts.PathState,
+				PathProblem: facts.PathProblem,
 			})
 			if err != nil {
 				return Result{Content: err.Error(), IsError: true, Rule: decidedBy, Protected: decision.Protected}
@@ -509,6 +528,12 @@ func (r *Registry) Execute(ctx context.Context, name string, args json.RawMessag
 			// Nobody to ask, and a rule that says "ask" must never quietly become
 			// "run it".
 			return Result{Content: ruleNoChannelMessage(name, decision), IsError: true, Rule: decidedBy, Protected: decision.Protected}
+		case mustConfirm:
+			return Result{
+				Content:   pathNoChannelMessage(name, facts),
+				IsError:   true,
+				Protected: decision.Protected,
+			}
 		}
 	}
 	// The pre-image is taken from the arguments the call will actually run
@@ -533,11 +558,18 @@ func (r *Registry) Execute(ctx context.Context, name string, args json.RawMessag
 // the arguments alone, so a rule costs no dry run and no disk read — and a rule
 // can only ever match what the approval card shows.
 func callFacts(name string, args json.RawMessage) permissions.CallFacts {
-	return permissions.CallFacts{
+	facts := permissions.CallFacts{
 		Tool:    name,
 		Command: commandOf(name, args),
 		Paths:   pathsOf(name, args),
 	}
+	if facts.Command != "" {
+		analysis := permissions.AnalyzeShellPaths(facts.Command, runtime.GOOS)
+		facts.Paths = analysis.Paths
+		facts.PathState = analysis.State
+		facts.PathProblem = analysis.Problem
+	}
+	return facts
 }
 
 // captureBefore records the pre-image of every path this call names.
@@ -636,6 +668,14 @@ func ruleDenyMessage(name string, d permissions.Decision) string {
 // confirmation in a run that has no way to ask for it.
 func ruleNoChannelMessage(name string, d permissions.Decision) string {
 	return name + " denied: " + d.Ref() + " asks for confirmation and no approval channel is installed"
+}
+
+func pathNoChannelMessage(name string, facts permissions.CallFacts) string {
+	if facts.PathState == permissions.PathsIndeterminate {
+		return name + " denied: shell path analysis is incomplete (" + facts.PathProblem +
+			") and no approval channel is installed"
+	}
+	return name + " denied: the shell command touches a protected path and no approval channel is installed"
 }
 
 func (r *Registry) resolvePath(p string) (string, error) {

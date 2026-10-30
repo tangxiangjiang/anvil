@@ -63,7 +63,8 @@ test('a tool is called by the name a reader knows', () => {
   assert.match(call, /el\('span', 'name', toolTitle\(event\.name\)\)/);
   assert.doesNotMatch(call, /event\.name \|\| 'tool'/);
   assert.match(CHAT_JS, /el\('span', 'tool-name', toolTitle\(request\.tool\)\)/);
-  assert.match(CHAT_JS, /announceAlert\('Approval needed: ' \+ toolTitle\(request\.tool\)/);
+  assert.match(CHAT_JS, /let alert = 'Approval needed: ' \+ toolTitle\(request\.tool\)/);
+  assert.match(CHAT_JS, /announceAlert\(alert\);/);
 });
 
 test('a read names its file and the lines it used', () => {

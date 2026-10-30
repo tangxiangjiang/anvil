@@ -6,6 +6,7 @@ package permissions
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -180,16 +181,55 @@ func TestUserGlobsAddToTheFixedList(t *testing.T) {
 	}
 }
 
-// A shell rule matches the command line, not paths. This is the honest limit of
-// the protection: a command that names .git is still covered by an allow rule,
-// because the card never showed those paths as files.
-func TestShellRulesAreNotPathProtected(t *testing.T) {
+// Shell operands join file-tool paths at the same protection boundary: an allow
+// may match the command text, but cannot cover a protected lexical candidate.
+func TestShellRulesArePathProtected(t *testing.T) {
 	dir := t.TempDir()
 	set := mergeForTest(t, dir, nil, []Rule{{Effect: "allow", Tool: "shell", Pattern: "readonly"}})
 	set.Protect(Protection{Root: dir})
 	d := set.Evaluate(CallFacts{Tool: "shell", Command: "cat .git/config"}, "linux")
-	if !d.Matched || d.Effect != Allow {
-		t.Fatalf("Evaluate = %+v, want the command rule: protection is about paths", d)
+	if d.Matched {
+		t.Fatalf("Evaluate = %+v, want the allow suppressed", d)
+	}
+	if d.PathState != PathsKnown || len(d.Protected) != 1 || d.Protected[0] != ".git/config" {
+		t.Fatalf("shell path finding was not preserved: %+v", d)
+	}
+}
+
+func TestProtectionExistsWithoutRules(t *testing.T) {
+	dir := t.TempDir()
+	set := WithProtection(nil, Protection{Root: dir})
+	if set == nil || set.Len() != 0 {
+		t.Fatalf("WithProtection = %v, want an empty protected set", set)
+	}
+	d := set.Evaluate(CallFacts{Tool: "shell", Command: "cat .git/config"}, "linux")
+	if d.Matched || d.PathState != PathsKnown ||
+		len(d.Protected) != 1 || d.Protected[0] != ".git/config" {
+		t.Fatalf("Evaluate = %+v, want protected fact without a rule", d)
+	}
+}
+
+func TestShellCandidatesReachExistingProtectionMatcher(t *testing.T) {
+	dir := t.TempDir()
+	anvilHome := filepath.Join(dir, "user-state")
+	set := mergeForTest(t, dir, nil, []Rule{{Effect: "allow", Tool: "shell"}})
+	set.Protect(Protection{
+		Root:      dir,
+		AnvilHome: anvilHome,
+		Extra:     []string{"secrets/**"},
+	})
+
+	commands := []string{
+		`cat src/../.GIT/config`,
+		`cat .anvil/checkpoints/x`,
+		`cat secrets/token`,
+		`cat "` + filepath.ToSlash(filepath.Join(anvilHome, "config.json")) + `"`,
+	}
+	for _, command := range commands {
+		d := set.Evaluate(CallFacts{Tool: "shell", Command: command}, runtime.GOOS)
+		if d.Matched || len(d.Protected) != 1 {
+			t.Errorf("%q: Evaluate = %+v, want one protected candidate and no allow", command, d)
+		}
 	}
 }
 

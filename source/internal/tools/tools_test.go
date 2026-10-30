@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/anvil-dev/anvil/internal/permissions"
 	"github.com/anvil-dev/anvil/internal/tools"
 )
 
@@ -150,6 +151,87 @@ func TestGrepAndGlobSkipIntermediate(t *testing.T) {
 	if strings.Contains(globRes.Content, "Intermediate") {
 		t.Fatalf("glob should skip Intermediate: %q", globRes.Content)
 	}
+}
+
+func TestCallFactsForShellIncludesPathAnalysis(t *testing.T) {
+	facts := tools.CallFactsFor("shell", mustJSON(map[string]any{
+		"command": "cat .git/config",
+	}))
+	if facts.PathState != permissions.PathsKnown || facts.PathProblem != "" {
+		t.Fatalf("CallFactsFor analysis = %q %q", facts.PathState, facts.PathProblem)
+	}
+	if len(facts.Paths) != 1 || facts.Paths[0] != ".git/config" {
+		t.Fatalf("CallFactsFor paths = %v, want [.git/config]", facts.Paths)
+	}
+}
+
+func TestProtectedShellRequiresApprovalChannel(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(dir, ".git", "marker")
+	if err := os.WriteFile(marker, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	set, err := permissions.New([]permissions.Rule{{Effect: "allow", Tool: "shell"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	set.Protect(permissions.Protection{Root: dir})
+	reg := tools.NewRegistry(dir, true)
+	reg.SetPermissionRules(set)
+
+	res := reg.Execute(context.Background(), "shell", shellArgsForTest(shellWriteProtectedCommand()))
+	if !res.IsError || !strings.Contains(res.Content, "no approval channel") {
+		t.Fatalf("Execute = %+v, want fail-closed no-channel refusal", res)
+	}
+	if got, _ := os.ReadFile(marker); string(got) != "old" {
+		t.Fatalf("protected command ran without approval: %q", got)
+	}
+	if res.PathState != permissions.PathsKnown || len(res.Protected) != 1 {
+		t.Fatalf("analysis finding missing from result: %+v", res)
+	}
+}
+
+func TestIndeterminateShellRequiresApprovalChannel(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "marker")
+	if err := os.WriteFile(marker, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ANVIL_TEST_TARGET", marker)
+	reg := tools.NewRegistry(dir, true)
+
+	res := reg.Execute(context.Background(), "shell", shellArgsForTest(shellWriteDynamicCommand()))
+	if !res.IsError || !strings.Contains(res.Content, permissions.PathProblemDynamicPath) {
+		t.Fatalf("Execute = %+v, want dynamic-path refusal", res)
+	}
+	if got, _ := os.ReadFile(marker); string(got) != "old" {
+		t.Fatalf("indeterminate command ran without approval: %q", got)
+	}
+	if res.PathState != permissions.PathsIndeterminate ||
+		res.PathProblem != permissions.PathProblemDynamicPath {
+		t.Fatalf("analysis finding missing from result: %+v", res)
+	}
+}
+
+func shellArgsForTest(command string) json.RawMessage {
+	return mustJSON(map[string]any{"command": command})
+}
+
+func shellWriteProtectedCommand() string {
+	if runtime.GOOS == "windows" {
+		return `echo changed> .git\marker`
+	}
+	return `printf changed > .git/marker`
+}
+
+func shellWriteDynamicCommand() string {
+	if runtime.GOOS == "windows" {
+		return `echo changed> "%ANVIL_TEST_TARGET%"`
+	}
+	return `printf changed > "$ANVIL_TEST_TARGET"`
 }
 
 func mustJSON(v any) json.RawMessage {

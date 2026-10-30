@@ -6,6 +6,8 @@ package editorhost
 import (
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -243,4 +245,178 @@ func TestProtectedPathSkipsTheAllowRuleAndSaysSo(t *testing.T) {
 	if _, ok := results[0]["rule"]; ok {
 		t.Errorf("an allow that was skipped must not be reported as deciding: %v", results[0]["rule"])
 	}
+}
+
+func TestProtectedShellPausesAndCarriesAnalysis(t *testing.T) {
+	llm := newStubLLM(t,
+		toolTurn("call_1", "shell", shellCommandArgs(protectedShellCommand())),
+		textTurn("done"),
+	)
+	h, dir := initHost(t, llm.baseURL())
+	if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeRules(t, dir, `{"version":1,"rules":[{"effect":"allow","tool":"shell"}]}`)
+	sessionID := startSession(t, h, SessionParams{PermissionMode: ModeAuto})
+
+	var card map[string]any
+	out := promptRun(t, h, sessionID, "write protected state", func(req map[string]any) map[string]any {
+		card = req
+		if _, err := os.Stat(filepath.Join(dir, ".git", "config")); !os.IsNotExist(err) {
+			t.Fatal("the shell command started before approval")
+		}
+		return map[string]any{"decision": DecisionAllow}
+	})
+	if card == nil {
+		t.Fatal("protected shell command did not request approval")
+	}
+	if card["path_analysis"] != "known" {
+		t.Fatalf("path_analysis = %v, want known", card["path_analysis"])
+	}
+	protected, _ := card["protected"].([]any)
+	if len(protected) != 1 || protected[0] != protectedShellPath() {
+		t.Fatalf("protected = %v", card["protected"])
+	}
+	decisions, _ := card["decisions"].([]any)
+	if len(decisions) != 2 || decisions[0] != DecisionAllow || decisions[1] != DecisionDeny {
+		t.Fatalf("decisions = %v, want one-shot allow and deny", decisions)
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, ".git", "config")); err != nil || !strings.Contains(string(got), "protected") {
+		t.Fatalf("approved command did not run: %q, %v", got, err)
+	}
+	results := toolResultsOf(t, out.events)
+	if len(results) != 1 || results[0]["path_analysis"] != "known" {
+		t.Fatalf("tool result lost analysis: %v", results)
+	}
+}
+
+func TestIndeterminateShellDenialSurvivesTranscriptReplay(t *testing.T) {
+	llm := newStubLLM(t,
+		toolTurn("call_1", "shell", shellCommandArgs(dynamicShellCommand())),
+		textTurn("done"),
+	)
+	h, _ := initHost(t, llm.baseURL())
+	session := resultOf(t, h.callOK(MethodSessionNew, SessionParams{PermissionMode: ModeAuto}))
+	sessionID, _ := session["session_id"].(string)
+	agentID, _ := session["agent_id"].(string)
+
+	var card map[string]any
+	out := promptRun(t, h, sessionID, "run it", func(req map[string]any) map[string]any {
+		card = req
+		return map[string]any{"decision": DecisionDeny, "message": "dynamic shell path denied"}
+	})
+	if card["path_analysis"] != "indeterminate" ||
+		card["path_problem"] != "dynamic_path" {
+		t.Fatalf("approval analysis = %v / %v", card["path_analysis"], card["path_problem"])
+	}
+	if protected, _ := card["protected"].([]any); len(protected) != 0 {
+		t.Fatalf("an unknown path must not be mislabeled protected: %v", protected)
+	}
+	results := toolResultsOf(t, out.events)
+	if len(results) != 1 || results[0]["is_error"] != true ||
+		results[0]["path_problem"] != "dynamic_path" {
+		t.Fatalf("denied result = %v", results)
+	}
+
+	h.callOK(MethodSessionClose, SessionRefParams{SessionID: sessionID})
+	replay := resultOf(t, h.callOK(MethodSessionTranscript, SessionTranscriptParams{AgentID: agentID}))
+	entries, _ := replay["entries"].([]any)
+	var stored map[string]any
+	for _, raw := range entries {
+		entry, _ := raw.(map[string]any)
+		if entry["role"] == "tool" {
+			stored = entry
+			break
+		}
+	}
+	if stored == nil || stored["is_error"] != true ||
+		stored["path_analysis"] != "indeterminate" ||
+		stored["path_problem"] != "dynamic_path" ||
+		!strings.Contains(stored["content"].(string), "dynamic shell path denied") {
+		t.Fatalf("replayed denial lost its reason: %v", stored)
+	}
+}
+
+func TestProtectedShellIgnoresPriorSessionAllow(t *testing.T) {
+	llm := newStubLLM(t,
+		toolTurn("call_1", "shell", shellCommandArgs("echo plain")),
+		toolTurn("call_2", "shell", shellCommandArgs(protectedShellCommand())),
+		textTurn("done"),
+	)
+	h, dir := initHost(t, llm.baseURL())
+	if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sessionID := startSession(t, h, SessionParams{PermissionMode: ModeAsk})
+
+	var cards []map[string]any
+	promptRun(t, h, sessionID, "run both", func(req map[string]any) map[string]any {
+		cards = append(cards, req)
+		if len(cards) == 1 {
+			return map[string]any{"decision": DecisionAllowSession}
+		}
+		return map[string]any{"decision": DecisionDeny}
+	})
+	if len(cards) != 2 {
+		t.Fatalf("protected call reused the session allow: %d cards", len(cards))
+	}
+	if protected, _ := cards[1]["protected"].([]any); len(protected) != 1 {
+		t.Fatalf("second card lost protected path: %v", cards[1])
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".git", "config")); !os.IsNotExist(err) {
+		t.Fatal("denied protected command ran")
+	}
+}
+
+func TestAutoModeAsksForOtherwiseReadOnlyProtectedShell(t *testing.T) {
+	command := `cat .git/config`
+	if runtime.GOOS == "windows" {
+		command = `type .git\config`
+	}
+	llm := newStubLLM(t,
+		toolTurn("call_1", "shell", shellCommandArgs(command)),
+		textTurn("done"),
+	)
+	h, dir := initHost(t, llm.baseURL())
+	if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".git", "config"), []byte("secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sessionID := startSession(t, h, SessionParams{PermissionMode: ModeAuto})
+
+	asks := 0
+	promptRun(t, h, sessionID, "read it", func(req map[string]any) map[string]any {
+		asks++
+		return map[string]any{"decision": DecisionDeny}
+	})
+	if asks != 1 {
+		t.Fatalf("auto mode approved a protected read without asking: %d cards", asks)
+	}
+}
+
+func shellCommandArgs(command string) string {
+	return `{"command":` + strconv.Quote(command) + `}`
+}
+
+func protectedShellCommand() string {
+	if runtime.GOOS == "windows" {
+		return `echo protected> .git\config`
+	}
+	return `printf protected > .git/config`
+}
+
+func protectedShellPath() string {
+	if runtime.GOOS == "windows" {
+		return `.git\config`
+	}
+	return `.git/config`
+}
+
+func dynamicShellCommand() string {
+	if runtime.GOOS == "windows" {
+		return `echo %ANVIL_TARGET%`
+	}
+	return `echo "$ANVIL_TARGET"`
 }

@@ -85,7 +85,7 @@ type Agent struct {
 	// promptSpec is the layers systemPrompt was composed from; a run composes again from
 	// it to add its matched skills and directive before the closing line.
 	promptSpec prompt.Spec
-	hookFile     *hooks.File
+	hookFile   *hooks.File
 }
 
 // Create validates options and returns a new local agent (no LLM call).
@@ -200,7 +200,7 @@ func createAgent(ctx context.Context, opts Options, ident subagentIdentity) (*Ag
 		lsp:          lspSup,
 		history:      nil,
 		systemPrompt: prompt.Compose(spec),
-			promptSpec:   spec,
+		promptSpec:   spec,
 		hookFile:     hookFile,
 	}, nil
 }
@@ -313,7 +313,7 @@ func Resume(ctx context.Context, agentID string, opts Options) (*Agent, error) {
 		lsp:          lspSup,
 		history:      historyFromRecords(records),
 		systemPrompt: prompt.Compose(spec),
-			promptSpec:   spec,
+		promptSpec:   spec,
 		hookFile:     hookFile,
 	}, nil
 }
@@ -575,8 +575,10 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 				Preview:  toToolPreview(call.Preview),
 				// Which rule asked, when one did. A client shows it, so a prompt
 				// never appears without a reason the user can act on.
-				Rule:      permissionRuleMatch(call.Rule),
-				Protected: call.Protected,
+				Rule:         permissionRuleMatch(call.Rule),
+				Protected:    call.Protected,
+				PathAnalysis: string(call.PathState),
+				PathProblem:  call.PathProblem,
 				// Who is asking: a subagent's call is decided by the same callback
 				// as its parent's, and the card must be able to say whose it is.
 				AgentID: agentID,
@@ -966,17 +968,15 @@ func buildPermissionRules(cwd string, opts Options) (*permissions.Set, error) {
 		}
 	}
 	set := permissions.Merge(user, workspace, code)
-	if set != nil {
-		// Protected paths are a fact about where the session runs, not about which
-		// file supplied a rule, so they are installed on every set that has rules.
-		anvilHome, _ := permissions.AnvilHome()
-		set.Protect(permissions.Protection{
-			Root:      cwd,
-			Home:      permissions.HomeDir(),
-			AnvilHome: anvilHome,
-			Extra:     extra,
-		})
-	}
+	// Protected paths are a fact about where the session runs, not about whether
+	// any rule file happened to contain a rule.
+	anvilHome, _ := permissions.AnvilHome()
+	set = permissions.WithProtection(set, permissions.Protection{
+		Root:      cwd,
+		Home:      permissions.HomeDir(),
+		AnvilHome: anvilHome,
+		Extra:     extra,
+	})
 	return set, nil
 }
 
@@ -1402,6 +1402,8 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 			Delay:          ev.Delay,
 			Rule:           permissionRuleMatch(ev.Rule),
 			Protected:      ev.Protected,
+			PathAnalysis:   string(ev.PathState),
+			PathProblem:    ev.PathProblem,
 			Usage:          usageInfo(ev.Usage),
 			UsageEstimated: ev.UsageEstimated,
 			Items:          todoItemsInfo(ev.Items),
@@ -1514,12 +1516,16 @@ func (a *Agent) persistMessage(runID string, m llm.Message) {
 		return
 	}
 	rec := store.Record{
-		Type:       store.TypeMessage,
-		RunID:      runID,
-		Role:       string(m.Role),
-		Content:    m.Content,
-		ToolCallID: m.ToolCallID,
-		Name:       m.Name,
+		Type:        store.TypeMessage,
+		RunID:       runID,
+		Role:        string(m.Role),
+		Content:     m.Content,
+		ToolCallID:  m.ToolCallID,
+		Name:        m.Name,
+		IsError:     m.IsError,
+		Protected:   m.Protected,
+		PathState:   m.PathState,
+		PathProblem: m.PathProblem,
 	}
 	for _, tc := range m.ToolCalls {
 		rec.ToolCalls = append(rec.ToolCalls, store.ToolCall{

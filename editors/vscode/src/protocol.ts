@@ -522,6 +522,7 @@ export type PermissionMode = (typeof PermissionModes)[number];
 /** Decisions the host accepts, in the order a prompt should offer them. */
 export const Decisions = ['allow', 'allow_session', 'deny'] as const;
 export type Decision = (typeof Decisions)[number];
+export type PathAnalysis = 'known' | 'indeterminate';
 
 /**
  * What a gated call would do. Best-effort by contract: an absent `kind` means
@@ -578,6 +579,10 @@ export interface ApprovalRequest {
    * read — which is also why `remember` offers nothing.
    */
   protected?: string[];
+  /** Shell path analysis; omitted for non-shell calls. */
+  path_analysis?: PathAnalysis;
+  /** Stable reason when path_analysis is indeterminate. */
+  path_problem?: string;
   /**
    * The "always allow" choices this call can honestly be offered. Empty or
    * absent means no rule shape would decide this call — a compound shell line,
@@ -861,6 +866,10 @@ export interface TranscriptEntry {
   tool_call_id?: string;
   name?: string;
   tool_calls?: TranscriptCall[];
+  is_error?: boolean;
+  protected?: string[];
+  path_analysis?: PathAnalysis;
+  path_problem?: string;
 
   /** run_end */
   status?: RunStatus;
@@ -1272,6 +1281,9 @@ export interface HostEvent {
    * call, because it is how the record says no remembered rule decided it.
    */
   protected?: string[];
+  /** Shell path analysis preserved on live and replayed tool results. */
+  path_analysis?: PathAnalysis;
+  path_problem?: string;
   /**
    * The complete task list on a `todo` event (0.40.9). Present as [] when a
    * call cleared it — which is different from the field being absent on every

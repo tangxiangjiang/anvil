@@ -27,7 +27,7 @@ const ProtocolVersion = 1
 // product line, not the protocol revision (that is ProtocolVersion): the
 // extension compares the dotted minor it packaged with against this string and
 // warns on a mismatch, so the two have to be released together (0.46).
-var Version = "0.46.85"
+var Version = "0.46.87"
 
 // Client to host request methods.
 const (
@@ -686,6 +686,10 @@ type ApprovalRequestParams struct {
 	// Anvil home, and the user file's globs. It is set whether or not a rule
 	// asked, because it is why no remembered allow can settle this call.
 	Protected []string `json:"protected,omitempty"`
+	// PathAnalysis and PathProblem report the shell analyzer's finding. They are
+	// omitted for non-shell tools.
+	PathAnalysis string `json:"path_analysis,omitempty"`
+	PathProblem  string `json:"path_problem,omitempty"`
 	// TimeoutMS is how long the host will wait, for a UI countdown.
 	TimeoutMS int `json:"timeout_ms,omitempty"`
 	// AgentID and Depth name the agent whose call is being decided, so a card can
@@ -928,11 +932,15 @@ type TranscriptEntry struct {
 	RunID string `json:"run_id,omitempty"`
 
 	// message
-	Role       string           `json:"role,omitempty"`
-	Content    string           `json:"content,omitempty"`
-	ToolCallID string           `json:"tool_call_id,omitempty"`
-	Name       string           `json:"name,omitempty"`
-	ToolCalls  []TranscriptCall `json:"tool_calls,omitempty"`
+	Role         string           `json:"role,omitempty"`
+	Content      string           `json:"content,omitempty"`
+	ToolCallID   string           `json:"tool_call_id,omitempty"`
+	Name         string           `json:"name,omitempty"`
+	ToolCalls    []TranscriptCall `json:"tool_calls,omitempty"`
+	IsError      bool             `json:"is_error,omitempty"`
+	Protected    []string         `json:"protected,omitempty"`
+	PathAnalysis string           `json:"path_analysis,omitempty"`
+	PathProblem  string           `json:"path_problem,omitempty"`
 
 	// run_end
 	Status string `json:"status,omitempty"`
@@ -1433,7 +1441,9 @@ type EventParams struct {
 	// (0.46+), set on a tool_result whether or not a rule decided it. It is how
 	// the record says after the fact why a remembered allow did not cover the
 	// call — including where bypass ran it all the same.
-	Protected []string `json:"protected,omitempty"`
+	Protected    []string `json:"protected,omitempty"`
+	PathAnalysis string   `json:"path_analysis,omitempty"`
+	PathProblem  string   `json:"path_problem,omitempty"`
 	// Items is the complete task list on a `todo` event (0.40.9). It is a
 	// pointer so that an empty list reaches the client as [] — clearing the
 	// panel — while every other event omits the field entirely.

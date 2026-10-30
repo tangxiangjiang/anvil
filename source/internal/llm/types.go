@@ -28,6 +28,13 @@ type Message struct {
 	ToolCallID string
 	ToolCalls  []ToolCall
 	Name       string
+	// Result metadata is used only on tool messages. Providers ignore it; the
+	// session store keeps it so a transcript replay can render the same safety
+	// explanation and error state as the live event.
+	IsError     bool     `json:"-"`
+	Protected   []string `json:"-"`
+	PathState   string   `json:"-"`
+	PathProblem string   `json:"-"`
 	// ProviderState is what a provider needs back, verbatim, to continue the tool loop this
 	// message started (0.48+). Today that is one thing: Anthropic's signed thinking blocks,
 	// which the Messages API requires on the next request of a tool-use turn (docs: "Required:

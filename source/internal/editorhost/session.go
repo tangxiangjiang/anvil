@@ -188,6 +188,8 @@ func projectEvent(sessionID, runID string, ev anvil.Event) (EventParams, bool) {
 		Code:           string(ev.Code),
 		Rule:           ruleInfo(ev.Rule),
 		Protected:      ev.Protected,
+		PathAnalysis:   ev.PathAnalysis,
+		PathProblem:    ev.PathProblem,
 		Usage:          usageWire(ev.Usage),
 		UsageEstimated: ev.UsageEstimated,
 		Items:          items,

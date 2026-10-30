@@ -179,6 +179,12 @@ type CallFacts struct {
 	// the call touches no file, or when they could not be determined — and a
 	// call whose paths are unknown never matches a path rule.
 	Paths []string
+	// PathState says whether Paths is the complete lexical path-candidate set.
+	// It is empty for non-shell calls.
+	PathState PathKnowledge
+	// PathProblem is the stable reason an indeterminate shell command could not
+	// produce a complete path set.
+	PathProblem string
 }
 
 // Decision is what a rule set concluded about a call.
@@ -204,6 +210,10 @@ type Decision struct {
 	// "this path is protected" is a fact about the call, not about a rule. An
 	// allow rule is skipped for such a call; deny and ask still decide.
 	Protected []string
+	// PathState and PathProblem preserve the shell analyzer's finding for callers
+	// that need to explain why an allow was not eligible.
+	PathState   PathKnowledge
+	PathProblem string
 }
 
 // String names the rule the way the file spells it, for a message a reader can
@@ -344,11 +354,17 @@ func (s *Set) Evaluate(f CallFacts, goos string) Decision {
 	if s == nil {
 		return Decision{}
 	}
+	if f.Command != "" && f.PathState == "" {
+		analysis := AnalyzeShellPaths(f.Command, goos)
+		f.Paths = analysis.Paths
+		f.PathState = analysis.State
+		f.PathProblem = analysis.Problem
+	}
 	protected := s.protectedPaths(f)
 	var best Decision
 	for i := range s.rules {
 		r := s.rules[i]
-		if len(protected) > 0 && r.effect == Allow {
+		if (len(protected) > 0 || f.PathState == PathsIndeterminate) && r.effect == Allow {
 			continue
 		}
 		if !r.covers(f, goos) {
@@ -371,5 +387,7 @@ func (s *Set) Evaluate(f CallFacts, goos string) Decision {
 		}
 	}
 	best.Protected = protected
+	best.PathState = f.PathState
+	best.PathProblem = f.PathProblem
 	return best
 }

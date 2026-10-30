@@ -69,9 +69,8 @@ test('a stored conversation replays oldest first, in the shapes the tab draws', 
   assert.equal(result.event.type, 'tool_result');
   assert.equal(result.event.tool_call_id, 't1');
   assert.equal(result.event.content, 'wrote 1 bytes');
-  // And it claims nothing about failure. Whether the call failed was never
-  // written down; an `is_error` invented here would be a card that says "done"
-  // or "failed" on no evidence at all.
+  // A legacy record that predates persisted result metadata still claims
+  // nothing about failure.
   assert.equal(result.event.is_error, undefined);
 
   const end = steps[5];
@@ -80,6 +79,33 @@ test('a stored conversation replays oldest first, in the shapes the tab draws', 
   assert.equal(end.done.steps, 3);
   assert.equal(end.done.usage?.total_tokens, 3);
   assert.equal(end.done.session_id, 's1');
+});
+
+test('shell safety findings and denial state survive replay', () => {
+  const steps = replayOf(
+    [
+      {
+        kind: 'message',
+        run_id: 'r1',
+        role: 'tool',
+        tool_call_id: 't1',
+        name: 'shell',
+        content: 'dynamic shell path denied',
+        is_error: true,
+        protected: ['.git/config'],
+        path_analysis: 'indeterminate',
+        path_problem: 'dynamic_path',
+      },
+    ],
+    's1',
+  );
+  const result = steps.at(-1);
+  assert.ok(result?.kind === 'event');
+  assert.equal(result.event.type, 'tool_result');
+  assert.equal(result.event.is_error, true);
+  assert.deepEqual(result.event.protected, ['.git/config']);
+  assert.equal(result.event.path_analysis, 'indeterminate');
+  assert.equal(result.event.path_problem, 'dynamic_path');
 });
 
 test('a result whose call fell outside the window gets the row it should have had', () => {

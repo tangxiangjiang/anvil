@@ -583,16 +583,20 @@ func (s *Server) handleSessionTranscript(ctx context.Context, params json.RawMes
 	}
 	for _, in := range result.Entries {
 		entry := TranscriptEntry{
-			Kind:       in.Kind,
-			RunID:      in.RunID,
-			Role:       in.Role,
-			Content:    in.Content,
-			ToolCallID: in.ToolCallID,
-			Name:       in.Name,
-			Status:     in.Status,
-			Steps:      in.Steps,
-			Err:        in.Err,
-			Code:       string(in.Code),
+			Kind:         in.Kind,
+			RunID:        in.RunID,
+			Role:         in.Role,
+			Content:      in.Content,
+			ToolCallID:   in.ToolCallID,
+			Name:         in.Name,
+			IsError:      in.IsError,
+			Protected:    in.Protected,
+			PathAnalysis: in.PathAnalysis,
+			PathProblem:  in.PathProblem,
+			Status:       in.Status,
+			Steps:        in.Steps,
+			Err:          in.Err,
+			Code:         string(in.Code),
 		}
 		for _, tc := range in.ToolCalls {
 			entry.ToolCalls = append(entry.ToolCalls, TranscriptCall{
@@ -1853,7 +1857,8 @@ func approvalTimeout(ms int) time.Duration {
 func (s *Server) permissionHook(sess *session, timeout time.Duration) anvil.PermissionFunc {
 	return func(ctx context.Context, req anvil.PermissionRequest) (anvil.PermissionDecision, error) {
 		scope := approvalScope(req.Preview)
-		if s.approvals.sessionAllowed(sess.id, req.ToolName, scope) {
+		mustConfirm := requiresPathConfirmation(req)
+		if !mustConfirm && s.approvals.sessionAllowed(sess.id, req.ToolName, scope) {
 			return anvil.PermissionDecision{Allow: true}, nil
 		}
 
@@ -1861,19 +1866,28 @@ func (s *Server) permissionHook(sess *session, timeout time.Duration) anvil.Perm
 		runID := sess.activeRunID()
 		call := pendingCall{tool: req.ToolName, args: req.Args}
 		p := s.approvals.begin(sess.id, runID, requestID, call, timeout)
+		decisions := []string{DecisionAllow, DecisionAllowSession, DecisionDeny}
+		var remember []RememberOption
+		if mustConfirm {
+			decisions = []string{DecisionAllow, DecisionDeny}
+		} else {
+			remember = s.rememberOptions(sess, call)
+		}
 		s.notify(NotifyApprovalRequest, ApprovalRequestParams{
-			RequestID: requestID,
-			SessionID: sess.id,
-			RunID:     runID,
-			Tool:      req.ToolName,
-			Args:      req.Args,
-			Preview:   approvalPreview(req.Preview),
-			Decisions: []string{DecisionAllow, DecisionAllowSession, DecisionDeny},
-			Rule:      ruleInfo(req.Rule),
-			Protected: req.Protected,
+			RequestID:    requestID,
+			SessionID:    sess.id,
+			RunID:        runID,
+			Tool:         req.ToolName,
+			Args:         req.Args,
+			Preview:      approvalPreview(req.Preview),
+			Decisions:    decisions,
+			Rule:         ruleInfo(req.Rule),
+			Protected:    req.Protected,
+			PathAnalysis: req.PathAnalysis,
+			PathProblem:  req.PathProblem,
 			// Only offered when the session actually reads the rule file: a rule
 			// written into a file this session ignores would be a button that lies.
-			Remember:  s.rememberOptions(sess, call),
+			Remember:  remember,
 			TimeoutMS: int(timeout / time.Millisecond),
 			// The child that asked, when one did. run_id stays the session's
 			// active run, so session.cancel still withdraws the prompts that
@@ -1889,7 +1903,9 @@ func (s *Server) permissionHook(sess *session, timeout time.Duration) anvil.Perm
 		case DecisionAllow:
 			return anvil.PermissionDecision{Allow: true, Args: resp.Args}, nil
 		case DecisionAllowSession:
-			s.approvals.allowSession(sess.id, req.ToolName, resp.Scope)
+			if !mustConfirm {
+				s.approvals.allowSession(sess.id, req.ToolName, resp.Scope)
+			}
 			return anvil.PermissionDecision{Allow: true, Args: resp.Args}, nil
 		default:
 			msg := resp.Message
@@ -1939,6 +1955,9 @@ func (s *Server) autoHook(sess *session, timeout time.Duration) anvil.Permission
 		if req.Rule != nil && req.Rule.Effect == anvil.PermissionEffectAsk {
 			return ask(ctx, req)
 		}
+		if requiresPathConfirmation(req) {
+			return ask(ctx, req)
+		}
 		if anvil.AutoApproveCall(req.ToolName, req.Args) {
 			return anvil.PermissionDecision{Allow: true}, nil
 		}
@@ -1960,11 +1979,16 @@ func (s *Server) dontAskHook(sess *session) anvil.PermissionFunc {
 	return func(_ context.Context, req anvil.PermissionRequest) (anvil.PermissionDecision, error) {
 		// "Always allow for this session" is a pre-approval a person gave, and a
 		// mode is not allowed to overrule an answer somebody already made.
-		if s.approvals.sessionAllowed(sess.id, req.ToolName, approvalScope(req.Preview)) {
+		if !requiresPathConfirmation(req) &&
+			s.approvals.sessionAllowed(sess.id, req.ToolName, approvalScope(req.Preview)) {
 			return anvil.PermissionDecision{Allow: true}, nil
 		}
 		return anvil.PermissionDecision{Allow: false, Message: dontAskMessage(req)}, nil
 	}
+}
+
+func requiresPathConfirmation(req anvil.PermissionRequest) bool {
+	return len(req.Protected) > 0 || req.PathAnalysis == "indeterminate"
 }
 
 // dontAskMessage tells the model what refused the call and what would change it.

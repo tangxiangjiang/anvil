@@ -23,13 +23,9 @@ func TestAuditProtectedPathIsCaseInsensitive(t *testing.T) {
 	}
 }
 
-// audit #10: a shell call carries Command and no Paths, so protectedPaths returns
-// nothing and an allow rule for "rm" covers a command that deletes .git.
+// audit #10: shell operands are analyzed before protected paths are checked, so
+// an allow rule for "rm" cannot cover a command that deletes .git.
 func TestAuditShellAllowDoesNotCoverProtectedPaths(t *testing.T) {
-	// Open: the existing TestShellRulesAreNotPathProtected records the opposite
-	// design (a shell allow covers a command naming .git). The two conflict; the
-	// decision is with the user. See audit.md #10.
-	t.Skip("audit: open, see audit.md #10 (design conflict)")
 	dir := t.TempDir()
 	set, err := New([]Rule{{Effect: "allow", Tool: "shell", Pattern: "rm:*"}})
 	if err != nil {

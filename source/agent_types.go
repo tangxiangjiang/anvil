@@ -169,6 +169,10 @@ type Event struct {
 	// rule: it is set even when no rule decided, so a client can say why a
 	// remembered allow did not cover a `.git` write. Nil on every other event.
 	Protected []string
+	// PathAnalysis and PathProblem carry the shell analyzer's finding on a
+	// tool_result. Empty for non-shell tools.
+	PathAnalysis string
+	PathProblem  string
 	// Items is the model's task list, set on EventTodo (0.40.9) and nil on every
 	// other event. It is the complete list the call wrote, not a change: a
 	// client replaces its checklist, and an empty list means the call cleared it.

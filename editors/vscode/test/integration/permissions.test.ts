@@ -39,6 +39,31 @@ test('an approval carries the rule that asked and the choices that would decide 
   assert.deepEqual(prefix?.rule, { effect: 'allow', tool: 'shell', pattern: 'git status:*' });
 });
 
+test('protected shell findings cross the packaged host wire as one-shot approval facts', async (t) => {
+  const harness = await startFakeHost('protected-shell');
+  t.after(() => harness.stop());
+
+  await harness.session.send('update protected state');
+  await waitFor(() => harness.approvals.length === 1, 'the protected shell approval');
+  const request = harness.approvals[0];
+  assert.equal(request.tool, 'shell');
+  assert.deepEqual(request.protected, ['.git/config']);
+  assert.equal(request.path_analysis, 'known');
+  assert.equal(request.path_problem, undefined);
+  assert.deepEqual(request.decisions, ['allow', 'deny']);
+  assert.deepEqual(request.remember ?? [], []);
+
+  await harness.client.request(Method.ApprovalResponse, {
+    request_id: request.request_id,
+    decision: 'deny',
+  });
+  await waitFor(() => harness.dones.length === 1, 'the protected shell run to finish');
+  const result = harness.events.find((event) => event.type === 'tool_result');
+  assert.equal(result?.is_error, true);
+  assert.deepEqual(result?.protected, ['.git/config']);
+  assert.equal(result?.path_analysis, 'known');
+});
+
 test('a remembered rule settles the card, and the tool result names it', async (t) => {
   const harness = await startFakeHost('permissions');
   t.after(() => harness.stop());

@@ -44,6 +44,17 @@ func (s *Set) Protect(p Protection) *Set {
 	return s
 }
 
+// WithProtection installs protection even when there are no rules. Protected
+// shell findings must reach the approval policy independently of whether the
+// workspace happened to write an allow/ask/deny entry.
+func WithProtection(s *Set, p Protection) *Set {
+	if s == nil {
+		s = &Set{}
+	}
+	s.protection = &p
+	return s
+}
+
 // protectedPaths reports the paths of a call that an allow rule may not cover,
 // in the order the call named them. It reports the paths as the call spelled
 // them, because that is what the card and the result show.

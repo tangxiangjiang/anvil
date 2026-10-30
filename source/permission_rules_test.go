@@ -761,6 +761,10 @@ func TestEvaluateAcrossScopes(t *testing.T) {
 	if m := EvaluatePermissionRulesAcross(dir, nil, allowed, "write_file", json.RawMessage(`{"path":"a.txt"}`)); m == nil {
 		t.Fatal("an ordinary path is still covered")
 	}
+	shellAllowed := []PermissionRule{{Effect: "allow", Tool: "shell", Pattern: "rm:*"}}
+	if m := EvaluatePermissionRulesAcross(dir, nil, shellAllowed, "shell", shellArgs("rm -rf .git")); m != nil {
+		t.Fatalf("a shell allow must not settle a protected operand: %+v", m)
+	}
 }
 
 // The card's "always allow" choices follow the same rule: a path-shaped option
@@ -779,5 +783,11 @@ func TestPermissionRuleOptionsInSkipsProtectedPaths(t *testing.T) {
 	}
 	if got := PermissionRuleOptionsIn(dir, "write_file", json.RawMessage(`{"path":"src/a.go"}`)); len(got) != 1 {
 		t.Fatalf("an ordinary path is still offered: %+v", got)
+	}
+	if got := PermissionRuleOptionsIn(dir, "shell", shellArgs("rm -rf .git")); len(got) != 0 {
+		t.Fatalf("protected shell options = %+v, want none", got)
+	}
+	if got := PermissionRuleOptionsIn(dir, "shell", shellArgs(`rm "$TARGET"`)); len(got) != 0 {
+		t.Fatalf("indeterminate shell options = %+v, want none", got)
 	}
 }

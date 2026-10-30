@@ -86,11 +86,15 @@ type Record struct {
 	Brief json.RawMessage `json:"brief,omitempty"`
 
 	// message
-	Role       string     `json:"role,omitempty"`
-	Content    string     `json:"content,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
-	Name       string     `json:"name,omitempty"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	Role        string     `json:"role,omitempty"`
+	Content     string     `json:"content,omitempty"`
+	ToolCallID  string     `json:"tool_call_id,omitempty"`
+	Name        string     `json:"name,omitempty"`
+	ToolCalls   []ToolCall `json:"tool_calls,omitempty"`
+	IsError     bool       `json:"is_error,omitempty"`
+	Protected   []string   `json:"protected,omitempty"`
+	PathState   string     `json:"path_analysis,omitempty"`
+	PathProblem string     `json:"path_problem,omitempty"`
 
 	// run_start / run_end
 	RunID  string `json:"run_id,omitempty"`

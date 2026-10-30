@@ -539,6 +539,10 @@ type PermissionRequest struct {
 	// as a reason to ask even when it would otherwise remember an allow, because
 	// no allow rule can cover these paths anyway.
 	Protected []string
+	// PathAnalysis is "known" or "indeterminate" for shell calls and empty for
+	// other tools. PathProblem is the stable reason when analysis is incomplete.
+	PathAnalysis string
+	PathProblem  string
 	// AgentID and RunID name the agent whose call is being decided and the run it
 	// belongs to (0.42+). For a child agent, AgentID is the child — which is what
 	// lets an approval card say that a subagent is asking. Empty only for a

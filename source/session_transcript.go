@@ -51,11 +51,15 @@ type TranscriptEntry struct {
 	RunID string
 
 	// Message fields. Role is the store's own word: user, assistant or tool.
-	Role       string
-	Content    string
-	ToolCallID string
-	Name       string
-	ToolCalls  []TranscriptToolCall
+	Role         string
+	Content      string
+	ToolCallID   string
+	Name         string
+	ToolCalls    []TranscriptToolCall
+	IsError      bool
+	Protected    []string
+	PathAnalysis string
+	PathProblem  string
 
 	// Run-end fields.
 	Status string
@@ -132,12 +136,16 @@ func transcriptFromRecords(recs []store.Record, limit int) TranscriptResult {
 		switch rec.Type {
 		case store.TypeMessage:
 			entry := TranscriptEntry{
-				Kind:       TranscriptMessage,
-				RunID:      rec.RunID,
-				Role:       rec.Role,
-				Content:    rec.Content,
-				ToolCallID: rec.ToolCallID,
-				Name:       rec.Name,
+				Kind:         TranscriptMessage,
+				RunID:        rec.RunID,
+				Role:         rec.Role,
+				Content:      rec.Content,
+				ToolCallID:   rec.ToolCallID,
+				Name:         rec.Name,
+				IsError:      rec.IsError,
+				Protected:    rec.Protected,
+				PathAnalysis: rec.PathState,
+				PathProblem:  rec.PathProblem,
 			}
 			for _, tc := range rec.ToolCalls {
 				entry.ToolCalls = append(entry.ToolCalls, TranscriptToolCall{

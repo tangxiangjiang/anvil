@@ -1,6 +1,6 @@
 # 51 — Protected paths in shell permission decisions
 
-**Milestone focus:** 0.51. **Design status:** planned.
+**Milestone focus:** 0.51. **Design status:** done.
 
 ## 1. Today / problem
 

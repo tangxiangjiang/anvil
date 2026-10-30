@@ -3343,8 +3343,19 @@
     // ran without a prompt says no remembered rule decided it.
     if (Array.isArray(event.protected) && event.protected.length > 0) {
       const line = el('div', 'rule-ref protected');
-      line.appendChild(el('span', null, 'protected path: '));
+      line.appendChild(el('span', null, 'touched protected paths: '));
       line.appendChild(el('code', null, event.protected.join(', ')));
+      card.insertBefore(line, card.querySelector('.pane'));
+    }
+    if (event.path_analysis === 'indeterminate') {
+      const line = el('div', 'rule-ref protected');
+      line.appendChild(el('span', null, 'path analysis incomplete'));
+      if (event.path_problem) {
+        line.appendChild(el('span', null, ' ('));
+        line.appendChild(el('code', null, event.path_problem));
+        line.appendChild(el('span', null, ')'));
+      }
+      line.appendChild(el('span', null, '; a saved allow cannot cover this command.'));
       card.insertBefore(line, card.querySelector('.pane'));
     }
 
@@ -3720,8 +3731,19 @@
     // a card that looks like it ignored its own rules and one that explains why.
     if (Array.isArray(request.protected) && request.protected.length > 0) {
       const line = el('div', 'why protected');
-      line.appendChild(el('span', null, 'Protected path — no always-allow rule can cover it: '));
+      line.appendChild(el('span', null, 'Touches protected paths — explicit approval is required: '));
       line.appendChild(el('code', null, request.protected.join(', ')));
+      card.appendChild(line);
+    }
+    if (request.path_analysis === 'indeterminate') {
+      const line = el('div', 'why protected');
+      line.appendChild(el('span', null, 'Path analysis incomplete'));
+      if (request.path_problem) {
+        line.appendChild(el('span', null, ' ('));
+        line.appendChild(el('code', null, request.path_problem));
+        line.appendChild(el('span', null, ')'));
+      }
+      line.appendChild(el('span', null, '; a saved allow cannot cover this command.'));
       card.appendChild(line);
     }
     card.appendChild(describePreview(request));
@@ -3756,7 +3778,13 @@
     // keyboard: saying it, and putting focus on the first answer, is the whole
     // keyboard path to deciding it.
     const preview = request.preview || {};
-    announceAlert('Approval needed: ' + toolTitle(request.tool) + (preview.summary ? '. ' + preview.summary : ''));
+    let alert = 'Approval needed: ' + toolTitle(request.tool) + (preview.summary ? '. ' + preview.summary : '');
+    if (Array.isArray(request.protected) && request.protected.length > 0) {
+      alert += '. Touches protected paths: ' + request.protected.join(', ');
+    } else if (request.path_analysis === 'indeterminate') {
+      alert += '. Path analysis incomplete' + (request.path_problem ? ': ' + request.path_problem : '');
+    }
+    announceAlert(alert);
     const first = buttons.querySelector('button');
     if (first) first.focus();
   }
@@ -3785,6 +3813,7 @@
   function rememberButtons(request) {
     const options = Array.isArray(request.remember) ? request.remember : [];
     if (options.length === 0) {
+      if (!Array.isArray(request.decisions) || !request.decisions.includes('allow_session')) return [];
       const scope = request.preview && request.preview.path ? request.preview.path : undefined;
       const label = scope ? `Always allow for ${scope}` : `Always allow ${toolTitle(request.tool)} this session`;
       const button = decisionButton(request, 'allow_session', label, 'secondary', scope);

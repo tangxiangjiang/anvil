@@ -185,6 +185,10 @@ export function replayOf(entries: TranscriptEntry[], sessionId = ''): ReplayStep
           tool_call_id: entry.tool_call_id,
           name: entry.name,
           content,
+          is_error: entry.is_error,
+          protected: entry.protected,
+          path_analysis: entry.path_analysis,
+          path_problem: entry.path_problem,
         },
       });
     }

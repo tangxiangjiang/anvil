@@ -618,6 +618,38 @@ async function runScript(session, run, message) {
     return;
   }
 
+  if (scenario === 'protected-shell') {
+    const command = 'printf protected > .git/config';
+    const args = { command };
+    event(session, run, { type: 'tool_call', tool_call_id: 't1', name: 'shell', args });
+    const requestId = `req-${run}`;
+    notify('approval.request', {
+      request_id: requestId,
+      session_id: session.session_id,
+      run_id: run,
+      tool: 'shell',
+      args,
+      preview: { kind: 'command', command: [command] },
+      decisions: ['allow', 'deny'],
+      protected: ['.git/config'],
+      path_analysis: 'known',
+      timeout_ms: 30_000,
+    });
+    const answer = await new Promise((resolve) => approvals.set(requestId, resolve));
+    const denied = answer.decision === 'deny';
+    event(session, run, {
+      type: 'tool_result',
+      tool_call_id: 't1',
+      name: 'shell',
+      content: denied ? 'protected shell command denied' : 'protected shell command approved',
+      is_error: denied,
+      protected: ['.git/config'],
+      path_analysis: 'known',
+    });
+    finish(session, run, { status: 'finished', result: denied ? 'not run' : 'ran', steps: 2 });
+    return;
+  }
+
   if (scenario === 'permissions') {
     // What the real host sends when a rule says `ask`: the card names the rule
     // that insisted, and every "always allow" shape that would decide this very
