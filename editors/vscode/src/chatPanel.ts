@@ -66,6 +66,7 @@ import {
   RuleFileInfo,
   RuleInfo,
   RuleSpec,
+  SessionHistoryContextResult,
   SessionInfo,
   SessionResult,
   SessionCompactResult,
@@ -413,6 +414,7 @@ type Outbound =
    * conversation, in its place.
    */
   | { type: 'note'; text: string }
+  | { type: 'historyContext'; context: SessionHistoryContextResult }
   /**
    * Where a replayed run ended, drawn in the transcript at that point. The live
    * `done` is a different thing: it is the end of the run in flight, and it
@@ -546,6 +548,9 @@ export class ChatPanel implements HostListener {
   private listening = false;
   /** Messages held until it does. See `post`. */
   private pending: Outbound[] = [];
+  /** A search hit is drawn only after the ordinary transcript tail is ready. */
+  private pendingHistoryContext: SessionHistoryContextResult | undefined;
+  private replaySettled = false;
   /**
    * This tab's conversation, and nothing else's.
    *
@@ -792,6 +797,19 @@ export class ChatPanel implements HostListener {
     this.panel.reveal(this.panel.viewColumn, false);
   }
 
+  /** Draws an old search hit in a bounded block apart from the live transcript. */
+  showHistoryContext(context: SessionHistoryContextResult): void {
+    this.pendingHistoryContext = context;
+    if (this.replaySettled) this.postPendingHistoryContext();
+  }
+
+  private postPendingHistoryContext(): void {
+    const context = this.pendingHistoryContext;
+    if (!context) return;
+    this.pendingHistoryContext = undefined;
+    this.post({ type: 'historyContext', context });
+  }
+
   /** Whether this is the tab the user is looking at. */
   isActive(): boolean {
     return this.active;
@@ -928,6 +946,7 @@ export class ChatPanel implements HostListener {
 
   private async onMessage(msg: Inbound): Promise<void> {
     if (msg.type === 'ready') {
+      this.replaySettled = false;
       this.eventEpoch++;
       this.eventWatermarks.clear();
       this.eventDelivery = Promise.resolve();
@@ -973,6 +992,10 @@ export class ChatPanel implements HostListener {
       // session's configuration rather than any one turn in it.
       void this.reattach()
         .catch(() => undefined)
+        .then(() => {
+          this.replaySettled = true;
+          this.postPendingHistoryContext();
+        })
         .then(() => this.reportMcp())
         .then(() => this.reportWebSearch());
       return;

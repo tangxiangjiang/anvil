@@ -4725,6 +4725,55 @@ body.dont-ask-mode .composer {
   color: var(--vscode-descriptionForeground);
 }
 
+.history-context {
+  border: 1px solid var(--vscode-focusBorder, var(--vscode-panel-border));
+  border-radius: 6px;
+  padding: 8px;
+  display: grid;
+  gap: 5px;
+  background: var(--vscode-editorWidget-background, transparent);
+}
+
+.history-context-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.history-context-latest {
+  border: 0;
+  padding: 2px 5px;
+  color: var(--vscode-textLink-foreground);
+  background: transparent;
+  cursor: pointer;
+}
+
+.history-context-entry {
+  display: grid;
+  grid-template-columns: 3.5em minmax(0, 1fr);
+  gap: 6px;
+  padding: 3px 5px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.history-context-entry.target {
+  color: var(--vscode-foreground);
+  background: var(--vscode-editor-findMatchHighlightBackground);
+  outline: 1px solid var(--vscode-editor-findMatchBorder, transparent);
+}
+
+.history-context-marker,
+.history-context-clipped {
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.85em;
+}
+
+.history-context-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* Where a replayed run ended, centred like the session marker it echoes. */
 .msg.run-end .body {
   font-size: 0.85em;

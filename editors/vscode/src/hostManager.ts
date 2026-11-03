@@ -56,6 +56,8 @@ import {
   RunReconcileResult,
   SessionDeleteResult,
   SessionForkResult,
+  SessionHistoryContextParams,
+  SessionHistoryContextResult,
   SessionInfo,
   SessionRenameResult,
   SessionResult,
@@ -464,9 +466,20 @@ export class HostManager {
   }
 
   /** Local full-text search over durable sessions; cursor remains host-owned. */
-  async searchSessions(params: SessionSearchParams): Promise<SessionSearchResult> {
+  async searchSessions(
+    params: SessionSearchParams,
+    signal?: AbortSignal,
+  ): Promise<SessionSearchResult> {
     const client = await this.startClient();
-    return client.request<SessionSearchResult>(Method.SessionSearch, params);
+    return client.request<SessionSearchResult>(Method.SessionSearch, params, undefined, signal);
+  }
+
+  /** Bounded read-only context around one local search result. */
+  async sessionHistoryContext(
+    params: SessionHistoryContextParams,
+  ): Promise<SessionHistoryContextResult> {
+    const client = await this.startClient();
+    return client.request<SessionHistoryContextResult>(Method.SessionHistoryContext, params);
   }
 
   /**

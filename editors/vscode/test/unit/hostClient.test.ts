@@ -1,6 +1,15 @@
 import { strict as assert } from 'node:assert';
+import { mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
-import { HostClient, HostDownError, HostRpcError, HostTimeoutError } from '../../src/hostClient';
+import {
+  HostCancelledError,
+  HostClient,
+  HostDownError,
+  HostRpcError,
+  HostTimeoutError,
+} from '../../src/hostClient';
 import { FIXTURE_HOST, waitFor } from '../helpers/harness';
 
 function client(env: Record<string, string> = {}, requestTimeoutMs = 2_000): HostClient {
@@ -86,6 +95,29 @@ test('an unanswered request times out rather than hanging the caller', async () 
   await host.start();
   await assert.rejects(() => host.request('models.list'), HostTimeoutError);
   // The client stays usable: a dropped request must not poison the pipe.
+  const session = await host.request<{ session_id: string }>('session.new', {});
+  assert.equal(session.session_id, 's1');
+  await host.stop();
+});
+
+test('an aborted request notifies the Host and does not poison later requests', async () => {
+  const echo = join(mkdtempSync(join(tmpdir(), 'anvil-cancel-')), 'requests.jsonl');
+  const host = client({ FAKE_HOST_IGNORE: 'models.list', FAKE_HOST_ECHO: echo });
+  await host.start();
+  const controller = new AbortController();
+  const pending = host.request('models.list', {}, undefined, controller.signal);
+  controller.abort();
+  await assert.rejects(() => pending, HostCancelledError);
+  await waitFor(
+    () => {
+      try {
+        return readFileSync(echo, 'utf8').includes('$/cancelRequest');
+      } catch {
+        return false;
+      }
+    },
+    'the cancellation notification',
+  );
   const session = await host.request<{ session_id: string }>('session.new', {});
   assert.equal(session.session_id, 's1');
   await host.stop();

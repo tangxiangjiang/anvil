@@ -55,7 +55,10 @@ import {
   RuleSpec,
   RunEventsResult,
   RunReconcileResult,
+  SessionHistoryContextParams,
+  SessionHistoryContextResult,
   SessionInfo,
+  SessionSearchHit,
   SessionSearchParams,
   SessionSearchResult,
   SessionTranscriptResult,
@@ -521,8 +524,28 @@ export class Hub {
     return sessions;
   }
 
-  searchSessions(params: SessionSearchParams): Promise<SessionSearchResult> {
-    return this.manager.searchSessions(params);
+  searchSessions(
+    params: SessionSearchParams,
+    signal?: AbortSignal,
+  ): Promise<SessionSearchResult> {
+    return this.manager.searchSessions(params, signal);
+  }
+
+  sessionHistoryContext(
+    params: SessionHistoryContextParams,
+  ): Promise<SessionHistoryContextResult> {
+    return this.manager.sessionHistoryContext(params);
+  }
+
+  /** Opens a search hit and keeps its bounded old context separate from the live tail. */
+  async openSearchHit(hit: SessionSearchHit): Promise<void> {
+    const panel = this.openTab(hit.agent_id);
+    if (hit.record_pos <= 0) return;
+    const context = await this.sessionHistoryContext({
+      agent_id: hit.agent_id,
+      record_pos: hit.record_pos,
+    });
+    panel.showHistoryContext(context);
   }
 
   async workflow(agentId: string, artifactId?: string): Promise<WorkflowGetResult> {

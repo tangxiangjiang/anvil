@@ -5,8 +5,17 @@
 
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
-import { SessionInfo } from '../../src/protocol';
-import { filterSessions, sessionChoices } from '../../src/sessionSearch';
+import { SessionInfo, SessionSearchHit } from '../../src/protocol';
+import {
+  SessionSearchEpoch,
+  buildSessionSearchParams,
+  contentSearchEligible,
+  filterSessions,
+  highlightSnippet,
+  mergeSessionSearchHits,
+  sessionChoices,
+  sessionSearchChoices,
+} from '../../src/sessionSearch';
 
 function session(agentId: string, title?: string, updatedAt?: string): SessionInfo {
   const info: SessionInfo = { agent_id: agentId, cwd: '/w', provider: 'openai', model: 'm', runs: 1 };
@@ -67,3 +76,84 @@ test('the choices keep the order the filter handed back', () => {
   const choices = sessionChoices(filterSessions(sessions, 'notes'));
   assert.deepEqual(choices.map((choice) => choice.label), ['Write the release notes']);
 });
+
+test('content search waits for meaningful input but accepts structured filters', () => {
+  assert.equal(contentSearchEligible(''), false);
+  assert.equal(contentSearchEligible('a'), false);
+  assert.equal(contentSearchEligible('"你"'), false);
+  assert.equal(contentSearchEligible('ab'), true);
+  assert.equal(contentSearchEligible('你好'), true);
+  assert.equal(contentSearchEligible('role:user'), true);
+  assert.equal(contentSearchEligible('after:2026-01-01'), true);
+});
+
+test('request construction resets pagination unless a cursor is explicitly supplied', () => {
+  const filters = { role: 'assistant' as const, kind: 'error' as const, includeArgs: true };
+  assert.deepEqual(buildSessionSearchParams('  shader  ', filters), {
+    query: 'shader',
+    limit: 50,
+    roles: ['assistant'],
+    kinds: ['error'],
+    include_args: true,
+  });
+  assert.equal(buildSessionSearchParams('shader', filters, 'opaque').cursor, 'opaque');
+});
+
+test('snippet ranges use Unicode code points and merge before highlighting', () => {
+  assert.equal(
+    highlightSnippet('a😀bcde', [
+      { start: 1, end: 3 },
+      { start: 2, end: 4 },
+      { start: -10, end: 0 },
+      { start: 99, end: 100 },
+    ]),
+    'a⟦😀bc⟧de',
+  );
+});
+
+test('stored snippet markup remains inert plain Quick Pick text', () => {
+  const malicious = '[open](command:workbench.action.closeWindow)<script>alert(1)</script>';
+  const choices = sessionSearchChoices([
+    hit('agent-danger', 4, malicious, [{ start: 0, end: 6 }]),
+  ]);
+  assert.equal(
+    choices[0].detail,
+    '⟦[open]⟧(command:workbench.action.closeWindow)<script>alert(1)</script>',
+  );
+  assert.equal(choices[0].choiceKind, 'result');
+  assert.equal(choices[0].agentId, 'agent-danger');
+});
+
+test('later pages deduplicate stored records without collapsing separate positions', () => {
+  const first = hit('agent-a', 2, 'first');
+  const duplicate = hit('agent-a', 2, 'duplicate');
+  const next = hit('agent-a', 3, 'next');
+  assert.deepEqual(
+    mergeSessionSearchHits([first], [duplicate, next]).map((item) => item.record_pos),
+    [2, 3],
+  );
+});
+
+test('superseding a search makes every older response stale', () => {
+  const epoch = new SessionSearchEpoch();
+  const first = epoch.supersede();
+  const second = epoch.supersede();
+  assert.equal(epoch.current(first), false);
+  assert.equal(epoch.current(second), true);
+});
+
+function hit(
+  agentId: string,
+  recordPos: number,
+  snippet: string,
+  match: Array<{ start: number; end: number }> = [],
+): SessionSearchHit {
+  return {
+    agent_id: agentId,
+    record_pos: recordPos,
+    kind: 'message',
+    role: 'assistant',
+    snippet,
+    match,
+  };
+}

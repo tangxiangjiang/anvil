@@ -62,6 +62,10 @@ type Server struct {
 	sessions  map[string]*session
 	sessionID []string
 
+	requestMu sync.Mutex
+	requests  map[int64]context.CancelFunc
+	requestWG sync.WaitGroup
+
 	// mcpMu guards the runtime registry, which lives apart from sessions: one
 	// runtime serves every session that reads the same file layers, and it can
 	// exist before any of them (a panel opened first).
@@ -88,6 +92,7 @@ func New(cfg Config, in io.Reader, out io.Writer) *Server {
 		hostID:    hostID,
 		cwd:       cfg.CWD,
 		sessions:  map[string]*session{},
+		requests:  map[int64]context.CancelFunc{},
 		mcp:       map[string]*hostMCPRuntime{},
 	}
 }
@@ -98,6 +103,8 @@ func (s *Server) Serve(ctx context.Context) error {
 	go s.out.run()
 
 	err := s.serve(ctx)
+	s.cancelRequests()
+	s.requestWG.Wait()
 	// Tear down sessions first so their terminal notifications are queued
 	// before the writer is flushed, then wait for the queue to reach the client.
 	s.closeAll()
@@ -143,6 +150,10 @@ func (s *Server) handleLine(ctx context.Context, line []byte) error {
 		s.writeResult(req.ID, map[string]any{})
 		return errShutdown
 	}
+	if req.Method == MethodSessionSearch && s.ready() {
+		s.startCancellableRequest(ctx, req)
+		return nil
+	}
 	result, rpcErr := s.dispatch(ctx, &req)
 	if rpcErr != nil {
 		s.writeError(req.ID, rpcErr)
@@ -160,9 +171,66 @@ func (s *Server) handleNotification(_ context.Context, req *Request) error {
 		return nil
 	case MethodShutdown:
 		return errShutdown
+	case "$/cancelRequest":
+		var params struct {
+			ID int64 `json:"id"`
+		}
+		if json.Unmarshal(req.Params, &params) == nil {
+			s.cancelRequest(params.ID)
+		}
+		return nil
 	default:
 		s.logf("ignoring unknown notification %q", req.Method)
 		return nil
+	}
+}
+
+func (s *Server) startCancellableRequest(parent context.Context, req Request) {
+	ctx, cancel := context.WithCancel(parent)
+	id := *req.ID
+	s.requestMu.Lock()
+	s.requests[id] = cancel
+	s.requestMu.Unlock()
+	s.requestWG.Add(1)
+	go func() {
+		defer s.requestWG.Done()
+		defer func() {
+			s.requestMu.Lock()
+			delete(s.requests, id)
+			s.requestMu.Unlock()
+			cancel()
+		}()
+		result, rpcErr := s.dispatch(ctx, &req)
+		if errors.Is(ctx.Err(), context.Canceled) {
+			s.writeError(req.ID, errCode(CodeRequestCancelled, "request cancelled"))
+			return
+		}
+		if rpcErr != nil {
+			s.writeError(req.ID, rpcErr)
+			return
+		}
+		s.writeResult(req.ID, result)
+	}()
+}
+
+func (s *Server) cancelRequest(id int64) {
+	s.requestMu.Lock()
+	cancel := s.requests[id]
+	s.requestMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func (s *Server) cancelRequests() {
+	s.requestMu.Lock()
+	cancels := make([]context.CancelFunc, 0, len(s.requests))
+	for _, cancel := range s.requests {
+		cancels = append(cancels, cancel)
+	}
+	s.requestMu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
 	}
 }
 
@@ -182,6 +250,8 @@ func (s *Server) dispatch(ctx context.Context, req *Request) (any, *RPCError) {
 		return s.handleSessionList(ctx, req.Params)
 	case MethodSessionSearch:
 		return s.handleSessionSearch(ctx, req.Params)
+	case MethodSessionHistoryContext:
+		return s.handleSessionHistoryContext(ctx, req.Params)
 	case MethodSessionTranscript:
 		return s.handleSessionTranscript(ctx, req.Params)
 	case MethodSessionClose:
@@ -318,7 +388,7 @@ func (s *Server) handleInitialize(params json.RawMessage) (any, *RPCError) {
 }
 
 func capabilities() []string {
-	return []string{"streaming", "sessions", "session.search", "resume", "cancel", "models", "approval", "context", "vision", "plan", "skills", "rules", "permissions", "mcp", "mcp.runtime", "subagents", "tasks", "runs.durable", "workflow"}
+	return []string{"streaming", "sessions", "session.search", "session.historyContext", "resume", "cancel", "models", "approval", "context", "vision", "plan", "skills", "rules", "permissions", "mcp", "mcp.runtime", "subagents", "tasks", "runs.durable", "workflow"}
 }
 
 // ---------------------------------------------------------------------------
@@ -495,6 +565,33 @@ func (s *Server) handleSessionSearch(ctx context.Context, params json.RawMessage
 			wire.Match[i] = SessionSearchTextRange{Start: match.Start, End: match.End}
 		}
 		out.Hits = append(out.Hits, wire)
+	}
+	return out, nil
+}
+
+func (s *Server) handleSessionHistoryContext(ctx context.Context, params json.RawMessage) (any, *RPCError) {
+	p, rpcErr := decode[SessionHistoryContextParams](params)
+	if rpcErr != nil {
+		return nil, errInvalidParams("session.historyContext: " + rpcErr.Error())
+	}
+	result, err := anvil.SessionHistoryContext(ctx, anvil.SessionHistoryContextOptions{
+		Local:   anvil.LocalOptions{CWD: s.cwdPath(), Store: p.Store},
+		AgentID: p.AgentID, RecordPos: p.RecordPos, Before: p.Before, After: p.After,
+	})
+	if err != nil {
+		var anchorErr *anvil.SessionHistoryAnchorError
+		if errors.As(err, &anchorErr) {
+			return nil, errCode(CodeSessionHistoryAnchor, err.Error())
+		}
+		return nil, errHost(err)
+	}
+	out := SessionHistoryContextResult{
+		Entries:     make([]TranscriptEntry, 0, len(result.Entries)),
+		TargetIndex: result.TargetIndex, ClippedBefore: result.ClippedBefore,
+		ClippedAfter: result.ClippedAfter,
+	}
+	for _, entry := range result.Entries {
+		out.Entries = append(out.Entries, transcriptEntryWire(entry))
 	}
 	return out, nil
 }
@@ -681,40 +778,42 @@ func (s *Server) handleSessionTranscript(ctx context.Context, params json.RawMes
 		Dropped: result.Dropped,
 	}
 	for _, in := range result.Entries {
-		entry := TranscriptEntry{
-			Kind:         in.Kind,
-			RunID:        in.RunID,
-			Role:         in.Role,
-			Content:      in.Content,
-			ContinueFrom: in.ContinueFrom,
-			ToolCallID:   in.ToolCallID,
-			Name:         in.Name,
-			IsError:      in.IsError,
-			Protected:    in.Protected,
-			PathAnalysis: in.PathAnalysis,
-			PathProblem:  in.PathProblem,
-			Status:       in.Status,
-			Steps:        in.Steps,
-			Err:          in.Err,
-			Code:         string(in.Code),
-			Text:         in.Text,
-			Attempt:      in.Attempt,
-			MaxAttempts:  in.MaxAttempts,
-			DelayMS:      in.DelayMS,
-			Truncated:    in.Truncated,
-		}
-		applyStageTranscript(&entry, in.Stage)
-		for _, tc := range in.ToolCalls {
-			entry.ToolCalls = append(entry.ToolCalls, TranscriptCall{
-				ID:   tc.ID,
-				Name: tc.Name,
-				Args: tc.Args,
-			})
-		}
-		entry.Usage = usageWire(in.Usage)
-		out.Entries = append(out.Entries, entry)
+		out.Entries = append(out.Entries, transcriptEntryWire(in))
 	}
 	return out, nil
+}
+
+func transcriptEntryWire(in anvil.TranscriptEntry) TranscriptEntry {
+	entry := TranscriptEntry{
+		Kind:         in.Kind,
+		RunID:        in.RunID,
+		Role:         in.Role,
+		Content:      in.Content,
+		ContinueFrom: in.ContinueFrom,
+		ToolCallID:   in.ToolCallID,
+		Name:         in.Name,
+		IsError:      in.IsError,
+		Protected:    in.Protected,
+		PathAnalysis: in.PathAnalysis,
+		PathProblem:  in.PathProblem,
+		Status:       in.Status,
+		Steps:        in.Steps,
+		Err:          in.Err,
+		Code:         string(in.Code),
+		Text:         in.Text,
+		Attempt:      in.Attempt,
+		MaxAttempts:  in.MaxAttempts,
+		DelayMS:      in.DelayMS,
+		Truncated:    in.Truncated,
+	}
+	applyStageTranscript(&entry, in.Stage)
+	for _, tc := range in.ToolCalls {
+		entry.ToolCalls = append(entry.ToolCalls, TranscriptCall{
+			ID: tc.ID, Name: tc.Name, Args: tc.Args,
+		})
+	}
+	entry.Usage = usageWire(in.Usage)
+	return entry
 }
 
 func (s *Server) handleSessionClose(params json.RawMessage) (any, *RPCError) {

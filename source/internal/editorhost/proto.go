@@ -37,6 +37,9 @@ const (
 	MethodSessionResume = "session.resume"
 	MethodSessionList   = "session.list"
 	MethodSessionSearch = "session.search"
+	// MethodSessionHistoryContext returns a bounded window around a local search
+	// anchor without changing the ordinary transcript tail.
+	MethodSessionHistoryContext = "session.historyContext"
 	// MethodSessionTranscript replays a stored conversation. It is keyed by agent
 	// id rather than by session, so it answers for a session this host has not
 	// opened — which is the case it exists for: a client that has just reloaded
@@ -158,11 +161,12 @@ const (
 
 // JSON-RPC 2.0 standard error codes.
 const (
-	CodeParse          = -32700
-	CodeInvalidRequest = -32600
-	CodeMethodNotFound = -32601
-	CodeInvalidParams  = -32602
-	CodeInternal       = -32603
+	CodeParse            = -32700
+	CodeInvalidRequest   = -32600
+	CodeMethodNotFound   = -32601
+	CodeInvalidParams    = -32602
+	CodeInternal         = -32603
+	CodeRequestCancelled = -32800
 )
 
 // Host-specific error codes.
@@ -188,6 +192,9 @@ const (
 	// CodeSessionCursor reports a tampered, mismatched, expired, or
 	// restart-invalidated local search cursor. No partial page accompanies it.
 	CodeSessionCursor = -32007
+	// CodeSessionHistoryAnchor reports a record position invalidated by a
+	// session deletion or rewrite. Clients refresh instead of guessing nearby.
+	CodeSessionHistoryAnchor = -32008
 )
 
 // Request is one inbound JSON-RPC call or notification. A nil ID marks a
@@ -808,6 +815,21 @@ type SessionSearchResult struct {
 	NextCursor string             `json:"next_cursor,omitempty"`
 	Scanned    int                `json:"scanned"`
 	Partial    bool               `json:"partial"`
+}
+
+type SessionHistoryContextParams struct {
+	AgentID   string `json:"agent_id"`
+	RecordPos uint64 `json:"record_pos"`
+	Before    int    `json:"before,omitempty"`
+	After     int    `json:"after,omitempty"`
+	Store     string `json:"store,omitempty"`
+}
+
+type SessionHistoryContextResult struct {
+	Entries       []TranscriptEntry `json:"entries"`
+	TargetIndex   int               `json:"target_index"`
+	ClippedBefore bool              `json:"clipped_before"`
+	ClippedAfter  bool              `json:"clipped_after"`
 }
 
 // SessionInfo mirrors anvil.AgentInfo in host vocabulary.

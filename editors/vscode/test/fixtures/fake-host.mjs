@@ -826,6 +826,10 @@ async function drain() {
 
 async function handle(msg) {
   if (msg.method === 'initialized' || msg.method === undefined) return;
+  if (msg.method === '$/cancelRequest') {
+    echo(msg.method, msg.params || {});
+    return;
+  }
   if (ignore !== '' && msg.method === ignore) return;
   if (msg.method === 'shutdown') {
     process.exit(0);

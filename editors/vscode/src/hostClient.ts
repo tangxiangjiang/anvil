@@ -56,6 +56,14 @@ export class HostTimeoutError extends Error {
   }
 }
 
+/** The caller superseded a request and no longer wants its reply. */
+export class HostCancelledError extends Error {
+  constructor(method: string) {
+    super(`${method} was cancelled`);
+    this.name = 'HostCancelledError';
+  }
+}
+
 /**
  * Splits a byte stream into lines. Exported because it is the piece most worth
  * testing directly: a JSON line can arrive in pieces, several at a time, or
@@ -84,6 +92,7 @@ interface Pending {
   resolve: (value: unknown) => void;
   reject: (err: Error) => void;
   timer?: NodeJS.Timeout;
+  removeAbortListener?: () => void;
 }
 
 /** One running host child. */
@@ -197,6 +206,7 @@ export class HostClient {
       if (!entry) return;
       this.pending.delete(msg.id);
       if (entry.timer) clearTimeout(entry.timer);
+      entry.removeAbortListener?.();
       if (msg.error) entry.reject(new HostRpcError(msg.error));
       else entry.resolve(msg.result);
       return;
@@ -207,10 +217,18 @@ export class HostClient {
   }
 
   /** Sends a request and resolves with its result. */
-  request<T>(method: string, params?: unknown, timeoutMs?: number): Promise<T> {
+  request<T>(
+    method: string,
+    params?: unknown,
+    timeoutMs?: number,
+    signal?: AbortSignal,
+  ): Promise<T> {
     const child = this.child;
     if (!child || this.exited) {
       return Promise.reject(new HostDownError(`${method}: the host is not running`));
+    }
+    if (signal?.aborted) {
+      return Promise.reject(new HostCancelledError(method));
     }
     const id = this.nextId++;
     const ms = timeoutMs ?? this.options.requestTimeoutMs ?? 30_000;
@@ -222,10 +240,28 @@ export class HostClient {
       };
       if (ms > 0) {
         entry.timer = setTimeout(() => {
-          if (this.pending.delete(id)) reject(new HostTimeoutError(method, ms));
+          if (this.pending.delete(id)) {
+            entry.removeAbortListener?.();
+            reject(new HostTimeoutError(method, ms));
+          }
         }, ms);
       }
       this.pending.set(id, entry);
+      if (signal) {
+        const abort = (): void => {
+          if (!this.pending.delete(id)) return;
+          if (entry.timer) clearTimeout(entry.timer);
+          signal.removeEventListener('abort', abort);
+          this.notify('$/cancelRequest', { id });
+          reject(new HostCancelledError(method));
+        };
+        signal.addEventListener('abort', abort, { once: true });
+        entry.removeAbortListener = () => signal.removeEventListener('abort', abort);
+        if (signal.aborted) {
+          abort();
+          return;
+        }
+      }
       this.write({ jsonrpc: '2.0', id, method, params });
     });
   }
@@ -292,6 +328,7 @@ export class HostClient {
   private failAll(err: Error): void {
     for (const [, entry] of this.pending) {
       if (entry.timer) clearTimeout(entry.timer);
+      entry.removeAbortListener?.();
       entry.reject(err);
     }
     this.pending.clear();

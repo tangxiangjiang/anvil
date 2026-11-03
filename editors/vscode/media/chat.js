@@ -2670,6 +2670,68 @@
     endRound();
   }
 
+  function historyContextText(entry) {
+    if (!entry || typeof entry !== 'object') return '';
+    if (entry.kind === 'message') {
+      const role = typeof entry.role === 'string' && entry.role ? entry.role : 'message';
+      const content = typeof entry.content === 'string' ? entry.content : '';
+      const calls = Array.isArray(entry.tool_calls)
+        ? entry.tool_calls.map((call) => call && call.name).filter(Boolean).join(', ')
+        : '';
+      return role + ': ' + (content || (calls ? 'tools: ' + calls : ''));
+    }
+    if (entry.kind === 'run_end') {
+      return 'run ' + (entry.status || 'ended') + (entry.err ? ': ' + entry.err : '');
+    }
+    if (entry.kind === 'summary') return 'summary: ' + (entry.content || '');
+    if (entry.kind === 'retry') return entry.text || 'provider retry';
+    if (entry.kind === 'stage') {
+      return 'stage: ' + (entry.title || entry.node_id || entry.state || 'update');
+    }
+    if (entry.kind === 'truncated') return 'response truncated';
+    return String(entry.kind || 'history');
+  }
+
+  /** A search hit outside the ordinary tail stays separate from the live chat. */
+  function addHistoryContext(context) {
+    if (!context || !Array.isArray(context.entries) || context.entries.length === 0) return;
+    const wrap = el('section', 'history-context');
+    wrap.setAttribute('role', 'region');
+    wrap.setAttribute('aria-label', 'History context around search result');
+    const header = el('div', 'history-context-header');
+    header.appendChild(el('strong', '', 'History context'));
+    const latest = el('button', 'history-context-latest', 'Return to latest');
+    latest.type = 'button';
+    latest.addEventListener('click', () => {
+      wrap.remove();
+      composer.scrollIntoView({ block: 'end' });
+      input.focus();
+    });
+    header.appendChild(latest);
+    wrap.appendChild(header);
+    if (context.clipped_before) {
+      wrap.appendChild(el('div', 'history-context-clipped', 'Earlier context clipped'));
+    }
+    context.entries.forEach((entry, index) => {
+      const row = el(
+        'div',
+        'history-context-entry' + (index === context.target_index ? ' target' : ''),
+      );
+      row.appendChild(el(
+        'span',
+        'history-context-marker',
+        index === context.target_index ? 'Match' : '',
+      ));
+      row.appendChild(el('span', 'history-context-text', historyContextText(entry)));
+      wrap.appendChild(row);
+    });
+    if (context.clipped_after) {
+      wrap.appendChild(el('div', 'history-context-clipped', 'Later context clipped'));
+    }
+    append(wrap);
+    endRound();
+  }
+
   /**
    * The boundary a compaction leaves in the conversation.
    *
@@ -7296,6 +7358,9 @@
         return;
       case 'note':
         addNote(msg.text || '');
+        return;
+      case 'historyContext':
+        addHistoryContext(msg.context);
         return;
       case 'runEnd':
         addRunEnd(msg.done);

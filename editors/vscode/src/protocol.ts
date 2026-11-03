@@ -20,6 +20,7 @@ export const Method = {
   SessionResume: 'session.resume',
   SessionList: 'session.list',
   SessionSearch: 'session.search',
+  SessionHistoryContext: 'session.historyContext',
   /**
    * Replays a stored conversation. Keyed by agent id rather than by session, so
    * it answers for a session this host has not opened — which is the case it
@@ -956,6 +957,7 @@ export interface TaskNotification {
 // --- session.list ------------------------------------------------------------
 
 export const SESSION_SEARCH_CURSOR_ERROR = -32007;
+export const SESSION_HISTORY_ANCHOR_ERROR = -32008;
 
 export interface SessionSearchParams {
   query: string;
@@ -993,6 +995,21 @@ export interface SessionSearchResult {
   next_cursor?: string;
   scanned: number;
   partial: boolean;
+}
+
+export interface SessionHistoryContextParams {
+  agent_id: string;
+  record_pos: number;
+  before?: number;
+  after?: number;
+  store?: string;
+}
+
+export interface SessionHistoryContextResult {
+  entries: TranscriptEntry[];
+  target_index: number;
+  clipped_before: boolean;
+  clipped_after: boolean;
 }
 
 export interface SessionInfo {

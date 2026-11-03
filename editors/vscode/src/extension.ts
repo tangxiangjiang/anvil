@@ -14,9 +14,28 @@ import { Hub } from './hub';
 import { PLAN_SCHEME, planTarget } from './plan';
 import { PlanDocuments } from './planDocument';
 import { PreviewDocuments } from './review';
-import { SessionInfo } from './protocol';
+import {
+  CodeMethodNotFound,
+  SESSION_HISTORY_ANCHOR_ERROR,
+  SESSION_SEARCH_CURSOR_ERROR,
+  SessionInfo,
+  SessionSearchHit,
+} from './protocol';
 import { SessionNode, SessionRow } from './sessionList';
-import { SessionChoice, filterSessions, sessionChoices } from './sessionSearch';
+import {
+  SessionChoice,
+  SessionSearchEpoch,
+  SessionSearchFilters,
+  buildSessionSearchParams,
+  contentSearchEligible,
+  filterSessions,
+  loadMoreChoice,
+  mergeSessionSearchHits,
+  retryChoice,
+  sessionChoices,
+  sessionSearchChoices,
+  statusChoice,
+} from './sessionSearch';
 import { SessionTreeProvider } from './sessionTree';
 import { ChatStatusBar, STATUS_BAR_COMMAND } from './statusBar';
 import { initWorkspaceRoot } from './workspaceRoot';
@@ -368,9 +387,9 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     }),
 
-    // A filter over the stored list rather than the sidebar's scrollbar: titles
-    // repeat and ids are long, and the person looking for one already knows a
-    // word in it.
+    // Local full-text search over stored JSONL/SQLite transcripts. Short input
+    // stays a cheap title/id filter; content requests are debounced and only
+    // the latest response may replace the picker.
     vscode.commands.registerCommand('anvil.searchSessions', async () => {
       let sessions: SessionInfo[];
       try {
@@ -384,18 +403,207 @@ export function activate(context: vscode.ExtensionContext): void {
         return;
       }
       const pick = vscode.window.createQuickPick<SessionChoice>();
-      pick.title = 'Search sessions';
-      pick.placeholder = 'A word from the title, or the agent id';
+      const epoch = new SessionSearchEpoch();
+      let timer: NodeJS.Timeout | undefined;
+      let requestAbort: AbortController | undefined;
+      let disposed = false;
+      let legacyHost = false;
+      let hits: SessionSearchHit[] = [];
+      let nextCursor: string | undefined;
+      let filters: SessionSearchFilters = { role: 'all', kind: 'all', includeArgs: false };
+      let roleButton: vscode.QuickInputButton;
+      let kindButton: vscode.QuickInputButton;
+      let argsButton: vscode.QuickInputButton;
+      let refreshButton: vscode.QuickInputButton;
+
+      const contentRequested = (): boolean =>
+        contentSearchEligible(pick.value) || filters.role !== 'all' || filters.kind !== 'all';
+
+      const setButtons = (): void => {
+        roleButton = {
+          iconPath: new vscode.ThemeIcon('person'),
+          tooltip: `Role: ${filters.role} (click to cycle)`,
+        };
+        kindButton = {
+          iconPath: new vscode.ThemeIcon('symbol-keyword'),
+          tooltip: `Kind: ${filters.kind} (click to cycle)`,
+        };
+        argsButton = {
+          iconPath: new vscode.ThemeIcon(filters.includeArgs ? 'unlock' : 'lock'),
+          tooltip: filters.includeArgs
+            ? 'Tool arguments included; they may contain secrets (click to exclude)'
+            : 'Tool arguments excluded (click to include; they may contain secrets)',
+        };
+        refreshButton = {
+          iconPath: new vscode.ThemeIcon('refresh'),
+          tooltip: 'Refresh this search',
+        };
+        pick.buttons = [roleButton, kindButton, argsButton, refreshButton];
+        pick.title = filters.includeArgs
+          ? 'Search sessions — local tool arguments included'
+          : 'Search sessions — local content only';
+      };
+
+      const showMetadata = (notice?: string): void => {
+        const choices = sessionChoices(filterSessions(sessions, pick.value));
+        pick.items = notice ? [...choices, statusChoice(notice)] : choices;
+        pick.busy = false;
+        nextCursor = undefined;
+        hits = [];
+      };
+
+      const showResults = (partial: boolean): void => {
+        const choices = sessionSearchChoices(hits, sessions);
+        if (partial) {
+          choices.push(statusChoice('$(warning) Partial local results — the scan limit was reached.'));
+        }
+        if (choices.length === 0) {
+          choices.push(statusChoice('No local transcript content matched.'));
+        }
+        if (nextCursor) choices.push(loadMoreChoice());
+        pick.items = choices;
+      };
+
+      const runSearch = async (append: boolean): Promise<void> => {
+        if (disposed) return;
+        if (legacyHost) {
+          showMetadata('$(info) This Host supports title/id search only; update it for content search.');
+          return;
+        }
+        const requestCursor = append ? nextCursor : undefined;
+        if (append && !requestCursor) return;
+        const requestEpoch = epoch.supersede();
+        const abort = new AbortController();
+        requestAbort?.abort();
+        requestAbort = abort;
+        pick.busy = true;
+        if (!append) {
+          hits = [];
+          nextCursor = undefined;
+          pick.items = [statusChoice('Searching local transcripts…')];
+        }
+        try {
+          const result = await hub.searchSessions(
+            buildSessionSearchParams(pick.value, filters, requestCursor),
+            abort.signal,
+          );
+          if (disposed || !epoch.current(requestEpoch)) return;
+          hits = append ? mergeSessionSearchHits(hits, result.hits) : result.hits;
+          nextCursor = result.next_cursor;
+          showResults(result.partial);
+        } catch (err) {
+          if (disposed || !epoch.current(requestEpoch)) return;
+          if (err instanceof HostRpcError && err.code === CodeMethodNotFound) {
+            legacyHost = true;
+            showMetadata('$(info) This Host supports title/id search only; update it for content search.');
+          } else if (err instanceof HostRpcError && err.code === SESSION_SEARCH_CURSOR_ERROR) {
+            hits = [];
+            nextCursor = undefined;
+            pick.items = [
+              retryChoice('The result snapshot expired. Retry starts again from page one.'),
+            ];
+          } else {
+            pick.items = [retryChoice((err as Error).message)];
+          }
+        } finally {
+          if (requestAbort === abort) requestAbort = undefined;
+          if (!disposed && epoch.current(requestEpoch)) pick.busy = false;
+        }
+      };
+
+      const scheduleSearch = (immediate = false): void => {
+        epoch.supersede();
+        requestAbort?.abort();
+        requestAbort = undefined;
+        if (timer) clearTimeout(timer);
+        timer = undefined;
+        nextCursor = undefined;
+        hits = [];
+        pick.busy = false;
+        if (!contentRequested()) {
+          showMetadata();
+          return;
+        }
+        if (legacyHost) {
+          showMetadata('$(info) Content search is unavailable with this older Host.');
+          return;
+        }
+        pick.items = [statusChoice('Search local transcript content…')];
+        if (immediate) {
+          void runSearch(false);
+        } else {
+          timer = setTimeout(() => {
+            timer = undefined;
+            void runSearch(false);
+          }, 250);
+        }
+      };
+
+      const cycle = <T extends string>(value: T, values: readonly T[]): T =>
+        values[(values.indexOf(value) + 1) % values.length];
+
+      pick.placeholder = 'Search content, or use role:, kind:, status:, after:, before:';
+      pick.matchOnDescription = true;
+      pick.matchOnDetail = true;
       pick.items = sessionChoices(sessions);
+      setButtons();
       pick.onDidChangeValue((value) => {
-        pick.items = sessionChoices(filterSessions(sessions, value));
+        void value;
+        scheduleSearch();
+      });
+      pick.onDidTriggerButton((button) => {
+        if (button === roleButton) {
+          filters = {
+            ...filters,
+            role: cycle(filters.role, ['all', 'user', 'assistant', 'tool'] as const),
+          };
+        } else if (button === kindButton) {
+          filters = {
+            ...filters,
+            kind: cycle(filters.kind, ['all', 'message', 'error', 'plan', 'todo'] as const),
+          };
+        } else if (button === argsButton) {
+          filters = { ...filters, includeArgs: !filters.includeArgs };
+        } else if (button === refreshButton) {
+          legacyHost = false;
+        }
+        setButtons();
+        scheduleSearch(true);
       });
       pick.onDidAccept(() => {
         const chosen = pick.selectedItems[0];
+        if (!chosen || chosen.choiceKind === 'status') {
+          if (contentRequested()) scheduleSearch(true);
+          return;
+        }
+        if (chosen.choiceKind === 'loadMore') {
+          void runSearch(true);
+          return;
+        }
+        if (chosen.choiceKind === 'retry') {
+          scheduleSearch(true);
+          return;
+        }
         pick.hide();
-        if (chosen) void hub.openSession(chosen.agentId);
+        if (chosen.hit) {
+          void hub.openSearchHit(chosen.hit).catch((err) => {
+            const message =
+              err instanceof HostRpcError && err.code === SESSION_HISTORY_ANCHOR_ERROR
+                ? 'The search result changed on disk. Refresh the search to locate it again.'
+                : `Could not load the matching history: ${(err as Error).message}`;
+            void vscode.window.showWarningMessage(`Anvil: ${message}`);
+          });
+        } else if (chosen.agentId) {
+          void hub.openSession(chosen.agentId);
+        }
       });
-      pick.onDidHide(() => pick.dispose());
+      pick.onDidHide(() => {
+        disposed = true;
+        epoch.supersede();
+        requestAbort?.abort();
+        if (timer) clearTimeout(timer);
+        pick.dispose();
+      });
       pick.show();
     }),
 
