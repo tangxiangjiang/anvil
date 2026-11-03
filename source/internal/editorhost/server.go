@@ -180,6 +180,8 @@ func (s *Server) dispatch(ctx context.Context, req *Request) (any, *RPCError) {
 		return s.handleSessionResume(ctx, req.Params)
 	case MethodSessionList:
 		return s.handleSessionList(ctx, req.Params)
+	case MethodSessionSearch:
+		return s.handleSessionSearch(ctx, req.Params)
 	case MethodSessionTranscript:
 		return s.handleSessionTranscript(ctx, req.Params)
 	case MethodSessionClose:
@@ -316,7 +318,7 @@ func (s *Server) handleInitialize(params json.RawMessage) (any, *RPCError) {
 }
 
 func capabilities() []string {
-	return []string{"streaming", "sessions", "resume", "cancel", "models", "approval", "context", "vision", "plan", "skills", "rules", "permissions", "mcp", "mcp.runtime", "subagents", "tasks", "runs.durable", "workflow"}
+	return []string{"streaming", "sessions", "session.search", "resume", "cancel", "models", "approval", "context", "vision", "plan", "skills", "rules", "permissions", "mcp", "mcp.runtime", "subagents", "tasks", "runs.durable", "workflow"}
 }
 
 // ---------------------------------------------------------------------------
@@ -446,6 +448,68 @@ func (s *Server) handleSessionList(ctx context.Context, params json.RawMessage) 
 		out.Sessions = out.Sessions[:p.Limit]
 	}
 	return out, nil
+}
+
+func (s *Server) handleSessionSearch(ctx context.Context, params json.RawMessage) (any, *RPCError) {
+	p, rpcErr := decode[SessionSearchParams](params)
+	if rpcErr != nil {
+		return nil, errInvalidParams("session.search: " + rpcErr.Error())
+	}
+	after, err := parseSessionSearchTime(p.After)
+	if err != nil {
+		return nil, errInvalidParams("session.search after: " + err.Error())
+	}
+	before, err := parseSessionSearchTime(p.Before)
+	if err != nil {
+		return nil, errInvalidParams("session.search before: " + err.Error())
+	}
+	result, err := anvil.SearchSessions(ctx, anvil.SessionSearchOptions{
+		Local: anvil.LocalOptions{CWD: s.cwdPath(), Store: p.Store},
+		Query: p.Query, AgentID: p.AgentID, Roles: p.Roles, Kinds: p.Kinds,
+		After: after, Before: before, Limit: p.Limit, Cursor: p.Cursor,
+		IncludeArgs: p.IncludeArgs,
+	})
+	if err != nil {
+		var queryErr *anvil.SessionSearchQueryError
+		if errors.As(err, &queryErr) {
+			return nil, errInvalidParams("session.search: " + err.Error())
+		}
+		var cursorErr *anvil.SessionSearchCursorError
+		if errors.As(err, &cursorErr) {
+			return nil, errCode(CodeSessionCursor, err.Error())
+		}
+		return nil, errHost(err)
+	}
+	out := SessionSearchResult{
+		Hits:       make([]SessionSearchHit, 0, len(result.Hits)),
+		NextCursor: result.NextCursor, Scanned: result.Scanned, Partial: result.Partial,
+	}
+	for _, hit := range result.Hits {
+		wire := SessionSearchHit{
+			AgentID: hit.AgentID, RunID: hit.RunID, RecordPos: hit.RecordPos,
+			Kind: hit.Kind, Role: hit.Role, Name: hit.Name, Timestamp: hit.Timestamp,
+			Title: hit.Title, Snippet: hit.Snippet,
+			Match: make([]SessionSearchTextRange, len(hit.Match)),
+		}
+		for i, match := range hit.Match {
+			wire.Match[i] = SessionSearchTextRange{Start: match.Start, End: match.End}
+		}
+		out.Hits = append(out.Hits, wire)
+	}
+	return out, nil
+}
+
+func parseSessionSearchTime(value string) (time.Time, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, nil
+	}
+	for _, layout := range []string{time.RFC3339Nano, "2006-01-02"} {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return parsed, nil
+		}
+	}
+	return time.Time{}, errors.New("must be RFC3339 or YYYY-MM-DD")
 }
 
 // handleSessionRename names a stored session, as an appended `meta` record.

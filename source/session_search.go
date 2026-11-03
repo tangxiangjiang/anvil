@@ -26,8 +26,6 @@ const (
 )
 
 // SessionSearchOptions defines a local-only query over persisted sessions.
-// Cursor is reserved for the pagination contract delivered in p_0.56.2 and is
-// rejected in this phase rather than silently ignored.
 type SessionSearchOptions struct {
 	Local       LocalOptions
 	Query       string
@@ -134,11 +132,6 @@ func SearchSessions(ctx context.Context, opts SessionSearchOptions) (SessionSear
 	if err != nil {
 		return SessionSearchResult{}, err
 	}
-	if strings.TrimSpace(opts.Cursor) != "" {
-		return SessionSearchResult{}, &SessionSearchQueryError{
-			Position: -1, Message: "cursor pagination is not available yet",
-		}
-	}
 	limit := opts.Limit
 	if limit < 0 {
 		return SessionSearchResult{}, &SessionSearchQueryError{Position: -1, Message: "limit cannot be negative"}
@@ -153,12 +146,25 @@ func SearchSessions(ctx context.Context, opts SessionSearchOptions) (SessionSear
 	if err != nil {
 		return SessionSearchResult{}, err
 	}
+	identity := sessionSearchIdentity(cwd, opts, query)
+	if strings.TrimSpace(opts.Cursor) != "" {
+		if err := defaultSessionSearchSnapshots.validate(opts.Cursor, identity); err != nil {
+			return SessionSearchResult{}, err
+		}
+	}
 	backend, err := store.Open(cwd, opts.Local.Store)
 	if err != nil {
 		return SessionSearchResult{}, newError("open store", false, err)
 	}
 	defer backend.Close()
-	return searchSessionsBackend(ctx, opts, query, limit, backend)
+	if strings.TrimSpace(opts.Cursor) != "" {
+		return defaultSessionSearchSnapshots.resume(ctx, opts.Cursor, identity, limit, backend)
+	}
+	ranked, result, err := scanSessionSearchBackend(ctx, opts, query, backend)
+	if err != nil {
+		return SessionSearchResult{}, err
+	}
+	return defaultSessionSearchSnapshots.first(identity, ranked, result, limit)
 }
 
 func searchSessionsBackend(
@@ -168,17 +174,30 @@ func searchSessionsBackend(
 	limit int,
 	backend store.Backend,
 ) (SessionSearchResult, error) {
+	ranked, result, err := scanSessionSearchBackend(ctx, opts, query, backend)
+	if err != nil {
+		return SessionSearchResult{}, err
+	}
+	return sessionSearchPage(ranked, result, limit), nil
+}
+
+func scanSessionSearchBackend(
+	ctx context.Context,
+	opts SessionSearchOptions,
+	query compiledSessionSearch,
+	backend store.Backend,
+) ([]rankedSessionHit, SessionSearchResult, error) {
 	var ids []string
 	if strings.TrimSpace(opts.AgentID) != "" {
 		if err := validPlanID("agent_id", opts.AgentID); err != nil {
-			return SessionSearchResult{}, &SessionSearchQueryError{Position: -1, Message: err.Error()}
+			return nil, SessionSearchResult{}, &SessionSearchQueryError{Position: -1, Message: err.Error()}
 		}
 		ids = []string{opts.AgentID}
 	} else {
 		var err error
 		ids, err = backend.ListIDs()
 		if err != nil {
-			return SessionSearchResult{}, newError("list agents", false, err)
+			return nil, SessionSearchResult{}, newError("list agents", false, err)
 		}
 		sort.Strings(ids)
 	}
@@ -187,7 +206,7 @@ func searchSessionsBackend(
 	scannedBytes := 0
 	for _, agentID := range ids {
 		if err := ctx.Err(); err != nil {
-			return SessionSearchResult{}, err
+			return nil, SessionSearchResult{}, err
 		}
 		records, loadErr := backend.Load(agentID)
 		if loadErr != nil {
@@ -198,7 +217,7 @@ func searchSessionsBackend(
 			continue
 		}
 		if err := ctx.Err(); err != nil {
-			return SessionSearchResult{}, err
+			return nil, SessionSearchResult{}, err
 		}
 		records = append([]store.Record(nil), records...)
 		scanEnd := len(records)
@@ -212,7 +231,7 @@ func searchSessionsBackend(
 			}
 			if result.Scanned%64 == 0 {
 				if err := ctx.Err(); err != nil {
-					return SessionSearchResult{}, err
+					return nil, SessionSearchResult{}, err
 				}
 			}
 		}
@@ -245,13 +264,17 @@ func searchSessionsBackend(
 		}
 		return ranked[i].hit.Kind < ranked[j].hit.Kind
 	})
+	return ranked, result, nil
+}
+
+func sessionSearchPage(ranked []rankedSessionHit, result SessionSearchResult, limit int) SessionSearchResult {
 	if len(ranked) > limit {
 		ranked = ranked[:limit]
 	}
 	for _, item := range ranked {
 		result.Hits = append(result.Hits, item.hit)
 	}
-	return result, nil
+	return result
 }
 
 func compileSessionSearch(opts SessionSearchOptions) (compiledSessionSearch, error) {

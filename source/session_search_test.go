@@ -52,8 +52,15 @@ func TestSessionQueryParity(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			jsonCursor := gotJSON.NextCursor != ""
+			sqliteCursor := gotSQLite.NextCursor != ""
+			gotJSON.NextCursor = ""
+			gotSQLite.NextCursor = ""
 			if !reflect.DeepEqual(gotJSON, gotSQLite) {
 				t.Fatalf("JSONL=%+v\nSQLite=%+v", gotJSON, gotSQLite)
+			}
+			if jsonCursor != sqliteCursor {
+				t.Fatalf("cursor presence differs: JSONL=%v SQLite=%v", jsonCursor, sqliteCursor)
 			}
 		})
 	}
@@ -221,7 +228,8 @@ func TestSessionQueryValidationAndCancellation(t *testing.T) {
 		opts.Local = LocalOptions{CWD: dir, Store: store.KindJSONL}
 		_, err := SearchSessions(context.Background(), opts)
 		var queryErr *SessionSearchQueryError
-		if !errors.As(err, &queryErr) {
+		var cursorErr *SessionSearchCursorError
+		if !errors.As(err, &queryErr) && !errors.As(err, &cursorErr) {
 			t.Fatalf("opts=%+v error=%v", opts, err)
 		}
 	}

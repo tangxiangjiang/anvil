@@ -59,6 +59,8 @@ import {
   SessionInfo,
   SessionRenameResult,
   SessionResult,
+  SessionSearchParams,
+  SessionSearchResult,
   SessionTranscriptParams,
   SessionTranscriptResult,
   SkillEntry,
@@ -459,6 +461,12 @@ export class HostManager {
     const client = await this.startClient();
     const result = await client.request<{ sessions: SessionInfo[] }>(Method.SessionList, {});
     return result.sessions ?? [];
+  }
+
+  /** Local full-text search over durable sessions; cursor remains host-owned. */
+  async searchSessions(params: SessionSearchParams): Promise<SessionSearchResult> {
+    const client = await this.startClient();
+    return client.request<SessionSearchResult>(Method.SessionSearch, params);
   }
 
   /**

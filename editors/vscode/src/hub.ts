@@ -56,6 +56,8 @@ import {
   RunEventsResult,
   RunReconcileResult,
   SessionInfo,
+  SessionSearchParams,
+  SessionSearchResult,
   SessionTranscriptResult,
   SkillEntry,
   SubagentProfile,
@@ -517,6 +519,10 @@ export class Hub {
       for (const panel of this.panels) panel.sessionTitleChanged();
     }
     return sessions;
+  }
+
+  searchSessions(params: SessionSearchParams): Promise<SessionSearchResult> {
+    return this.manager.searchSessions(params);
   }
 
   async workflow(agentId: string, artifactId?: string): Promise<WorkflowGetResult> {

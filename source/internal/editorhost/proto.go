@@ -36,6 +36,7 @@ const (
 	MethodSessionNew    = "session.new"
 	MethodSessionResume = "session.resume"
 	MethodSessionList   = "session.list"
+	MethodSessionSearch = "session.search"
 	// MethodSessionTranscript replays a stored conversation. It is keyed by agent
 	// id rather than by session, so it answers for a session this host has not
 	// opened — which is the case it exists for: a client that has just reloaded
@@ -184,6 +185,9 @@ const (
 	// CodeWorkflowConflict reports a stale revision or a decision that differs
 	// from the durable batch already accepted at that revision.
 	CodeWorkflowConflict = -32006
+	// CodeSessionCursor reports a tampered, mismatched, expired, or
+	// restart-invalidated local search cursor. No partial page accompanies it.
+	CodeSessionCursor = -32007
 )
 
 // Request is one inbound JSON-RPC call or notification. A nil ID marks a
@@ -764,6 +768,46 @@ type SessionListParams struct {
 // SessionListResult is the persisted-session listing.
 type SessionListResult struct {
 	Sessions []SessionInfo `json:"sessions"`
+}
+
+// SessionSearchParams is a local-only full-text query. Cursor is opaque: the
+// client may retain it but never interprets or edits it.
+type SessionSearchParams struct {
+	Query       string   `json:"query"`
+	AgentID     string   `json:"agent_id,omitempty"`
+	Roles       []string `json:"roles,omitempty"`
+	Kinds       []string `json:"kinds,omitempty"`
+	After       string   `json:"after,omitempty"`
+	Before      string   `json:"before,omitempty"`
+	Limit       int      `json:"limit,omitempty"`
+	Cursor      string   `json:"cursor,omitempty"`
+	IncludeArgs bool     `json:"include_args,omitempty"`
+	Store       string   `json:"store,omitempty"`
+}
+
+type SessionSearchTextRange struct {
+	Start int `json:"start"`
+	End   int `json:"end"`
+}
+
+type SessionSearchHit struct {
+	AgentID   string                   `json:"agent_id"`
+	RunID     string                   `json:"run_id,omitempty"`
+	RecordPos uint64                   `json:"record_pos"`
+	Kind      string                   `json:"kind"`
+	Role      string                   `json:"role,omitempty"`
+	Name      string                   `json:"name,omitempty"`
+	Timestamp time.Time                `json:"timestamp,omitempty"`
+	Title     string                   `json:"title,omitempty"`
+	Snippet   string                   `json:"snippet"`
+	Match     []SessionSearchTextRange `json:"match"`
+}
+
+type SessionSearchResult struct {
+	Hits       []SessionSearchHit `json:"hits"`
+	NextCursor string             `json:"next_cursor,omitempty"`
+	Scanned    int                `json:"scanned"`
+	Partial    bool               `json:"partial"`
 }
 
 // SessionInfo mirrors anvil.AgentInfo in host vocabulary.
