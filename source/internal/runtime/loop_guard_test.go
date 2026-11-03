@@ -99,3 +99,54 @@ func TestLoopGuardSameToolNameNotCycle(t *testing.T) {
 		}
 	}
 }
+
+func TestLoopGuardDifferentShellChecksMayReturnSameOutput(t *testing.T) {
+	g := newLoopGuard()
+	for i := 0; i < 12; i++ {
+		tc := llm.ToolCall{
+			Name: "shell",
+			Args: json.RawMessage(fmt.Sprintf(
+				`{"command":"python check.py --attempt %d"}`, i,
+			)),
+		}
+		action, reason := g.Observe(
+			[]llm.ToolCall{tc},
+			[]tools.Result{{Content: "pending\n6 lines of output"}},
+		)
+		if action != loopOK {
+			t.Fatalf("check %d: action=%v reason=%q", i, action, reason)
+		}
+	}
+}
+
+func TestLoopGuardProgressClearsAnOldWarning(t *testing.T) {
+	g := newLoopGuard()
+	repeated := llm.ToolCall{Name: "shell", Args: json.RawMessage(`{"command":"check"}`)}
+	same := []tools.Result{{Content: "pending"}}
+	for i := 0; i < 3; i++ {
+		action, _ := g.Observe([]llm.ToolCall{repeated}, same)
+		if i < 2 && action != loopOK {
+			t.Fatalf("early repeat %d: action=%v", i, action)
+		}
+		if i == 2 && action != loopWarn {
+			t.Fatalf("third repeat: action=%v", action)
+		}
+	}
+
+	progress := llm.ToolCall{Name: "shell", Args: json.RawMessage(`{"command":"inspect-different-state"}`)}
+	if action, reason := g.Observe(
+		[]llm.ToolCall{progress}, []tools.Result{{Content: "new evidence"}},
+	); action != loopOK {
+		t.Fatalf("progress: action=%v reason=%q", action, reason)
+	}
+
+	for i := 0; i < 3; i++ {
+		action, reason := g.Observe([]llm.ToolCall{repeated}, same)
+		if i < 2 && action != loopOK {
+			t.Fatalf("new sequence %d: action=%v reason=%q", i, action, reason)
+		}
+		if i == 2 && action != loopWarn {
+			t.Fatalf("new sequence should warn again, got action=%v reason=%q", action, reason)
+		}
+	}
+}

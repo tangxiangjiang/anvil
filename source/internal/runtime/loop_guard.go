@@ -50,7 +50,10 @@ type loopGuard struct {
 	// window called that a loop.
 	seq []seqEntry
 
-	warned bool
+	// warnedKey arms a stop only for the same unresolved violation. Any
+	// successful, different call clears it, so an old warning cannot terminate
+	// unrelated work much later in a run.
+	warnedKey string
 }
 
 // seqEntry is one tool call as the cycle detector remembers it: the name for
@@ -74,6 +77,7 @@ func (g *loopGuard) Observe(calls []llm.ToolCall, results []tools.Result) (loopA
 		return loopOK, ""
 	}
 	reason := ""
+	reasonKey := ""
 	for i, tc := range calls {
 		cfp := callFingerprint(tc)
 		if cfp == g.lastCallFP {
@@ -84,6 +88,7 @@ func (g *loopGuard) Observe(calls []llm.ToolCall, results []tools.Result) (loopA
 		}
 		if g.callStreak >= g.repeatThreshold {
 			reason = fmt.Sprintf("repeated tool call %q ×%d", tc.Name, g.callStreak)
+			reasonKey = "repeat:" + cfp
 			break
 		}
 
@@ -91,7 +96,10 @@ func (g *loopGuard) Observe(calls []llm.ToolCall, results []tools.Result) (loopA
 		if i < len(results) {
 			content = results[i].Content
 		}
-		rfp := resultFingerprint(tc.Name, content)
+		// Equal output is a stall only when it came from the same call. Status
+		// checks commonly return the same text for different paths, filters, or
+		// polling parameters; those are distinct observations, not a loop.
+		rfp := resultFingerprint(cfp, content)
 		if rfp == g.lastResultFP {
 			g.resultStreak++
 		} else {
@@ -100,20 +108,23 @@ func (g *loopGuard) Observe(calls []llm.ToolCall, results []tools.Result) (loopA
 		}
 		if g.resultStreak >= g.stallThreshold {
 			reason = fmt.Sprintf("stalled tool %q (identical result ×%d)", tc.Name, g.resultStreak)
+			reasonKey = "stall:" + rfp
 			break
 		}
 
 		g.seq = append(g.seq, seqEntry{name: tc.Name, fp: cfp})
 		if msg := g.detectCycle(); msg != "" {
 			reason = msg
+			reasonKey = "cycle:" + msg
 			break
 		}
 	}
 	if reason == "" {
+		g.warnedKey = ""
 		return loopOK, ""
 	}
-	if !g.warned {
-		g.warned = true
+	if g.warnedKey != reasonKey {
+		g.warnedKey = reasonKey
 		return loopWarn, reason
 	}
 	return loopStop, reason
@@ -159,9 +170,9 @@ func callFingerprint(tc llm.ToolCall) string {
 	return tc.Name + "\x00" + compactJSON(tc.Args)
 }
 
-func resultFingerprint(name, content string) string {
+func resultFingerprint(callFP, content string) string {
 	sum := sha256.Sum256([]byte(content))
-	return name + "\x00" + hex.EncodeToString(sum[:8])
+	return callFP + "\x00" + hex.EncodeToString(sum[:8])
 }
 
 func compactJSON(raw []byte) string {

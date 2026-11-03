@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 
-const PRE_CHANGE_VERSION = '0.52.16';
+const PRE_CHANGE_VERSION = '0.52.17';
 const EXTENSION_ROOT = join(__dirname, '..', '..', '..');
 const REPOSITORY_ROOT = join(EXTENSION_ROOT, '..', '..');
 
