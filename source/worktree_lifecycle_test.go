@@ -96,7 +96,8 @@ func TestWorktreeLifecyclePrepareDiscoverCleanup(t *testing.T) {
 
 	again, err := CleanupWorktreeWorker(context.Background(), WorktreeCleanupOptions{
 		Local: LocalOptions{CWD: base}, WorktreeRoot: managed,
-		AgentID: worker.AgentID, WorkerID: worker.ID, ExpectedRevision: worker.Revision,
+		AgentID: worker.AgentID, WorkerID: worker.ID,
+		ExpectedRevision: result.Worker.Revision,
 	})
 	if err != nil || again.Worker.State != WorktreeRemoved {
 		t.Fatalf("idempotent cleanup=%+v err=%v", again, err)
@@ -117,6 +118,12 @@ func TestWorktreeLifecycleSQLiteOwnershipParity(t *testing.T) {
 	if err != nil || !sameWorktreeManifest(worker, stored) {
 		t.Fatalf("stored=%+v err=%v", stored, err)
 	}
+	if !isWorktreeStoreProjection(stored) ||
+		worktreePathContainsAbsolute(
+			mustJSONWorktree(t, stored), worker.BaseRoot, worker.WorktreeRoot, worker.GitCommonDir,
+		) {
+		t.Fatalf("stored worktree projection leaked a local path: %+v", stored)
+	}
 	result, err := CleanupWorktreeWorker(context.Background(), WorktreeCleanupOptions{
 		Local: options.Local, WorktreeRoot: managed, AgentID: worker.AgentID,
 		WorkerID: worker.ID, ExpectedRevision: worker.Revision,
@@ -124,6 +131,15 @@ func TestWorktreeLifecycleSQLiteOwnershipParity(t *testing.T) {
 	if err != nil || result.Worker.State != WorktreeRemoved {
 		t.Fatalf("cleanup=%+v err=%v", result, err)
 	}
+}
+
+func mustJSONWorktree(t *testing.T, worker WorktreeWorker) []byte {
+	t.Helper()
+	data, err := json.Marshal(worker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }
 
 func TestWorktreeSecurityRejectsEscapesAndIneligibleRepositories(t *testing.T) {
@@ -366,8 +382,30 @@ func TestWorktreeOwnershipRejectsForgeryCollisionQuotaAndLockContention(t *testi
 		}
 	})
 
-	t.Run("interrupted preparation is discoverable", func(t *testing.T) {
+	t.Run("stale lock file is recoverable", func(t *testing.T) {
 		_, managed := newWorktreeTestRepository(t)
+		if err := createManagedWorktreeRoot(managed); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := initializeWorktreeManager(managed); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(managed, ".anvil", "lifecycle.lock")
+		if err := os.WriteFile(path, []byte(`{"pid":999999,"token":"stale"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := secureWorktreePath(path, false); err != nil {
+			t.Fatal(err)
+		}
+		release, err := acquireWorktreeLifecycleLock(managed)
+		if err != nil {
+			t.Fatalf("stale lock was not recovered: %v", err)
+		}
+		release()
+	})
+
+	t.Run("interrupted preparation is discoverable", func(t *testing.T) {
+		base, managed := newWorktreeTestRepository(t)
 		if err := createManagedWorktreeRoot(managed); err != nil {
 			t.Fatal(err)
 		}
@@ -377,18 +415,27 @@ func TestWorktreeOwnershipRejectsForgeryCollisionQuotaAndLockContention(t *testi
 		}
 		now := time.Now().UTC()
 		worker := WorktreeWorker{
-			Schema: worktreeManifestSchema, Revision: 2,
+			Schema: worktreeManifestSchema, Revision: 1,
 			ID: "w-" + strings.Repeat("c", 24), AgentID: "agent-one",
 			ArtifactID: "artifact-one", WorkItemID: "item-one",
 			ExecutionID: "exec-" + strings.Repeat("c", 24), Attempt: 1,
-			State: WorktreePreparing, WorktreeRoot: filepath.Join(managed, "wt-crashed"),
+			State: WorktreeRequested, BaseRoot: base,
+			WorktreeRoot: filepath.Join(managed, "wt-"+"w-"+strings.Repeat("c", 24)),
+			GitCommonDir: filepath.Join(base, ".git"), BaseRef: "HEAD",
+			BaseCommit:  strings.TrimSpace(worktreeTestGit(t, base, "rev-parse", "HEAD")),
+			Branch:      "anvil/agent-one/item-one/1-" + strings.Repeat("c", 8),
 			OwnerHostID: "host-one", CreatedAt: now, UpdatedAt: now,
 		}
+		if err := appendWorktreeStoreRecord(LocalOptions{CWD: base}, base, worker); err != nil {
+			t.Fatal(err)
+		}
+		worker.State = WorktreePreparing
+		worker.Revision++
 		if err := writeInitialWorktreeOwner(managed, key, worker); err != nil {
 			t.Fatal(err)
 		}
 		workers, err := ListWorktreeWorkers(context.Background(), WorktreeListOptions{
-			WorktreeRoot: managed,
+			Local: LocalOptions{CWD: base}, WorktreeRoot: managed,
 		})
 		if err != nil || len(workers) != 1 || workers[0].State != WorktreePreparing {
 			t.Fatalf("workers=%+v err=%v", workers, err)
@@ -436,6 +483,37 @@ func TestWorktreeCleanupFailsClosedForDirtyOrMismatchedState(t *testing.T) {
 			t, base, "status", "--porcelain=v1", "--untracked-files=all",
 		)); status != "" {
 			t.Fatalf("primary worktree changed: %q", status)
+		}
+	})
+
+	t.Run("ignored worker file", func(t *testing.T) {
+		base, managed := newWorktreeTestRepository(t)
+		if err := os.WriteFile(
+			filepath.Join(base, ".gitignore"), []byte("ignored.bin\n"), 0o600,
+		); err != nil {
+			t.Fatal(err)
+		}
+		worktreeTestGit(t, base, "add", ".gitignore")
+		worktreeTestGit(t, base, "commit", "-m", "ignore generated file")
+		worker, err := PrepareWorktreeWorker(
+			context.Background(), worktreeTestOptions(base, managed),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ignored := filepath.Join(worker.WorktreeRoot, "ignored.bin")
+		if err := os.WriteFile(ignored, []byte("must survive"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err = CleanupWorktreeWorker(context.Background(), WorktreeCleanupOptions{
+			Local: LocalOptions{CWD: base}, WorktreeRoot: managed,
+			AgentID: worker.AgentID, WorkerID: worker.ID,
+			ExpectedRevision: worker.Revision,
+		})
+		assertWorktreeErrorCode(t, err, "dirty")
+		if data, readErr := os.ReadFile(ignored); readErr != nil ||
+			string(data) != "must survive" {
+			t.Fatalf("ignored data was not preserved: %q err=%v", data, readErr)
 		}
 	})
 
@@ -496,7 +574,7 @@ func TestWorktreeCleanupRetainsBranchOnlyWhenRequested(t *testing.T) {
 	again, err := CleanupWorktreeWorker(context.Background(), WorktreeCleanupOptions{
 		Local: LocalOptions{CWD: base}, WorktreeRoot: managed,
 		AgentID: worker.AgentID, WorkerID: worker.ID,
-		ExpectedRevision: worker.Revision,
+		ExpectedRevision: result.Worker.Revision, RetainBranch: true,
 	})
 	if err != nil || !again.RetainedBranch {
 		t.Fatalf("idempotent retained cleanup=%+v err=%v", again, err)
@@ -581,6 +659,98 @@ func TestWorktreeCleanupReconcilesRemovedOwnerAfterStoreFailure(t *testing.T) {
 	if err != nil || stored.Revision != worker.Revision || stored.State != WorktreeRemoved {
 		t.Fatalf("stored=%+v err=%v", stored, err)
 	}
+}
+
+func TestWorktreeCleanupRecoversOwnedPartialPreparation(t *testing.T) {
+	t.Run("requested without resources", func(t *testing.T) {
+		base, managed, worker := newPartialWorktreeTestOwner(t, WorktreeRequested, false)
+		result, err := CleanupWorktreeWorker(context.Background(), WorktreeCleanupOptions{
+			Local: LocalOptions{CWD: base}, WorktreeRoot: managed,
+			AgentID: worker.AgentID, WorkerID: worker.ID,
+			ExpectedRevision: worker.Revision,
+		})
+		if err != nil || result.Worker.State != WorktreeRemoved ||
+			len(result.RemovedPaths) != 0 {
+			t.Fatalf("cleanup=%+v err=%v", result, err)
+		}
+	})
+
+	t.Run("preparing with branch only", func(t *testing.T) {
+		base, managed, worker := newPartialWorktreeTestOwner(t, WorktreePreparing, true)
+		result, err := CleanupWorktreeWorker(context.Background(), WorktreeCleanupOptions{
+			Local: LocalOptions{CWD: base}, WorktreeRoot: managed,
+			AgentID: worker.AgentID, WorkerID: worker.ID,
+			ExpectedRevision: worker.Revision,
+		})
+		if err != nil || result.Worker.State != WorktreeRemoved {
+			t.Fatalf("cleanup=%+v err=%v", result, err)
+		}
+		exists, err := (worktreeGitRunner{}).branchExists(
+			context.Background(), base, worker.Branch,
+		)
+		if err != nil || exists {
+			t.Fatalf("partial branch exists=%v err=%v", exists, err)
+		}
+	})
+}
+
+func newPartialWorktreeTestOwner(
+	t *testing.T,
+	state WorktreeWorkerState,
+	withBranch bool,
+) (string, string, WorktreeWorker) {
+	t.Helper()
+	baseInput, managedInput := newWorktreeTestRepository(t)
+	base, err := canonicalExistingPath(baseInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := createManagedWorktreeRoot(managedInput); err != nil {
+		t.Fatal(err)
+	}
+	managed, err := canonicalExistingPath(managedInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := initializeWorktreeManager(managed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository, err := inspectWorktreeRepository(
+		context.Background(), worktreeGitRunner{}, base, "HEAD",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	worker := WorktreeWorker{
+		Schema: worktreeManifestSchema, Revision: 1,
+		ID: "w-" + strings.Repeat("d", 24), AgentID: "agent-partial",
+		ArtifactID: "artifact-partial", WorkItemID: "item-partial",
+		ExecutionID: "exec-" + strings.Repeat("d", 24), Attempt: 1,
+		State: WorktreeRequested, BaseRoot: base,
+		WorktreeRoot: filepath.Join(managed, "wt-"+"w-"+strings.Repeat("d", 24)),
+		GitCommonDir: repository.commonDir, BaseRef: "HEAD",
+		BaseCommit:  repository.commit,
+		Branch:      "anvil/agent-partial/item-partial/1-" + strings.Repeat("d", 8),
+		OwnerHostID: "host-partial", LeaseUntil: now.Add(time.Minute),
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := appendWorktreeStoreRecord(LocalOptions{CWD: base}, base, worker); err != nil {
+		t.Fatal(err)
+	}
+	if state == WorktreePreparing {
+		worker.State = state
+		worker.Revision++
+		worker.UpdatedAt = time.Now().UTC()
+	}
+	if withBranch {
+		worktreeTestGit(t, base, "branch", worker.Branch, worker.BaseCommit)
+	}
+	if err := writeInitialWorktreeOwner(managed, key, worker); err != nil {
+		t.Fatal(err)
+	}
+	return base, managed, worker
 }
 
 func newWorktreeTestRepository(t *testing.T) (base, managed string) {

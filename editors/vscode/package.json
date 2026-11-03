@@ -2,7 +2,7 @@
   "name": "anvil-vscode",
   "displayName": "Anvil",
   "description": "Anvil agent in VS Code: streaming chat, tool cards, per-call approvals.",
-  "version": "0.52.19",
+  "version": "0.52.20",
   "publisher": "anvil-dev",
   "author": {
     "name": "Xiangjiang Tang",
@@ -220,6 +220,36 @@
         "category": "Anvil"
       },
       {
+        "command": "anvil.worktree.prepare",
+        "title": "Anvil: Prepare Isolated Worktree",
+        "category": "Anvil",
+        "icon": "$(git-branch-create)"
+      },
+      {
+        "command": "anvil.worktree.review",
+        "title": "Anvil: Review Worktree",
+        "category": "Anvil",
+        "icon": "$(git-pull-request)"
+      },
+      {
+        "command": "anvil.worktree.integrate",
+        "title": "Anvil: Integrate Reviewed Worktree",
+        "category": "Anvil",
+        "icon": "$(git-merge)"
+      },
+      {
+        "command": "anvil.worktree.discard",
+        "title": "Anvil: Discard Reviewed Worktree",
+        "category": "Anvil",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "anvil.worktree.cleanup",
+        "title": "Anvil: Clean Up Worktree",
+        "category": "Anvil",
+        "icon": "$(clear-all)"
+      },
+      {
         "command": "anvil.openMcp",
         "title": "Anvil: Open MCP Servers",
         "category": "Anvil"
@@ -346,6 +376,31 @@
           "command": "anvil.workflow.openSession",
           "when": "view == anvil.workflow && (viewItem == anvilWorkflowSession || viewItem =~ /^anvilWorkflowItem/)",
           "group": "navigation@2"
+        },
+        {
+          "command": "anvil.worktree.prepare",
+          "when": "view == anvil.workflow && viewItem == anvilWorkflowItem.approved",
+          "group": "worktree@1"
+        },
+        {
+          "command": "anvil.worktree.review",
+          "when": "view == anvil.workflow && (viewItem == anvilWorktree.review_ready || viewItem == anvilWorktree.interrupted)",
+          "group": "worktree@1"
+        },
+        {
+          "command": "anvil.worktree.integrate",
+          "when": "view == anvil.workflow && viewItem == anvilWorktree.review_ready",
+          "group": "worktree@2"
+        },
+        {
+          "command": "anvil.worktree.discard",
+          "when": "view == anvil.workflow && (viewItem == anvilWorktree.review_ready || viewItem == anvilWorktree.interrupted)",
+          "group": "worktree@3"
+        },
+        {
+          "command": "anvil.worktree.cleanup",
+          "when": "view == anvil.workflow && (viewItem == anvilWorktree.integrated || viewItem == anvilWorktree.discarded || viewItem == anvilWorktree.cleanup_failed)",
+          "group": "worktree@4"
         }
       ],
       "editor/title": [
@@ -453,6 +508,11 @@
             ],
             "default": "",
             "description": "Session store kind. Empty uses the host default."
+          },
+          "anvil.worktreeRoot": {
+            "type": "string",
+            "default": "",
+            "markdownDescription": "Absolute operator-owned directory for isolated Anvil worktrees. It must be outside the opened repository. Required for Worktree review, integration, discard, and cleanup commands."
           },
           "anvil.vision": {
             "type": "boolean",

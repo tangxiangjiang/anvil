@@ -56,33 +56,36 @@ const (
 )
 
 var worktreeIDGenerator = randomWorktreeID
+var errWorktreeLifecycleLockBusy = errors.New("worktree lifecycle lock is busy")
 
 // WorktreeWorker is the coordinator-owned lifecycle manifest. Absolute paths
 // remain local persistence facts and are not model input.
 type WorktreeWorker struct {
-	Schema        int                 `json:"schema"`
-	Revision      uint64              `json:"revision"`
-	ID            string              `json:"id"`
-	AgentID       string              `json:"agent_id"`
-	ArtifactID    string              `json:"artifact_id"`
-	WorkItemID    string              `json:"work_item_id"`
-	ExecutionID   string              `json:"execution_id"`
-	Attempt       int                 `json:"attempt"`
-	State         WorktreeWorkerState `json:"state"`
-	BaseRoot      string              `json:"base_root"`
-	WorktreeRoot  string              `json:"worktree_root"`
-	GitCommonDir  string              `json:"git_common_dir"`
-	BaseRef       string              `json:"base_ref"`
-	BaseCommit    string              `json:"base_commit"`
-	Branch        string              `json:"branch"`
-	HeadCommit    string              `json:"head_commit,omitempty"`
-	OwnerHostID   string              `json:"owner_host_id"`
-	LeaseUntil    time.Time           `json:"lease_until"`
-	CheckpointID  string              `json:"checkpoint_id,omitempty"`
-	CleanupPolicy string              `json:"cleanup_policy,omitempty"`
-	Failure       string              `json:"failure,omitempty"`
-	CreatedAt     time.Time           `json:"created_at"`
-	UpdatedAt     time.Time           `json:"updated_at"`
+	Schema            int                 `json:"schema"`
+	Revision          uint64              `json:"revision"`
+	ID                string              `json:"id"`
+	AgentID           string              `json:"agent_id"`
+	ArtifactID        string              `json:"artifact_id"`
+	WorkItemID        string              `json:"work_item_id"`
+	ExecutionID       string              `json:"execution_id"`
+	Attempt           int                 `json:"attempt"`
+	State             WorktreeWorkerState `json:"state"`
+	BaseRoot          string              `json:"base_root"`
+	WorktreeRoot      string              `json:"worktree_root"`
+	GitCommonDir      string              `json:"git_common_dir"`
+	BaseRef           string              `json:"base_ref"`
+	BaseCommit        string              `json:"base_commit"`
+	Branch            string              `json:"branch"`
+	HeadCommit        string              `json:"head_commit,omitempty"`
+	OwnerHostID       string              `json:"owner_host_id"`
+	LeaseUntil        time.Time           `json:"lease_until"`
+	CheckpointID      string              `json:"checkpoint_id,omitempty"`
+	Review            *WorktreeReview     `json:"review,omitempty"`
+	IntegrationCommit string              `json:"integration_commit,omitempty"`
+	CleanupPolicy     string              `json:"cleanup_policy,omitempty"`
+	Failure           string              `json:"failure,omitempty"`
+	CreatedAt         time.Time           `json:"created_at"`
+	UpdatedAt         time.Time           `json:"updated_at"`
 }
 
 // WorktreePrepareOptions contains only coordinator/operator inputs. Directory
@@ -108,12 +111,13 @@ type WorktreeListOptions struct {
 }
 
 type WorktreeCleanupOptions struct {
-	Local            LocalOptions
-	WorktreeRoot     string
-	AgentID          string
-	WorkerID         string
-	ExpectedRevision uint64
-	RetainBranch     bool
+	Local                LocalOptions
+	WorktreeRoot         string
+	AgentID              string
+	WorkerID             string
+	ExpectedRevision     uint64
+	ExpectedReviewDigest string
+	RetainBranch         bool
 }
 
 type WorktreeCleanupResult struct {
@@ -155,7 +159,8 @@ type worktreeLockRecord struct {
 }
 
 type worktreeGitRunner struct {
-	bin string
+	bin               string
+	expectedCommonDir string
 }
 
 type worktreeBoundedBuffer struct {
@@ -219,6 +224,7 @@ func PrepareWorktreeWorker(
 	if err != nil {
 		return WorktreeWorker{}, err
 	}
+	git.expectedCommonDir = repository.commonDir
 	now := time.Now().UTC()
 	workerID, err := worktreeIDGenerator("w")
 	if err != nil {
@@ -372,12 +378,20 @@ func ListWorktreeWorkers(
 	if err != nil {
 		return nil, err
 	}
+	release, err := acquireWorktreeLifecycleLock(root)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	owners, err := loadWorktreeOwners(root, key)
 	if err != nil {
 		return nil, err
 	}
 	out := owners[:0]
 	for _, worker := range owners {
+		if _, err := reconcileWorktreeStore(opts.Local, worker); err != nil {
+			return nil, err
+		}
 		if opts.AgentID == "" || worker.AgentID == opts.AgentID {
 			out = append(out, worker)
 		}
@@ -425,6 +439,22 @@ func CleanupWorktreeWorker(
 		if archived.AgentID != opts.AgentID {
 			return WorktreeCleanupResult{}, wtError("ownership", "archived worker owner mismatch")
 		}
+		if archived.Revision != opts.ExpectedRevision {
+			return WorktreeCleanupResult{}, wtError(
+				"stale", "expected revision %d, archived revision is %d",
+				opts.ExpectedRevision, archived.Revision,
+			)
+		}
+		requestedPolicy := "delete_branch"
+		if opts.RetainBranch {
+			requestedPolicy = "retain_branch"
+		}
+		if archived.CleanupPolicy != requestedPolicy {
+			return WorktreeCleanupResult{}, wtError(
+				"policy", "archived cleanup policy is %s, requested %s",
+				archived.CleanupPolicy, requestedPolicy,
+			)
+		}
 		return WorktreeCleanupResult{
 			Worker: archived, RetainedBranch: archived.CleanupPolicy == "retain_branch",
 		}, nil
@@ -451,7 +481,7 @@ func CleanupWorktreeWorker(
 			opts.ExpectedRevision, worker.Revision,
 		)
 	}
-	stored, err := latestStoredWorktree(opts.Local, worker.BaseRoot, opts.AgentID, opts.WorkerID)
+	stored, err := reconcileWorktreeStore(opts.Local, worker)
 	if err != nil {
 		return WorktreeCleanupResult{}, err
 	}
@@ -462,7 +492,7 @@ func CleanupWorktreeWorker(
 				"ownership", "removed recovery record does not follow stored cleaning state",
 			)
 		}
-		git := worktreeGitRunner{}
+		git := worktreeGitRunner{expectedCommonDir: worker.GitCommonDir}
 		present, verifyErr := verifyCleanupPreconditions(ctx, git, root, worker, true)
 		if verifyErr != nil {
 			return WorktreeCleanupResult{}, verifyErr
@@ -505,7 +535,7 @@ func CleanupWorktreeWorker(
 			"state", "worker state %q is not eligible for cleanup", worker.State,
 		)
 	}
-	git := worktreeGitRunner{}
+	git := worktreeGitRunner{expectedCommonDir: worker.GitCommonDir}
 	recovering := worker.State == WorktreeCleaning
 	requestedPolicy := "delete_branch"
 	if opts.RetainBranch {
@@ -520,6 +550,18 @@ func CleanupWorktreeWorker(
 		return WorktreeCleanupResult{}, wtError(
 			"stale", "cleanup policy differs from the persisted request",
 		)
+	}
+	if worker.State == WorktreeDiscarded {
+		if worker.Review == nil ||
+			opts.ExpectedReviewDigest == "" ||
+			worker.Review.PatchDigest != opts.ExpectedReviewDigest {
+			return WorktreeCleanupResult{}, wtError(
+				"stale", "discard cleanup requires the exact reviewed patch digest",
+			)
+		}
+		if err := sanitizeReviewedDiscard(ctx, git, worker); err != nil {
+			return WorktreeCleanupResult{}, err
+		}
 	}
 	present, err := verifyCleanupPreconditions(ctx, git, root, worker, recovering)
 	if err != nil {
@@ -546,7 +588,10 @@ func CleanupWorktreeWorker(
 			return WorktreeCleanupResult{Worker: failed}, wtError("cleanup", "%s", failed.Failure)
 		}
 	}
-	removed := []string{worker.WorktreeRoot}
+	var removed []string
+	if present {
+		removed = append(removed, worker.WorktreeRoot)
+	}
 	if stat, statErr := os.Lstat(worker.WorktreeRoot); statErr == nil {
 		if !stat.IsDir() {
 			failed, persistErr := persistCleanupFailure(
@@ -618,9 +663,9 @@ func canReconcileRemovedWorktree(previous, current WorktreeWorker) bool {
 		previous.WorkItemID == current.WorkItemID &&
 		previous.ExecutionID == current.ExecutionID &&
 		previous.Attempt == current.Attempt &&
-		sameWorktreePath(previous.BaseRoot, current.BaseRoot) &&
-		sameWorktreePath(previous.WorktreeRoot, current.WorktreeRoot) &&
-		sameWorktreePath(previous.GitCommonDir, current.GitCommonDir) &&
+		sameStoredWorktreePath(previous.BaseRoot, current.BaseRoot) &&
+		sameStoredWorktreePath(previous.WorktreeRoot, current.WorktreeRoot) &&
+		sameStoredWorktreePath(previous.GitCommonDir, current.GitCommonDir) &&
 		previous.BaseRef == current.BaseRef &&
 		previous.BaseCommit == current.BaseCommit &&
 		previous.Branch == current.Branch &&
@@ -869,7 +914,10 @@ func verifyCleanupPreconditions(
 	}
 	root, err := canonicalExistingPath(worker.WorktreeRoot)
 	if err != nil {
-		if !allowRemoved || !os.IsNotExist(err) {
+		partial := worker.State == WorktreeRequested ||
+			worker.State == WorktreePreparing ||
+			(worker.State == WorktreeCleanupFailed && worker.HeadCommit == "")
+		if (!allowRemoved && !partial) || !os.IsNotExist(err) {
 			return false, wtError("ownership", "owned worktree is missing or redirected")
 		}
 		if worktreeListContainsPath(list, worker.WorktreeRoot) {
@@ -880,10 +928,15 @@ func verifyCleanupPreconditions(
 			return false, branchErr
 		}
 		if exists {
+			if worker.State == WorktreeRequested {
+				return false, wtError(
+					"ownership", "requested worker unexpectedly owns a branch",
+				)
+			}
 			head, headErr := git.run(
 				ctx, base, "rev-parse", "--verify", "refs/heads/"+worker.Branch,
 			)
-			if headErr != nil || strings.TrimSpace(head) != worker.HeadCommit {
+			if headErr != nil || strings.TrimSpace(head) != expectedWorktreeHead(worker) {
 				return false, wtError("stale", "worker branch changed during cleanup")
 			}
 		}
@@ -891,6 +944,11 @@ func verifyCleanupPreconditions(
 	}
 	if !sameWorktreePath(root, worker.WorktreeRoot) {
 		return false, wtError("ownership", "owned worktree is redirected")
+	}
+	if worker.State == WorktreeRequested {
+		return false, wtError(
+			"ownership", "requested worker unexpectedly has a worktree path",
+		)
 	}
 	if !worktreeListOwns(list, worker.WorktreeRoot, worker.Branch) {
 		return false, wtError("ownership", "Git does not attribute the path and branch to this worker")
@@ -908,21 +966,33 @@ func verifyCleanupPreconditions(
 		return false, wtError("ownership", "worker Git common dir does not match ownership record")
 	}
 	head, err := git.run(ctx, root, "rev-parse", "--verify", "HEAD")
-	if err != nil || strings.TrimSpace(head) != worker.HeadCommit {
+	if err != nil || strings.TrimSpace(head) != expectedWorktreeHead(worker) {
 		return false, wtError("stale", "worker HEAD changed after ownership was recorded")
 	}
 	branch, err := git.run(ctx, root, "branch", "--show-current")
 	if err != nil || strings.TrimSpace(branch) != worker.Branch {
 		return false, wtError("ownership", "worker branch changed")
 	}
-	status, err := git.run(ctx, root, "status", "--porcelain=v1", "--untracked-files=all")
+	status, err := git.run(
+		ctx, root, "status", "--porcelain=v1", "--untracked-files=all", "--ignored=matching",
+	)
 	if err != nil {
 		return false, wtError("repository", "read worker status: %v", err)
 	}
 	if strings.TrimSpace(status) != "" {
-		return false, wtError("dirty", "worker has tracked or untracked changes; explicit reviewed discard is required")
+		return false, wtError(
+			"dirty",
+			"worker has tracked, untracked, or ignored files; explicit reviewed discard is required",
+		)
 	}
 	return true, nil
+}
+
+func expectedWorktreeHead(worker WorktreeWorker) string {
+	if worker.HeadCommit != "" {
+		return worker.HeadCommit
+	}
+	return worker.BaseCommit
 }
 
 func worktreeListOwns(porcelain, root, branch string) bool {
@@ -963,7 +1033,8 @@ func worktreeListContainsPath(porcelain, root string) bool {
 
 func cleanupEligibleState(state WorktreeWorkerState) bool {
 	switch state {
-	case WorktreeReady, WorktreeReviewReady, WorktreeInterrupted,
+	case WorktreeRequested, WorktreePreparing, WorktreeReady,
+		WorktreeReviewReady, WorktreeInterrupted,
 		WorktreeIntegrated, WorktreeDiscarded, WorktreeCleaning, WorktreeCleanupFailed:
 		return true
 	default:
@@ -1020,12 +1091,159 @@ func persistWorktreeTransition(
 	return nil
 }
 
+// reconcileWorktreeStore repairs only a signed owner record that is exactly
+// one valid lifecycle transition ahead of the append-only session projection.
+// This makes an owner-file publication followed by a store crash recoverable
+// without accepting identity, repository, or path changes.
+func reconcileWorktreeStore(
+	local LocalOptions,
+	worker WorktreeWorker,
+) (WorktreeWorker, error) {
+	stored, err := latestStoredWorktree(local, worker.BaseRoot, worker.AgentID, worker.ID)
+	if err != nil {
+		var lifecycleErr *WorktreeLifecycleError
+		if errors.As(err, &lifecycleErr) &&
+			lifecycleErr.Code == "ownership" &&
+			worker.Revision == 1 &&
+			worker.State == WorktreeRequested {
+			if err := appendWorktreeStoreRecord(local, worker.BaseRoot, worker); err != nil {
+				return WorktreeWorker{}, wtError(
+					"persistence", "recover initial worktree projection: %v", err,
+				)
+			}
+			return projectWorktreeForStore(worker), nil
+		}
+		return WorktreeWorker{}, err
+	}
+	if sameWorktreeManifest(worker, stored) {
+		return stored, nil
+	}
+	if !validWorktreeStoreTransition(stored, worker) {
+		return WorktreeWorker{}, wtError(
+			"ownership", "recovery and session ownership records do not match",
+		)
+	}
+	if err := appendWorktreeStoreRecord(local, worker.BaseRoot, worker); err != nil {
+		return WorktreeWorker{}, wtError(
+			"persistence", "reconcile worktree transition: %v", err,
+		)
+	}
+	return projectWorktreeForStore(worker), nil
+}
+
+func validWorktreeStoreTransition(previous, current WorktreeWorker) bool {
+	allowed := false
+	switch previous.State {
+	case WorktreeRequested:
+		allowed = current.State == WorktreePreparing || current.State == WorktreeCleaning
+	case WorktreePreparing:
+		allowed = current.State == WorktreeReady ||
+			current.State == WorktreeCleanupFailed ||
+			current.State == WorktreeCleaning
+	case WorktreeReady:
+		allowed = current.State == WorktreeRunning || current.State == WorktreeCleaning
+	case WorktreeRunning:
+		allowed = current.State == WorktreeReviewReady ||
+			current.State == WorktreeInterrupted ||
+			current.State == WorktreeCleaning
+	case WorktreeReviewReady:
+		allowed = current.State == WorktreeReviewReady ||
+			current.State == WorktreeIntegrating ||
+			current.State == WorktreeDiscarded ||
+			current.State == WorktreeCleaning
+	case WorktreeInterrupted:
+		allowed = current.State == WorktreeInterrupted ||
+			current.State == WorktreeDiscarded ||
+			current.State == WorktreeCleaning
+	case WorktreeIntegrated, WorktreeDiscarded:
+		allowed = current.State == WorktreeCleaning
+	case WorktreeIntegrating:
+		allowed = current.State == WorktreeIntegrated ||
+			current.State == WorktreeReviewReady
+	case WorktreeCleaning:
+		allowed = current.State == WorktreeRemoved ||
+			current.State == WorktreeCleanupFailed
+	case WorktreeCleanupFailed:
+		allowed = current.State == WorktreeCleaning
+	}
+	headValid := previous.HeadCommit == current.HeadCommit ||
+		(previous.State == WorktreePreparing &&
+			current.State == WorktreeReady &&
+			current.HeadCommit == current.BaseCommit) ||
+		(current.State == previous.State &&
+			(current.State == WorktreeReviewReady ||
+				current.State == WorktreeInterrupted) &&
+			current.Review != nil &&
+			current.Review.BaseCommit == current.BaseCommit &&
+			current.Review.HeadCommit == current.HeadCommit)
+	policyValid := previous.CleanupPolicy == current.CleanupPolicy ||
+		(current.State == WorktreeCleaning &&
+			previous.CleanupPolicy == "" &&
+			(current.CleanupPolicy == "delete_branch" ||
+				current.CleanupPolicy == "retain_branch")) ||
+		(previous.State == WorktreeCleaning &&
+			current.State == WorktreeRemoved &&
+			previous.CleanupPolicy == "delete_branch" &&
+			current.CleanupPolicy == "retain_branch")
+	checkpointValid := previous.CheckpointID == current.CheckpointID ||
+		(previous.State == WorktreeReady &&
+			current.State == WorktreeRunning &&
+			previous.CheckpointID == "" &&
+			current.CheckpointID != "")
+	reviewValid := sameWorktreeReview(previous.Review, current.Review) ||
+		((previous.State == WorktreeReviewReady ||
+			previous.State == WorktreeInterrupted) &&
+			current.State == previous.State &&
+			current.Review != nil &&
+			current.Review.ManifestRevision == current.Revision) ||
+		(previous.State == WorktreeIntegrating &&
+			current.State == WorktreeReviewReady &&
+			current.Review == nil)
+	integrationValid := previous.IntegrationCommit == current.IntegrationCommit ||
+		(previous.State == WorktreeIntegrating &&
+			current.State == WorktreeIntegrated &&
+			current.IntegrationCommit != "")
+	return allowed &&
+		headValid &&
+		policyValid &&
+		checkpointValid &&
+		reviewValid &&
+		integrationValid &&
+		current.Revision == previous.Revision+1 &&
+		previous.Schema == current.Schema &&
+		previous.ID == current.ID &&
+		previous.AgentID == current.AgentID &&
+		previous.ArtifactID == current.ArtifactID &&
+		previous.WorkItemID == current.WorkItemID &&
+		previous.ExecutionID == current.ExecutionID &&
+		previous.Attempt == current.Attempt &&
+		sameStoredWorktreePath(previous.BaseRoot, current.BaseRoot) &&
+		sameStoredWorktreePath(previous.WorktreeRoot, current.WorktreeRoot) &&
+		sameStoredWorktreePath(previous.GitCommonDir, current.GitCommonDir) &&
+		previous.BaseRef == current.BaseRef &&
+		previous.BaseCommit == current.BaseCommit &&
+		previous.Branch == current.Branch &&
+		previous.OwnerHostID == current.OwnerHostID &&
+		previous.CreatedAt.Equal(current.CreatedAt) &&
+		!current.UpdatedAt.Before(previous.UpdatedAt)
+}
+
+func sameWorktreeReview(left, right *WorktreeReview) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	a, _ := json.Marshal(left)
+	b, _ := json.Marshal(right)
+	return bytes.Equal(a, b)
+}
+
 func appendWorktreeStoreRecord(
 	local LocalOptions,
 	baseRoot string,
 	worker WorktreeWorker,
 ) error {
-	payload, err := json.Marshal(worker)
+	projection := projectWorktreeForStore(worker)
+	payload, err := json.Marshal(projection)
 	if err != nil {
 		return err
 	}
@@ -1066,6 +1284,7 @@ func latestStoredWorktree(
 		if json.Unmarshal(record.Worktree, &worker) != nil || worker.ID != workerID {
 			continue
 		}
+		worker = projectWorktreeForStore(worker)
 		if ok && worker.Revision == found.Revision && !sameWorktreeManifest(worker, found) {
 			return WorktreeWorker{}, wtError(
 				"ownership", "session ownership has conflicting records at revision %d",
@@ -1102,6 +1321,9 @@ func initializeWorktreeManager(root string) ([]byte, error) {
 		if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
 			return nil, wtError("ownership", "owner key is not a regular file")
 		}
+		if err := secureWorktreePath(keyPath, false); err != nil {
+			return nil, wtError("ownership", "owner key access is not private: %v", err)
+		}
 		return readWorktreeOwnerKey(root)
 	}
 	if !os.IsNotExist(err) {
@@ -1115,6 +1337,11 @@ func initializeWorktreeManager(root string) ([]byte, error) {
 	if err != nil {
 		return nil, wtError("ownership", "create owner key: %v", err)
 	}
+	if err := secureWorktreePath(keyPath, false); err != nil {
+		_ = file.Close()
+		_ = os.Remove(keyPath)
+		return nil, wtError("ownership", "secure owner key: %v", err)
+	}
 	if _, err := file.Write(key); err != nil {
 		_ = file.Close()
 		return nil, wtError("ownership", "write owner key: %v", err)
@@ -1125,6 +1352,9 @@ func initializeWorktreeManager(root string) ([]byte, error) {
 	}
 	if err := file.Close(); err != nil {
 		return nil, wtError("ownership", "close owner key: %v", err)
+	}
+	if err := syncWorktreeDirectory(manager); err != nil {
+		return nil, wtError("ownership", "sync owner key directory: %v", err)
 	}
 	return key, nil
 }
@@ -1144,6 +1374,9 @@ func readWorktreeOwnerKey(root string) ([]byte, error) {
 	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
 		return nil, wtError("ownership", "owner key permissions are not private")
 	}
+	if err := secureWorktreePath(path, false); err != nil {
+		return nil, wtError("ownership", "owner key access is not private: %v", err)
+	}
 	key, err := os.ReadFile(path)
 	if err != nil || len(key) != 32 {
 		return nil, wtError("ownership", "owner key is unreadable or invalid")
@@ -1160,6 +1393,9 @@ func ensurePrivateDirectory(path string) error {
 		if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
 			return wtError("security", "%s permissions are not private", path)
 		}
+		if err := secureWorktreePath(path, true); err != nil {
+			return wtError("security", "%s access is not private: %v", path, err)
+		}
 		return nil
 	}
 	if !os.IsNotExist(err) {
@@ -1167,6 +1403,12 @@ func ensurePrivateDirectory(path string) error {
 	}
 	if err := os.Mkdir(path, 0o700); err != nil {
 		return wtError("security", "create managed directory: %v", err)
+	}
+	if err := secureWorktreePath(path, true); err != nil {
+		return wtError("security", "secure managed directory: %v", err)
+	}
+	if err := syncWorktreeDirectory(filepath.Dir(path)); err != nil {
+		return wtError("persistence", "sync managed directory parent: %v", err)
 	}
 	return nil
 }
@@ -1186,6 +1428,9 @@ func createManagedWorktreeRoot(path string) error {
 	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
 		return wtError("security", "worktree root permissions are not private")
 	}
+	if err := secureWorktreePath(path, true); err != nil {
+		return wtError("security", "secure worktree root: %v", err)
+	}
 	return nil
 }
 
@@ -1198,26 +1443,19 @@ func acquireWorktreeLifecycleLock(root string) (func(), error) {
 	record, _ := json.Marshal(worktreeLockRecord{
 		Token: token, PID: os.Getpid(), AcquiredAt: time.Now().UTC(),
 	})
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	lock, err := lockWorktreeLifecycleFile(path)
 	if err != nil {
-		if os.IsExist(err) {
+		if errors.Is(err, errWorktreeLifecycleLockBusy) {
 			return nil, wtError("busy", "worktree lifecycle is locked")
 		}
 		return nil, wtError("lock", "create lifecycle lock: %v", err)
 	}
-	if _, err := file.Write(record); err != nil {
-		_ = file.Close()
-		return nil, wtError("lock", "write lifecycle lock: %v", err)
-	}
-	if err := file.Close(); err != nil {
-		return nil, wtError("lock", "close lifecycle lock: %v", err)
+	if err := lock.write(record); err != nil {
+		_ = lock.release()
+		return nil, wtError("lock", "persist lifecycle lock: %v", err)
 	}
 	release := func() {
-		data, readErr := os.ReadFile(path)
-		var current worktreeLockRecord
-		if readErr == nil && json.Unmarshal(data, &current) == nil && current.Token == token {
-			_ = os.Remove(path)
-		}
+		_ = lock.release()
 	}
 	return release, nil
 }
@@ -1236,6 +1474,9 @@ func writeInitialWorktreeOwner(root string, key []byte, worker WorktreeWorker) e
 	if err := os.Link(temp, path); err != nil {
 		return wtError("ownership", "publish initial ownership record: %v", err)
 	}
+	if err := syncWorktreeDirectory(filepath.Dir(path)); err != nil {
+		return wtError("ownership", "sync initial ownership record: %v", err)
+	}
 	return nil
 }
 
@@ -1253,6 +1494,9 @@ func writeWorktreeOwner(root string, key []byte, worker WorktreeWorker) error {
 	if err := atomicReplace(temp, path); err != nil {
 		return wtError("ownership", "replace ownership record: %v", err)
 	}
+	if err := syncWorktreeDirectory(filepath.Dir(path)); err != nil {
+		return wtError("ownership", "sync ownership record: %v", err)
+	}
 	return nil
 }
 
@@ -1269,6 +1513,11 @@ func writeWorktreeOwnerTemp(root, workerID string, data []byte) (string, error) 
 	if err != nil {
 		return "", wtError("ownership", "create ownership update: %v", err)
 	}
+	if err := secureWorktreePath(temp, false); err != nil {
+		_ = file.Close()
+		_ = os.Remove(temp)
+		return "", wtError("ownership", "secure ownership update: %v", err)
+	}
 	if _, err := file.Write(data); err != nil {
 		_ = file.Close()
 		_ = os.Remove(temp)
@@ -1282,6 +1531,10 @@ func writeWorktreeOwnerTemp(root, workerID string, data []byte) (string, error) 
 	if err := file.Close(); err != nil {
 		_ = os.Remove(temp)
 		return "", wtError("ownership", "close ownership update: %v", err)
+	}
+	if err := syncWorktreeDirectory(filepath.Dir(temp)); err != nil {
+		_ = os.Remove(temp)
+		return "", wtError("ownership", "sync ownership update directory: %v", err)
 	}
 	return temp, nil
 }
@@ -1331,6 +1584,9 @@ func readWorktreeOwnerFile(path string, key []byte) (WorktreeWorker, error) {
 	}
 	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
 		return WorktreeWorker{}, wtError("ownership", "ownership record permissions are not private")
+	}
+	if err := secureWorktreePath(path, false); err != nil {
+		return WorktreeWorker{}, wtError("ownership", "ownership record access is not private: %v", err)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -1406,6 +1662,12 @@ func archiveWorktreeOwner(root, workerID string) error {
 	if err := os.Rename(source, target); err != nil {
 		return wtError("ownership", "archive ownership record: %v", err)
 	}
+	if err := syncWorktreeDirectory(filepath.Dir(source)); err != nil {
+		return wtError("ownership", "sync ownership directory: %v", err)
+	}
+	if err := syncWorktreeDirectory(filepath.Dir(target)); err != nil {
+		return wtError("ownership", "sync ownership archive: %v", err)
+	}
 	return nil
 }
 
@@ -1414,9 +1676,48 @@ func worktreeOwnerPath(root, workerID string) string {
 }
 
 func sameWorktreeManifest(a, b WorktreeWorker) bool {
+	if isWorktreeStoreProjection(a) || isWorktreeStoreProjection(b) {
+		a = projectWorktreeForStore(a)
+		b = projectWorktreeForStore(b)
+	}
 	left, _ := json.Marshal(a)
 	right, _ := json.Marshal(b)
 	return bytes.Equal(left, right)
+}
+
+func projectWorktreeForStore(worker WorktreeWorker) WorktreeWorker {
+	if isWorktreeStoreProjection(worker) {
+		return worker
+	}
+	worker.BaseRoot = worktreePathDigest(worker.BaseRoot)
+	worker.WorktreeRoot = worktreePathDigest(worker.WorktreeRoot)
+	worker.GitCommonDir = worktreePathDigest(worker.GitCommonDir)
+	return worker
+}
+
+func isWorktreeStoreProjection(worker WorktreeWorker) bool {
+	return strings.HasPrefix(worker.BaseRoot, "sha256:") &&
+		strings.HasPrefix(worker.WorktreeRoot, "sha256:") &&
+		strings.HasPrefix(worker.GitCommonDir, "sha256:")
+}
+
+func worktreePathDigest(path string) string {
+	if strings.HasPrefix(path, "sha256:") {
+		return path
+	}
+	canonical := filepath.Clean(path)
+	if runtime.GOOS == "windows" {
+		canonical = strings.ToLower(canonical)
+	}
+	digest := sha256.Sum256([]byte(canonical))
+	return "sha256:" + hex.EncodeToString(digest[:])
+}
+
+func sameStoredWorktreePath(stored, actual string) bool {
+	if strings.HasPrefix(stored, "sha256:") {
+		return hmac.Equal([]byte(stored), []byte(worktreePathDigest(actual)))
+	}
+	return sameWorktreePath(stored, actual)
 }
 
 func canonicalExistingPath(name string) (string, error) {
@@ -1428,7 +1729,7 @@ func canonicalExistingPath(name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.EvalSymlinks(resolved)
+	return finalWorktreePath(resolved)
 }
 
 func canonicalFuturePath(name string) (string, error) {
@@ -1637,6 +1938,10 @@ func (g worktreeGitRunner) run(
 	if bin == "" {
 		bin = "git"
 	}
+	top, gitDir, _, err := g.pinnedIdentity(timeoutCtx, bin, cwd)
+	if err != nil {
+		return "", err
+	}
 	fixed := []string{
 		"--no-pager",
 		"-c", "color.ui=false",
@@ -1646,9 +1951,11 @@ func (g worktreeGitRunner) run(
 		"-c", "core.attributesFile=" + os.DevNull,
 		"-c", "credential.helper=",
 		"-c", "diff.external=",
-		"-C", cwd,
+		"--git-dir=" + gitDir,
+		"--work-tree=" + top,
 	}
 	command := exec.CommandContext(timeoutCtx, bin, append(fixed, args...)...)
+	command.Dir = top
 	command.Env = worktreeGitEnvironment()
 	stdout := &worktreeBoundedBuffer{remaining: maxWorktreeGitOutput}
 	stderr := &worktreeBoundedBuffer{remaining: 64 << 10}
@@ -1669,6 +1976,50 @@ func (g worktreeGitRunner) run(
 	return stdout.buffer.String(), nil
 }
 
+func (g worktreeGitRunner) pinnedIdentity(
+	ctx context.Context,
+	bin, cwd string,
+) (string, string, string, error) {
+	command := exec.CommandContext(
+		ctx, bin,
+		"--no-pager",
+		"-c", "core.hooksPath=",
+		"-c", "credential.helper=",
+		"-C", cwd,
+		"rev-parse", "--show-toplevel", "--absolute-git-dir", "--git-common-dir",
+	)
+	command.Env = worktreeGitEnvironment()
+	output, err := command.Output()
+	if err != nil {
+		return "", "", "", wtError("repository", "resolve pinned Git identity: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	if len(lines) != 3 {
+		return "", "", "", wtError("repository", "Git identity output is malformed")
+	}
+	top, err := canonicalExistingPath(strings.TrimSpace(lines[0]))
+	if err != nil {
+		return "", "", "", wtError("repository", "canonicalize Git work tree: %v", err)
+	}
+	gitDir, err := canonicalExistingPath(strings.TrimSpace(lines[1]))
+	if err != nil {
+		return "", "", "", wtError("repository", "canonicalize Git directory: %v", err)
+	}
+	commonInput := strings.TrimSpace(lines[2])
+	if !filepath.IsAbs(commonInput) {
+		commonInput = filepath.Join(top, commonInput)
+	}
+	commonDir, err := canonicalExistingPath(commonInput)
+	if err != nil {
+		return "", "", "", wtError("repository", "canonicalize Git common directory: %v", err)
+	}
+	if g.expectedCommonDir != "" &&
+		!sameWorktreePath(commonDir, g.expectedCommonDir) {
+		return "", "", "", wtError("ownership", "Git repository identity changed")
+	}
+	return top, gitDir, commonDir, nil
+}
+
 func (g worktreeGitRunner) branchExists(
 	ctx context.Context,
 	cwd, branch string,
@@ -1679,11 +2030,17 @@ func (g worktreeGitRunner) branchExists(
 	if bin == "" {
 		bin = "git"
 	}
+	top, gitDir, _, pinErr := g.pinnedIdentity(timeoutCtx, bin, cwd)
+	if pinErr != nil {
+		return false, pinErr
+	}
 	fixed := []string{
 		"--no-pager", "-c", "core.hooksPath=", "-c", "credential.helper=",
-		"-C", cwd, "show-ref", "--verify", "--quiet", "refs/heads/" + branch,
+		"--git-dir=" + gitDir, "--work-tree=" + top,
+		"show-ref", "--verify", "--quiet", "refs/heads/" + branch,
 	}
 	command := exec.CommandContext(timeoutCtx, bin, fixed...)
+	command.Dir = top
 	command.Env = worktreeGitEnvironment()
 	err := command.Run()
 	if err == nil {

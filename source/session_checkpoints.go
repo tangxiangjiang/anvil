@@ -4,6 +4,7 @@
 package anvil
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -16,9 +17,14 @@ import (
 // CheckpointRun is one run's record of what the workspace looked like before
 // it: the files its tool calls were about to change.
 type CheckpointRun struct {
-	RunID     string
-	CreatedAt time.Time
-	Files     []CheckpointFile
+	RunID                string
+	CreatedAt            time.Time
+	Files                []CheckpointFile
+	WorkerID             string
+	ExecutionID          string
+	BaseCommit           string
+	WorkspaceFingerprint string
+	RootDigest           string
 }
 
 // CheckpointFile is one path a run captured.
@@ -92,7 +98,76 @@ func ListCheckpoints(cwd, agentID string, opts CheckpointOptions) ([]CheckpointR
 		for _, entry := range run.Files {
 			files = append(files, CheckpointFile{Path: entry.Path, Existed: entry.Existed, Size: entry.Size, AgentID: entry.AgentID})
 		}
-		out = append(out, CheckpointRun{RunID: run.RunID, CreatedAt: run.CreatedAt, Files: files})
+		out = append(out, CheckpointRun{
+			RunID: run.RunID, CreatedAt: run.CreatedAt, Files: files,
+			WorkerID: run.WorkerID, ExecutionID: run.ExecutionID,
+			BaseCommit:           run.BaseCommit,
+			WorkspaceFingerprint: run.WorkspaceFingerprint,
+			RootDigest:           run.RootDigest,
+		})
+	}
+	return out, nil
+}
+
+// RestoreWorktreeCheckpoint restores a routed worker checkpoint only after
+// revalidating the signed lifecycle/plan route and every checkpoint scope
+// field. It cannot resolve a path against the primary or a sibling worktree.
+func RestoreWorktreeCheckpoint(
+	ctx context.Context,
+	route WorktreeWorkerRoute,
+	agentID, runID string,
+	opts CheckpointOptions,
+) ([]RestoredFile, error) {
+	if agentID == "" || runID == "" {
+		return nil, newError("agent id and run id are required", false, nil)
+	}
+	if err := validateMaterializedRoute(route); err != nil {
+		return nil, err
+	}
+	verified, err := RestoreWorktreeWorkerRoute(ctx, WorktreeWorkerRouteOptions{
+		Local:        LocalOptions{CWD: route.baseRoot, Store: route.store},
+		WorktreeRoot: route.managerRoot, AgentID: route.AgentID,
+		WorkerID: route.WorkerID, ExpectedRevision: route.ManifestRevision,
+		ExpectedPlanRevision: route.PlanRevision, OwnerHostID: route.ownerHostID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if verified.WorkspaceFingerprint != route.WorkspaceFingerprint ||
+		verified.RootDigest != route.RootDigest {
+		return nil, wtError("ownership", "checkpoint route changed before restore")
+	}
+	if opts.Dir == "" {
+		opts.Dir = filepath.Join(
+			route.baseRoot, ".anvil", "checkpoints", "worktrees",
+			route.CheckpointNamespace,
+		)
+	}
+	resolve := func(rel string) (string, error) {
+		return tools.ResolveInRoot(route.worktreeRoot, filepath.FromSlash(rel))
+	}
+	restored, err := checkpoint.RestoreScoped(
+		checkpointRoot(route.worktreeRoot, opts), agentID, runID,
+		checkpoint.Scope{
+			RootAgentID: route.AgentID, WorkerID: route.WorkerID,
+			ExecutionID: route.ExecutionID, BaseCommit: route.BaseCommit,
+			WorkspaceFingerprint: route.WorkspaceFingerprint,
+			RootDigest:           route.RootDigest,
+		},
+		resolve,
+	)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, newError("no checkpoint for run "+runID, false, nil)
+		}
+		return nil, newError("restore worktree checkpoint", false, err)
+	}
+	out := make([]RestoredFile, 0, len(restored))
+	for _, file := range restored {
+		out = append(out, RestoredFile{
+			Path: file.Path, Deleted: file.Deleted, Skipped: file.Skipped,
+			Reason: file.Reason, Warning: file.Warning,
+		})
 	}
 	return out, nil
 }

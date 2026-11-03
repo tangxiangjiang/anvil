@@ -134,20 +134,24 @@ type Record struct {
 	Event          json.RawMessage `json:"event,omitempty"`
 
 	// plan_artifact / work_state
-	Schema      int             `json:"schema,omitempty"`
-	ArtifactID  string          `json:"artifact_id,omitempty"`
-	Revision    int             `json:"revision,omitempty"`
-	Body        string          `json:"body,omitempty"`
-	Items       json.RawMessage `json:"items,omitempty"`
-	ItemID      string          `json:"item_id,omitempty"`
-	ExecutionID string          `json:"execution_id,omitempty"`
-	State       string          `json:"state,omitempty"`
-	Actor       string          `json:"actor,omitempty"`
-	Decision    string          `json:"decision,omitempty"`
-	DecisionID  string          `json:"decision_batch_id,omitempty"`
-	Reason      string          `json:"reason,omitempty"`
-	Evidence    json.RawMessage `json:"evidence,omitempty"`
-	Worktree    json.RawMessage `json:"worktree,omitempty"`
+	Schema               int             `json:"schema,omitempty"`
+	ArtifactID           string          `json:"artifact_id,omitempty"`
+	Revision             int             `json:"revision,omitempty"`
+	Body                 string          `json:"body,omitempty"`
+	Items                json.RawMessage `json:"items,omitempty"`
+	ItemID               string          `json:"item_id,omitempty"`
+	ExecutionID          string          `json:"execution_id,omitempty"`
+	State                string          `json:"state,omitempty"`
+	Actor                string          `json:"actor,omitempty"`
+	Decision             string          `json:"decision,omitempty"`
+	DecisionID           string          `json:"decision_batch_id,omitempty"`
+	Reason               string          `json:"reason,omitempty"`
+	Evidence             json.RawMessage `json:"evidence,omitempty"`
+	Worktree             json.RawMessage `json:"worktree,omitempty"`
+	WorkerID             string          `json:"worker_id,omitempty"`
+	WorktreeLabel        string          `json:"worktree_label,omitempty"`
+	WorkspaceFingerprint string          `json:"workspace_fingerprint,omitempty"`
+	BaseCommit           string          `json:"base_commit,omitempty"`
 
 	// run_state / task_state. These are deliberately descriptive only: process
 	// handles, PIDs, cancellation functions, environment and output stay in RAM.
@@ -379,12 +383,19 @@ type Summary struct {
 	Usage      *Usage
 	// Subagent identity, carried from the meta record so a listing can nest a
 	// child under its parent without reading every transcript.
-	ParentAgentID    string
-	ParentRunID      string
-	ParentToolCallID string
-	Depth            int
-	Kind             string
-	TaskTitle        string
+	ParentAgentID        string
+	ParentRunID          string
+	ParentToolCallID     string
+	Depth                int
+	Kind                 string
+	TaskTitle            string
+	WorkerID             string
+	WorktreeLabel        string
+	WorkspaceFingerprint string
+	BaseCommit           string
+	ArtifactID           string
+	WorkItemID           string
+	ExecutionID          string
 }
 
 // ListIDs returns agent ids that have store files (filename without .jsonl).
@@ -472,6 +483,15 @@ func Summarize(records []Record) Summary {
 			}
 			if rec.TaskTitle != "" {
 				sum.TaskTitle = titleOf(rec.TaskTitle)
+			}
+			if rec.WorkerID != "" {
+				sum.WorkerID = rec.WorkerID
+				sum.WorktreeLabel = rec.WorktreeLabel
+				sum.WorkspaceFingerprint = rec.WorkspaceFingerprint
+				sum.BaseCommit = rec.BaseCommit
+				sum.ArtifactID = rec.ArtifactID
+				sum.WorkItemID = rec.ItemID
+				sum.ExecutionID = rec.ExecutionID
 			}
 		case TypeMessage:
 			// The first thing a person typed is what the session is about. A

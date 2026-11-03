@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/anvil-dev/anvil/internal/checkpoint"
 	"github.com/anvil-dev/anvil/internal/compress"
 	"github.com/anvil-dev/anvil/internal/hooks"
 	"github.com/anvil-dev/anvil/internal/id"
@@ -104,6 +105,9 @@ func Create(ctx context.Context, opts Options) (*Agent, error) {
 // createAgent is Create with the identity a subagent has. A top-level caller
 // passes the zero value and writes exactly the meta record it wrote before.
 func createAgent(ctx context.Context, opts Options, ident subagentIdentity) (*Agent, error) {
+	if err := revalidateAttachedWorktreeOptions(ctx, opts); err != nil {
+		return nil, newError("verify worktree worker route", false, err)
+	}
 	opts, cwd, err := normalizeOptions(opts)
 	if err != nil {
 		return nil, err
@@ -143,7 +147,11 @@ func createAgent(ctx context.Context, opts Options, ident subagentIdentity) (*Ag
 	// Keep the table on the options too: childOptions hands the same pointer to
 	// every child, which is what makes the tree's table one table.
 	opts.taskMgr = reg.TaskManager()
-	st, err := store.Open(cwd, opts.Local.Store)
+	storeCWD := cwd
+	if opts.storeCWD != "" {
+		storeCWD = opts.storeCWD
+	}
+	st, err := store.Open(storeCWD, opts.Local.Store)
 	if err != nil {
 		cleanupRegistry(sessions, plugMgr, lspSup)
 		return nil, newError("open store", false, err)
@@ -180,6 +188,15 @@ func createAgent(ctx context.Context, opts Options, ident subagentIdentity) (*Ag
 	}
 	if ident.ParentAgentID != "" {
 		meta.Kind = "subagent"
+	}
+	if route := opts.worktreeRoute; route != nil {
+		meta.WorkerID = route.WorkerID
+		meta.WorktreeLabel = route.WorktreeLabel
+		meta.WorkspaceFingerprint = route.WorkspaceFingerprint
+		meta.BaseCommit = route.BaseCommit
+		meta.ArtifactID = route.ArtifactID
+		meta.ItemID = route.WorkItemID
+		meta.ExecutionID = route.ExecutionID
 	}
 	if err := st.Append(agentID, meta); err != nil {
 		_ = lock.Release()
@@ -249,6 +266,9 @@ func Prompt(ctx context.Context, message string, opts Options) (*RunResult, erro
 
 // Resume loads a persisted agent by ID from the local store (jsonl or sqlite).
 func Resume(ctx context.Context, agentID string, opts Options) (*Agent, error) {
+	if err := revalidateAttachedWorktreeOptions(ctx, opts); err != nil {
+		return nil, newError("verify worktree worker route", false, err)
+	}
 	opts, cwd, err := normalizeOptions(opts)
 	if err != nil {
 		return nil, err
@@ -279,7 +299,11 @@ func Resume(ctx context.Context, agentID string, opts Options) (*Agent, error) {
 		return nil, err
 	}
 	opts.taskMgr = reg.TaskManager()
-	st, err := store.Open(cwd, opts.Local.Store)
+	storeCWD := cwd
+	if opts.storeCWD != "" {
+		storeCWD = opts.storeCWD
+	}
+	st, err := store.Open(storeCWD, opts.Local.Store)
 	if err != nil {
 		cleanupRegistry(sessions, plugMgr, lspSup)
 		return nil, newError("open store", false, err)
@@ -500,6 +524,7 @@ func toPluginPolicy(p *PluginPolicy) *plugin.Policy {
 
 func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Registry, []*mcp.Session, *plugin.Manager, *hooks.File, *lsp.Supervisor, error) {
 	reg := tools.NewRegistry(cwd, opts.Local.AllowShellEnabled())
+	reg.SetDenyProtectedPaths(opts.worktreeRoute != nil)
 	// Every call this registry executes belongs to one agent; saying which lets a
 	// permission prompt point at a child instead of the session (0.42+).
 	reg.SetIdentity(opts.agentID, opts.depth)
@@ -514,13 +539,23 @@ func buildRegistry(ctx context.Context, cwd string, opts Options) (*tools.Regist
 		}
 	}
 	if on := opts.Subagents.OnTask; on != nil {
-		mgr.SetOnChange(func(info tasks.Info) { on(toTaskInfo(info)) })
+		mgr.SetOnChange(func(info tasks.Info) {
+			on(toTaskInfoForRoute(info, opts.worktreeRoute))
+		})
 	}
 	reg.SetTaskManager(mgr)
 	if opts.Checkpoints != nil {
 		// Capture is named but not yet scoped to a run: SetRunContext in
 		// executeRun is what turns a call from "no pre-image" into one.
 		reg.SetCheckpoints(checkpointRoot(cwd, *opts.Checkpoints))
+		if route := opts.worktreeRoute; route != nil {
+			reg.SetCheckpointScope(checkpoint.Scope{
+				RootAgentID: route.AgentID, WorkerID: route.WorkerID,
+				ExecutionID: route.ExecutionID, BaseCommit: route.BaseCommit,
+				WorkspaceFingerprint: route.WorkspaceFingerprint,
+				RootDigest:           route.RootDigest,
+			})
+		}
 	}
 	embedKey := opts.EmbedAPIKey
 	if embedKey == "" {
@@ -1145,6 +1180,9 @@ func (a *Agent) Send(ctx context.Context, message string, opts ...SendOption) (*
 			cancel()
 		}
 	}
+	if err := revalidateAttachedWorktreeOptions(ctx, a.opts); err != nil {
+		return nil, newError("verify worktree worker route before run", false, err)
+	}
 
 	parts, err := a.prepareAttachments(cfg.Attachments)
 	if err != nil {
@@ -1501,6 +1539,13 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 			Compact:        compactInfo(ev.Compact),
 			LastRequestAt:  ev.LastRequestAt,
 		}
+		if err := stampWorktreeEvent(a.opts.worktreeRoute, &out); err != nil {
+			cancelCause(err)
+			out = Event{
+				Type: EventError, Text: err.Error(), IsError: true,
+			}
+			_ = stampWorktreeEvent(a.opts.worktreeRoute, &out)
+		}
 		a.persistRunSignal(run.id, out)
 		run.emit(out)
 		// A child's events travel to whoever asked for the child, tagged with the
@@ -1542,6 +1587,21 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 		rr.ID = run.id
 	} else {
 		run.id = rr.ID
+	}
+	if rr.Status == StatusCancelled {
+		if err := interruptAttachedWorktreeOptions(
+			&a.opts, firstNonEmpty(rr.Err, "worker run was cancelled"),
+		); err != nil {
+			a.recordPersistError(err)
+		}
+	} else {
+		failure := ""
+		if rr.Status == StatusError {
+			failure = oneLine(firstNonEmpty(rr.Err, rr.Result, "worker run failed"))
+		}
+		if err := finishAttachedWorktreeOptions(&a.opts, failure); err != nil {
+			a.recordPersistError(err)
+		}
 	}
 
 	var usage *store.Usage
@@ -1635,6 +1695,10 @@ func (a *Agent) persistMessage(runID string, m llm.Message) {
 // bypass the model runtime, so keeping both operations here prevents live and
 // replay projections from acquiring different shapes.
 func (a *Agent) emitStage(stage StageEvent) {
+	if err := stampWorktreeStage(a.opts.worktreeRoute, &stage); err != nil {
+		a.recordPersistError(err)
+		return
+	}
 	raw, err := json.Marshal(stage)
 	if err != nil {
 		a.recordPersistError(err)
@@ -1761,6 +1825,7 @@ func (a *Agent) configureTaskPersistence() bool {
 	}
 	st, agentID, hostID := a.store, a.id, a.hostID
 	leaseDuration := a.leaseDuration
+	route := cloneWorktreeRouteValue(a.opts.worktreeRoute)
 	return a.taskMgr.SetPersistenceOnChange(func(info tasks.Info) error {
 		rec := store.Record{
 			TaskID: info.ID, TaskKind: string(info.Kind), TaskTitle: info.Title,
@@ -1769,6 +1834,12 @@ func (a *Agent) configureTaskPersistence() bool {
 			ParentToolCallID: info.ParentToolCallID, HostID: hostID,
 			LeaseUntil: time.Now().UTC().Add(leaseDuration),
 			StartedAt:  info.StartedAt, EndedAt: info.EndedAt,
+		}
+		if route != nil {
+			rec.WorkerID = route.WorkerID
+			rec.WorktreeLabel = route.WorktreeLabel
+			rec.WorkspaceFingerprint = route.WorkspaceFingerprint
+			rec.BaseCommit = route.BaseCommit
 		}
 		if info.Status != tasks.StatusRunning {
 			exit := info.ExitCode

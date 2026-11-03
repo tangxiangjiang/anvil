@@ -328,6 +328,18 @@ func (s *Server) dispatch(ctx context.Context, req *Request) (any, *RPCError) {
 		return s.handleWorkflowGet(ctx, req.Params)
 	case MethodWorkflowDecide:
 		return s.handleWorkflowDecide(ctx, req.Params)
+	case MethodWorktreePrepare:
+		return s.handleWorktreePrepare(ctx, req.Params)
+	case MethodWorktreeList:
+		return s.handleWorktreeList(ctx, req.Params)
+	case MethodWorktreeReview:
+		return s.handleWorktreeReview(ctx, req.Params)
+	case MethodWorktreeIntegrate:
+		return s.handleWorktreeIntegrate(ctx, req.Params)
+	case MethodWorktreeDiscard:
+		return s.handleWorktreeDiscard(ctx, req.Params)
+	case MethodWorktreeCleanup:
+		return s.handleWorktreeCleanup(ctx, req.Params)
 	case MethodApprovalResponse:
 		return s.handleApprovalResponse(req.Params)
 	default:
@@ -388,7 +400,7 @@ func (s *Server) handleInitialize(params json.RawMessage) (any, *RPCError) {
 }
 
 func capabilities() []string {
-	return []string{"streaming", "sessions", "session.search", "session.historyContext", "resume", "cancel", "models", "approval", "context", "vision", "plan", "skills", "rules", "permissions", "mcp", "mcp.runtime", "subagents", "tasks", "runs.durable", "workflow"}
+	return []string{"streaming", "sessions", "session.search", "session.historyContext", "resume", "cancel", "models", "approval", "context", "vision", "plan", "skills", "rules", "permissions", "mcp", "mcp.runtime", "subagents", "tasks", "runs.durable", "workflow", "worktree.review"}
 }
 
 // ---------------------------------------------------------------------------
@@ -496,12 +508,19 @@ func (s *Server) handleSessionList(ctx context.Context, params json.RawMessage) 
 			LastRunID:  in.LastRunID,
 			Runs:       in.Runs,
 
-			ParentAgentID:    in.ParentAgentID,
-			ParentRunID:      in.ParentRunID,
-			ParentToolCallID: in.ParentToolCallID,
-			Depth:            in.Depth,
-			Subagent:         in.Kind == "subagent",
-			TaskTitle:        in.TaskTitle,
+			ParentAgentID:        in.ParentAgentID,
+			ParentRunID:          in.ParentRunID,
+			ParentToolCallID:     in.ParentToolCallID,
+			Depth:                in.Depth,
+			Subagent:             in.Kind == "subagent",
+			TaskTitle:            in.TaskTitle,
+			WorkerID:             in.WorkerID,
+			WorktreeLabel:        in.WorktreeLabel,
+			WorkspaceFingerprint: in.WorkspaceFingerprint,
+			BaseCommit:           in.BaseCommit,
+			ArtifactID:           in.ArtifactID,
+			WorkItemID:           in.WorkItemID,
+			ExecutionID:          in.ExecutionID,
 		}
 		if !in.CreatedAt.IsZero() {
 			entry.CreatedAt = in.CreatedAt.UTC().Format("2006-01-02T15:04:05Z")
@@ -1164,16 +1183,20 @@ func (s *Server) forwardTask(sess *session, info anvil.TaskInfo) {
 // taskInfo projects one public task snapshot onto the wire shape.
 func taskInfo(t anvil.TaskInfo) TaskInfo {
 	out := TaskInfo{
-		ID:               t.ID,
-		Kind:             string(t.Kind),
-		Title:            t.Title,
-		Status:           string(t.Status),
-		AgentID:          t.AgentID,
-		ChildAgentID:     t.ChildAgentID,
-		ParentRunID:      t.ParentRunID,
-		ParentToolCallID: t.ParentToolCallID,
-		StartedAt:        t.StartedAt,
-		ExitCode:         t.ExitCode,
+		ID:                   t.ID,
+		Kind:                 string(t.Kind),
+		Title:                t.Title,
+		Status:               string(t.Status),
+		AgentID:              t.AgentID,
+		ChildAgentID:         t.ChildAgentID,
+		ParentRunID:          t.ParentRunID,
+		ParentToolCallID:     t.ParentToolCallID,
+		StartedAt:            t.StartedAt,
+		ExitCode:             t.ExitCode,
+		WorkerID:             t.WorkerID,
+		WorktreeLabel:        t.WorktreeLabel,
+		WorkspaceFingerprint: t.WorkspaceFingerprint,
+		BaseCommit:           t.BaseCommit,
 	}
 	if !t.EndedAt.IsZero() {
 		ended := t.EndedAt
@@ -1389,6 +1412,9 @@ func (s *Server) handleTaskHistory(ctx context.Context, params json.RawMessage) 
 			HostID: task.HostID, Cause: task.Cause, StartedAt: task.StartedAt,
 			ExitCode: task.ExitCode, OutputFirstOffset: task.OutputFirstOffset,
 			OutputNextOffset: task.OutputNextOffset,
+			WorkerID:         task.WorkerID, WorktreeLabel: task.WorktreeLabel,
+			WorkspaceFingerprint: task.WorkspaceFingerprint,
+			BaseCommit:           task.BaseCommit,
 		}
 		if !task.LeaseUntil.IsZero() {
 			lease := task.LeaseUntil

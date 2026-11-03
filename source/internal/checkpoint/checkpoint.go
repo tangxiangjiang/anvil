@@ -66,10 +66,27 @@ type Entry struct {
 
 // Manifest is one run's record, stored beside its captured files.
 type Manifest struct {
-	AgentID   string    `json:"agent_id"`
-	RunID     string    `json:"run_id"`
-	CreatedAt time.Time `json:"created_at"`
-	Files     []Entry   `json:"files"`
+	AgentID              string    `json:"agent_id"`
+	RunID                string    `json:"run_id"`
+	CreatedAt            time.Time `json:"created_at"`
+	Files                []Entry   `json:"files"`
+	RootAgentID          string    `json:"root_agent_id,omitempty"`
+	WorkerID             string    `json:"worker_id,omitempty"`
+	ExecutionID          string    `json:"execution_id,omitempty"`
+	BaseCommit           string    `json:"base_commit,omitempty"`
+	WorkspaceFingerprint string    `json:"workspace_fingerprint,omitempty"`
+	RootDigest           string    `json:"root_digest,omitempty"`
+}
+
+// Scope binds a checkpoint to one verified worktree execution. Its zero value
+// is the legacy same-workspace domain.
+type Scope struct {
+	RootAgentID          string
+	WorkerID             string
+	ExecutionID          string
+	BaseCommit           string
+	WorkspaceFingerprint string
+	RootDigest           string
 }
 
 // Run is a manifest plus where it lives.
@@ -166,7 +183,19 @@ func saveManifest(dir string, m Manifest) error {
 // A directory is not captured: the tools that can change the workspace write
 // files, and restoring a directory's listing would be a different feature.
 func Capture(root, agentID, runID, relPath, absPath string) error {
-	return capture(root, agentID, runID, "", "", relPath, absPath)
+	return capture(root, agentID, runID, "", "", Scope{}, relPath, absPath)
+}
+
+// CaptureScoped records a pre-image in a verified worktree checkpoint domain.
+func CaptureScoped(
+	root, agentID, runID string,
+	scope Scope,
+	relPath, absPath string,
+) error {
+	if err := validateScope(scope); err != nil {
+		return err
+	}
+	return capture(root, agentID, runID, "", "", scope, relPath, absPath)
 }
 
 // CaptureFor is Capture for a child agent in a tree: the path is filed under the root's
@@ -180,7 +209,31 @@ func CaptureFor(root, rootAgentID, rootRunID, childAgentID, childRunID, relPath,
 	if err := safeName(childRunID); err != nil {
 		return err
 	}
-	return capture(root, rootAgentID, rootRunID, childAgentID, childRunID, relPath, absPath)
+	return capture(
+		root, rootAgentID, rootRunID, childAgentID, childRunID,
+		Scope{}, relPath, absPath,
+	)
+}
+
+// CaptureForScoped is CaptureFor inside a verified worktree domain.
+func CaptureForScoped(
+	root, rootAgentID, rootRunID, childAgentID, childRunID string,
+	scope Scope,
+	relPath, absPath string,
+) error {
+	if err := safeName(childAgentID); err != nil {
+		return err
+	}
+	if err := safeName(childRunID); err != nil {
+		return err
+	}
+	if err := validateScope(scope); err != nil {
+		return err
+	}
+	return capture(
+		root, rootAgentID, rootRunID, childAgentID, childRunID,
+		scope, relPath, absPath,
+	)
 }
 
 // manifestLocks serialises the read-modify-write of one run's manifest. A tree's Workers
@@ -196,7 +249,11 @@ func lockRun(dir string) func() {
 	return mu.Unlock
 }
 
-func capture(root, agentID, runID, childAgentID, childRunID, relPath, absPath string) error {
+func capture(
+	root, agentID, runID, childAgentID, childRunID string,
+	scope Scope,
+	relPath, absPath string,
+) error {
 	dir, err := runDir(root, agentID, runID)
 	if err != nil {
 		return err
@@ -209,6 +266,9 @@ func capture(root, agentID, runID, childAgentID, childRunID, relPath, absPath st
 
 	m, err := loadManifest(dir, agentID, runID)
 	if err != nil {
+		return err
+	}
+	if err := bindManifestScope(&m, scope); err != nil {
 		return err
 	}
 	for _, entry := range m.Files {
@@ -327,8 +387,31 @@ func Get(root, agentID, runID string) (Run, error) {
 // cannot be resolved or written; a half-applied restore is reported as an
 // error rather than counted as success.
 func Restore(root, agentID, runID string, resolve func(rel string) (string, error)) ([]Restored, error) {
+	return restore(root, agentID, runID, Scope{}, resolve)
+}
+
+// RestoreScoped restores only when every worktree identity field matches.
+func RestoreScoped(
+	root, agentID, runID string,
+	scope Scope,
+	resolve func(rel string) (string, error),
+) ([]Restored, error) {
+	if err := validateScope(scope); err != nil {
+		return nil, err
+	}
+	return restore(root, agentID, runID, scope, resolve)
+}
+
+func restore(
+	root, agentID, runID string,
+	scope Scope,
+	resolve func(rel string) (string, error),
+) ([]Restored, error) {
 	run, err := Get(root, agentID, runID)
 	if err != nil {
+		return nil, err
+	}
+	if err := requireManifestScope(run.Manifest, scope); err != nil {
 		return nil, err
 	}
 	restored := make([]Restored, 0, len(run.Files))
@@ -384,12 +467,109 @@ func Restore(root, agentID, runID string, resolve func(rel string) (string, erro
 	return restored, nil
 }
 
+func validateScope(scope Scope) error {
+	values := []string{
+		scope.RootAgentID, scope.WorkerID, scope.ExecutionID, scope.BaseCommit,
+		scope.WorkspaceFingerprint, scope.RootDigest,
+	}
+	for _, value := range values {
+		if value == "" {
+			return fmt.Errorf("%w: incomplete checkpoint scope", errUnsafe)
+		}
+		if strings.ContainsAny(value, "\r\n") {
+			return fmt.Errorf("%w: invalid checkpoint scope", errUnsafe)
+		}
+	}
+	if err := safeName(scope.RootAgentID); err != nil {
+		return err
+	}
+	if err := safeName(scope.WorkerID); err != nil {
+		return err
+	}
+	if err := safeName(scope.ExecutionID); err != nil {
+		return err
+	}
+	return nil
+}
+
+func scopeEmpty(scope Scope) bool {
+	return scope == (Scope{})
+}
+
+func manifestScope(m Manifest) Scope {
+	return Scope{
+		RootAgentID: m.RootAgentID, WorkerID: m.WorkerID,
+		ExecutionID: m.ExecutionID, BaseCommit: m.BaseCommit,
+		WorkspaceFingerprint: m.WorkspaceFingerprint, RootDigest: m.RootDigest,
+	}
+}
+
+func bindManifestScope(m *Manifest, scope Scope) error {
+	current := manifestScope(*m)
+	if scopeEmpty(current) {
+		if scopeEmpty(scope) {
+			return nil
+		}
+		if len(m.Files) != 0 {
+			return fmt.Errorf("%w: cannot adopt an existing unscoped checkpoint", errUnsafe)
+		}
+		m.RootAgentID = scope.RootAgentID
+		m.WorkerID = scope.WorkerID
+		m.ExecutionID = scope.ExecutionID
+		m.BaseCommit = scope.BaseCommit
+		m.WorkspaceFingerprint = scope.WorkspaceFingerprint
+		m.RootDigest = scope.RootDigest
+		return nil
+	}
+	if current != scope {
+		return fmt.Errorf("%w: checkpoint scope mismatch", errUnsafe)
+	}
+	return nil
+}
+
+func requireManifestScope(m Manifest, expected Scope) error {
+	actual := manifestScope(m)
+	if scopeEmpty(expected) {
+		if !scopeEmpty(actual) {
+			return fmt.Errorf(
+				"%w: scoped checkpoint requires its verified worktree root",
+				errUnsafe,
+			)
+		}
+		return nil
+	}
+	if actual != expected {
+		return fmt.Errorf("%w: checkpoint scope mismatch", errUnsafe)
+	}
+	return nil
+}
+
 // Finish records the post-run state of every file a run captured: the hash of
 // what each file holds now, after the run's writes. resolve maps a manifest path
 // to its absolute path, the same way Restore does, so both agree on where a file
 // is. A file the run deleted, or one that is no longer a regular file, records
 // nothing and is restored without the check.
 func Finish(root, agentID, runID string, resolve func(rel string) (string, error)) error {
+	return finish(root, agentID, runID, Scope{}, resolve)
+}
+
+// FinishScoped records post-images only in the matching worktree domain.
+func FinishScoped(
+	root, agentID, runID string,
+	scope Scope,
+	resolve func(rel string) (string, error),
+) error {
+	if err := validateScope(scope); err != nil {
+		return err
+	}
+	return finish(root, agentID, runID, scope, resolve)
+}
+
+func finish(
+	root, agentID, runID string,
+	scope Scope,
+	resolve func(rel string) (string, error),
+) error {
 	dir, err := runDir(root, agentID, runID)
 	if err != nil {
 		return err
@@ -397,6 +577,9 @@ func Finish(root, agentID, runID string, resolve func(rel string) (string, error
 	defer lockRun(dir)()
 	m, err := loadManifest(dir, agentID, runID)
 	if err != nil {
+		return err
+	}
+	if err := requireManifestScope(m, scope); err != nil {
 		return err
 	}
 	for i := range m.Files {

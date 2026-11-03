@@ -4,6 +4,9 @@ import {
   WorkflowArtifact,
   WorkflowGetResult,
   WorkflowWorkItem,
+  WorktreeListParams,
+  WorktreeListResult,
+  WorktreeWorkerInfo,
 } from './protocol';
 import { HostRpcError } from './hostClient';
 import {
@@ -16,6 +19,7 @@ import {
 export interface WorkflowSource {
   listSessions(): Promise<SessionInfo[]>;
   workflow(agentId: string, artifactId?: string): Promise<WorkflowGetResult>;
+  listWorktrees?(params: WorktreeListParams): Promise<WorktreeListResult>;
   openSession(agentId: string): Promise<void>;
   onSessionsChanged(listener: () => void): vscode.Disposable;
 }
@@ -39,6 +43,12 @@ export interface WorkflowItemNode {
   item: WorkflowWorkItem;
 }
 
+export interface WorkflowWorktreeNode {
+  kind: 'worktree';
+  agentId: string;
+  worker: WorktreeWorkerInfo;
+}
+
 interface WorkflowLeafNode {
   kind: 'leaf';
   id: string;
@@ -57,6 +67,7 @@ export type WorkflowTreeNode =
   | WorkflowSessionNode
   | WorkflowArtifactNode
   | WorkflowItemNode
+  | WorkflowWorktreeNode
   | WorkflowLeafNode
   | WorkflowNoteNode;
 
@@ -71,6 +82,7 @@ export class WorkflowTreeProvider implements vscode.TreeDataProvider<WorkflowTre
   private sessionsFailure = '';
   private readonly projections = new Map<string, WorkflowGetResult>();
   private readonly failures = new Map<string, string>();
+  private readonly worktrees = new Map<string, WorktreeWorkerInfo[]>();
   private selection: { agentId: string; artifactId: string; itemIds: Set<string> } | undefined;
   private filter = '';
   private timer: ReturnType<typeof setTimeout> | undefined;
@@ -110,9 +122,7 @@ export class WorkflowTreeProvider implements vscode.TreeDataProvider<WorkflowTre
       case 'item': {
         const treeItem = new vscode.TreeItem(node.item.title, vscode.TreeItemCollapsibleState.Collapsed);
         treeItem.id = `workflow-item:${node.agentId}:${node.artifact.artifact_id}:${node.item.id}`;
-        treeItem.contextValue = node.item.approval === 'pending'
-          ? 'anvilWorkflowItem.pending'
-          : 'anvilWorkflowItem';
+        treeItem.contextValue = `anvilWorkflowItem.${node.item.approval}`;
         treeItem.description = `${node.item.approval} · ${node.item.state}`;
         treeItem.iconPath = new vscode.ThemeIcon(itemIcon(node.item.state));
         treeItem.tooltip = `${node.item.goal}\nRevision ${node.artifact.revision}`;
@@ -122,6 +132,22 @@ export class WorkflowTreeProvider implements vscode.TreeDataProvider<WorkflowTre
             : vscode.TreeItemCheckboxState.Unchecked;
         }
         return treeItem;
+      }
+      case 'worktree': {
+        const item = new vscode.TreeItem(
+          node.worker.worktree_label || node.worker.id,
+          vscode.TreeItemCollapsibleState.Collapsed,
+        );
+        item.id = `workflow-worktree:${node.agentId}:${node.worker.id}`;
+        item.contextValue = `anvilWorktree.${node.worker.state}`;
+        item.description = `${node.worker.state} · r${node.worker.revision}`;
+        item.iconPath = new vscode.ThemeIcon(worktreeIcon(node.worker.state));
+        item.tooltip = [
+          node.worker.id,
+          `Base ${shortCommit(node.worker.base_commit)}`,
+          node.worker.failure,
+        ].filter(Boolean).join('\n');
+        return item;
       }
       case 'leaf': {
         const item = new vscode.TreeItem(node.label, vscode.TreeItemCollapsibleState.None);
@@ -168,13 +194,21 @@ export class WorkflowTreeProvider implements vscode.TreeDataProvider<WorkflowTre
       const artifacts = projection.artifacts.filter((artifact) =>
         workflowMatches(artifact, undefined, this.filter) ||
         artifact.items.some((item) => workflowMatches(artifact, item, this.filter)));
-      if (artifacts.length === 0) {
+      const workers = await this.loadWorktrees(element.agentId);
+      if (artifacts.length === 0 && workers.length === 0) {
         return [note(
           `empty:${element.agentId}`,
           this.filter ? 'No workflow items match the filter.' : 'No structured plans in this session.',
         )];
       }
-      return artifacts.map((artifact) => ({ kind: 'artifact', agentId: element.agentId, artifact }));
+      return [
+        ...workers.map((worker) => ({
+          kind: 'worktree' as const, agentId: element.agentId, worker,
+        })),
+        ...artifacts.map((artifact) => ({
+          kind: 'artifact' as const, agentId: element.agentId, artifact,
+        })),
+      ];
     }
     if (element.kind === 'artifact') {
       const items = element.artifact.items
@@ -194,6 +228,7 @@ export class WorkflowTreeProvider implements vscode.TreeDataProvider<WorkflowTre
       return items;
     }
     if (element.kind === 'item') return this.itemFacts(element);
+    if (element.kind === 'worktree') return this.worktreeFacts(element);
     return [];
   }
 
@@ -240,6 +275,7 @@ export class WorkflowTreeProvider implements vscode.TreeDataProvider<WorkflowTre
     this.sessionsFailure = '';
     this.projections.clear();
     this.failures.clear();
+    this.worktrees.clear();
     this.selection = undefined;
     await this.loadSessions();
     this.changed.fire(undefined);
@@ -248,6 +284,7 @@ export class WorkflowTreeProvider implements vscode.TreeDataProvider<WorkflowTre
   async refreshAgent(agentId: string): Promise<void> {
     this.projections.delete(agentId);
     this.failures.delete(agentId);
+    this.worktrees.delete(agentId);
     await this.loadWorkflow(agentId);
     this.changed.fire(undefined);
   }
@@ -295,6 +332,28 @@ export class WorkflowTreeProvider implements vscode.TreeDataProvider<WorkflowTre
     }
   }
 
+  private async loadWorktrees(agentId: string): Promise<WorktreeWorkerInfo[]> {
+    const cached = this.worktrees.get(agentId);
+    if (cached) return cached;
+    const root = vscode.workspace.getConfiguration('anvil').get<string>('worktreeRoot', '').trim();
+    if (!root || !this.source.listWorktrees) {
+      this.worktrees.set(agentId, []);
+      return [];
+    }
+    try {
+      const result = await this.source.listWorktrees({
+        agent_id: agentId, worktree_root: root,
+      });
+      const workers = result.workers ?? [];
+      this.worktrees.set(agentId, workers);
+      return workers;
+    } catch (err) {
+      this.failures.set(agentId, (err as Error).message);
+      this.worktrees.set(agentId, []);
+      return [];
+    }
+  }
+
   private itemFacts(node: WorkflowItemNode): WorkflowTreeNode[] {
     const projection = this.projections.get(node.agentId);
     const state = latestWorkflowState(
@@ -325,6 +384,49 @@ export class WorkflowTreeProvider implements vscode.TreeDataProvider<WorkflowTre
     return facts;
   }
 
+  private worktreeFacts(node: WorkflowWorktreeNode): WorkflowTreeNode[] {
+    const review = node.worker.review;
+    const facts: WorkflowTreeNode[] = [
+      {
+        kind: 'leaf', id: `worktree:${node.worker.id}:base`,
+        label: `Base ${shortCommit(node.worker.base_commit)}`,
+        description: review ? `reviewed at ${shortCommit(review.current_base)}` : 'recorded base',
+        icon: 'git-commit',
+      },
+      {
+        kind: 'leaf', id: `worktree:${node.worker.id}:head`,
+        label: `Head ${shortCommit(node.worker.head_commit ?? node.worker.base_commit)}`,
+        description: node.worker.integration_commit
+          ? `integrated as ${shortCommit(node.worker.integration_commit)}`
+          : 'worker branch',
+        icon: 'git-branch',
+      },
+    ];
+    if (review) {
+      facts.push({
+        kind: 'leaf', id: `worktree:${node.worker.id}:review`,
+        label: review.integrable ? 'Ready to integrate' : 'Integration blocked',
+        description: review.integrable
+          ? review.allowed_strategies.join(', ')
+          : review.refusal_reasons.join('; '),
+        icon: review.integrable ? 'pass-filled' : 'warning',
+      });
+      for (const conflict of review.conflicts) {
+        facts.push({
+          kind: 'leaf', id: `worktree:${node.worker.id}:conflict:${conflict.path}`,
+          label: conflict.path, description: conflict.kind, icon: 'merge',
+        });
+      }
+    }
+    if (node.worker.failure) {
+      facts.push({
+        kind: 'leaf', id: `worktree:${node.worker.id}:failure`,
+        label: 'Blocked', description: node.worker.failure, icon: 'error',
+      });
+    }
+    return facts;
+  }
+
   private isSelected(node: WorkflowItemNode): boolean {
     return this.selection?.agentId === node.agentId &&
       this.selection.artifactId === node.artifact.artifact_id &&
@@ -338,9 +440,25 @@ export class WorkflowTreeProvider implements vscode.TreeDataProvider<WorkflowTre
       this.sessions = undefined;
       this.projections.clear();
       this.failures.clear();
+      this.worktrees.clear();
       this.selection = undefined;
       this.changed.fire(undefined);
     }, SETTLE_MS);
+  }
+}
+
+function shortCommit(value: string): string {
+  return value ? value.slice(0, 8) : 'unknown';
+}
+
+function worktreeIcon(state: string): string {
+  switch (state) {
+    case 'review_ready': return 'git-pull-request';
+    case 'integrating': return 'loading~spin';
+    case 'integrated': return 'pass-filled';
+    case 'discarded': return 'trash';
+    case 'cleanup_failed': return 'warning';
+    default: return 'git-branch';
   }
 }
 

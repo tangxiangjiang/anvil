@@ -1,6 +1,6 @@
 # 57 — Worktree workers in VS Code
 
-**Milestone focus:** 0.57. **Design status:** planned. **Risk:** high. This chapter may be
+**Milestone focus:** 0.57. **Design status:** delivered. **Risk:** high. This chapter may be
 implemented only after the 0.51–0.56 contracts it depends on are delivered and tested.
 
 ## 1. Today and the problem

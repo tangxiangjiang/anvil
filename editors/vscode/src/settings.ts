@@ -234,6 +234,8 @@ export interface ResolvedSettings {
    * travels to the host, and a change to it alone must not restart one.
    */
   fontSize: number;
+  /** Operator-owned root for isolated worktree lifecycle records. */
+  worktreeRoot: string;
 }
 
 /** Reads the workspace configuration into a session config. */
@@ -370,6 +372,7 @@ export function readSettings(): ResolvedSettings {
     contextKeepRecent,
     cacheTtlSeconds,
     fontSize,
+    worktreeRoot: (cfg.get<string>('worktreeRoot', '') ?? '').trim(),
   };
 }
 
@@ -389,6 +392,7 @@ export function settingsKey(settings: ResolvedSettings): string {
   const hostRelevant: Partial<ResolvedSettings> = { ...settings };
   delete hostRelevant.fontSize;
   delete hostRelevant.models;
+  delete hostRelevant.worktreeRoot;
   return JSON.stringify(hostRelevant);
 }
 

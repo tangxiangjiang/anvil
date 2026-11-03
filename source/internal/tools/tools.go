@@ -117,6 +117,7 @@ type Registry struct {
 	// and run, so restoring the root run undoes the whole tree.
 	cpRootAgent string
 	cpRootRun   string
+	cpScope     checkpoint.Scope
 	// agentID and depth identify the agent this registry executes for, so a
 	// permission request can say which agent is asking and how deep it is
 	// nested. Set once at creation; runID comes from SetRunContext.
@@ -125,6 +126,10 @@ type Registry struct {
 	// taskMgr is the agent tree's background table. It is set before any run
 	// starts; the task tools and a background shell read it at call time.
 	taskMgr *tasks.Manager
+	// denyProtected makes protected paths an immutable refusal rather than only
+	// an approval boundary. Worktree workers enable it because no model action
+	// may touch linked Git metadata or coordinator state.
+	denyProtected bool
 }
 
 // PreExecFunc runs before every tool (hooks like beforeMCP / beforeRead).
@@ -231,11 +236,37 @@ func (r *Registry) SetCheckpointRoot(rootAgentID, rootRunID string) {
 	}
 }
 
+// SetCheckpointScope binds every capture to one verified worktree execution.
+// The zero value preserves the legacy same-workspace domain.
+func (r *Registry) SetCheckpointScope(scope checkpoint.Scope) {
+	if r != nil {
+		r.cpScope = scope
+	}
+}
+
+// SetDenyProtectedPaths makes any protected-path fact fail before execution.
+func (r *Registry) SetDenyProtectedPaths(deny bool) {
+	if r != nil {
+		r.denyProtected = deny
+	}
+}
+
 // capture files one path under the right run: the tree's root run when this agent is a
 // child of one, its own run otherwise.
 func (r *Registry) capture(rel, abs string) error {
 	if r.cpRootAgent != "" && r.cpRootRun != "" {
+		if r.cpScope != (checkpoint.Scope{}) {
+			return checkpoint.CaptureForScoped(
+				r.cpDir, r.cpRootAgent, r.cpRootRun, r.cpAgent, r.cpRun,
+				r.cpScope, rel, abs,
+			)
+		}
 		return checkpoint.CaptureFor(r.cpDir, r.cpRootAgent, r.cpRootRun, r.cpAgent, r.cpRun, rel, abs)
+	}
+	if r.cpScope != (checkpoint.Scope{}) {
+		return checkpoint.CaptureScoped(
+			r.cpDir, r.cpAgent, r.cpRun, r.cpScope, rel, abs,
+		)
 	}
 	return checkpoint.Capture(r.cpDir, r.cpAgent, r.cpRun, rel, abs)
 }
@@ -485,6 +516,12 @@ func (r *Registry) Execute(ctx context.Context, name string, args json.RawMessag
 	facts = callFacts(name, args)
 	decision := rules.Evaluate(facts, runtime.GOOS)
 	protected = decision.Protected
+	if r.denyProtected && len(decision.Protected) > 0 {
+		return Result{
+			Content: "tool denied: protected paths are outside this worker boundary",
+			IsError: true, Protected: decision.Protected,
+		}
+	}
 	var decidedBy *permissions.Decision
 	if decision.Matched {
 		decidedBy = &decision

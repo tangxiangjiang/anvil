@@ -56,6 +56,12 @@ type TaskInfo struct {
 	// ExitCode is the process exit code for a shell task, -1 when the process
 	// did not exit on its own. It is 0 for an agent task.
 	ExitCode int
+	// Worktree identity is host-stamped for routed work. Empty means the task
+	// belongs to a same-workspace agent.
+	WorkerID             string
+	WorktreeLabel        string
+	WorkspaceFingerprint string
+	BaseCommit           string
 }
 
 // TaskOutput is one read of a background task's output.
@@ -88,7 +94,7 @@ func (a *Agent) Tasks() []TaskInfo {
 	infos := mgr.List()
 	out := make([]TaskInfo, 0, len(infos))
 	for _, info := range infos {
-		out = append(out, toTaskInfo(info))
+		out = append(out, toTaskInfoForRoute(info, a.opts.worktreeRoute))
 	}
 	return out
 }
@@ -104,7 +110,7 @@ func (a *Agent) Task(taskID string) (TaskInfo, error) {
 	if err != nil {
 		return TaskInfo{}, err
 	}
-	return toTaskInfo(info), nil
+	return toTaskInfoForRoute(info, a.opts.worktreeRoute), nil
 }
 
 // TaskOutput reads a background task's output from offset, at most limit bytes
@@ -139,7 +145,7 @@ func (a *Agent) CancelTask(taskID string) (TaskInfo, error) {
 	if err != nil {
 		return TaskInfo{}, err
 	}
-	return toTaskInfo(info), nil
+	return toTaskInfoForRoute(info, a.opts.worktreeRoute), nil
 }
 
 // taskManager reads the table under the lock Close takes when it clears it.
@@ -166,4 +172,15 @@ func toTaskInfo(info tasks.Info) TaskInfo {
 		EndedAt:          info.EndedAt,
 		ExitCode:         info.ExitCode,
 	}
+}
+
+func toTaskInfoForRoute(info tasks.Info, route *WorktreeWorkerRoute) TaskInfo {
+	out := toTaskInfo(info)
+	if route != nil {
+		out.WorkerID = route.WorkerID
+		out.WorktreeLabel = route.WorktreeLabel
+		out.WorkspaceFingerprint = route.WorkspaceFingerprint
+		out.BaseCommit = route.BaseCommit
+	}
+	return out
 }

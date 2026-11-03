@@ -559,10 +559,12 @@ func (a *Agent) childOptions(in spawnParams, selectors []string, depth int, prof
 		completer:         a.complete,
 		budget:            a.budget,
 		taskMgr:           a.taskMgr,
+		worktreeRoute:     cloneWorktreeRouteValue(a.opts.worktreeRoute),
+		storeCWD:          a.opts.storeCWD,
 		// A child of a confined worker is confined to the same files: spawn_agent must not be
 		// a way around the allowlist a brief set.
 		confine: append([]permissions.Rule(nil), a.opts.confine...),
-		depth:             depth,
+		depth:   depth,
 		Local: LocalOptions{
 			CWD:             a.cwd,
 			AllowShell:      a.opts.Local.AllowShell,
@@ -610,6 +612,14 @@ func (a *Agent) childOptions(in spawnParams, selectors []string, depth int, prof
 		opts.skipFileMCP = true
 	}
 	return opts
+}
+
+func cloneWorktreeRouteValue(route *WorktreeWorkerRoute) *WorktreeWorkerRoute {
+	if route == nil {
+		return nil
+	}
+	copy := *route
+	return &copy
 }
 
 // createSubagent builds a child through the same Create path as any agent,

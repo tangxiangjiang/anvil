@@ -308,6 +308,11 @@ type Options struct {
 	// buildRegistry; a child inherits the parent's, so one tree has one table
 	// however deep the work goes.
 	taskMgr *tasks.Manager
+	// worktreeRoute is a host-verified 0.57 route. It is never populated from
+	// prompt or wire input. storeCWD keeps the worker transcript in the owning
+	// coordinator's store while Local.CWD confines tools to the linked worktree.
+	worktreeRoute *WorktreeWorkerRoute
+	storeCWD      string
 }
 
 // SubagentOptions configures the spawn_agent built-in and the work its children

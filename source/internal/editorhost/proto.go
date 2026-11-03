@@ -123,15 +123,21 @@ const (
 	// MethodTasksOutput pages one task's output from a byte offset.
 	MethodTasksOutput = "tasks.output"
 	// MethodTasksCancel stops one running task and answers its final state.
-	MethodTasksCancel    = "tasks.cancel"
-	MethodRunList        = "run.list"
-	MethodRunGet         = "run.get"
-	MethodRunEvents      = "run.events"
-	MethodRunReconcile   = "run.reconcile"
-	MethodTaskHistory    = "task.history"
-	MethodWorkflowGet    = "workflow.get"
-	MethodWorkflowDecide = "workflow.decide"
-	MethodShutdown       = "shutdown"
+	MethodTasksCancel       = "tasks.cancel"
+	MethodRunList           = "run.list"
+	MethodRunGet            = "run.get"
+	MethodRunEvents         = "run.events"
+	MethodRunReconcile      = "run.reconcile"
+	MethodTaskHistory       = "task.history"
+	MethodWorkflowGet       = "workflow.get"
+	MethodWorkflowDecide    = "workflow.decide"
+	MethodWorktreePrepare   = "worktree.prepare"
+	MethodWorktreeList      = "worktree.list"
+	MethodWorktreeReview    = "worktree.review"
+	MethodWorktreeIntegrate = "worktree.integrate"
+	MethodWorktreeDiscard   = "worktree.discard"
+	MethodWorktreeCleanup   = "worktree.cleanup"
+	MethodShutdown          = "shutdown"
 
 	// MethodApprovalResponse answers a pending approval.request. It is the only
 	// client request that resolves a notification the host sent earlier.
@@ -854,12 +860,19 @@ type SessionInfo struct {
 	// Subagent identity (0.42+). Empty on a top-level session. ParentAgentID is
 	// what the tree nests a child under, and TaskTitle is the description its
 	// spawn call carried — the name a person gave the work, not a derived one.
-	ParentAgentID    string `json:"parent_agent_id,omitempty"`
-	ParentRunID      string `json:"parent_run_id,omitempty"`
-	ParentToolCallID string `json:"parent_tool_call_id,omitempty"`
-	Depth            int    `json:"depth,omitempty"`
-	Subagent         bool   `json:"subagent,omitempty"`
-	TaskTitle        string `json:"task_title,omitempty"`
+	ParentAgentID        string `json:"parent_agent_id,omitempty"`
+	ParentRunID          string `json:"parent_run_id,omitempty"`
+	ParentToolCallID     string `json:"parent_tool_call_id,omitempty"`
+	Depth                int    `json:"depth,omitempty"`
+	Subagent             bool   `json:"subagent,omitempty"`
+	TaskTitle            string `json:"task_title,omitempty"`
+	WorkerID             string `json:"worker_id,omitempty"`
+	WorktreeLabel        string `json:"worktree_label,omitempty"`
+	WorkspaceFingerprint string `json:"workspace_fingerprint,omitempty"`
+	BaseCommit           string `json:"base_commit,omitempty"`
+	ArtifactID           string `json:"artifact_id,omitempty"`
+	WorkItemID           string `json:"work_item_id,omitempty"`
+	ExecutionID          string `json:"execution_id,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
@@ -1044,14 +1057,18 @@ type TranscriptEntry struct {
 	PathProblem  string           `json:"path_problem,omitempty"`
 
 	// stage
-	NodeID       string          `json:"node_id,omitempty"`
-	ParentNodeID string          `json:"parent_node_id,omitempty"`
-	DependsOn    []string        `json:"depends_on,omitempty"`
-	AgentID      string          `json:"agent_id,omitempty"`
-	AgentRole    string          `json:"agent_role,omitempty"`
-	Stage        string          `json:"stage,omitempty"`
-	Brief        *BriefInfo      `json:"brief,omitempty"`
-	Acceptance   *AcceptanceInfo `json:"acceptance,omitempty"`
+	NodeID               string          `json:"node_id,omitempty"`
+	ParentNodeID         string          `json:"parent_node_id,omitempty"`
+	DependsOn            []string        `json:"depends_on,omitempty"`
+	AgentID              string          `json:"agent_id,omitempty"`
+	AgentRole            string          `json:"agent_role,omitempty"`
+	Stage                string          `json:"stage,omitempty"`
+	Brief                *BriefInfo      `json:"brief,omitempty"`
+	Acceptance           *AcceptanceInfo `json:"acceptance,omitempty"`
+	WorkerID             string          `json:"worker_id,omitempty"`
+	WorktreeLabel        string          `json:"worktree_label,omitempty"`
+	WorkspaceFingerprint string          `json:"workspace_fingerprint,omitempty"`
+	BaseCommit           string          `json:"base_commit,omitempty"`
 
 	// retry / truncated run signals
 	Text        string `json:"text,omitempty"`
@@ -1421,7 +1438,11 @@ type TaskInfo struct {
 	EndedAt *time.Time `json:"ended_at,omitempty"`
 	// ExitCode is the process exit code of a shell task, -1 when it did not
 	// exit on its own. It is 0 for an agent task.
-	ExitCode int `json:"exit_code"`
+	ExitCode             int    `json:"exit_code"`
+	WorkerID             string `json:"worker_id,omitempty"`
+	WorktreeLabel        string `json:"worktree_label,omitempty"`
+	WorkspaceFingerprint string `json:"workspace_fingerprint,omitempty"`
+	BaseCommit           string `json:"base_commit,omitempty"`
 }
 
 // TasksListParams names the session whose tree to report. A task id from
@@ -1542,23 +1563,27 @@ type TaskHistoryParams struct {
 }
 
 type DurableTaskInfo struct {
-	ID                string     `json:"id"`
-	Seq               uint64     `json:"seq"`
-	Kind              string     `json:"kind"`
-	Title             string     `json:"title"`
-	State             string     `json:"state"`
-	AgentID           string     `json:"agent_id,omitempty"`
-	ChildAgentID      string     `json:"child_agent_id,omitempty"`
-	ParentRunID       string     `json:"parent_run_id,omitempty"`
-	ParentToolCallID  string     `json:"parent_tool_call_id,omitempty"`
-	HostID            string     `json:"host_id,omitempty"`
-	LeaseUntil        *time.Time `json:"lease_until,omitempty"`
-	Cause             string     `json:"cause,omitempty"`
-	StartedAt         time.Time  `json:"started_at"`
-	EndedAt           *time.Time `json:"ended_at,omitempty"`
-	ExitCode          *int       `json:"exit_code,omitempty"`
-	OutputFirstOffset int64      `json:"output_first_offset,omitempty"`
-	OutputNextOffset  int64      `json:"output_next_offset,omitempty"`
+	ID                   string     `json:"id"`
+	Seq                  uint64     `json:"seq"`
+	Kind                 string     `json:"kind"`
+	Title                string     `json:"title"`
+	State                string     `json:"state"`
+	AgentID              string     `json:"agent_id,omitempty"`
+	ChildAgentID         string     `json:"child_agent_id,omitempty"`
+	ParentRunID          string     `json:"parent_run_id,omitempty"`
+	ParentToolCallID     string     `json:"parent_tool_call_id,omitempty"`
+	HostID               string     `json:"host_id,omitempty"`
+	LeaseUntil           *time.Time `json:"lease_until,omitempty"`
+	Cause                string     `json:"cause,omitempty"`
+	StartedAt            time.Time  `json:"started_at"`
+	EndedAt              *time.Time `json:"ended_at,omitempty"`
+	ExitCode             *int       `json:"exit_code,omitempty"`
+	OutputFirstOffset    int64      `json:"output_first_offset,omitempty"`
+	OutputNextOffset     int64      `json:"output_next_offset,omitempty"`
+	WorkerID             string     `json:"worker_id,omitempty"`
+	WorktreeLabel        string     `json:"worktree_label,omitempty"`
+	WorkspaceFingerprint string     `json:"workspace_fingerprint,omitempty"`
+	BaseCommit           string     `json:"base_commit,omitempty"`
 }
 
 type TaskHistoryResult struct {
@@ -1640,6 +1665,137 @@ type WorkflowDecideResult struct {
 	Artifact         WorkflowArtifact `json:"artifact"`
 	AcceptedRevision int              `json:"accepted_revision"`
 	Changed          bool             `json:"changed"`
+}
+
+type WorktreePrepareParams struct {
+	AgentID      string `json:"agent_id"`
+	ArtifactID   string `json:"artifact_id"`
+	WorkItemID   string `json:"work_item_id"`
+	ExecutionID  string `json:"execution_id,omitempty"`
+	Attempt      int    `json:"attempt"`
+	BaseRef      string `json:"base_ref,omitempty"`
+	WorktreeRoot string `json:"worktree_root"`
+	MaxWorkers   int    `json:"max_workers,omitempty"`
+	Store        string `json:"store,omitempty"`
+}
+
+type WorktreePrepareResult struct {
+	Worker WorktreeWorkerInfo `json:"worker"`
+}
+
+type WorktreeReviewParams struct {
+	AgentID          string `json:"agent_id"`
+	WorkerID         string `json:"worker_id"`
+	WorktreeRoot     string `json:"worktree_root"`
+	ExpectedRevision uint64 `json:"expected_revision"`
+	Store            string `json:"store,omitempty"`
+}
+
+type WorktreeListParams struct {
+	AgentID      string `json:"agent_id,omitempty"`
+	WorktreeRoot string `json:"worktree_root"`
+	Store        string `json:"store,omitempty"`
+}
+
+type WorktreeListResult struct {
+	Workers []WorktreeWorkerInfo `json:"workers"`
+}
+
+type WorktreeIntegrateParams struct {
+	AgentID             string `json:"agent_id"`
+	WorkerID            string `json:"worker_id"`
+	WorktreeRoot        string `json:"worktree_root"`
+	ExpectedRevision    uint64 `json:"expected_revision"`
+	ExpectedBase        string `json:"expected_base"`
+	ExpectedHead        string `json:"expected_head"`
+	ExpectedPatchDigest string `json:"expected_patch_digest"`
+	Strategy            string `json:"strategy"`
+	Store               string `json:"store,omitempty"`
+}
+
+type WorktreeDiscardParams struct {
+	AgentID             string `json:"agent_id"`
+	WorkerID            string `json:"worker_id"`
+	WorktreeRoot        string `json:"worktree_root"`
+	ExpectedRevision    uint64 `json:"expected_revision"`
+	ExpectedPatchDigest string `json:"expected_patch_digest"`
+	Store               string `json:"store,omitempty"`
+}
+
+type WorktreeCleanupParams struct {
+	AgentID              string `json:"agent_id"`
+	WorkerID             string `json:"worker_id"`
+	WorktreeRoot         string `json:"worktree_root"`
+	ExpectedRevision     uint64 `json:"expected_revision"`
+	ExpectedReviewDigest string `json:"expected_review_digest,omitempty"`
+	RetainBranch         bool   `json:"retain_branch,omitempty"`
+	Store                string `json:"store,omitempty"`
+}
+
+type WorktreeCommitInfo struct {
+	Hash    string `json:"hash"`
+	Subject string `json:"subject"`
+}
+
+type WorktreeChangedPath struct {
+	Status  string `json:"status"`
+	Path    string `json:"path"`
+	OldPath string `json:"old_path,omitempty"`
+}
+
+type WorktreeConflict struct {
+	Path    string `json:"path"`
+	Kind    string `json:"kind"`
+	Message string `json:"message,omitempty"`
+}
+
+type WorktreeReviewInfo struct {
+	Schema            int                   `json:"schema"`
+	WorkerID          string                `json:"worker_id"`
+	ManifestRevision  uint64                `json:"manifest_revision"`
+	BaseCommit        string                `json:"base_commit"`
+	CurrentBase       string                `json:"current_base"`
+	HeadCommit        string                `json:"head_commit"`
+	Commits           []WorktreeCommitInfo  `json:"commits"`
+	ChangedPaths      []WorktreeChangedPath `json:"changed_paths"`
+	DiffStat          string                `json:"diff_stat,omitempty"`
+	PatchDigest       string                `json:"patch_digest"`
+	DirtyTracked      []string              `json:"dirty_tracked"`
+	Untracked         []string              `json:"untracked"`
+	Ignored           []string              `json:"ignored"`
+	Conflicts         []WorktreeConflict    `json:"conflicts"`
+	AllowedStrategies []string              `json:"allowed_strategies"`
+	Integrable        bool                  `json:"integrable"`
+	RefusalReasons    []string              `json:"refusal_reasons"`
+	Interrupted       bool                  `json:"interrupted"`
+	ReviewedAt        time.Time             `json:"reviewed_at"`
+}
+
+type WorktreeWorkerInfo struct {
+	ID                string              `json:"id"`
+	AgentID           string              `json:"agent_id"`
+	ArtifactID        string              `json:"artifact_id"`
+	WorkItemID        string              `json:"work_item_id"`
+	ExecutionID       string              `json:"execution_id"`
+	Revision          uint64              `json:"revision"`
+	State             string              `json:"state"`
+	WorktreeLabel     string              `json:"worktree_label"`
+	BaseCommit        string              `json:"base_commit"`
+	HeadCommit        string              `json:"head_commit,omitempty"`
+	IntegrationCommit string              `json:"integration_commit,omitempty"`
+	Review            *WorktreeReviewInfo `json:"review,omitempty"`
+	Failure           string              `json:"failure,omitempty"`
+}
+
+type WorktreeReviewResult struct {
+	Review WorktreeReviewInfo `json:"review"`
+}
+
+type WorktreeMutationResult struct {
+	Worker         WorktreeWorkerInfo `json:"worker"`
+	ResultCommit   string             `json:"result_commit,omitempty"`
+	RemovedPaths   []string           `json:"removed_paths,omitempty"`
+	RetainedBranch bool               `json:"retained_branch,omitempty"`
 }
 
 // TaskNotification reports one task changing state. It is additive: a client
@@ -1747,16 +1903,20 @@ type EventParams struct {
 	PathAnalysis string   `json:"path_analysis,omitempty"`
 	PathProblem  string   `json:"path_problem,omitempty"`
 	// Orchestration identity is set on a durable `stage` event.
-	NodeID       string          `json:"node_id,omitempty"`
-	ParentNodeID string          `json:"parent_node_id,omitempty"`
-	DependsOn    []string        `json:"depends_on,omitempty"`
-	AgentRole    string          `json:"agent_role,omitempty"`
-	Stage        string          `json:"stage,omitempty"`
-	Brief        *BriefInfo      `json:"brief,omitempty"`
-	Acceptance   *AcceptanceInfo `json:"acceptance,omitempty"`
-	ArtifactID   string          `json:"artifact_id,omitempty"`
-	WorkItemID   string          `json:"work_item_id,omitempty"`
-	ExecutionID  string          `json:"execution_id,omitempty"`
+	NodeID               string          `json:"node_id,omitempty"`
+	ParentNodeID         string          `json:"parent_node_id,omitempty"`
+	DependsOn            []string        `json:"depends_on,omitempty"`
+	AgentRole            string          `json:"agent_role,omitempty"`
+	Stage                string          `json:"stage,omitempty"`
+	Brief                *BriefInfo      `json:"brief,omitempty"`
+	Acceptance           *AcceptanceInfo `json:"acceptance,omitempty"`
+	ArtifactID           string          `json:"artifact_id,omitempty"`
+	WorkItemID           string          `json:"work_item_id,omitempty"`
+	ExecutionID          string          `json:"execution_id,omitempty"`
+	WorkerID             string          `json:"worker_id,omitempty"`
+	WorktreeLabel        string          `json:"worktree_label,omitempty"`
+	WorkspaceFingerprint string          `json:"workspace_fingerprint,omitempty"`
+	BaseCommit           string          `json:"base_commit,omitempty"`
 	// Items is the complete task list on a `todo` event (0.40.9). It is a
 	// pointer so that an empty list reaches the client as [] — clearing the
 	// panel — while every other event omits the field entirely.

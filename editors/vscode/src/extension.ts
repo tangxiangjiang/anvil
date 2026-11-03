@@ -54,9 +54,18 @@ import { HostRpcError } from './hostClient';
 import { WorkflowDocuments } from './workflowDocument';
 import {
   WorkflowArtifactNode,
+  WorkflowItemNode,
   WorkflowTreeProvider,
+  WorkflowWorktreeNode,
 } from './workflowTree';
 import { workflowDecisionParams } from './workflowView';
+import {
+  strategyLabel,
+  worktreeCleanupParams,
+  worktreeDiscardParams,
+  worktreeIntegrationParams,
+  worktreeReviewMarkdown,
+} from './worktreeView';
 
 /** The window's shared half, so `deactivate` can kill the child. */
 let active: Hub | undefined;
@@ -210,6 +219,64 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('anvil.workflow.openSession', async (arg: unknown) => {
       const agentId = workflowAgentId(arg);
       if (agentId) await hub.openSession(agentId);
+    }),
+
+    vscode.commands.registerCommand('anvil.worktree.prepare', async (arg: unknown) => {
+      const node = workflowItemNode(arg);
+      if (!node || node.item.approval !== 'approved') return;
+      const root = configuredWorktreeRoot();
+      if (!root) return;
+      try {
+        await hub.prepareWorktree({
+          agent_id: node.agentId,
+          artifact_id: node.artifact.artifact_id,
+          work_item_id: node.item.id,
+          attempt: node.item.execution_ids.length + 1,
+          worktree_root: root,
+        });
+        await workflowTree.refreshAgent(node.agentId);
+      } catch (err) {
+        void vscode.window.showErrorMessage(`Anvil: could not prepare worktree: ${(err as Error).message}`);
+      }
+    }),
+
+    vscode.commands.registerCommand('anvil.worktree.review', async (arg: unknown) => {
+      const node = workflowWorktreeNode(arg);
+      if (!node) return;
+      const root = configuredWorktreeRoot();
+      if (!root) return;
+      try {
+        const result = await hub.reviewWorktree({
+          agent_id: node.agentId, worker_id: node.worker.id,
+          worktree_root: root, expected_revision: node.worker.revision,
+        });
+        await workflowDocuments.open(
+          node.agentId, `worktree-${node.worker.id}`,
+          `Worktree ${node.worker.worktree_label}`,
+          worktreeReviewMarkdown(node.worker, result.review),
+        );
+        await workflowTree.refreshAgent(node.agentId);
+      } catch (err) {
+        void vscode.window.showErrorMessage(`Anvil: worktree review failed: ${(err as Error).message}`);
+      }
+    }),
+
+    vscode.commands.registerCommand('anvil.worktree.integrate', async (arg: unknown) => {
+      const node = workflowWorktreeNode(arg);
+      if (!node) return;
+      await integrateReviewedWorktree(hub, workflowTree, workflowDocuments, node);
+    }),
+
+    vscode.commands.registerCommand('anvil.worktree.discard', async (arg: unknown) => {
+      const node = workflowWorktreeNode(arg);
+      if (!node) return;
+      await discardReviewedWorktree(hub, workflowTree, workflowDocuments, node);
+    }),
+
+    vscode.commands.registerCommand('anvil.worktree.cleanup', async (arg: unknown) => {
+      const node = workflowWorktreeNode(arg);
+      if (!node) return;
+      await cleanupReviewedWorktree(hub, workflowTree, node);
     }),
 
     // The MCP manager: every server of both layers with what it is doing, and the
@@ -791,11 +858,174 @@ async function decideWorkflowSelection(
   }
 }
 
+function configuredWorktreeRoot(): string | undefined {
+  const root = readSettings().worktreeRoot;
+  if (root) return root;
+  void vscode.window.showWarningMessage(
+    'Set anvil.worktreeRoot to review and manage isolated worktrees.',
+    'Open Settings',
+  ).then((choice) => {
+    if (choice === 'Open Settings') {
+      void vscode.commands.executeCommand('workbench.action.openSettings', 'anvil.worktreeRoot');
+    }
+  });
+  return undefined;
+}
+
+async function integrateReviewedWorktree(
+  hub: Hub,
+  tree: WorkflowTreeProvider,
+  documents: WorkflowDocuments,
+  node: WorkflowWorktreeNode,
+): Promise<void> {
+  const root = configuredWorktreeRoot();
+  if (!root) return;
+  try {
+    const preflight = await hub.reviewWorktree({
+      agent_id: node.agentId, worker_id: node.worker.id,
+      worktree_root: root, expected_revision: node.worker.revision,
+    });
+    await documents.open(
+      node.agentId, `worktree-${node.worker.id}`,
+      `Worktree ${node.worker.worktree_label}`,
+      worktreeReviewMarkdown(node.worker, preflight.review),
+    );
+    if (!preflight.review.integrable) {
+      await tree.refreshAgent(node.agentId);
+      void vscode.window.showWarningMessage(
+        `Integration is blocked: ${preflight.review.refusal_reasons.join('; ')}`,
+      );
+      return;
+    }
+    const strategy = await vscode.window.showQuickPick(
+      preflight.review.allowed_strategies.map((value) => ({
+        label: strategyLabel(value), value,
+      })),
+      { placeHolder: 'Choose the reviewed integration strategy' },
+    );
+    if (!strategy) {
+      await tree.refreshAgent(node.agentId);
+      return;
+    }
+    const confirmation = await vscode.window.showWarningMessage(
+      `Integrate ${preflight.review.changed_paths.length} reviewed path(s) from `
+        + `${node.worker.worktree_label} using ${strategy.label}?`,
+      { modal: true, detail: `Base ${preflight.review.current_base}\nHead ${preflight.review.head_commit}\nDigest ${preflight.review.patch_digest}` },
+      'Integrate Reviewed Changes',
+    );
+    if (confirmation !== 'Integrate Reviewed Changes') {
+      await tree.refreshAgent(node.agentId);
+      return;
+    }
+    await hub.integrateWorktree(
+      worktreeIntegrationParams(root, node.worker, preflight.review, strategy.value),
+    );
+    await tree.refreshAgent(node.agentId);
+    void vscode.window.showInformationMessage('Anvil: reviewed worktree changes integrated.');
+  } catch (err) {
+    await tree.refreshAgent(node.agentId);
+    void vscode.window.showErrorMessage(`Anvil: integration failed safely: ${(err as Error).message}`);
+  }
+}
+
+async function discardReviewedWorktree(
+  hub: Hub,
+  tree: WorkflowTreeProvider,
+  documents: WorkflowDocuments,
+  node: WorkflowWorktreeNode,
+): Promise<void> {
+  const root = configuredWorktreeRoot();
+  if (!root) return;
+  try {
+    const preflight = await hub.reviewWorktree({
+      agent_id: node.agentId, worker_id: node.worker.id,
+      worktree_root: root, expected_revision: node.worker.revision,
+    });
+    await documents.open(
+      node.agentId, `worktree-${node.worker.id}`,
+      `Discard ${node.worker.worktree_label}`,
+      worktreeReviewMarkdown(node.worker, preflight.review),
+    );
+    const confirmation = await vscode.window.showWarningMessage(
+      `Discard the reviewed changes in ${node.worker.worktree_label}?`,
+      {
+        modal: true,
+        detail: `${preflight.review.changed_paths.length} committed path(s), `
+          + `${preflight.review.dirty_tracked.length} dirty path(s), `
+          + `${preflight.review.untracked.length + preflight.review.ignored.length} untracked/ignored path(s).\n`
+          + `Digest ${preflight.review.patch_digest}`,
+      },
+      'Discard Reviewed Changes',
+    );
+    if (confirmation !== 'Discard Reviewed Changes') {
+      await tree.refreshAgent(node.agentId);
+      return;
+    }
+    await hub.discardWorktree(
+      worktreeDiscardParams(root, node.worker, preflight.review),
+    );
+    await tree.refreshAgent(node.agentId);
+    void vscode.window.showInformationMessage(
+      'Anvil: worktree marked discarded. Cleanup remains a separate confirmed action.',
+    );
+  } catch (err) {
+    await tree.refreshAgent(node.agentId);
+    void vscode.window.showErrorMessage(`Anvil: discard failed safely: ${(err as Error).message}`);
+  }
+}
+
+async function cleanupReviewedWorktree(
+  hub: Hub,
+  tree: WorkflowTreeProvider,
+  node: WorkflowWorktreeNode,
+): Promise<void> {
+  const root = configuredWorktreeRoot();
+  if (!root) return;
+  const confirmation = await vscode.window.showWarningMessage(
+    `Remove the proven-owned worktree ${node.worker.worktree_label}?`,
+    {
+      modal: true,
+      detail: node.worker.state === 'discarded'
+        ? 'Only content bound to the displayed discard review will be removed.'
+        : 'The worktree must be clean. Ambiguous content will be retained with a blocked error.',
+    },
+    'Remove Worktree',
+  );
+  if (confirmation !== 'Remove Worktree') return;
+  try {
+    await hub.cleanupWorktree(worktreeCleanupParams(root, node.worker));
+    await tree.refreshAgent(node.agentId);
+    void vscode.window.showInformationMessage('Anvil: owned worktree cleanup completed.');
+  } catch (err) {
+    await tree.refreshAgent(node.agentId);
+    void vscode.window.showErrorMessage(
+      `Anvil: cleanup blocked; worktree and branch were retained: ${(err as Error).message}`,
+    );
+  }
+}
+
 function workflowArtifactNode(arg: unknown): WorkflowArtifactNode | undefined {
   if (!arg || typeof arg !== 'object') return undefined;
   const node = arg as Partial<WorkflowArtifactNode>;
   return node.kind === 'artifact' && typeof node.agentId === 'string' && node.artifact
     ? node as WorkflowArtifactNode
+    : undefined;
+}
+
+function workflowItemNode(arg: unknown): WorkflowItemNode | undefined {
+  if (!arg || typeof arg !== 'object') return undefined;
+  const node = arg as Partial<WorkflowItemNode>;
+  return node.kind === 'item' && typeof node.agentId === 'string' &&
+    typeof node.item?.id === 'string' && node.artifact
+    ? node as WorkflowItemNode
+    : undefined;
+}
+
+function workflowWorktreeNode(arg: unknown): WorkflowWorktreeNode | undefined {
+  const node = arg as Partial<WorkflowWorktreeNode>;
+  return node?.kind === 'worktree' && typeof node.agentId === 'string' &&
+    typeof node.worker?.id === 'string'
+    ? node as WorkflowWorktreeNode
     : undefined;
 }
 

@@ -179,33 +179,37 @@ func projectEvent(sessionID, runID string, ev anvil.Event) (EventParams, bool) {
 		items = &list
 	}
 	out := EventParams{
-		SessionID:      sessionID,
-		RunID:          runID,
-		Seq:            ev.Seq,
-		Type:           string(ev.Type),
-		Text:           ev.Text,
-		ToolCallID:     ev.ToolCallID,
-		Name:           ev.Name,
-		Args:           ev.Args,
-		Content:        ev.Content,
-		IsError:        ev.IsError,
-		Step:           ev.Step,
-		MaxSteps:       ev.MaxSteps,
-		Code:           string(ev.Code),
-		Attempt:        ev.Attempt,
-		MaxAttempts:    ev.MaxAttempts,
-		DelayMS:        ev.Delay.Milliseconds(),
-		Rule:           ruleInfo(ev.Rule),
-		Protected:      ev.Protected,
-		PathAnalysis:   ev.PathAnalysis,
-		PathProblem:    ev.PathProblem,
-		Usage:          usageWire(ev.Usage),
-		UsageEstimated: ev.UsageEstimated,
-		Items:          items,
-		Compact:        compactWire(ev.Compact),
-		ArtifactID:     ev.ArtifactID,
-		WorkItemID:     ev.WorkItemID,
-		ExecutionID:    ev.ExecutionID,
+		SessionID:            sessionID,
+		RunID:                runID,
+		Seq:                  ev.Seq,
+		Type:                 string(ev.Type),
+		Text:                 ev.Text,
+		ToolCallID:           ev.ToolCallID,
+		Name:                 ev.Name,
+		Args:                 ev.Args,
+		Content:              ev.Content,
+		IsError:              ev.IsError,
+		Step:                 ev.Step,
+		MaxSteps:             ev.MaxSteps,
+		Code:                 string(ev.Code),
+		Attempt:              ev.Attempt,
+		MaxAttempts:          ev.MaxAttempts,
+		DelayMS:              ev.Delay.Milliseconds(),
+		Rule:                 ruleInfo(ev.Rule),
+		Protected:            ev.Protected,
+		PathAnalysis:         ev.PathAnalysis,
+		PathProblem:          ev.PathProblem,
+		Usage:                usageWire(ev.Usage),
+		UsageEstimated:       ev.UsageEstimated,
+		Items:                items,
+		Compact:              compactWire(ev.Compact),
+		ArtifactID:           ev.ArtifactID,
+		WorkItemID:           ev.WorkItemID,
+		ExecutionID:          ev.ExecutionID,
+		WorkerID:             ev.WorkerID,
+		WorktreeLabel:        ev.WorktreeLabel,
+		WorkspaceFingerprint: ev.WorkspaceFingerprint,
+		BaseCommit:           ev.BaseCommit,
 	}
 	if ev.Type == anvil.EventTruncated {
 		// Assistant deltas already carried and stored the partial answer. The
@@ -229,6 +233,10 @@ func applyStageEvent(out *EventParams, stage *anvil.StageEvent) {
 	out.Stage = stage.Stage
 	out.Brief = briefWire(stage.Brief)
 	out.Acceptance = acceptanceWire(stage.Acceptance)
+	out.WorkerID = stage.WorkerID
+	out.WorktreeLabel = stage.WorktreeLabel
+	out.WorkspaceFingerprint = stage.WorkspaceFingerprint
+	out.BaseCommit = stage.BaseCommit
 }
 
 func applyStageTranscript(out *TranscriptEntry, stage *anvil.StageEvent) {
@@ -243,6 +251,10 @@ func applyStageTranscript(out *TranscriptEntry, stage *anvil.StageEvent) {
 	out.Stage = stage.Stage
 	out.Brief = briefWire(stage.Brief)
 	out.Acceptance = acceptanceWire(stage.Acceptance)
+	out.WorkerID = stage.WorkerID
+	out.WorktreeLabel = stage.WorktreeLabel
+	out.WorkspaceFingerprint = stage.WorkspaceFingerprint
+	out.BaseCommit = stage.BaseCommit
 }
 
 func briefWire(brief *anvil.BriefView) *BriefInfo {

@@ -83,23 +83,27 @@ func GetRunEvents(ctx context.Context, agentID, runID string, afterSeq uint64, l
 // DurableTaskInfo is a read-only task journal projection. It deliberately has
 // no process handle, PID, cancellation function, environment, or output ring.
 type DurableTaskInfo struct {
-	ID                string
-	Seq               uint64
-	Kind              string
-	Title             string
-	State             string
-	AgentID           string
-	ChildAgentID      string
-	ParentRunID       string
-	ParentToolCallID  string
-	HostID            string
-	LeaseUntil        time.Time
-	Cause             string
-	StartedAt         time.Time
-	EndedAt           time.Time
-	ExitCode          *int
-	OutputFirstOffset int64
-	OutputNextOffset  int64
+	ID                   string
+	Seq                  uint64
+	Kind                 string
+	Title                string
+	State                string
+	AgentID              string
+	ChildAgentID         string
+	ParentRunID          string
+	ParentToolCallID     string
+	HostID               string
+	LeaseUntil           time.Time
+	Cause                string
+	StartedAt            time.Time
+	EndedAt              time.Time
+	ExitCode             *int
+	OutputFirstOffset    int64
+	OutputNextOffset     int64
+	WorkerID             string
+	WorktreeLabel        string
+	WorkspaceFingerprint string
+	BaseCommit           string
 }
 
 // TaskHistory folds durable task records for one owning agent. It never
@@ -160,6 +164,8 @@ func TaskHistory(ctx context.Context, agentID, runID string, opts ListOptions) (
 			HostID: rec.HostID, LeaseUntil: rec.LeaseUntil, Cause: rec.Cause,
 			StartedAt: rec.StartedAt, EndedAt: rec.EndedAt, ExitCode: rec.ExitCode,
 			OutputFirstOffset: rec.OutputFirstOffset, OutputNextOffset: rec.OutputNextOffset,
+			WorkerID: rec.WorkerID, WorktreeLabel: rec.WorktreeLabel,
+			WorkspaceFingerprint: rec.WorkspaceFingerprint, BaseCommit: rec.BaseCommit,
 		})
 	}
 	return out, nil

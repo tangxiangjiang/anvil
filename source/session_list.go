@@ -29,12 +29,19 @@ type AgentInfo struct {
 	// Subagent identity (0.42+). Empty on a top-level session. A listing uses
 	// ParentAgentID to nest a child under the conversation that created it, and
 	// Kind is "subagent" exactly when it is one.
-	ParentAgentID    string
-	ParentRunID      string
-	ParentToolCallID string
-	Depth            int
-	Kind             string
-	TaskTitle        string
+	ParentAgentID        string
+	ParentRunID          string
+	ParentToolCallID     string
+	Depth                int
+	Kind                 string
+	TaskTitle            string
+	WorkerID             string
+	WorktreeLabel        string
+	WorkspaceFingerprint string
+	BaseCommit           string
+	ArtifactID           string
+	WorkItemID           string
+	ExecutionID          string
 }
 
 // ListOptions configures List / Get. Only Local.CWD is required.
@@ -131,12 +138,19 @@ func loadInfo(st store.Backend, agentID string) (AgentInfo, error) {
 		LastRunID:  sum.LastRunID,
 		Runs:       sum.Runs,
 
-		ParentAgentID:    sum.ParentAgentID,
-		ParentRunID:      sum.ParentRunID,
-		ParentToolCallID: sum.ParentToolCallID,
-		Depth:            sum.Depth,
-		Kind:             sum.Kind,
-		TaskTitle:        sum.TaskTitle,
+		ParentAgentID:        sum.ParentAgentID,
+		ParentRunID:          sum.ParentRunID,
+		ParentToolCallID:     sum.ParentToolCallID,
+		Depth:                sum.Depth,
+		Kind:                 sum.Kind,
+		TaskTitle:            sum.TaskTitle,
+		WorkerID:             sum.WorkerID,
+		WorktreeLabel:        sum.WorktreeLabel,
+		WorkspaceFingerprint: sum.WorkspaceFingerprint,
+		BaseCommit:           sum.BaseCommit,
+		ArtifactID:           sum.ArtifactID,
+		WorkItemID:           sum.WorkItemID,
+		ExecutionID:          sum.ExecutionID,
 	}
 	if sum.Usage != nil {
 		info.Usage = &Usage{

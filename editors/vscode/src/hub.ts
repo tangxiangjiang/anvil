@@ -69,6 +69,16 @@ import {
   WorkflowDecideParams,
   WorkflowDecideResult,
   WorkflowGetResult,
+  WorktreeCleanupParams,
+  WorktreeDiscardParams,
+  WorktreeIntegrateParams,
+  WorktreeListParams,
+  WorktreeListResult,
+  WorktreeMutationResult,
+  WorktreePrepareParams,
+  WorktreePrepareResult,
+  WorktreeReviewParams,
+  WorktreeReviewResult,
 } from './protocol';
 import { PreviewDocuments } from './review';
 import { describeProblem, emptyRulesFile, emptyUserRulesFile, problemPosition } from './rulesFile';
@@ -554,6 +564,30 @@ export class Hub {
 
   async decideWorkflow(params: WorkflowDecideParams): Promise<WorkflowDecideResult> {
     return this.manager.decideWorkflow(params);
+  }
+
+  async reviewWorktree(params: WorktreeReviewParams): Promise<WorktreeReviewResult> {
+    return this.manager.reviewWorktree(params);
+  }
+
+  async prepareWorktree(params: WorktreePrepareParams): Promise<WorktreePrepareResult> {
+    return this.manager.prepareWorktree(params);
+  }
+
+  async listWorktrees(params: WorktreeListParams): Promise<WorktreeListResult> {
+    return this.manager.listWorktrees(params);
+  }
+
+  async integrateWorktree(params: WorktreeIntegrateParams): Promise<WorktreeMutationResult> {
+    return this.manager.integrateWorktree(params);
+  }
+
+  async discardWorktree(params: WorktreeDiscardParams): Promise<WorktreeMutationResult> {
+    return this.manager.discardWorktree(params);
+  }
+
+  async cleanupWorktree(params: WorktreeCleanupParams): Promise<WorktreeMutationResult> {
+    return this.manager.cleanupWorktree(params);
   }
 
   /** The stored conversation for one agent, oldest first. */

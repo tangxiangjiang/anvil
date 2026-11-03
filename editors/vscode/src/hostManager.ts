@@ -81,6 +81,16 @@ import {
   WorkflowDecideResult,
   WorkflowGetParams,
   WorkflowGetResult,
+  WorktreeCleanupParams,
+  WorktreeDiscardParams,
+  WorktreeIntegrateParams,
+  WorktreeListParams,
+  WorktreeListResult,
+  WorktreeMutationResult,
+  WorktreePrepareParams,
+  WorktreePrepareResult,
+  WorktreeReviewParams,
+  WorktreeReviewResult,
 } from './protocol';
 import { RunFailure } from './errors';
 import { parseWorkflowArtifact, parseWorkflowGetResult } from './workflowSchema';
@@ -545,6 +555,36 @@ export class HostManager {
       accepted_revision: raw.accepted_revision,
       changed: raw.changed,
     };
+  }
+
+  async reviewWorktree(params: WorktreeReviewParams): Promise<WorktreeReviewResult> {
+    const client = await this.startClient();
+    return client.request<WorktreeReviewResult>(Method.WorktreeReview, params);
+  }
+
+  async prepareWorktree(params: WorktreePrepareParams): Promise<WorktreePrepareResult> {
+    const client = await this.startClient();
+    return client.request<WorktreePrepareResult>(Method.WorktreePrepare, params);
+  }
+
+  async listWorktrees(params: WorktreeListParams): Promise<WorktreeListResult> {
+    const client = await this.startClient();
+    return client.request<WorktreeListResult>(Method.WorktreeList, params);
+  }
+
+  async integrateWorktree(params: WorktreeIntegrateParams): Promise<WorktreeMutationResult> {
+    const client = await this.startClient();
+    return client.request<WorktreeMutationResult>(Method.WorktreeIntegrate, params);
+  }
+
+  async discardWorktree(params: WorktreeDiscardParams): Promise<WorktreeMutationResult> {
+    const client = await this.startClient();
+    return client.request<WorktreeMutationResult>(Method.WorktreeDiscard, params);
+  }
+
+  async cleanupWorktree(params: WorktreeCleanupParams): Promise<WorktreeMutationResult> {
+    const client = await this.startClient();
+    return client.request<WorktreeMutationResult>(Method.WorktreeCleanup, params);
   }
 
   /**

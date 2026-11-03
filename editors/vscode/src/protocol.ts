@@ -113,6 +113,12 @@ export const Method = {
   TaskHistory: 'task.history',
   WorkflowGet: 'workflow.get',
   WorkflowDecide: 'workflow.decide',
+  WorktreePrepare: 'worktree.prepare',
+  WorktreeList: 'worktree.list',
+  WorktreeReview: 'worktree.review',
+  WorktreeIntegrate: 'worktree.integrate',
+  WorktreeDiscard: 'worktree.discard',
+  WorktreeCleanup: 'worktree.cleanup',
   Shutdown: 'shutdown',
   ApprovalResponse: 'approval.response',
 } as const;
@@ -733,6 +739,10 @@ export interface TaskInfo {
   ended_at?: string;
   /** A shell task's exit code; -1 when the process did not exit on its own. */
   exit_code: number;
+  worker_id?: string;
+  worktree_label?: string;
+  workspace_fingerprint?: string;
+  base_commit?: string;
 }
 
 export interface TasksListParams {
@@ -859,6 +869,10 @@ export interface DurableTaskInfo {
   exit_code?: number;
   output_first_offset?: number;
   output_next_offset?: number;
+  worker_id?: string;
+  worktree_label?: string;
+  workspace_fingerprint?: string;
+  base_commit?: string;
 }
 
 export interface TaskHistoryResult {
@@ -947,6 +961,122 @@ export interface WorkflowDecideResult {
   artifact: WorkflowArtifact;
   accepted_revision: number;
   changed: boolean;
+}
+
+export interface WorktreeCommitInfo {
+  hash: string;
+  subject: string;
+}
+
+export interface WorktreeChangedPath {
+  status: string;
+  path: string;
+  old_path?: string;
+}
+
+export interface WorktreeConflict {
+  path: string;
+  kind: string;
+  message?: string;
+}
+
+export interface WorktreeReviewInfo {
+  schema: 1;
+  worker_id: string;
+  manifest_revision: number;
+  base_commit: string;
+  current_base: string;
+  head_commit: string;
+  commits: WorktreeCommitInfo[];
+  changed_paths: WorktreeChangedPath[];
+  diff_stat?: string;
+  patch_digest: string;
+  dirty_tracked: string[];
+  untracked: string[];
+  ignored: string[];
+  conflicts: WorktreeConflict[];
+  allowed_strategies: Array<'fast_forward' | 'merge_no_ff' | 'cherry_pick'>;
+  integrable: boolean;
+  refusal_reasons: string[];
+  interrupted: boolean;
+  reviewed_at: string;
+}
+
+export interface WorktreeWorkerInfo {
+  id: string;
+  agent_id: string;
+  artifact_id: string;
+  work_item_id: string;
+  execution_id: string;
+  revision: number;
+  state: string;
+  worktree_label: string;
+  base_commit: string;
+  head_commit?: string;
+  integration_commit?: string;
+  review?: WorktreeReviewInfo;
+  failure?: string;
+}
+
+export interface WorktreePrepareParams {
+  agent_id: string;
+  artifact_id: string;
+  work_item_id: string;
+  execution_id?: string;
+  attempt: number;
+  base_ref?: string;
+  worktree_root: string;
+  max_workers?: number;
+  store?: string;
+}
+
+export interface WorktreePrepareResult {
+  worker: WorktreeWorkerInfo;
+}
+
+export interface WorktreeReviewParams {
+  agent_id: string;
+  worker_id: string;
+  worktree_root: string;
+  expected_revision: number;
+  store?: string;
+}
+
+export interface WorktreeListParams {
+  agent_id?: string;
+  worktree_root: string;
+  store?: string;
+}
+
+export interface WorktreeListResult {
+  workers: WorktreeWorkerInfo[];
+}
+
+export interface WorktreeIntegrateParams extends WorktreeReviewParams {
+  expected_base: string;
+  expected_head: string;
+  expected_patch_digest: string;
+  strategy: 'fast_forward' | 'merge_no_ff' | 'cherry_pick';
+}
+
+export interface WorktreeDiscardParams extends WorktreeReviewParams {
+  expected_patch_digest: string;
+}
+
+export interface WorktreeCleanupParams extends WorktreeReviewParams {
+  expected_review_digest?: string;
+  retain_branch?: boolean;
+}
+
+export interface WorktreeReviewResult {
+  review: WorktreeReviewInfo;
+}
+
+export interface WorktreeMutationResult {
+  worker: WorktreeWorkerInfo;
+  result_commit?: string;
+  removed_paths?: string[];
+  retained_branch?: boolean;
 }
 
 export interface TaskNotification {
@@ -1042,6 +1172,13 @@ export interface SessionInfo {
   subagent?: boolean;
   /** The description the spawn call gave the task, which is the readable name. */
   task_title?: string;
+  worker_id?: string;
+  worktree_label?: string;
+  workspace_fingerprint?: string;
+  base_commit?: string;
+  artifact_id?: string;
+  work_item_id?: string;
+  execution_id?: string;
 }
 
 // --- session.compact / session.context ---------------------------------------
@@ -1137,6 +1274,10 @@ export interface TranscriptEntry {
   stage?: 'decide' | 'analyze' | 'work';
   brief?: BriefInfo;
   acceptance?: AcceptanceInfo;
+  worker_id?: string;
+  worktree_label?: string;
+  workspace_fingerprint?: string;
+  base_commit?: string;
   /** retry / truncated run signals */
   text?: string;
   attempt?: number;
@@ -1582,6 +1723,11 @@ export interface HostEvent {
   artifact_id?: string;
   work_item_id?: string;
   execution_id?: string;
+  /** Host-verified worktree attribution; absolute local paths are never sent. */
+  worker_id?: string;
+  worktree_label?: string;
+  workspace_fingerprint?: string;
+  base_commit?: string;
   /**
    * The complete task list on a `todo` event (0.40.9). Present as [] when a
    * call cleared it — which is different from the field being absent on every

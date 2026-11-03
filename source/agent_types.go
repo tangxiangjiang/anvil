@@ -111,14 +111,18 @@ type AcceptanceView struct {
 
 // StageEvent is one stable node in Multi or Complex orchestration.
 type StageEvent struct {
-	NodeID       string          `json:"node_id"`
-	ParentNodeID string          `json:"parent_node_id,omitempty"`
-	DependsOn    []string        `json:"depends_on,omitempty"`
-	Role         Role            `json:"agent_role"`
-	Stage        string          `json:"stage"`
-	AgentID      string          `json:"agent_id,omitempty"`
-	Brief        *BriefView      `json:"brief,omitempty"`
-	Acceptance   *AcceptanceView `json:"acceptance,omitempty"`
+	NodeID               string          `json:"node_id"`
+	ParentNodeID         string          `json:"parent_node_id,omitempty"`
+	DependsOn            []string        `json:"depends_on,omitempty"`
+	Role                 Role            `json:"agent_role"`
+	Stage                string          `json:"stage"`
+	AgentID              string          `json:"agent_id,omitempty"`
+	Brief                *BriefView      `json:"brief,omitempty"`
+	Acceptance           *AcceptanceView `json:"acceptance,omitempty"`
+	WorkerID             string          `json:"worker_id,omitempty"`
+	WorktreeLabel        string          `json:"worktree_label,omitempty"`
+	WorkspaceFingerprint string          `json:"workspace_fingerprint,omitempty"`
+	BaseCommit           string          `json:"base_commit,omitempty"`
 }
 
 // Usage holds optional token counts from the provider.
@@ -231,6 +235,12 @@ type Event struct {
 	ArtifactID  string
 	WorkItemID  string
 	ExecutionID string
+	// Worktree identity (0.57+) is stamped by the verified host route. Empty
+	// means this is a same-workspace event; clients never infer it from cwd.
+	WorkerID             string
+	WorktreeLabel        string
+	WorkspaceFingerprint string
+	BaseCommit           string
 	// Items is the model's task list, set on EventTodo (0.40.9) and nil on every
 	// other event. It is the complete list the call wrote, not a change: a
 	// client replaces its checklist, and an empty list means the call cleared it.

@@ -45,12 +45,17 @@ func TestPlanRoundTripEventIdentity(t *testing.T) {
 	event, ok := projectEvent("session-1", "run-1", anvil.Event{
 		Type: anvil.EventTodo, ArtifactID: "artifact-release",
 		WorkItemID: "build", ExecutionID: "run-build",
+		WorkerID: "w-1", WorktreeLabel: "wt-w-1",
+		WorkspaceFingerprint: "fingerprint-1", BaseCommit: "base-1",
 		Items: []anvil.TodoItem{{
 			ID: "todo-build", Text: "build", Status: anvil.TodoPending, WorkItemID: "build",
 		}},
 	})
 	if !ok || event.ArtifactID != "artifact-release" ||
-		event.WorkItemID != "build" || event.ExecutionID != "run-build" {
+		event.WorkItemID != "build" || event.ExecutionID != "run-build" ||
+		event.WorkerID != "w-1" || event.WorktreeLabel != "wt-w-1" ||
+		event.WorkspaceFingerprint != "fingerprint-1" ||
+		event.BaseCommit != "base-1" {
 		t.Fatalf("event=%+v ok=%v", event, ok)
 	}
 	if event.Items == nil || len(*event.Items) != 1 ||
