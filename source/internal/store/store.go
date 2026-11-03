@@ -46,6 +46,7 @@ const (
 	TypeTaskState    = "task_state"    // durable task identity/status projection (0.54+)
 	TypePlanArtifact = "plan_artifact" // versioned structured plan projection (0.55+)
 	TypeWorkState    = "work_state"    // append-only work-item state projection (0.55+)
+	TypeWorktree     = "worktree"      // signed worktree-worker lifecycle projection (0.57+)
 )
 
 // ErrNotFound is returned by Load when the agent has no store file.
@@ -146,6 +147,7 @@ type Record struct {
 	DecisionID  string          `json:"decision_batch_id,omitempty"`
 	Reason      string          `json:"reason,omitempty"`
 	Evidence    json.RawMessage `json:"evidence,omitempty"`
+	Worktree    json.RawMessage `json:"worktree,omitempty"`
 
 	// run_state / task_state. These are deliberately descriptive only: process
 	// handles, PIDs, cancellation functions, environment and output stay in RAM.

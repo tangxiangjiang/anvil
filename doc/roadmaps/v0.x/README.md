@@ -68,7 +68,7 @@ user-visible batch.
 | 0.54 | Durable agent runs | done | [m_0.54_durable_agent_runs.vscode.md](m_0.54_durable_agent_runs.vscode.md) | [54](../../design/v0.x/54-durable-agent-runs.vscode.md) |
 | 0.55 | Structured plans and workflow control | done | [m_0.55_structured_plans.vscode.md](m_0.55_structured_plans.vscode.md) | [55](../../design/v0.x/55-structured-plans-and-workflow-control.vscode.md) |
 | 0.56 | Session search and history | done | [m_0.56_session_search.vscode.md](m_0.56_session_search.vscode.md) | [56](../../design/v0.x/56-session-search-and-history.vscode.md) |
-| 0.57 | Worktree workers | planned | [m_0.57_worktree_workers.vscode.md](m_0.57_worktree_workers.vscode.md) | [57](../../design/v0.x/57-worktree-workers.vscode.md) |
+| 0.57 | Worktree workers | in_progress | [m_0.57_worktree_workers.vscode.md](m_0.57_worktree_workers.vscode.md) | [57](../../design/v0.x/57-worktree-workers.vscode.md) |
 
 ## Naming
 
