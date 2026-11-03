@@ -31,9 +31,17 @@ import {
   settingsKey,
 } from './settings';
 import { ToolOutputDocuments } from './toolOutput';
+import { HostRpcError } from './hostClient';
+import { WorkflowDocuments } from './workflowDocument';
+import {
+  WorkflowArtifactNode,
+  WorkflowTreeProvider,
+} from './workflowTree';
+import { workflowDecisionParams } from './workflowView';
 
 /** The window's shared half, so `deactivate` can kill the child. */
 let active: Hub | undefined;
+let workflowDecisionPending = false;
 
 export function activate(context: vscode.ExtensionContext): void {
   const output = vscode.window.createOutputChannel('Anvil');
@@ -61,6 +69,9 @@ export function activate(context: vscode.ExtensionContext): void {
   // demand from the result the webview already holds rather than from a file.
   const outputs = new ToolOutputDocuments();
   context.subscriptions.push(outputs);
+
+  const workflowDocuments = new WorkflowDocuments();
+  context.subscriptions.push(workflowDocuments);
 
   const hub = new Hub(context, log, previews, plans, outputs);
   active = hub;
@@ -97,6 +108,18 @@ export function activate(context: vscode.ExtensionContext): void {
     treeDataProvider: tree,
     showCollapseAll: true,
   });
+  const workflowTree = new WorkflowTreeProvider(hub);
+  const workflowView = vscode.window.createTreeView(WorkflowTreeProvider.viewType, {
+    treeDataProvider: workflowTree,
+    showCollapseAll: true,
+    canSelectMany: true,
+  });
+  const workflowChecks = workflowView.onDidChangeCheckboxState((event) => {
+    for (const [node, state] of event.items) {
+      workflowTree.toggle(node, state === vscode.TreeItemCheckboxState.Checked);
+    }
+    void setContext('anvil.workflowSelection', workflowTree.selected() !== undefined);
+  });
   /**
    * The last reading the configuration listener saw. Kept outside the
    * subscription list because it is state, not a disposable; a change is
@@ -107,6 +130,9 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     sessionView,
     tree,
+    workflowView,
+    workflowTree,
+    workflowChecks,
 
     // A new tab, always. This is the command the chat title bar and the
     // "+" affordances point at: two conversations are two tabs.
@@ -125,6 +151,46 @@ export function activate(context: vscode.ExtensionContext): void {
     // conversation, and the same command is the status-bar item's click.
     vscode.commands.registerCommand('anvil.openTasks', () => {
       hub.openTasks();
+    }),
+
+    vscode.commands.registerCommand('anvil.refreshWorkflow', async () => {
+      await workflowTree.refresh();
+      await setContext('anvil.workflowSelection', false);
+    }),
+
+    vscode.commands.registerCommand('anvil.filterWorkflow', async () => {
+      const value = await vscode.window.showInputBox({
+        prompt: 'Filter workflow plans and items',
+        placeHolder: 'Artifact, title, item, or goal',
+      });
+      if (value !== undefined) {
+        workflowTree.setFilter(value);
+        await setContext('anvil.workflowSelection', false);
+      }
+    }),
+
+    vscode.commands.registerCommand('anvil.approveWorkflowSelection', async () => {
+      await decideWorkflowSelection(hub, workflowTree, 'approve');
+    }),
+
+    vscode.commands.registerCommand('anvil.denyWorkflowSelection', async () => {
+      await decideWorkflowSelection(hub, workflowTree, 'deny');
+    }),
+
+    vscode.commands.registerCommand('anvil.workflow.openArtifact', async (arg: unknown) => {
+      const node = workflowArtifactNode(arg);
+      if (!node) return;
+      await workflowDocuments.open(
+        node.agentId,
+        node.artifact.artifact_id,
+        node.artifact.title ?? node.artifact.artifact_id,
+        node.artifact.body ?? '',
+      );
+    }),
+
+    vscode.commands.registerCommand('anvil.workflow.openSession', async (arg: unknown) => {
+      const agentId = workflowAgentId(arg);
+      if (agentId) await hub.openSession(agentId);
     }),
 
     // The MCP manager: every server of both layers with what it is doing, and the
@@ -444,6 +510,8 @@ export function activate(context: vscode.ExtensionContext): void {
 
   void setContext('anvil.busy', false);
   void setContext('anvil.activeBusy', false);
+  void setContext('anvil.workflowSelection', false);
+  void setContext('anvil.workflowDecisionPending', false);
   void setContext('anvil.trusted', vscode.workspace.isTrusted);
 }
 
@@ -453,6 +521,80 @@ export function deactivate(): void {
   const hub = active;
   active = undefined;
   if (hub) void hub.dispose();
+}
+
+async function decideWorkflowSelection(
+  hub: Hub,
+  tree: WorkflowTreeProvider,
+  decision: 'approve' | 'deny',
+): Promise<void> {
+  const selection = tree.selected();
+  if (!selection) {
+    void vscode.window.showInformationMessage('Select one or more pending workflow items first.');
+    return;
+  }
+  if (workflowDecisionPending) {
+    void vscode.window.showInformationMessage('A workflow decision is already in progress.');
+    return;
+  }
+  workflowDecisionPending = true;
+  await setContext('anvil.workflowDecisionPending', true);
+  try {
+    let reason: string | undefined;
+    if (decision === 'deny') {
+      reason = await vscode.window.showInputBox({
+        prompt: 'Why should the selected work be denied?',
+        validateInput: (value) => value.trim() === '' ? 'A denial reason is required.' : undefined,
+      });
+      if (reason === undefined) return;
+    }
+    const names = selection.itemIds.map((id) =>
+      selection.artifact.items.find((item) => item.id === id)?.title ?? id);
+    const verb = decision === 'approve' ? 'Approve' : 'Deny';
+    const answer = await vscode.window.showWarningMessage(
+      `${verb} ${names.length} selected workflow item${names.length === 1 ? '' : 's'}?`,
+      {
+        modal: true,
+        detail: `Artifact ${selection.artifact.artifact_id}, revision ${selection.artifact.revision}\n${names.join('\n')}`,
+      },
+      verb,
+    );
+    if (answer !== verb) return;
+    try {
+      await hub.decideWorkflow(workflowDecisionParams(selection, decision, reason));
+      tree.clearSelection();
+      await setContext('anvil.workflowSelection', false);
+      await tree.refreshAgent(selection.agentId);
+    } catch (err) {
+      if (err instanceof HostRpcError && err.code === -32006) {
+        tree.clearSelection();
+        await setContext('anvil.workflowSelection', false);
+        await tree.refreshAgent(selection.agentId);
+        void vscode.window.showWarningMessage(
+          'The workflow changed before this decision was applied. The view was refreshed; nothing was retried.',
+        );
+        return;
+      }
+      void vscode.window.showErrorMessage(`Anvil: could not ${decision} workflow items: ${(err as Error).message}`);
+    }
+  } finally {
+    workflowDecisionPending = false;
+    await setContext('anvil.workflowDecisionPending', false);
+  }
+}
+
+function workflowArtifactNode(arg: unknown): WorkflowArtifactNode | undefined {
+  if (!arg || typeof arg !== 'object') return undefined;
+  const node = arg as Partial<WorkflowArtifactNode>;
+  return node.kind === 'artifact' && typeof node.agentId === 'string' && node.artifact
+    ? node as WorkflowArtifactNode
+    : undefined;
+}
+
+function workflowAgentId(arg: unknown): string | undefined {
+  if (!arg || typeof arg !== 'object') return undefined;
+  const node = arg as { agentId?: unknown };
+  return typeof node.agentId === 'string' && node.agentId !== '' ? node.agentId : undefined;
 }
 
 /**

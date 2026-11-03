@@ -75,16 +75,29 @@ test('only a finished run whose last block is prose becomes a summary', () => {
   assert.match(mark, /classList\.add\('summary'\)/);
   assert.doesNotMatch(mark, /innerHTML|outerHTML|insertAdjacentHTML|document\.write/);
 
-  // The body is re-rendered from the remainder, so the title is not repeated
-  // under its own header. It is then moved after the reply details so folding
-  // the work cannot hide the conclusion, and the old body rail is recomputed.
-  assert.match(mark, /round\.text = parts\.body/);
-  assert.match(mark, /round\.md = \{ node: round\.body, settled: \[\], offset: 0, rendered: 0 \}/);
-  assert.match(mark, /round\.body\.textContent = ''/);
-  assert.match(mark, /paintMarkdown\(round\.md, round\.text\)/);
+  // Summary is presentation only: it must not rewrite the source, replace the
+  // Markdown projection, or clear/re-render a body that already displayed the
+  // complete answer.
+  assert.doesNotMatch(mark, /round\.text\s*=/);
+  assert.doesNotMatch(mark, /round\.md\s*=/);
+  assert.doesNotMatch(mark, /round\.body\.textContent\s*=/);
+  assert.doesNotMatch(mark, /paintMarkdown|renderBlocks|replaceChild/);
   assert.match(mark, /insertBefore\(round\.wrap, turn\.nextSibling\)/);
   assert.match(mark, /classList\.remove\('rail', 'rail-up', 'rail-down'\)/);
   assert.match(mark, /syncRail\(body\)/);
+});
+
+test('the ordinary renderer creates list items without wrapping them as empty blocks', () => {
+  const build = bodyOf(CHAT_JS, 'buildBlock');
+  assert.match(build, /for \(const item of block\.items \|\| \[\]\) node\.appendChild\(itemNode\(item\)\)/);
+  assert.doesNotMatch(build, /\.map\(itemNode\)/);
+});
+
+test('a queued streaming frame cannot overwrite a completed Summary', () => {
+  const queue = bodyOf(CHAT_JS, 'queuePaint');
+  assert.match(queue, /const target = state\.md/);
+  assert.match(queue, /if \(state\.md !== target\) return/);
+  assert.match(queue, /paintMarkdown\(target, state\.text\)/);
 });
 
 test('the two endings call it by their own status rules', () => {
@@ -103,14 +116,14 @@ test('the two endings call it by their own status rules', () => {
     'the live reply folds after its Summary is moved out',
   );
 
-  // A replay knows the stored status: failed and stopped runs are not
-  // conclusions, and the summary is marked before the run-end line is appended
-  // so it is still the last block the run drew.
+  // A replay knows the stored status: only a clean finish is a conclusion.
+  // The summary is marked before the run-end line is appended so it is still
+  // the last block the run drew.
   const replay = bodyOf(CHAT_JS, 'addRunEnd');
   assert.match(replay, /const round = currentRound\(\)/);
   assert.match(
     replay,
-    /if \(status !== 'error' && status !== 'cancelled'\) markSummary\(round, done && done\.run_id\)/,
+    /if \(status === 'finished'\) markSummary\(round, done && done\.run_id\)/,
   );
   assert.ok(
     replay.indexOf('markSummary(round,') < replay.indexOf('finishReply()')

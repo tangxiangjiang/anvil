@@ -5,6 +5,7 @@ package anvil
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 
 	"github.com/anvil-dev/anvil/internal/runtime"
@@ -17,18 +18,25 @@ type Run struct {
 	done   chan struct{}
 
 	cancelCause context.CancelCauseFunc
+	journal     func(seq uint64, event json.RawMessage) error
 
-	mu     sync.Mutex
-	result *RunResult
-	err    error
+	mu      sync.Mutex
+	result  *RunResult
+	err     error
+	lastSeq uint64
 }
 
-func newRun(id string, cancelCause context.CancelCauseFunc) *Run {
+func newRun(
+	id string,
+	cancelCause context.CancelCauseFunc,
+	journal func(seq uint64, event json.RawMessage) error,
+) *Run {
 	return &Run{
 		id:          id,
 		events:      make(chan Event, 64),
 		done:        make(chan struct{}),
 		cancelCause: cancelCause,
+		journal:     journal,
 	}
 }
 
@@ -89,6 +97,25 @@ func (r *Run) finish(result *RunResult, err error) {
 }
 
 func (r *Run) emit(ev Event) {
+	if r.journal != nil && durableRunEvent(ev.Type) {
+		r.mu.Lock()
+		next := r.lastSeq + 1
+		ev.Seq = next
+		raw, err := json.Marshal(ev)
+		if err == nil {
+			err = r.journal(next, raw)
+			if err == nil {
+				r.lastSeq = next
+			}
+		}
+		r.mu.Unlock()
+		if err != nil {
+			if r.cancelCause != nil {
+				r.cancelCause(err)
+			}
+			return
+		}
+	}
 	select {
 	case r.events <- ev:
 	default:
@@ -96,5 +123,14 @@ func (r *Run) emit(ev Event) {
 		case r.events <- ev:
 		default:
 		}
+	}
+}
+
+func durableRunEvent(eventType EventType) bool {
+	switch eventType {
+	case EventReasoning, EventProgress:
+		return false
+	default:
+		return true
 	}
 }

@@ -583,8 +583,10 @@ func workflowBackground(reg *tools.Registry, parent *Agent, plan *workflowPlan, 
 	}
 	title := workflowTitle(plan.spec.Name)
 	info, err := mgr.StartAgent(tasks.AgentSpec{
-		Title:   title,
-		AgentID: parent.id,
+		Title:            title,
+		AgentID:          parent.id,
+		ParentRunID:      parentRunID,
+		ParentToolCallID: toolCallID,
 		Run: func(taskCtx context.Context) (string, string, error) {
 			block, status := executeWorkflow(taskCtx, parent, plan, parentRunID, toolCallID)
 			return status, block, nil
@@ -930,13 +932,41 @@ func (w *workflowRun) runOrderedFanOut(ctx context.Context, i int, values map[st
 
 // runChild is the same child spawn_agent creates, with the workflow call as its
 // origin and the step's description as its task title.
-func (w *workflowRun) runChild(ctx context.Context, stepIndex, itemIndex int, prompt string) workflowItemOutcome {
+func (w *workflowRun) runChild(ctx context.Context, stepIndex, itemIndex int, prompt string) (out workflowItemOutcome) {
 	step := w.plan.spec.Steps[stepIndex]
 	itemText := prompt
-	out := workflowItemOutcome{index: itemIndex}
+	out = workflowItemOutcome{index: itemIndex}
 	description := workflowTitle(w.plan.spec.Name) + " / " + w.plan.ids[stepIndex]
 	if itemIndex >= 0 {
 		description += " #" + strconv.Itoa(itemIndex)
+	}
+
+	finish, err := w.claimComplexItem(ctx, stepIndex, itemText)
+	if err != nil {
+		out.status = workflowFailed
+		out.errText = err.Error()
+		return out
+	}
+	if finish != nil {
+		defer func() {
+			finish.State = WorkStateFailed
+			finish.Reason = workflowFirstLine(out.errText)
+			switch out.status {
+			case workflowFinished:
+				finish.State = WorkStateCompleted
+				finish.Reason = ""
+				finish.Evidence, _ = json.Marshal(map[string]string{
+					"kind": "worker", "agent_id": out.agentID, "status": "finished",
+				})
+			case workflowCancelled:
+				finish.State = WorkStateCancelled
+			}
+			if _, finishErr := w.parent.FinishPlanExecution(context.Background(), *finish); finishErr != nil {
+				out.status = workflowFailed
+				out.errText = firstNonEmpty(out.errText,
+					"record Worker completion: "+finishErr.Error())
+			}
+		}()
 	}
 
 	if err := w.parent.budget.take(); err != nil {
@@ -1056,6 +1086,13 @@ func (w *workflowRun) runChild(ctx context.Context, stepIndex, itemIndex int, pr
 					w.plan.ids[stepIndex], step.ResultSchema, strings.Join(problems, "\n- "))
 			}
 		}
+		if out.status == workflowFinished && w.isBuiltInComplex() &&
+			w.plan.ids[stepIndex] == "analyze" {
+			if err := w.persistComplexArtifact(callCtx, res.Result); err != nil {
+				out.status = workflowFailed
+				out.errText = "persist the structured plan before Worker starts: " + err.Error()
+			}
+		}
 	case StatusCancelled:
 		out.status = workflowCancelled
 		out.errText = firstNonEmpty(res.Err, "the run stopped")
@@ -1065,6 +1102,70 @@ func (w *workflowRun) runChild(ctx context.Context, stepIndex, itemIndex int, pr
 	}
 	return out
 }
+
+func (w *workflowRun) claimComplexItem(
+	ctx context.Context,
+	stepIndex int,
+	itemText string,
+) (*PlanExecutionFinish, error) {
+	if !w.isBuiltInComplex() || w.plan.ids[stepIndex] != "work" {
+		return nil, nil
+	}
+	var item struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(itemText), &item); err != nil {
+		return nil, fmt.Errorf("read structured work item identity: %w", err)
+	}
+	executionID := "execution:" + w.parentRunID + ":" + item.ID
+	request := PlanExecutionRequest{
+		ArtifactID: complexArtifactID(w.parentRunID), ItemID: item.ID,
+		ExpectedRevision: 1, ExecutionID: executionID,
+	}
+	claimed, err := w.parent.ClaimPlanExecution(ctx, request)
+	if err != nil {
+		return nil, fmt.Errorf("claim structured work item %s: %w", item.ID, err)
+	}
+	if !claimed.Started {
+		return nil, fmt.Errorf("structured work item %s was already dispatched", item.ID)
+	}
+	return &PlanExecutionFinish{
+		ArtifactID: request.ArtifactID, ItemID: item.ID,
+		ExpectedRevision: request.ExpectedRevision, ExecutionID: executionID,
+	}, nil
+}
+
+func (w *workflowRun) isBuiltInComplex() bool {
+	return w.plan.spec.Name == "complex" && strings.HasPrefix(w.toolCallID, "complex-")
+}
+
+func (w *workflowRun) persistComplexArtifact(ctx context.Context, roadmap string) error {
+	var doc struct {
+		Items []roadmapItem `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(roadmap), &doc); err != nil {
+		return err
+	}
+	items := make([]WorkItem, len(doc.Items))
+	for i, item := range doc.Items {
+		items[i] = WorkItem{
+			ID: item.ID, Title: item.ID, Goal: item.Goal,
+			Plan: clonePlanStrings(item.Plan), Files: clonePlanStrings(item.Files),
+			Acceptance: clonePlanStrings(item.Acceptance), DependsOn: clonePlanStrings(item.DependsOn),
+			Approval: WorkApprovalApproved, State: WorkStateProposed,
+			Source: WorkSourceComplex, ExecutionIDs: []string{},
+		}
+	}
+	artifact := PlanArtifact{
+		Schema: PlanSchemaVersion, ArtifactID: complexArtifactID(w.parentRunID),
+		RunID: w.parentRunID, Kind: PlanKindComplex, Revision: 1,
+		Title: "Complex plan", Body: roadmap, Items: items,
+	}
+	recomputePlanReadiness(&artifact)
+	return w.parent.SavePlanArtifact(ctx, artifact)
+}
+
+func complexArtifactID(runID string) string { return "artifact:" + runID }
 
 // complexStageEvent gives the SDK-built workflow stable node identities. A
 // model-written run_workflow may use the same name, so the internal complex

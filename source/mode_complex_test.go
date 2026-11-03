@@ -111,6 +111,20 @@ func TestComplexSend(t *testing.T) {
 	if res.Status != StatusFinished {
 		t.Fatalf("status=%s err=%s result=%s", res.Status, res.Err, res.Result)
 	}
+	projection, err := parent.Workflow(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projection.Artifacts) != 1 || projection.Artifacts[0].Kind != PlanKindComplex ||
+		len(projection.Artifacts[0].Items) != 2 {
+		t.Fatalf("workflow projection=%+v", projection)
+	}
+	for _, item := range projection.Artifacts[0].Items {
+		if item.Approval != WorkApprovalApproved || item.State != WorkStateCompleted ||
+			len(item.ExecutionIDs) != 1 {
+			t.Fatalf("persisted item=%+v", item)
+		}
+	}
 	stages := map[string]*StageEvent{}
 	for ev := range run.Stream(context.Background()) {
 		if ev.Type == EventStage && ev.Stage != nil {

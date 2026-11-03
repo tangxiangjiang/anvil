@@ -27,6 +27,8 @@ export const TasksViewType = 'anvil.tasks';
 export interface TaskRow {
   /** The live session whose root agent owns the table. */
   sessionId: string;
+  /** False for a durable history row with no process handle in this host. */
+  live: boolean;
   task: TaskInfo;
 }
 
@@ -147,6 +149,7 @@ export class TasksPanels implements vscode.Disposable {
       type: 'state',
       rows: rows.map((row) => ({
         sessionId: row.sessionId,
+        live: row.live,
         id: row.task.id,
         kind: row.task.kind,
         title: row.task.title,

@@ -132,7 +132,7 @@ test('every tool call the card gets carries the answer about its review', () => 
   const from = CHAT_PANEL.indexOf('onEvent = (event: HostEvent)');
   assert.ok(from > 0, 'the panel has an onEvent');
   const listener = CHAT_PANEL.slice(from, CHAT_PANEL.indexOf('onApproval = ', from));
-  assert.match(listener, /this\.postEvent\(event, 'snapshot'\)/);
+  assert.match(listener, /this\.enqueueEvent\(event, 'snapshot', true, snapshot\)/);
 
   const body = methodOf(CHAT_PANEL, 'private async postEvent');
   assert.match(body, /reviewOf\(event\.name, event\.args\) !== undefined/);

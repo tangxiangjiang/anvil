@@ -22,6 +22,8 @@ import {
   CheckpointRestoreResult,
   CompactInfo,
   DoneParams,
+  DurableRunInfo,
+  DurableTaskInfo,
   HostEvent,
   McpAddParams,
   McpAuthenticateParams,
@@ -45,6 +47,13 @@ import {
   PermissionsSetParams,
   RuleFileInfo,
   RuleSpec,
+  RunEventsParams,
+  RunEventsResult,
+  RunGetParams,
+  RunGetResult,
+  RunListParams,
+  RunListResult,
+  RunReconcileResult,
   SessionDeleteResult,
   SessionForkResult,
   SessionInfo,
@@ -62,8 +71,15 @@ import {
   TasksListResult,
   TasksOutputParams,
   TasksOutputResult,
+  TaskHistoryParams,
+  TaskHistoryResult,
+  WorkflowDecideParams,
+  WorkflowDecideResult,
+  WorkflowGetParams,
+  WorkflowGetResult,
 } from './protocol';
 import { RunFailure } from './errors';
+import { parseWorkflowArtifact, parseWorkflowGetResult } from './workflowSchema';
 
 /** What the panel needs to hear about. */
 export interface HostListener {
@@ -458,6 +474,56 @@ export class HostManager {
     const params: SessionTranscriptParams = { agent_id: agentId };
     if (limit !== undefined) params.limit = limit;
     return client.request<SessionTranscriptResult>(Method.SessionTranscript, params);
+  }
+
+  async listRuns(agentId: string): Promise<DurableRunInfo[]> {
+    const client = await this.startClient();
+    const params: RunListParams = { agent_id: agentId };
+    const result = await client.request<RunListResult>(Method.RunList, params);
+    return result.runs ?? [];
+  }
+
+  async getRun(agentId: string, runId: string): Promise<DurableRunInfo> {
+    const client = await this.startClient();
+    const params: RunGetParams = { agent_id: agentId, run_id: runId };
+    return (await client.request<RunGetResult>(Method.RunGet, params)).run;
+  }
+
+  async runEvents(agentId: string, runId: string, afterSeq = 0, limit?: number): Promise<RunEventsResult> {
+    const client = await this.startClient();
+    const params: RunEventsParams = { agent_id: agentId, run_id: runId, after_seq: afterSeq };
+    if (limit !== undefined) params.limit = limit;
+    return client.request<RunEventsResult>(Method.RunEvents, params);
+  }
+
+  async reconcileRuns(): Promise<RunReconcileResult> {
+    const client = await this.startClient();
+    return client.request<RunReconcileResult>(Method.RunReconcile, {});
+  }
+
+  async taskHistory(agentId: string, runId?: string): Promise<DurableTaskInfo[]> {
+    const client = await this.startClient();
+    const params: TaskHistoryParams = { agent_id: agentId };
+    if (runId) params.run_id = runId;
+    const result = await client.request<TaskHistoryResult>(Method.TaskHistory, params);
+    return result.tasks ?? [];
+  }
+
+  async workflow(agentId: string, artifactId?: string): Promise<WorkflowGetResult> {
+    const client = await this.startClient();
+    const params: WorkflowGetParams = { agent_id: agentId };
+    if (artifactId) params.artifact_id = artifactId;
+    return parseWorkflowGetResult(await client.request<unknown>(Method.WorkflowGet, params));
+  }
+
+  async decideWorkflow(params: WorkflowDecideParams): Promise<WorkflowDecideResult> {
+    const client = await this.startClient();
+    const raw = await client.request<WorkflowDecideResult>(Method.WorkflowDecide, params);
+    return {
+      artifact: parseWorkflowArtifact(raw.artifact),
+      accepted_revision: raw.accepted_revision,
+      changed: raw.changed,
+    };
   }
 
   /**

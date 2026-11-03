@@ -104,6 +104,13 @@ export const Method = {
   TasksList: 'tasks.list',
   TasksOutput: 'tasks.output',
   TasksCancel: 'tasks.cancel',
+  RunList: 'run.list',
+  RunGet: 'run.get',
+  RunEvents: 'run.events',
+  RunReconcile: 'run.reconcile',
+  TaskHistory: 'task.history',
+  WorkflowGet: 'workflow.get',
+  WorkflowDecide: 'workflow.decide',
   Shutdown: 'shutdown',
   ApprovalResponse: 'approval.response',
 } as const;
@@ -714,7 +721,7 @@ export interface TaskInfo {
   kind: 'shell' | 'agent';
   /** The command for a shell task, the brief's description for an agent. */
   title: string;
-  status: 'running' | 'finished' | 'failed' | 'cancelled';
+  status: 'running' | 'finished' | 'failed' | 'cancelled' | 'interrupted';
   /** The agent whose tool call started the task, not a subagent's own id. */
   agent_id?: string;
   child_agent_id?: string;
@@ -766,6 +773,178 @@ export interface TasksCancelParams {
 
 export interface TasksCancelResult {
   task: TaskInfo;
+}
+
+export interface DurableRunInfo {
+  id: string;
+  status?: string;
+  state?: 'accepted' | 'running' | 'finished' | 'error' | 'cancelled' | 'interrupted';
+  steps?: number;
+  started_at?: string;
+  ended_at?: string;
+  usage?: Usage;
+  error?: string;
+  code?: string;
+  host_id?: string;
+  lease_until?: string;
+  last_seq?: number;
+  cause?: string;
+}
+
+export interface RunListParams {
+  agent_id: string;
+  store?: string;
+}
+
+export interface RunListResult {
+  runs: DurableRunInfo[];
+}
+
+export interface RunGetParams extends RunListParams {
+  run_id: string;
+}
+
+export interface RunGetResult {
+  run: DurableRunInfo;
+}
+
+export interface RunEventsParams extends RunGetParams {
+  after_seq?: number;
+  limit?: number;
+}
+
+export interface RunEventsResult {
+  events: HostEvent[];
+  next_seq: number;
+  terminal: boolean;
+  truncated?: boolean;
+}
+
+export interface RunReconcileParams {
+  store?: string;
+}
+
+export interface RunRef {
+  agent_id: string;
+  run_id: string;
+}
+
+export interface RunReconcileResult {
+  interrupted: RunRef[];
+}
+
+export interface TaskHistoryParams {
+  agent_id: string;
+  run_id?: string;
+  store?: string;
+}
+
+export interface DurableTaskInfo {
+  id: string;
+  seq: number;
+  kind: 'shell' | 'agent';
+  title: string;
+  state: 'running' | 'finished' | 'failed' | 'cancelled' | 'interrupted';
+  agent_id?: string;
+  child_agent_id?: string;
+  parent_run_id?: string;
+  parent_tool_call_id?: string;
+  host_id?: string;
+  lease_until?: string;
+  cause?: string;
+  started_at: string;
+  ended_at?: string;
+  exit_code?: number;
+  output_first_offset?: number;
+  output_next_offset?: number;
+}
+
+export interface TaskHistoryResult {
+  tasks: DurableTaskInfo[];
+}
+
+export type WorkflowApproval = 'pending' | 'approved' | 'denied';
+export type WorkflowItemState =
+  | 'proposed'
+  | 'ready'
+  | 'running'
+  | 'blocked'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
+export type WorkflowItemSource = 'plan' | 'todo' | 'complex';
+
+export interface WorkflowWorkItem {
+  id: string;
+  title: string;
+  goal: string;
+  plan: string[];
+  files: string[];
+  acceptance: string[];
+  depends_on: string[];
+  approval: WorkflowApproval;
+  state: WorkflowItemState;
+  source: WorkflowItemSource;
+  execution_ids: string[];
+  checkpoint_run_id?: string;
+}
+
+export interface WorkflowArtifact {
+  schema: 1;
+  artifact_id: string;
+  run_id: string;
+  kind: 'plan' | 'complex';
+  revision: number;
+  title?: string;
+  body?: string;
+  items: WorkflowWorkItem[];
+}
+
+export interface WorkflowWorkState {
+  artifact_id: string;
+  item_id: string;
+  revision: number;
+  execution_id?: string;
+  state: WorkflowItemState;
+  actor?: string;
+  decision?: 'approve' | 'deny';
+  decision_batch_id?: string;
+  timestamp?: string;
+  reason?: string;
+  evidence?: unknown;
+}
+
+export interface WorkflowGetParams {
+  agent_id: string;
+  artifact_id?: string;
+  store?: string;
+}
+
+export interface WorkflowGetResult {
+  artifacts: WorkflowArtifact[];
+  selected_artifact_id?: string;
+  states: WorkflowWorkState[];
+  last_seq?: number;
+}
+
+export interface WorkflowDecision {
+  item_id: string;
+  decision: 'approve' | 'deny';
+  reason?: string;
+}
+
+export interface WorkflowDecideParams {
+  agent_id: string;
+  artifact_id: string;
+  expected_revision: number;
+  decisions: WorkflowDecision[];
+  store?: string;
+}
+
+export interface WorkflowDecideResult {
+  artifact: WorkflowArtifact;
+  accepted_revision: number;
+  changed: boolean;
 }
 
 export interface TaskNotification {
@@ -900,7 +1079,6 @@ export interface TranscriptEntry {
   stage?: 'decide' | 'analyze' | 'work';
   brief?: BriefInfo;
   acceptance?: AcceptanceInfo;
-
   /** retry / truncated run signals */
   text?: string;
   attempt?: number;
@@ -1284,6 +1462,8 @@ export type EventType =
 export interface HostEvent {
   session_id: string;
   run_id: string;
+  /** Durable per-run sequence; absent on intentionally live-only events. */
+  seq?: number;
   type: EventType;
   /**
    * Which agent the step belongs to. Every event names one: the session's own
@@ -1340,6 +1520,10 @@ export interface HostEvent {
   stage?: 'decide' | 'analyze' | 'work';
   brief?: BriefInfo;
   acceptance?: AcceptanceInfo;
+  /** Explicit structured-workflow identity; never inferred from display text. */
+  artifact_id?: string;
+  work_item_id?: string;
+  execution_id?: string;
   /**
    * The complete task list on a `todo` event (0.40.9). Present as [] when a
    * call cleared it — which is different from the field being absent on every
@@ -1369,12 +1553,14 @@ export interface AcceptanceInfo {
 
 /** One row of the model's plan, as `todo_write` wrote it. */
 export interface TodoItem {
+  id?: string;
   text: string;
   status: 'pending' | 'in_progress' | 'done';
+  work_item_id?: string;
 }
 
 /** Run status values, mirroring `anvil.Status*`. */
-export type RunStatus = 'finished' | 'error' | 'cancelled';
+export type RunStatus = 'finished' | 'error' | 'cancelled' | 'interrupted';
 
 /** The terminal envelope, emitted exactly once per prompt after the last event. */
 export interface DoneParams {

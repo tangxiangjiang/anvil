@@ -1431,9 +1431,9 @@ button.ghost[aria-pressed='true'] {
 
 /*
  * The answer that ends a turn is the turn's summary: the dot that terminates
- * the rail, the word, and the answer's own first line as its title. The body is
- * the rest of the answer — the title line was taken out of it when the block
- * was marked, so it is said once.
+ * the rail, the word, and the answer's own first line as its title. The
+ * completed body remains the live rendering: Summary never rebuilds or removes
+ * content merely to avoid repeating that title.
  */
 .msg.assistant.summary > .who {
   display: flex;

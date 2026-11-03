@@ -68,8 +68,10 @@ type CompactInfo struct {
 
 // TodoItem is one row of the model's plan.
 type TodoItem struct {
-	Text   string
-	Status string
+	ID         string
+	Text       string
+	Status     string
+	WorkItemID string
 }
 
 // Task-list statuses. A todo_write call names one of these for every row.
@@ -183,6 +185,9 @@ type RunResult struct {
 
 // Event is one streamed unit from a Run.
 type Event struct {
+	// Seq is the durable per-run sequence. Zero means the event is intentionally
+	// live-only (for example reasoning or progress).
+	Seq        uint64
 	Type       EventType
 	Text       string
 	ToolCallID string
@@ -221,6 +226,11 @@ type Event struct {
 	// Stage is set only on EventStage. Unlike ordinary streamed progress it is
 	// persisted and therefore has an identical transcript representation.
 	Stage *StageEvent
+	// Structured workflow identity (0.55+). Empty means this event is not
+	// explicitly linked; clients must never infer a link from matching text.
+	ArtifactID  string
+	WorkItemID  string
+	ExecutionID string
 	// Items is the model's task list, set on EventTodo (0.40.9) and nil on every
 	// other event. It is the complete list the call wrote, not a change: a
 	// client replaces its checklist, and an empty list means the call cleared it.

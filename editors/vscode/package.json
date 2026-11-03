@@ -2,7 +2,7 @@
   "name": "anvil-vscode",
   "displayName": "Anvil",
   "description": "Anvil agent in VS Code: streaming chat, tool cards, per-call approvals.",
-  "version": "0.52.7",
+  "version": "0.52.17",
   "publisher": "anvil-dev",
   "author": {
     "name": "Xiangjiang Tang",
@@ -66,6 +66,12 @@
         {
           "id": "anvil.sessions",
           "name": "Sessions",
+          "icon": "media/anvil.svg",
+          "contextualTitle": "Anvil"
+        },
+        {
+          "id": "anvil.workflow",
+          "name": "Workflow",
           "icon": "media/anvil.svg",
           "contextualTitle": "Anvil"
         }
@@ -180,6 +186,40 @@
         "category": "Anvil"
       },
       {
+        "command": "anvil.refreshWorkflow",
+        "title": "Anvil: Refresh Workflow",
+        "category": "Anvil",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "anvil.filterWorkflow",
+        "title": "Anvil: Filter Workflow",
+        "category": "Anvil",
+        "icon": "$(search)"
+      },
+      {
+        "command": "anvil.approveWorkflowSelection",
+        "title": "Anvil: Approve Selected Work",
+        "category": "Anvil",
+        "icon": "$(pass)"
+      },
+      {
+        "command": "anvil.denyWorkflowSelection",
+        "title": "Anvil: Deny Selected Work",
+        "category": "Anvil",
+        "icon": "$(circle-slash)"
+      },
+      {
+        "command": "anvil.workflow.openArtifact",
+        "title": "Anvil: Open Workflow Plan",
+        "category": "Anvil"
+      },
+      {
+        "command": "anvil.workflow.openSession",
+        "title": "Anvil: Open Workflow Session",
+        "category": "Anvil"
+      },
+      {
         "command": "anvil.openMcp",
         "title": "Anvil: Open MCP Servers",
         "category": "Anvil"
@@ -249,6 +289,26 @@
           "command": "anvil.stop",
           "when": "view == anvil.sessions && anvil.busy",
           "group": "navigation@3"
+        },
+        {
+          "command": "anvil.filterWorkflow",
+          "when": "view == anvil.workflow",
+          "group": "navigation@1"
+        },
+        {
+          "command": "anvil.refreshWorkflow",
+          "when": "view == anvil.workflow",
+          "group": "navigation@2"
+        },
+        {
+          "command": "anvil.approveWorkflowSelection",
+          "when": "view == anvil.workflow && anvil.workflowSelection && !anvil.workflowDecisionPending",
+          "group": "navigation@3"
+        },
+        {
+          "command": "anvil.denyWorkflowSelection",
+          "when": "view == anvil.workflow && anvil.workflowSelection && !anvil.workflowDecisionPending",
+          "group": "navigation@4"
         }
       ],
       "view/item/context": [
@@ -276,6 +336,16 @@
           "command": "anvil.deleteSession",
           "when": "view == anvil.sessions && viewItem =~ /^session/",
           "group": "2_dangerous@1"
+        },
+        {
+          "command": "anvil.workflow.openArtifact",
+          "when": "view == anvil.workflow && viewItem == anvilWorkflowArtifact",
+          "group": "navigation@1"
+        },
+        {
+          "command": "anvil.workflow.openSession",
+          "when": "view == anvil.workflow && (viewItem == anvilWorkflowSession || viewItem =~ /^anvilWorkflowItem/)",
+          "group": "navigation@2"
         }
       ],
       "editor/title": [

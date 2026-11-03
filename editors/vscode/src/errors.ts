@@ -12,6 +12,7 @@ import { DoneParams, RunStatus } from './protocol';
 export type FailureKind =
   | 'none'
   | 'cancelled'
+  | 'interrupted'
   | 'max_steps'
   | 'provider'
   | 'auth'
@@ -34,6 +35,7 @@ export interface RunFailure {
 
 const MESSAGES: Record<Exclude<FailureKind, 'none'>, string> = {
   cancelled: 'Stopped.',
+  interrupted: 'Interrupted because the host that owned this run was lost.',
   max_steps: 'The agent hit its step limit before finishing. Raise anvil.maxSteps or ask for a smaller change.',
   provider: 'The model provider rejected the request. Check the API key, the model id, and anvil.baseUrl.',
   auth: 'The model provider refused the credentials. Check the API key and anvil.baseUrl.',
@@ -56,6 +58,9 @@ export function classifyDone(done: DoneParams): RunFailure {
   if (status === 'cancelled') {
     return { kind: 'cancelled', message: MESSAGES.cancelled, isError: false };
   }
+  if (status === 'interrupted') {
+    return { kind: 'interrupted', message: done.err || MESSAGES.interrupted, isError: false };
+  }
 
   const kind = classifyCode(done.code);
   const detail = (done.err || '').trim();
@@ -74,7 +79,7 @@ export function classifyDone(done: DoneParams): RunFailure {
 }
 
 /** Maps an `anvil.Code*` string onto a failure kind. */
-export function classifyCode(code: string | undefined): Exclude<FailureKind, 'none' | 'cancelled'> {
+export function classifyCode(code: string | undefined): Exclude<FailureKind, 'none' | 'cancelled' | 'interrupted'> {
   switch ((code ?? '').toLowerCase()) {
     case 'max_steps':
       return 'max_steps';

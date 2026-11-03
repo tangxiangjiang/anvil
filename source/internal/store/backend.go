@@ -4,6 +4,7 @@
 package store
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -20,6 +21,14 @@ const (
 type Backend interface {
 	Append(agentID string, rec Record) error
 	Load(agentID string) ([]Record, error)
+	// UpdateRecords atomically replaces one agent's record sequence with the
+	// value returned by update. The callback runs while this backend's write
+	// serialization is held. It is the compare-and-swap boundary for mutations
+	// that must inspect current state before appending an audit batch.
+	UpdateRecords(agentID string, update func([]Record) ([]Record, error)) error
+	AppendRunEvent(agentID, runID string, seq uint64, event json.RawMessage) error
+	AppendRunEventLimited(agentID, runID string, seq uint64, event json.RawMessage, limit JournalLimit) error
+	LoadRunEvents(agentID, runID string) ([]JournalEvent, error)
 	ListIDs() ([]string, error)
 	Exists(agentID string) bool
 	// TryLock claims exclusive write ownership of agentID for this process, or

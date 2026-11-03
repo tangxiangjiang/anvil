@@ -54,8 +54,10 @@ func TestRetrySignalLiveAndReplayPreserveResolvedPolicy(t *testing.T) {
 	if live["attempt"] != float64(1) || live["max_attempts"] != float64(3) {
 		t.Fatalf("retry policy fields=%v", live)
 	}
-	if delay, _ := live["delay_ms"].(float64); delay <= 0 {
-		t.Fatalf("retry delay missing: %v", live)
+	// Full jitter deliberately includes zero, in which case omitempty leaves
+	// delay_ms off the wire: that is an immediate retry, not a missing policy.
+	if delay, ok := live["delay_ms"].(float64); ok && delay < 0 {
+		t.Fatalf("retry delay is negative: %v", live)
 	}
 	if text, _ := live["text"].(string); !strings.Contains(text, "temporarily unavailable") {
 		t.Fatalf("safe provider summary missing: %v", live)

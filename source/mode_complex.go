@@ -143,12 +143,13 @@ func complexSteps(reg *tools.Registry, o ComplexOptions, message string) workflo
 // executeComplex runs a Complex Send: the three-stage workflow on this agent, rendered as
 // the run's final message. Its children's events reach Subagents.OnEvent exactly as a
 // run_workflow's do, and the run's own stream carries the stage outcome as a message.
-func (a *Agent) executeComplex(ctx context.Context, cancelCause context.CancelCauseFunc, wall time.Duration, run *Run, message, directive, continuationFrom string) {
+func (a *Agent) executeComplex(ctx context.Context, cancelCause context.CancelCauseFunc, wall time.Duration, run *Run, message, directive string) {
 	defer func() {
 		a.registry.SetRunContext("", "")
 		cancelCause(nil)
 		a.clearRunState(run)
 	}()
+	a.persistRunState(run.id, "running", "")
 	if wall > 0 {
 		var wallCancel context.CancelFunc
 		ctx, wallCancel = context.WithTimeoutCause(ctx, wall, runtime.ErrMaxWallTime)
@@ -158,9 +159,6 @@ func (a *Agent) executeComplex(ctx context.Context, cancelCause context.CancelCa
 	if a.depth == 0 {
 		a.budget.reset()
 	}
-	a.persist(store.Record{
-		Type: store.TypeRunStart, RunID: run.id, ContinueFrom: continuationFrom,
-	})
 	a.registry.SetRunContext(a.id, run.id)
 	a.persistMessageValue(run.id, "user", message)
 
@@ -174,6 +172,7 @@ func (a *Agent) executeComplex(ctx context.Context, cancelCause context.CancelCa
 	if status != StatusFinished {
 		rr.Err = firstNonEmpty(strings.SplitN(text, "\n", 2)[0], "the complex run did not finish")
 	}
+	a.persistRunState(run.id, string(status), "")
 	a.persist(store.Record{Type: store.TypeRunEnd, RunID: run.id, Status: string(status), Steps: rr.Steps})
 	run.emit(Event{Type: EventAssistant, Text: text})
 	run.emit(Event{Type: EventDone, Text: text})

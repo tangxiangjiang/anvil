@@ -90,6 +90,37 @@ func TestTodoWriteEmptyListClears(t *testing.T) {
 	}
 }
 
+func TestTodoWritePreservesExplicitWorkflowIdentity(t *testing.T) {
+	reg := NewRegistry(t.TempDir(), false)
+	res := reg.Execute(context.Background(), TodoToolName, json.RawMessage(
+		`{"artifact_id":"artifact-release","items":[`+
+			`{"id":"todo-build","text":"build","status":"pending","work_item_id":"build"}]}`,
+	))
+	if res.IsError || res.TodoArtifactID != "artifact-release" || len(res.Todos) != 1 {
+		t.Fatalf("result=%+v", res)
+	}
+	if got := res.Todos[0]; got.ID != "todo-build" || got.WorkItemID != "build" {
+		t.Fatalf("todo=%+v", got)
+	}
+}
+
+func TestTodoWriteRejectsAmbiguousWorkflowIdentity(t *testing.T) {
+	reg := NewRegistry(t.TempDir(), false)
+	for _, raw := range []string{
+		`{"items":[{"text":"build","status":"pending","work_item_id":"build"}]}`,
+		`{"artifact_id":"artifact-release","items":[` +
+			`{"id":"same","text":"one","status":"pending"},` +
+			`{"id":"same","text":"two","status":"pending"}]}`,
+		`{"artifact_id":"artifact-release","items":[` +
+			`{"text":"one","status":"pending","work_item_id":"build"},` +
+			`{"text":"two","status":"pending","work_item_id":"build"}]}`,
+	} {
+		if res := reg.Execute(context.Background(), TodoToolName, json.RawMessage(raw)); !res.IsError {
+			t.Fatalf("accepted ambiguous identity: %s", raw)
+		}
+	}
+}
+
 // The checklist changes nothing a permission could protect, so a group that
 // names it must not turn it into an approval prompt. The callback fails the
 // call if it is ever consulted.

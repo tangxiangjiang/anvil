@@ -9,6 +9,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -39,8 +40,8 @@ func TestAuditForceSendWithCancelledContextStillStarts(t *testing.T) {
 	}
 }
 
-// audit #19: persist discards the Append error, so a failed write is reported to
-// no one and Wait returns finished.
+// audit #19: acceptance is durable, so a failed run_start is reported by Send
+// before provider or tool work can begin.
 func TestAuditPersistFailureIsReported(t *testing.T) {
 	a, err := Create(context.Background(), Options{
 		APIKey: "k", Model: Model{ID: "m"}, Local: LocalOptions{CWD: t.TempDir()},
@@ -52,12 +53,8 @@ func TestAuditPersistFailureIsReported(t *testing.T) {
 	a.complete = fixedResponse{resp: &llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Content: "ok"}}}
 	a.store = &failingStore{Backend: a.store}
 	run, err := a.Send(context.Background(), "hi")
-	if err != nil {
-		t.Fatal(err)
-	}
-	res, err := run.Wait(context.Background())
-	if err == nil && res.Status == "finished" {
-		t.Fatal("a failed append was not reported: the run finished with no error")
+	if err == nil || run != nil {
+		t.Fatalf("a failed acceptance append started a run: run=%v err=%v", run, err)
 	}
 }
 
@@ -69,6 +66,56 @@ type failingStore struct {
 
 func (failingStore) Append(string, store.Record) error {
 	return errors.New("disk full")
+}
+
+func TestJournalFailureDoesNotPoisonLaterRun(t *testing.T) {
+	a, err := Create(context.Background(), Options{
+		APIKey: "k", Model: Model{ID: "m"}, Local: LocalOptions{CWD: t.TempDir()},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	a.complete = fixedResponse{resp: &llm.Response{
+		Message: llm.Message{Role: llm.RoleAssistant, Content: "ok"},
+	}}
+	a.store = &failJournalOnce{Backend: a.store}
+
+	first, err := a.Send(context.Background(), "first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.Wait(context.Background()); err == nil {
+		t.Fatal("journal failure was not reported")
+	}
+	second, err := a.Send(context.Background(), "second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := second.Wait(context.Background()); err != nil {
+		t.Fatalf("later healthy run inherited prior journal failure: %v", err)
+	}
+}
+
+type failJournalOnce struct {
+	store.Backend
+	mu     sync.Mutex
+	failed bool
+}
+
+func (s *failJournalOnce) AppendRunEvent(agentID, runID string, seq uint64, event json.RawMessage) error {
+	return s.AppendRunEventLimited(agentID, runID, seq, event, store.JournalLimit{})
+}
+
+func (s *failJournalOnce) AppendRunEventLimited(agentID, runID string, seq uint64, event json.RawMessage, limit store.JournalLimit) error {
+	s.mu.Lock()
+	if !s.failed {
+		s.failed = true
+		s.mu.Unlock()
+		return errors.New("temporary journal failure")
+	}
+	s.mu.Unlock()
+	return s.Backend.AppendRunEventLimited(agentID, runID, seq, event, limit)
 }
 
 // audit #18: Close does not cancel the active run and releases the store lock

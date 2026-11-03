@@ -70,6 +70,9 @@ type Result struct {
 	// successful call named that: an empty slice is a list that was cleared,
 	// which is a different statement from a call that wrote none.
 	Todos []TodoItem
+	// TodoArtifactID explicitly links a v2 checklist to one structured artifact.
+	// Empty preserves the legacy unlinked checklist.
+	TodoArtifactID string
 }
 
 // Tool is an executable tool.
@@ -1324,12 +1327,14 @@ func (t *shellTool) Execute(ctx context.Context, args json.RawMessage) Result {
 			timeout = time.Duration(in.TimeoutSeconds) * time.Second
 		}
 		info, err := mgr.StartShell(tasks.ShellSpec{
-			Title:   in.Command,
-			Command: in.Command,
-			CWD:     t.r.cwd,
-			AgentID: t.r.agentID,
-			Timeout: timeout,
-			Prepare: configureShellCommand,
+			Title:            in.Command,
+			Command:          in.Command,
+			CWD:              t.r.cwd,
+			AgentID:          t.r.agentID,
+			ParentRunID:      t.r.RunID(),
+			ParentToolCallID: CallID(ctx),
+			Timeout:          timeout,
+			Prepare:          configureShellCommand,
 		})
 		if err != nil {
 			return Result{Content: err.Error(), IsError: true}

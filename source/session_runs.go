@@ -13,14 +13,19 @@ import (
 
 // RunInfo is operator-facing metadata for one persisted run (0.10+).
 type RunInfo struct {
-	ID        string
-	Status    string
-	Steps     int
-	StartedAt time.Time
-	EndedAt   time.Time
-	Usage     *Usage
-	Err       string
-	Code      Code
+	ID         string
+	Status     string
+	State      string
+	Steps      int
+	StartedAt  time.Time
+	EndedAt    time.Time
+	Usage      *Usage
+	Err        string
+	Code       Code
+	LastSeq    uint64
+	HostID     string
+	LeaseUntil time.Time
+	Cause      string
 }
 
 // ListRuns returns runs for agentID under opts.Local.CWD (from run_start/run_end records).
@@ -45,7 +50,7 @@ func ListRuns(ctx context.Context, agentID string, opts ListOptions) ([]RunInfo,
 		}
 		return nil, newError("load agent store", false, err)
 	}
-	return runsFromRecords(recs), nil
+	return runsFromRecords(recs)
 }
 
 // GetRun returns one run by id for agentID.
@@ -71,7 +76,11 @@ func (a *Agent) ListRuns(ctx context.Context) ([]RunInfo, error) {
 	return ListRuns(ctx, a.id, ListOptions{Local: a.opts.Local})
 }
 
-func runsFromRecords(recs []store.Record) []RunInfo {
+func runsFromRecords(recs []store.Record) ([]RunInfo, error) {
+	highWater, err := store.JournalHighWater(recs)
+	if err != nil {
+		return nil, newError("validate run journal", false, err)
+	}
 	byID := map[string]*RunInfo{}
 	order := []string{}
 	for _, rec := range recs {
@@ -97,6 +106,9 @@ func runsFromRecords(recs []store.Record) []RunInfo {
 				byID[rec.RunID] = info
 			}
 			info.Status = rec.Status
+			if info.State == "" {
+				info.State = rec.Status
+			}
 			info.Steps = rec.Steps
 			info.EndedAt = rec.Time
 			info.Err = rec.Err
@@ -110,11 +122,42 @@ func runsFromRecords(recs []store.Record) []RunInfo {
 					CacheWriteTokens: rec.Usage.CacheWriteTokens,
 				}
 			}
+		case store.TypeRunEvent:
+			if rec.RunID == "" {
+				continue
+			}
+			info, ok := byID[rec.RunID]
+			if !ok {
+				order = append(order, rec.RunID)
+				info = &RunInfo{ID: rec.RunID}
+				byID[rec.RunID] = info
+			}
+			info.LastSeq = highWater[rec.RunID]
+		case store.TypeRunState:
+			if rec.RunID == "" {
+				continue
+			}
+			info, ok := byID[rec.RunID]
+			if !ok {
+				order = append(order, rec.RunID)
+				info = &RunInfo{ID: rec.RunID}
+				byID[rec.RunID] = info
+			}
+			info.State = rec.RunState
+			if rec.RunState == "interrupted" || info.Status == "" {
+				info.Status = rec.RunState
+			}
+			info.HostID = rec.HostID
+			info.LeaseUntil = rec.LeaseUntil
+			info.Cause = rec.Cause
+			if store.TerminalRunState(rec.RunState) && info.EndedAt.IsZero() {
+				info.EndedAt = rec.Time
+			}
 		}
 	}
 	out := make([]RunInfo, 0, len(order))
 	for _, id := range order {
 		out = append(out, *byID[id])
 	}
-	return out
+	return out, nil
 }

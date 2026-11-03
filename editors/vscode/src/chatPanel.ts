@@ -57,6 +57,7 @@ import {
   ContextInfo,
   Decision,
   DoneParams,
+  DurableRunInfo,
   Effort,
   HostEvent,
   PermissionMode,
@@ -568,6 +569,12 @@ export class ChatPanel implements HostListener {
    * not started yet.
    */
   private agentId: string | undefined;
+  /** Highest durable event sequence rendered for each run in this document. */
+  private readonly eventWatermarks = new Map<string, number>();
+  /** Keeps replay, gap fills, and live delivery in durable sequence order. */
+  private eventDelivery: Promise<void> = Promise.resolve();
+  /** Invalidates asynchronous delivery that belonged to a replaced document. */
+  private eventEpoch = 0;
   /**
    * This tab's session options, until a session exists to carry them.
    *
@@ -921,6 +928,9 @@ export class ChatPanel implements HostListener {
 
   private async onMessage(msg: Inbound): Promise<void> {
     if (msg.type === 'ready') {
+      this.eventEpoch++;
+      this.eventWatermarks.clear();
+      this.eventDelivery = Promise.resolve();
       // Whatever was said before this document started listening, in the order
       // it was said — which for a tab opened by a session click is the reset,
       // the session marker and the state, in that order.
@@ -2099,9 +2109,22 @@ export class ChatPanel implements HostListener {
       return;
     }
 
+    try {
+      await this.hub.reconcileRuns();
+    } catch (err) {
+      this.log(`run reconciliation unavailable: ${(err as Error).message}`);
+    }
+    let durableRuns: DurableRunInfo[] = [];
+    try {
+      durableRuns = (await this.hub.listRuns(agentId)).filter((run) =>
+        run.state === 'accepted' || run.state === 'running' || run.state === 'interrupted');
+    } catch (err) {
+      this.log(`no durable run snapshot for ${agentId}: ${(err as Error).message}`);
+    }
+    const journalRuns = new Set(durableRuns.map((run) => run.id));
     const sessionId = this.session?.id ?? '';
     const steps = replayOf(result.entries ?? [], sessionId);
-    if (steps.length === 0) return;
+    if (steps.length === 0 && durableRuns.length === 0) return;
     // Read once for the whole replay: the rewind menu draws its file action per
     // run, and asking per run would be the same list again and again. A host
     // without the method answers -32601, which is every run offering no
@@ -2120,6 +2143,14 @@ export class ChatPanel implements HostListener {
     this.post({ type: 'replayStart' });
     try {
       for (const step of steps) {
+        const stepRun = step.kind === 'event'
+          ? step.event.run_id
+          : step.kind === 'runEnd'
+            ? step.done.run_id
+            : '';
+        if (stepRun && journalRuns.has(stepRun) && (step.kind === 'event' || step.kind === 'runEnd')) {
+          continue;
+        }
         if (step.kind === 'user') {
           this.post({ type: 'user', text: step.text, continueFrom: step.continueFrom });
         }
@@ -2128,7 +2159,10 @@ export class ChatPanel implements HostListener {
           this.post({ type: 'runEnd', done: step.done });
           const runId = step.done.run_id;
           if (runId) this.post({ type: 'rewindState', runId, files: checkpoints.get(runId) ?? [] });
-        } else await this.postEvent(step.event);
+        } else await this.enqueueEvent(step.event, 'disk', false);
+      }
+      for (const run of durableRuns) {
+        await this.rehydrateRun(agentId, run, sessionId);
       }
       if (this.dropped(result) > 0) {
         this.post({
@@ -2141,6 +2175,41 @@ export class ChatPanel implements HostListener {
       // disk failed: a conversation left muted is worse than one that announces
       // a turn it should have skipped.
       this.post({ type: 'replayEnd' });
+    }
+  }
+
+  private async rehydrateRun(agentId: string, run: DurableRunInfo, sessionId: string): Promise<void> {
+    let after = 0;
+    while (after < (run.last_seq ?? 0)) {
+      const page = await this.hub.runEvents(agentId, run.id, after);
+      if (after === 0 && page.truncated === true) {
+        this.post({
+          type: 'note',
+          text: 'Earlier live run details are outside the durable replay window; the conversation transcript is unchanged.',
+        });
+      }
+      for (const event of page.events ?? []) {
+        event.session_id = sessionId;
+        await this.enqueueEvent(event, 'disk', false);
+      }
+      const next = page.next_seq ?? after;
+      this.eventWatermarks.set(run.id, Math.max(this.eventWatermarks.get(run.id) ?? 0, next));
+      if (next <= after) break;
+      after = next;
+    }
+    if (run.state === 'interrupted') {
+      this.post({
+        type: 'runEnd',
+        done: {
+          session_id: sessionId,
+          run_id: run.id,
+          status: 'interrupted',
+          steps: run.steps,
+          usage: run.usage,
+          err: run.cause,
+          code: run.code,
+        },
+      });
     }
   }
 
@@ -2876,23 +2945,65 @@ export class ChatPanel implements HostListener {
   // --- HostListener ----------------------------------------------------------
 
   onEvent = (event: HostEvent): void => {
-    // The plan this turn is writing is kept as it arrives; a plan-mode answer
-    // must still be readable after a reload, and the transcript throws its runs
-    // away. It is not sent until the turn ends, so a reader is never handed half
-    // a plan dressed as the whole one.
-    this.trackPlanText(event);
     // The tool call is the last moment the file it names still holds its old
     // contents, and it arrives whether or not the call is gated — which is what
     // makes the changed-files list work in accept_edits and bypass too. The
     // read is awaited before the card is drawn, so the line number comes from
     // the file the call found rather than from the file after it wrote.
-    void (async () => {
-      if (event.type === 'tool_call') {
-        await this.changes.snapshotToolCall(event.name, event.args);
-      }
-      await this.postEvent(event, 'snapshot');
-    })();
+    const snapshot = event.type === 'tool_call'
+      ? this.changes.snapshotToolCall(event.name, event.args)
+      : Promise.resolve();
+    this.enqueueEvent(event, 'snapshot', true, snapshot);
   };
+
+  private enqueueEvent(
+    event: HostEvent,
+    source: 'snapshot' | 'disk',
+    fillGap: boolean,
+    before: Promise<unknown> = Promise.resolve(),
+  ): Promise<void> {
+    const epoch = this.eventEpoch;
+    this.eventDelivery = this.eventDelivery
+      .then(async () => {
+        await before;
+        if (epoch !== this.eventEpoch) return;
+        await this.deliverEvent(event, source, fillGap, epoch);
+      })
+      .catch((err: unknown) => {
+        this.log(`event delivery failed: ${(err as Error).message}`);
+      });
+    return this.eventDelivery;
+  }
+
+  private async deliverEvent(
+    event: HostEvent,
+    source: 'snapshot' | 'disk',
+    fillGap: boolean,
+    epoch: number,
+  ): Promise<void> {
+    if (epoch !== this.eventEpoch) return;
+    const seq = typeof event.seq === 'number' && event.seq > 0 ? event.seq : 0;
+    let current = this.eventWatermarks.get(event.run_id) ?? 0;
+    if (seq > 0 && seq <= current) return;
+    while (fillGap && seq > current + 1 && this.agentId) {
+      const page = await this.hub.runEvents(this.agentId, event.run_id, current);
+      if (epoch !== this.eventEpoch) return;
+      for (const missed of page.events ?? []) {
+        await this.deliverEvent(missed, 'disk', false, epoch);
+      }
+      const next = Math.max(this.eventWatermarks.get(event.run_id) ?? 0, page.next_seq ?? 0);
+      if (next <= current) break;
+      current = next;
+      this.eventWatermarks.set(event.run_id, current);
+      if (seq <= current) return;
+    }
+    if (seq > 0) this.eventWatermarks.set(event.run_id, seq);
+    // The plan this turn is writing is kept only once, after sequence
+    // deduplication, so replay/live overlap cannot duplicate its prose.
+    this.trackPlanText(event);
+    if (epoch !== this.eventEpoch) return;
+    await this.postEvent(event, source);
+  }
 
   /**
    * Sends one event to the card, with the one thing the card cannot work out
@@ -2947,15 +3058,22 @@ export class ChatPanel implements HostListener {
   };
 
   onDone = (done: DoneParams, failure: RunFailure): void => {
-    this.post({ type: 'done', done, failure });
-    this.planFinished(done.run_id);
-    void this.reportChanges(done.run_id);
-    void this.reportCheckpoint(done.run_id);
-    // The turn changed the stored record — its run count, its status, its
-    // updated_at — so the sidebar's copy of it is stale from here on.
-    this.hub.notifySessions();
-    this.hub.notifyRunning();
-    void this.dispatchNextTurn();
+    const epoch = this.eventEpoch;
+    // A terminal notification can overtake an asynchronous journal gap fill.
+    // Put it on the same chain so Summary is marked only after every assistant
+    // chunk and tool event that precedes it has reached the document.
+    this.eventDelivery = this.eventDelivery.then(() => {
+      if (epoch !== this.eventEpoch) return;
+      this.post({ type: 'done', done, failure });
+      this.planFinished(done.run_id);
+      void this.reportChanges(done.run_id);
+      void this.reportCheckpoint(done.run_id);
+      // The turn changed the stored record — its run count, its status, its
+      // updated_at — so the sidebar's copy of it is stale from here on.
+      this.hub.notifySessions();
+      this.hub.notifyRunning();
+      void this.dispatchNextTurn();
+    });
   };
 
   onState = (): void => {

@@ -42,10 +42,11 @@ function methodOf(source: string, signature: string): string {
 
 test('a replayed call goes through the one door that decides its review', () => {
   const body = methodOf(CHAT_PANEL, 'private async replay');
-  // Through `postEvent`, which is where `reviewable` is computed for a live
+  // Through the sequenced event queue and then `postEvent`, where `reviewable`
+  // is computed for a live
   // event too: a replay that posted its own tool call would be a card with no
   // way into its change, and the forgetting would be invisible.
-  assert.match(body, /this\.postEvent\(step\.event\)/);
+  assert.match(body, /this\.enqueueEvent\(step\.event, 'disk', false\)/);
   assert.doesNotMatch(body, /type: 'event', event/);
 
   // And never through `onEvent`. That path snapshots the change tracker, which
@@ -65,7 +66,38 @@ test('the replay is best-effort, because an old host is a supported pair', () =>
   assert.doesNotMatch(body, /type: 'notice'/);
   // Nothing to draw means nothing is posted: an empty replay must not cost the
   // user the session marker the resume just put there.
-  assert.match(body, /if \(steps\.length === 0\) return;/);
+  assert.match(body, /if \(steps\.length === 0 && durableRuns\.length === 0\) return;/);
+});
+
+test('durable replay reconciles once and deduplicates replay/live overlap by sequence', () => {
+  const replay = methodOf(CHAT_PANEL, 'private async replay');
+  assert.match(replay, /await this\.hub\.reconcileRuns\(\)/);
+  assert.match(replay, /await this\.hub\.listRuns\(agentId\)/);
+  assert.match(replay, /await this\.rehydrateRun\(agentId, run, sessionId\)/);
+
+  const deliver = methodOf(CHAT_PANEL, 'private async deliverEvent');
+  assert.match(deliver, /seq <= current/);
+  // A burst can overflow more than one journal page. Stopping after the first
+  // page silently jumps the watermark to the live event and drops the middle.
+  assert.match(deliver, /while \(fillGap && seq > current \+ 1/);
+  assert.match(deliver, /this\.hub\.runEvents/);
+  assert.match(deliver, /next <= current/);
+  assert.match(deliver, /this\.eventWatermarks\.set/);
+
+  const ready = CHAT_PANEL.slice(CHAT_PANEL.indexOf("if (msg.type === 'ready')"));
+  assert.match(ready, /this\.eventWatermarks\.clear\(\)/);
+});
+
+test('run completion waits behind assistant event and journal gap delivery', () => {
+  const done = CHAT_PANEL.slice(
+    CHAT_PANEL.indexOf('onDone = (done: DoneParams'),
+    CHAT_PANEL.indexOf('\n  onState =', CHAT_PANEL.indexOf('onDone = (done: DoneParams')),
+  );
+  assert.match(done, /this\.eventDelivery = this\.eventDelivery\.then\(\(\) =>/);
+  const queue = done.indexOf('this.eventDelivery.then');
+  const post = done.indexOf("this.post({ type: 'done'");
+  assert.ok(queue >= 0 && post > queue, 'done is posted from the event delivery queue');
+  assert.match(done, /epoch !== this\.eventEpoch/);
 });
 
 test('the replay lands after the reset and the marker, never before', () => {
@@ -163,6 +195,13 @@ test('a run end settles anything still reading "running"', () => {
   // precisely what is not known, and the button's rule is that a change which
   // did not land is not a change.
   assert.doesNotMatch(sweep, /addReviewButton/);
+});
+
+test('a lost host is rendered as interrupted rather than finished', () => {
+  const end = bodyOf(CHAT_JS, 'addRunEnd');
+  assert.match(end, /status === 'interrupted'/);
+  assert.match(end, /Run interrupted/);
+  assert.match(end, /addNotice\(done\.err\)/);
 });
 
 test('a run says what it cost the same way in both places', () => {

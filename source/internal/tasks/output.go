@@ -68,6 +68,12 @@ func (r *ring) appendText(s string) {
 	_, _ = r.Write([]byte(s))
 }
 
+func (r *ring) offsets() (first, next int64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.first, r.written
+}
+
 func (r *ring) snapshot(offset, limit int) Output {
 	r.mu.Lock()
 	defer r.mu.Unlock()

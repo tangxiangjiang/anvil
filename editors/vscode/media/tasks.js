@@ -138,7 +138,7 @@
         }),
       );
     }
-    if (row.kind === 'shell') {
+    if (row.kind === 'shell' && row.live === true) {
       actions.appendChild(
         action('View output', () => {
           selected = { sessionId: row.sessionId, taskId: row.id, title: row.title };
@@ -147,7 +147,7 @@
         }),
       );
     }
-    if (row.status === 'running') {
+    if (row.status === 'running' && row.live === true) {
       actions.appendChild(
         action('Cancel', (event) => {
           const button = event.currentTarget;

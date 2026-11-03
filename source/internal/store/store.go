@@ -9,34 +9,43 @@
 //	{cwd}/.anvil/agents/agent-<id>.jsonl
 //
 // Each line is one JSON record. Writes are append-only. Reads are crash-safe:
-// a trailing partially written line (no terminating newline / invalid JSON) is
-// ignored rather than failing the whole load.
+// a trailing partially written line with no terminating newline is ignored
+// rather than failing the whole load. Corruption in a complete line fails.
 //
 // Secrets: the API key is never persisted. The meta record stores only the
 // non-secret options snapshot (provider, model, cwd, limits).
 package store
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 )
 
 // Record kinds.
 const (
-	TypeMeta      = "meta"
-	TypeMessage   = "message"
-	TypeSummary   = "summary" // compression marker (0.9+); prior messages are ignored on Resume
-	TypeRunStart  = "run_start"
-	TypeRunEnd    = "run_end"
-	TypeStage     = "stage"     // durable Multi/Complex orchestration node (0.52+)
-	TypeRetry     = "retry"     // provider retry signal for transcript replay (0.53+)
-	TypeTruncated = "truncated" // terminal output-limit marker (0.53+)
+	TypeMeta         = "meta"
+	TypeMessage      = "message"
+	TypeSummary      = "summary" // compression marker (0.9+); prior messages are ignored on Resume
+	TypeRunStart     = "run_start"
+	TypeRunEnd       = "run_end"
+	TypeStage        = "stage"         // durable Multi/Complex orchestration node (0.52+)
+	TypeRetry        = "retry"         // provider retry signal for transcript replay (0.53+)
+	TypeTruncated    = "truncated"     // terminal output-limit marker (0.53+)
+	TypeRunEvent     = "run_event"     // versioned, sequenced durable run event (0.54+)
+	TypeRunGap       = "run_event_gap" // first retained sequence after bounded journal compaction
+	TypeRunState     = "run_state"     // durable ownership/lease projection (0.54+)
+	TypeTaskState    = "task_state"    // durable task identity/status projection (0.54+)
+	TypePlanArtifact = "plan_artifact" // versioned structured plan projection (0.55+)
+	TypeWorkState    = "work_state"    // append-only work-item state projection (0.55+)
 )
 
 // ErrNotFound is returned by Load when the agent has no store file.
@@ -117,11 +126,49 @@ type Record struct {
 	Err          string `json:"err,omitempty"`
 	Code         string `json:"code,omitempty"`
 	Truncated    bool   `json:"truncated,omitempty"`
+
+	// run_event
+	JournalVersion uint32          `json:"journal_version,omitempty"`
+	RunSeq         uint64          `json:"run_seq,omitempty"`
+	Event          json.RawMessage `json:"event,omitempty"`
+
+	// plan_artifact / work_state
+	Schema      int             `json:"schema,omitempty"`
+	ArtifactID  string          `json:"artifact_id,omitempty"`
+	Revision    int             `json:"revision,omitempty"`
+	Body        string          `json:"body,omitempty"`
+	Items       json.RawMessage `json:"items,omitempty"`
+	ItemID      string          `json:"item_id,omitempty"`
+	ExecutionID string          `json:"execution_id,omitempty"`
+	State       string          `json:"state,omitempty"`
+	Actor       string          `json:"actor,omitempty"`
+	Decision    string          `json:"decision,omitempty"`
+	DecisionID  string          `json:"decision_batch_id,omitempty"`
+	Reason      string          `json:"reason,omitempty"`
+	Evidence    json.RawMessage `json:"evidence,omitempty"`
+
+	// run_state / task_state. These are deliberately descriptive only: process
+	// handles, PIDs, cancellation functions, environment and output stay in RAM.
+	RunState          string    `json:"run_state,omitempty"`
+	TaskID            string    `json:"task_id,omitempty"`
+	TaskSeq           uint64    `json:"task_seq,omitempty"`
+	TaskKind          string    `json:"task_kind,omitempty"`
+	TaskState         string    `json:"task_state,omitempty"`
+	ChildAgentID      string    `json:"child_agent_id,omitempty"`
+	HostID            string    `json:"host_id,omitempty"`
+	LeaseUntil        time.Time `json:"lease_until,omitempty"`
+	Cause             string    `json:"cause,omitempty"`
+	StartedAt         time.Time `json:"started_at,omitempty"`
+	EndedAt           time.Time `json:"ended_at,omitempty"`
+	ExitCode          *int      `json:"exit_code,omitempty"`
+	OutputFirstOffset int64     `json:"output_first_offset,omitempty"`
+	OutputNextOffset  int64     `json:"output_next_offset,omitempty"`
 }
 
 // Store is a directory-backed JSONL session store.
 type Store struct {
 	dir string
+	mu  sync.Mutex
 }
 
 // New returns a store rooted at {cwd}/.anvil/agents.
@@ -156,6 +203,44 @@ func (s *Store) Append(agentID string, rec Record) error {
 	if s == nil {
 		return errors.New("nil store")
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.appendUnlocked(agentID, rec)
+}
+
+// UpdateRecords performs one append-only read/validate/commit transaction.
+// Replacing the complete file through rename makes a multi-record decision
+// visible whole after a crash; a partial audit batch is never exposed.
+func (s *Store) UpdateRecords(agentID string, update func([]Record) ([]Record, error)) error {
+	if s == nil {
+		return errors.New("nil store")
+	}
+	if update == nil {
+		return errors.New("record update is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	recs, err := s.loadUnlocked(agentID)
+	if err != nil {
+		return err
+	}
+	next, err := update(append([]Record(nil), recs...))
+	if err != nil {
+		return err
+	}
+	if len(next) < len(recs) || !reflect.DeepEqual(next[:len(recs)], recs) {
+		return errors.New("record update must preserve the existing append-only prefix")
+	}
+	now := time.Now().UTC()
+	for i := len(recs); i < len(next); i++ {
+		if next[i].Time.IsZero() {
+			next[i].Time = now
+		}
+	}
+	return s.replaceUnlocked(agentID, next)
+}
+
+func (s *Store) appendUnlocked(agentID string, rec Record) error {
 	if err := safeID(agentID); err != nil {
 		return err
 	}
@@ -169,7 +254,11 @@ func (s *Store) Append(agentID string, rec Record) error {
 	if err := os.MkdirAll(s.dir, 0o755); err != nil {
 		return fmt.Errorf("create store dir: %w", err)
 	}
-	f, err := os.OpenFile(s.Path(agentID), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	path := s.Path(agentID)
+	if err := recoverPartialTail(path); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return fmt.Errorf("open store file: %w", err)
 	}
@@ -179,6 +268,29 @@ func (s *Store) Append(agentID string, rec Record) error {
 	}
 	if err := f.Sync(); err != nil {
 		return fmt.Errorf("sync record: %w", err)
+	}
+	return nil
+}
+
+// recoverPartialTail removes only bytes after the final newline. Every
+// acknowledged JSONL append includes and syncs that newline, so an
+// unterminated suffix is necessarily an unacknowledged crash tail. Repairing
+// it before the next append prevents valid JSON from being concatenated onto
+// corrupt bytes.
+func recoverPartialTail(path string) error {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect store tail: %w", err)
+	}
+	if len(data) == 0 || data[len(data)-1] == '\n' {
+		return nil
+	}
+	valid := bytes.LastIndexByte(data, '\n') + 1
+	if err := os.Truncate(path, int64(valid)); err != nil {
+		return fmt.Errorf("recover store tail: %w", err)
 	}
 	return nil
 }
@@ -205,12 +317,19 @@ func (s *Store) Delete(agentID string) error {
 	return nil
 }
 
-// Load reads all valid records for agentID in order. A trailing partial or
-// corrupt line is ignored (crash-safe tail). Missing file → ErrNotFound.
+// Load reads all valid records for agentID in order. A trailing unterminated
+// partial write is ignored (crash-safe tail); complete-line and interior
+// corruption fail. Missing file → ErrNotFound.
 func (s *Store) Load(agentID string) ([]Record, error) {
 	if s == nil {
 		return nil, errors.New("nil store")
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.loadUnlocked(agentID)
+}
+
+func (s *Store) loadUnlocked(agentID string) ([]Record, error) {
 	if err := safeID(agentID); err != nil {
 		return nil, err
 	}
@@ -222,6 +341,7 @@ func (s *Store) Load(agentID string) ([]Record, error) {
 		return nil, fmt.Errorf("read store file: %w", err)
 	}
 	var out []Record
+	terminated := len(data) > 0 && data[len(data)-1] == '\n'
 	lines := strings.Split(string(data), "\n")
 	for i, raw := range lines {
 		line := strings.TrimSpace(raw)
@@ -230,9 +350,12 @@ func (s *Store) Load(agentID string) ([]Record, error) {
 		}
 		var rec Record
 		if err := json.Unmarshal([]byte(line), &rec); err != nil {
-			// Treat anything from here on as an unterminated / corrupt tail.
-			_ = i
-			break
+			// A crash may leave only the final, unterminated write partial.
+			// Corruption anywhere else is not a tail and must not be hidden.
+			if i == len(lines)-1 && !terminated {
+				break
+			}
+			return nil, fmt.Errorf("decode record %d: %w", i+1, err)
 		}
 		out = append(out, rec)
 	}

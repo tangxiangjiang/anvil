@@ -4,7 +4,7 @@ Versioned delivery for Anvil through milestone **0.57**. Design cutoff:
 [`doc/design/v0.x/`](../../design/v0.x/). Milestone 0.46 closes the original VS Code polish
 line; 0.47–0.50 develop the Agent SDK, and 0.51–0.57 secure and productize those capabilities
 in VS Code.
-The Agent SDK, shipped VSIX, and Host version are **0.52.7**. Roadmap status remains separate
+The Agent SDK, shipped VSIX, and Host version are **0.52.17**. Roadmap status remains separate
 from release status; the synchronized product version advances once for each delivered
 user-visible batch.
 
@@ -65,8 +65,8 @@ user-visible batch.
 | 0.51 | Protected shell paths | done | [m_0.51_protected_shell_paths.vscode.md](m_0.51_protected_shell_paths.vscode.md) | [51](../../design/v0.x/51-protected-shell-paths.vscode.md) |
 | 0.52 | Agent Mode Bridge | done | [m_0.52_agent_mode_bridge.vscode.md](m_0.52_agent_mode_bridge.vscode.md) | [52](../../design/v0.x/52-agent-mode-bridge.vscode.md) |
 | 0.53 | Model capabilities and run signals | done | [m_0.53_model_capabilities.vscode.md](m_0.53_model_capabilities.vscode.md) | [53](../../design/v0.x/53-model-capabilities-and-run-signals.vscode.md) |
-| 0.54 | Durable agent runs | planned | [m_0.54_durable_agent_runs.vscode.md](m_0.54_durable_agent_runs.vscode.md) | [54](../../design/v0.x/54-durable-agent-runs.vscode.md) |
-| 0.55 | Structured plans and workflow control | planned | [m_0.55_structured_plans.vscode.md](m_0.55_structured_plans.vscode.md) | [55](../../design/v0.x/55-structured-plans-and-workflow-control.vscode.md) |
+| 0.54 | Durable agent runs | done | [m_0.54_durable_agent_runs.vscode.md](m_0.54_durable_agent_runs.vscode.md) | [54](../../design/v0.x/54-durable-agent-runs.vscode.md) |
+| 0.55 | Structured plans and workflow control | done | [m_0.55_structured_plans.vscode.md](m_0.55_structured_plans.vscode.md) | [55](../../design/v0.x/55-structured-plans-and-workflow-control.vscode.md) |
 | 0.56 | Session search and history | planned | [m_0.56_session_search.vscode.md](m_0.56_session_search.vscode.md) | [56](../../design/v0.x/56-session-search-and-history.vscode.md) |
 | 0.57 | Worktree workers | planned | [m_0.57_worktree_workers.vscode.md](m_0.57_worktree_workers.vscode.md) | [57](../../design/v0.x/57-worktree-workers.vscode.md) |
 

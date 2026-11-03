@@ -1693,7 +1693,10 @@
       case 'list': {
         const node = el(block.ordered ? 'ol' : 'ul', 'md-list');
         if (block.ordered && block.from && block.from !== 1) node.start = block.from;
-        renderBlocks(node, (block.items || []).map(itemNode), 0);
+        // itemNode already returns a DOM <li>; renderBlocks accepts parsed
+        // blocks and would wrap those nodes as empty paragraphs on a one-shot
+        // render (notably when Summary redraws a completed answer).
+        for (const item of block.items || []) node.appendChild(itemNode(item));
         return node;
       }
       default: {
@@ -2601,10 +2604,15 @@
   function queuePaint(state) {
     if (state.paintQueued) return;
     state.paintQueued = true;
+    const target = state.md;
     requestAnimationFrame(() => {
       state.paintQueued = false;
+      // Summary replaces the streaming Markdown projection with a completed
+      // document. A frame queued before that replacement belongs to the old
+      // projection and must not redraw over the completed body.
+      if (state.md !== target) return;
       const pinned = atBottom();
-      paintMarkdown(state.md, state.text);
+      paintMarkdown(target, state.text);
       scrollIfPinned(pinned);
     });
   }
@@ -6114,12 +6122,19 @@
     finishStages(done);
     recordUsage(done);
     const status = done && done.status;
-    const word = status === 'error' ? 'Run failed' : status === 'cancelled' ? 'Run stopped' : 'Run finished';
+    const word =
+      status === 'error'
+        ? 'Run failed'
+        : status === 'cancelled'
+          ? 'Run stopped'
+          : status === 'interrupted'
+            ? 'Run interrupted'
+            : 'Run finished';
     // Before the run-end line is appended: the summary has to still be the last
     // block the run drew, and the line is the replay's ending, not its content.
-    if (status !== 'error' && status !== 'cancelled') markSummary(round, done && done.run_id);
+    if (status === 'finished') markSummary(round, done && done.run_id);
     finishReply();
-    if (status === 'error' && done && done.err) addNotice(done.err);
+    if ((status === 'error' || status === 'interrupted') && done && done.err) addNotice(done.err);
     if (done && done.truncated === true) addTruncationNotice(done);
     const line = el('div', 'msg run-end');
     line.appendChild(el('div', 'body', [word].concat(runSummary(done)).join(' · ')));
@@ -6184,9 +6199,9 @@
    * Only a round that is still the last block qualifies: a run that ended on a
    * tool call has no concluding text, and the prose before that call is not one.
    * The header replaces the speaker's name with the end dot, the word and the
-   * answer's first line; the body is re-rendered without that line, so the
-   * title is said once. The Copy action already holds the whole answer, because
-   * `endRound` copied it before this ran.
+   * answer's first line. The rendered body is deliberately left untouched:
+   * rebuilding a completed streaming document can lose list children or race a
+   * queued paint. Repeating the title is preferable to losing any answer text.
    */
   function markSummary(round, runId) {
     if (!round || !round.wrap || !round.body) return false;
@@ -6201,10 +6216,6 @@
     who.appendChild(el('span', 'summary-label', 'Summary'));
     who.appendChild(el('span', 'summary-title', parts.title));
     round.wrap.classList.add('summary');
-    round.text = parts.body;
-    round.md = { node: round.body, settled: [], offset: 0, rendered: 0 };
-    round.body.textContent = '';
-    paintMarkdown(round.md, round.text);
     // The folded face of the turn is the line that now titles its ending, so a
     // column of closed replies reads as the conclusions that closed them. A
     // turn whose run did not conclude keeps an empty hint — no title is

@@ -119,8 +119,15 @@ const (
 	// MethodTasksOutput pages one task's output from a byte offset.
 	MethodTasksOutput = "tasks.output"
 	// MethodTasksCancel stops one running task and answers its final state.
-	MethodTasksCancel = "tasks.cancel"
-	MethodShutdown    = "shutdown"
+	MethodTasksCancel    = "tasks.cancel"
+	MethodRunList        = "run.list"
+	MethodRunGet         = "run.get"
+	MethodRunEvents      = "run.events"
+	MethodRunReconcile   = "run.reconcile"
+	MethodTaskHistory    = "task.history"
+	MethodWorkflowGet    = "workflow.get"
+	MethodWorkflowDecide = "workflow.decide"
+	MethodShutdown       = "shutdown"
 
 	// MethodApprovalResponse answers a pending approval.request. It is the only
 	// client request that resolves a notification the host sent earlier.
@@ -174,6 +181,9 @@ const (
 	// this session's table. A task id belonging to another session lands here
 	// rather than being served.
 	CodeNoTask = -32005
+	// CodeWorkflowConflict reports a stale revision or a decision that differs
+	// from the durable batch already accepted at that revision.
+	CodeWorkflowConflict = -32006
 )
 
 // Request is one inbound JSON-RPC call or notification. A nil ID marks a
@@ -1392,6 +1402,180 @@ type TasksCancelResult struct {
 	Task TaskInfo `json:"task"`
 }
 
+// ---------------------------------------------------------------------------
+// durable run/task journal
+// ---------------------------------------------------------------------------
+
+type RunListParams struct {
+	AgentID string `json:"agent_id"`
+	Store   string `json:"store,omitempty"`
+}
+
+type RunGetParams struct {
+	AgentID string `json:"agent_id"`
+	RunID   string `json:"run_id"`
+	Store   string `json:"store,omitempty"`
+}
+
+type DurableRunInfo struct {
+	ID         string     `json:"id"`
+	Status     string     `json:"status,omitempty"`
+	State      string     `json:"state,omitempty"`
+	Steps      int        `json:"steps,omitempty"`
+	StartedAt  time.Time  `json:"started_at,omitempty"`
+	EndedAt    *time.Time `json:"ended_at,omitempty"`
+	Usage      *Usage     `json:"usage,omitempty"`
+	Error      string     `json:"error,omitempty"`
+	Code       string     `json:"code,omitempty"`
+	HostID     string     `json:"host_id,omitempty"`
+	LeaseUntil *time.Time `json:"lease_until,omitempty"`
+	LastSeq    uint64     `json:"last_seq,omitempty"`
+	Cause      string     `json:"cause,omitempty"`
+}
+
+type RunListResult struct {
+	Runs []DurableRunInfo `json:"runs"`
+}
+
+type RunGetResult struct {
+	Run DurableRunInfo `json:"run"`
+}
+
+type RunEventsParams struct {
+	AgentID  string `json:"agent_id"`
+	RunID    string `json:"run_id"`
+	AfterSeq uint64 `json:"after_seq,omitempty"`
+	Limit    int    `json:"limit,omitempty"`
+	Store    string `json:"store,omitempty"`
+}
+
+type RunEventsResult struct {
+	Events    []EventParams `json:"events"`
+	NextSeq   uint64        `json:"next_seq"`
+	Terminal  bool          `json:"terminal"`
+	Truncated bool          `json:"truncated,omitempty"`
+}
+
+type RunReconcileParams struct {
+	Store string `json:"store,omitempty"`
+}
+
+type RunRef struct {
+	AgentID string `json:"agent_id"`
+	RunID   string `json:"run_id"`
+}
+
+type RunReconcileResult struct {
+	Interrupted []RunRef `json:"interrupted"`
+}
+
+type TaskHistoryParams struct {
+	AgentID string `json:"agent_id"`
+	RunID   string `json:"run_id,omitempty"`
+	Store   string `json:"store,omitempty"`
+}
+
+type DurableTaskInfo struct {
+	ID                string     `json:"id"`
+	Seq               uint64     `json:"seq"`
+	Kind              string     `json:"kind"`
+	Title             string     `json:"title"`
+	State             string     `json:"state"`
+	AgentID           string     `json:"agent_id,omitempty"`
+	ChildAgentID      string     `json:"child_agent_id,omitempty"`
+	ParentRunID       string     `json:"parent_run_id,omitempty"`
+	ParentToolCallID  string     `json:"parent_tool_call_id,omitempty"`
+	HostID            string     `json:"host_id,omitempty"`
+	LeaseUntil        *time.Time `json:"lease_until,omitempty"`
+	Cause             string     `json:"cause,omitempty"`
+	StartedAt         time.Time  `json:"started_at"`
+	EndedAt           *time.Time `json:"ended_at,omitempty"`
+	ExitCode          *int       `json:"exit_code,omitempty"`
+	OutputFirstOffset int64      `json:"output_first_offset,omitempty"`
+	OutputNextOffset  int64      `json:"output_next_offset,omitempty"`
+}
+
+type TaskHistoryResult struct {
+	Tasks []DurableTaskInfo `json:"tasks"`
+}
+
+// ---------------------------------------------------------------------------
+// structured plan schema
+// ---------------------------------------------------------------------------
+
+type WorkflowArtifact struct {
+	Schema     int                `json:"schema"`
+	ArtifactID string             `json:"artifact_id"`
+	RunID      string             `json:"run_id"`
+	Kind       string             `json:"kind"`
+	Revision   int                `json:"revision"`
+	Title      string             `json:"title,omitempty"`
+	Body       string             `json:"body,omitempty"`
+	Items      []WorkflowWorkItem `json:"items"`
+}
+
+type WorkflowWorkItem struct {
+	ID              string   `json:"id"`
+	Title           string   `json:"title"`
+	Goal            string   `json:"goal"`
+	Plan            []string `json:"plan"`
+	Files           []string `json:"files"`
+	Acceptance      []string `json:"acceptance"`
+	DependsOn       []string `json:"depends_on"`
+	Approval        string   `json:"approval"`
+	State           string   `json:"state"`
+	Source          string   `json:"source"`
+	ExecutionIDs    []string `json:"execution_ids"`
+	CheckpointRunID string   `json:"checkpoint_run_id,omitempty"`
+}
+
+type WorkflowWorkState struct {
+	ArtifactID  string          `json:"artifact_id"`
+	ItemID      string          `json:"item_id"`
+	Revision    int             `json:"revision"`
+	ExecutionID string          `json:"execution_id,omitempty"`
+	State       string          `json:"state"`
+	Actor       string          `json:"actor,omitempty"`
+	Decision    string          `json:"decision,omitempty"`
+	DecisionID  string          `json:"decision_batch_id,omitempty"`
+	Timestamp   *time.Time      `json:"timestamp,omitempty"`
+	Reason      string          `json:"reason,omitempty"`
+	Evidence    json.RawMessage `json:"evidence,omitempty"`
+}
+
+type WorkflowGetParams struct {
+	AgentID    string `json:"agent_id"`
+	ArtifactID string `json:"artifact_id,omitempty"`
+	Store      string `json:"store,omitempty"`
+}
+
+type WorkflowGetResult struct {
+	Artifacts          []WorkflowArtifact  `json:"artifacts"`
+	SelectedArtifactID string              `json:"selected_artifact_id,omitempty"`
+	States             []WorkflowWorkState `json:"states"`
+	LastSeq            uint64              `json:"last_seq,omitempty"`
+}
+
+type WorkflowDecision struct {
+	ItemID   string `json:"item_id"`
+	Decision string `json:"decision"`
+	Reason   string `json:"reason,omitempty"`
+}
+
+type WorkflowDecideParams struct {
+	AgentID          string             `json:"agent_id"`
+	ArtifactID       string             `json:"artifact_id"`
+	ExpectedRevision int                `json:"expected_revision"`
+	Decisions        []WorkflowDecision `json:"decisions"`
+	Store            string             `json:"store,omitempty"`
+}
+
+type WorkflowDecideResult struct {
+	Artifact         WorkflowArtifact `json:"artifact"`
+	AcceptedRevision int              `json:"accepted_revision"`
+	Changed          bool             `json:"changed"`
+}
+
 // TaskNotification reports one task changing state. It is additive: a client
 // that does not know the method ignores it, and one that never asks
 // tasks.list still learns nothing it did not ask for.
@@ -1464,6 +1648,7 @@ type SubagentsResult struct {
 type EventParams struct {
 	SessionID  string          `json:"session_id"`
 	RunID      string          `json:"run_id"`
+	Seq        uint64          `json:"seq,omitempty"`
 	Type       string          `json:"type"`
 	Text       string          `json:"text,omitempty"`
 	ToolCallID string          `json:"tool_call_id,omitempty"`
@@ -1503,6 +1688,9 @@ type EventParams struct {
 	Stage        string          `json:"stage,omitempty"`
 	Brief        *BriefInfo      `json:"brief,omitempty"`
 	Acceptance   *AcceptanceInfo `json:"acceptance,omitempty"`
+	ArtifactID   string          `json:"artifact_id,omitempty"`
+	WorkItemID   string          `json:"work_item_id,omitempty"`
+	ExecutionID  string          `json:"execution_id,omitempty"`
 	// Items is the complete task list on a `todo` event (0.40.9). It is a
 	// pointer so that an empty list reaches the client as [] — clearing the
 	// panel — while every other event omits the field entirely.
@@ -1542,8 +1730,10 @@ type AcceptanceItemInfo struct {
 
 // TodoItem is one row of the model's plan.
 type TodoItem struct {
-	Text   string `json:"text"`
-	Status string `json:"status"`
+	ID         string `json:"id,omitempty"`
+	Text       string `json:"text"`
+	Status     string `json:"status"`
+	WorkItemID string `json:"work_item_id,omitempty"`
 }
 
 // CompactInfo is one compaction, live. It is what a client draws as the

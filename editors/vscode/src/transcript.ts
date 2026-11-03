@@ -196,11 +196,15 @@ export function replayOf(entries: TranscriptEntry[], sessionId = ''): ReplayStep
         // the same validation is applied below — so a failed call does not
         // replay as a list that was never accepted.
         if (call.name === 'todo_write') {
-          const items = todoItemsOf(call.args);
-          if (items) {
+          const todo = todoItemsOf(call.args);
+          if (todo) {
             steps.push({
               kind: 'event',
-              event: { session_id: sessionId, run_id: runId, type: 'todo', items },
+              event: {
+                session_id: sessionId, run_id: runId, type: 'todo',
+                items: todo.items,
+                ...(todo.artifactId ? { artifact_id: todo.artifactId } : {}),
+              },
             });
           }
         }
@@ -248,6 +252,7 @@ export function replayOf(entries: TranscriptEntry[], sessionId = ''): ReplayStep
 }
 
 const TODO_STATUSES = new Set(['pending', 'in_progress', 'done']);
+const TODO_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
 /**
  * The task list a stored `todo_write` call carries, or undefined when it could
@@ -258,17 +263,44 @@ const TODO_STATUSES = new Set(['pending', 'in_progress', 'done']);
  * the arguments leniently would let a call the host refused replay as a list
  * the panel never showed live, which is the one thing a replay must not do.
  */
-function todoItemsOf(args: unknown): TodoItem[] | undefined {
+function todoItemsOf(args: unknown): { artifactId?: string; items: TodoItem[] } | undefined {
   if (!args || typeof args !== 'object') return undefined;
-  const rows = (args as { items?: unknown }).items;
+  const input = args as { artifact_id?: unknown; items?: unknown };
+  const artifactId = input.artifact_id;
+  if (artifactId !== undefined && (typeof artifactId !== 'string' || !TODO_ID.test(artifactId))) {
+    return undefined;
+  }
+  const rows = input.items;
   if (!Array.isArray(rows)) return undefined;
   const items: TodoItem[] = [];
+  const ids = new Set<string>();
+  const workItems = new Set<string>();
   for (const row of rows) {
     if (!row || typeof row !== 'object') return undefined;
-    const { text, status } = row as { text?: unknown; status?: unknown };
+    const { id, text, status, work_item_id: workItemId } = row as {
+      id?: unknown;
+      text?: unknown;
+      status?: unknown;
+      work_item_id?: unknown;
+    };
     if (typeof text !== 'string' || text.trim() === '') return undefined;
     if (typeof status !== 'string' || !TODO_STATUSES.has(status)) return undefined;
-    items.push({ text: text.trim(), status: status as TodoItem['status'] });
+    if (id !== undefined && (typeof id !== 'string' || !TODO_ID.test(id) || ids.has(id))) return undefined;
+    if (workItemId !== undefined) {
+      if (typeof artifactId !== 'string' || typeof workItemId !== 'string' ||
+        !TODO_ID.test(workItemId) || workItems.has(workItemId)) return undefined;
+    }
+    if (typeof id === 'string') ids.add(id);
+    if (typeof workItemId === 'string') workItems.add(workItemId);
+    items.push({
+      ...(typeof id === 'string' ? { id } : {}),
+      text: text.trim(),
+      status: status as TodoItem['status'],
+      ...(typeof workItemId === 'string' ? { work_item_id: workItemId } : {}),
+    });
   }
-  return items;
+  return {
+    ...(typeof artifactId === 'string' ? { artifactId } : {}),
+    items,
+  };
 }

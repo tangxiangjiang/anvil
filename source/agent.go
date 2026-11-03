@@ -39,10 +39,14 @@ import (
 
 // Agent is a durable local agent handle bound to a working directory.
 type Agent struct {
-	id     string
-	opts   Options
-	cwd    string
-	closed bool
+	id            string
+	hostID        string
+	leaseDuration time.Duration
+	leaseStop     chan struct{}
+	leaseDone     chan struct{}
+	opts          Options
+	cwd           string
+	closed        bool
 
 	// depth is 0 for the session's own agent and grows with each spawn; the
 	// budget is shared by every agent in one root run's tree (0.42+).
@@ -55,8 +59,8 @@ type Agent struct {
 	store store.Backend
 	// lock is the exclusive claim on this agent id. Two live handles on one id
 	// interleave their runs into a single transcript, which is what strands a
-	// tool_call without its result. Nil when the backend does not lock (a
-	// caller-supplied store) or when the handle never took one (Create).
+	// tool_call without its result. Nil only when a caller-supplied backend
+	// implements locking as a no-op.
 	lock *store.SessionLock
 
 	mu sync.Mutex
@@ -87,6 +91,10 @@ type Agent struct {
 	promptSpec prompt.Spec
 	hookFile   *hooks.File
 }
+
+var processHostID = "host-" + id.New()
+
+const defaultRunLeaseDuration = 5 * time.Minute
 
 // Create validates options and returns a new local agent (no LLM call).
 func Create(ctx context.Context, opts Options) (*Agent, error) {
@@ -140,6 +148,12 @@ func createAgent(ctx context.Context, opts Options, ident subagentIdentity) (*Ag
 		cleanupRegistry(sessions, plugMgr, lspSup)
 		return nil, newError("open store", false, err)
 	}
+	lock, err := st.TryLock(agentID)
+	if err != nil {
+		_ = st.Close()
+		cleanupRegistry(sessions, plugMgr, lspSup)
+		return nil, newError("lock agent store", false, err)
+	}
 	// An agent's history is trimmed when it opens, so the bound is honoured even
 	// by embedders that never list checkpoints.
 	pruneCheckpoints(cwd, agentID, opts.Checkpoints)
@@ -168,6 +182,7 @@ func createAgent(ctx context.Context, opts Options, ident subagentIdentity) (*Ag
 		meta.Kind = "subagent"
 	}
 	if err := st.Append(agentID, meta); err != nil {
+		_ = lock.Release()
 		_ = st.Close()
 		cleanupRegistry(sessions, plugMgr, lspSup)
 		return nil, newError("persist agent meta", false, err)
@@ -178,31 +193,39 @@ func createAgent(ctx context.Context, opts Options, ident subagentIdentity) (*Ag
 		// not stay behind as a meta-only entry that lists as a session with no runs
 		// (audit #23), so the file is removed with the failed create.
 		_ = st.Delete(agentID)
+		_ = lock.Release()
 		_ = st.Close()
 		cleanupRegistry(sessions, plugMgr, lspSup)
 		return nil, newError("load project rules", false, err)
 	}
 	mcpTools, mcpVersion := runtimeMCPState(opts)
-	return &Agent{
-		id:           agentID,
-		opts:         opts,
-		cwd:          cwd,
-		depth:        opts.depth,
-		budget:       opts.budget,
-		taskMgr:      opts.taskMgr,
-		store:        st,
-		complete:     completer,
-		registry:     reg,
-		mcp:          sessions,
-		mcpTools:     mcpTools,
-		mcpVersion:   mcpVersion,
-		plugins:      plugMgr,
-		lsp:          lspSup,
-		history:      nil,
-		systemPrompt: prompt.Compose(spec),
-		promptSpec:   spec,
-		hookFile:     hookFile,
-	}, nil
+	a := &Agent{
+		id:            agentID,
+		hostID:        opts.HostID,
+		leaseDuration: opts.LeaseDuration,
+		opts:          opts,
+		cwd:           cwd,
+		depth:         opts.depth,
+		budget:        opts.budget,
+		taskMgr:       opts.taskMgr,
+		store:         st,
+		lock:          lock,
+		complete:      completer,
+		registry:      reg,
+		mcp:           sessions,
+		mcpTools:      mcpTools,
+		mcpVersion:    mcpVersion,
+		plugins:       plugMgr,
+		lsp:           lspSup,
+		history:       nil,
+		systemPrompt:  prompt.Compose(spec),
+		promptSpec:    spec,
+		hookFile:      hookFile,
+	}
+	if a.configureTaskPersistence() {
+		a.startOwnershipRenewal()
+	}
+	return a, nil
 }
 
 // Prompt creates an agent, sends one message, waits, and closes.
@@ -286,6 +309,12 @@ func Resume(ctx context.Context, agentID string, opts Options) (*Agent, error) {
 		}
 		return nil, newError("lock agent store", false, err)
 	}
+	if err := store.ReconcileLostHost(st, agentID, opts.HostID, time.Now().UTC()); err != nil {
+		_ = lock.Release()
+		_ = st.Close()
+		cleanupRegistry(sessions, plugMgr, lspSup)
+		return nil, newError("reconcile interrupted work", false, err)
+	}
 	spec, err := buildPromptSpec(cwd, opts)
 	if err != nil {
 		_ = lock.Release()
@@ -295,27 +324,33 @@ func Resume(ctx context.Context, agentID string, opts Options) (*Agent, error) {
 	}
 	pruneCheckpoints(cwd, agentID, opts.Checkpoints)
 	mcpTools, mcpVersion := runtimeMCPState(opts)
-	return &Agent{
-		id:           agentID,
-		opts:         opts,
-		cwd:          cwd,
-		depth:        opts.depth,
-		budget:       opts.budget,
-		taskMgr:      opts.taskMgr,
-		store:        st,
-		lock:         lock,
-		complete:     completer,
-		registry:     reg,
-		mcp:          sessions,
-		mcpTools:     mcpTools,
-		mcpVersion:   mcpVersion,
-		plugins:      plugMgr,
-		lsp:          lspSup,
-		history:      historyFromRecords(records),
-		systemPrompt: prompt.Compose(spec),
-		promptSpec:   spec,
-		hookFile:     hookFile,
-	}, nil
+	a := &Agent{
+		id:            agentID,
+		hostID:        opts.HostID,
+		leaseDuration: opts.LeaseDuration,
+		opts:          opts,
+		cwd:           cwd,
+		depth:         opts.depth,
+		budget:        opts.budget,
+		taskMgr:       opts.taskMgr,
+		store:         st,
+		lock:          lock,
+		complete:      completer,
+		registry:      reg,
+		mcp:           sessions,
+		mcpTools:      mcpTools,
+		mcpVersion:    mcpVersion,
+		plugins:       plugMgr,
+		lsp:           lspSup,
+		history:       historyFromRecords(records),
+		systemPrompt:  prompt.Compose(spec),
+		promptSpec:    spec,
+		hookFile:      hookFile,
+	}
+	if a.configureTaskPersistence() {
+		a.startOwnershipRenewal()
+	}
+	return a, nil
 }
 
 // buildSystemPrompt composes the agent's system prompt. It is the one place a prompt
@@ -1135,6 +1170,9 @@ func (a *Agent) Send(ctx context.Context, message string, opts ...SendOption) (*
 		}
 	}
 	a.running = true
+	// Persistence failures belong to one run. A later run that reaches a
+	// healthy backend must not inherit an earlier turn's failure.
+	a.persistErr = nil
 	historyCopy := append([]llm.Message(nil), a.history...)
 	// A provider's tool-loop state belongs to the run that produced it. A resumed session has
 	// none (the store keeps none), so a live one starts each run without it too, and the two
@@ -1144,15 +1182,64 @@ func (a *Agent) Send(ctx context.Context, message string, opts ...SendOption) (*
 	}
 	wall := a.opts.MaxWallTime
 	runCtx, cancelCause := context.WithCancelCause(ctx)
-	run := newRun("run-"+id.New(), cancelCause)
+	runID := "run-" + id.New()
+	var journal func(uint64, json.RawMessage) error
+	st, agentID := a.store, a.id
+	if st != nil {
+		maxEvents := a.opts.Local.RunJournalMaxEvents
+		if maxEvents == 0 {
+			maxEvents = DefaultRunJournalMaxEvents
+		} else if maxEvents < 0 {
+			maxEvents = 0
+		}
+		maxBytes := a.opts.Local.RunJournalMaxBytes
+		if maxBytes == 0 {
+			maxBytes = DefaultRunJournalMaxBytes
+		} else if maxBytes < 0 {
+			maxBytes = 0
+		}
+		limit := store.JournalLimit{MaxEvents: maxEvents, MaxBytes: maxBytes}
+		journal = func(seq uint64, event json.RawMessage) error {
+			err := st.AppendRunEventLimited(agentID, runID, seq, event, limit)
+			if err != nil {
+				a.recordPersistError(err)
+			}
+			return err
+		}
+	}
+	run := newRun(runID, cancelCause, journal)
 	a.activeRun = run
 	a.mu.Unlock()
 
+	// Acceptance is the first durable boundary. No provider call or tool may
+	// start until run_start has reached the selected backend.
+	if st != nil {
+		if err := st.Append(agentID, store.Record{
+			Type: store.TypeRunStart, RunID: runID, ContinueFrom: cfg.ContinuationFrom,
+		}); err != nil {
+			a.clearRunState(run)
+			cancelCause(err)
+			acceptErr := newError("persist accepted run", false, err)
+			run.finish(&RunResult{ID: runID, Status: StatusError, Err: acceptErr.Error()}, acceptErr)
+			return nil, acceptErr
+		}
+		if err := store.AppendRunState(st, agentID, store.Record{
+			RunID: runID, RunState: "accepted", HostID: a.hostID,
+			LeaseUntil: time.Now().UTC().Add(a.leaseDuration),
+		}); err != nil {
+			a.clearRunState(run)
+			cancelCause(err)
+			acceptErr := newError("persist run ownership", false, err)
+			run.finish(&RunResult{ID: runID, Status: StatusError, Err: acceptErr.Error()}, acceptErr)
+			return nil, acceptErr
+		}
+	}
+
 	if a.opts.Mode == ModeComplex {
-		go a.executeComplex(runCtx, cancelCause, wall, run, message, cfg.Directive, cfg.ContinuationFrom)
+		go a.executeComplex(runCtx, cancelCause, wall, run, message, cfg.Directive)
 		return run, nil
 	}
-	go a.executeRun(runCtx, cancelCause, wall, run, message, cfg.Directive, cfg.ContinuationFrom, historyCopy, parts)
+	go a.executeRun(runCtx, cancelCause, wall, run, message, cfg.Directive, historyCopy, parts)
 	return run, nil
 }
 
@@ -1300,7 +1387,9 @@ func todoItemsInfo(items []tools.TodoItem) []TodoItem {
 	}
 	out := make([]TodoItem, len(items))
 	for i, it := range items {
-		out[i] = TodoItem{Text: it.Text, Status: it.Status}
+		out[i] = TodoItem{
+			ID: it.ID, Text: it.Text, Status: it.Status, WorkItemID: it.WorkItemID,
+		}
 	}
 	return out
 }
@@ -1319,7 +1408,7 @@ func compactInfo(in *runtime.CompactInfo) *CompactInfo {
 	}
 }
 
-func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseFunc, wall time.Duration, run *Run, message, directive, continuationFrom string, history []llm.Message, userParts []llm.ContentPart) {
+func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseFunc, wall time.Duration, run *Run, message, directive string, history []llm.Message, userParts []llm.ContentPart) {
 	defer func() {
 		// The run is over, so its pre-images stop being written: a tool call made
 		// outside a run — a resumed tab replaying, a direct Execute — belongs to no
@@ -1328,6 +1417,7 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 		cancelCause(nil)
 		a.clearRunState(run)
 	}()
+	a.persistRunState(run.id, "running", "")
 
 	loopCtx := ctx
 	if wall > 0 {
@@ -1342,10 +1432,6 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 		// One root run is one tree: the agent budget begins again with it.
 		a.budget.reset()
 	}
-
-	a.persist(store.Record{
-		Type: store.TypeRunStart, RunID: run.id, ContinueFrom: continuationFrom,
-	})
 
 	sysPrompt := a.systemPrompt
 	routed := routerSkillsText(a.cwd, a.opts, message)
@@ -1411,6 +1497,7 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 			Usage:          usageInfo(ev.Usage),
 			UsageEstimated: ev.UsageEstimated,
 			Items:          todoItemsInfo(ev.Items),
+			ArtifactID:     ev.ArtifactID,
 			Compact:        compactInfo(ev.Compact),
 			LastRequestAt:  ev.LastRequestAt,
 		}
@@ -1467,6 +1554,7 @@ func (a *Agent) executeRun(ctx context.Context, cancelCause context.CancelCauseF
 			CacheWriteTokens: result.Usage.CacheWriteTokens,
 		}
 	}
+	a.persistRunState(rr.ID, string(rr.Status), "")
 	a.persist(store.Record{
 		Type:      store.TypeRunEnd,
 		RunID:     rr.ID,
@@ -1599,6 +1687,108 @@ func (a *Agent) persist(rec store.Record) {
 	}
 }
 
+func (a *Agent) persistRunState(runID, state, cause string) {
+	a.mu.Lock()
+	st, agentID, hostID := a.store, a.id, a.hostID
+	a.mu.Unlock()
+	if st == nil {
+		return
+	}
+	rec := store.Record{
+		RunID: runID, RunState: state, HostID: hostID,
+		LeaseUntil: time.Now().UTC().Add(a.leaseDuration),
+		Cause:      cause,
+	}
+	if store.TerminalRunState(state) {
+		rec.LeaseUntil = time.Time{}
+	}
+	if err := store.AppendRunState(st, agentID, rec); err != nil {
+		if state == "running" && errors.Is(err, store.ErrTerminalState) {
+			return
+		}
+		a.recordPersistError(err)
+	}
+}
+
+func (a *Agent) startOwnershipRenewal() {
+	if a == nil || a.leaseDuration <= 0 {
+		return
+	}
+	a.leaseStop = make(chan struct{})
+	a.leaseDone = make(chan struct{})
+	interval := a.leaseDuration / 3
+	if interval <= 0 {
+		interval = time.Millisecond
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		defer close(a.leaseDone)
+		for {
+			select {
+			case <-ticker.C:
+				a.mu.Lock()
+				active := a.activeRun
+				mgr := a.taskMgr
+				a.mu.Unlock()
+				if active != nil {
+					a.persistRunState(active.id, "running", "")
+				}
+				if mgr != nil {
+					if err := mgr.Renew(); err != nil {
+						a.recordPersistError(err)
+					}
+				}
+			case <-a.leaseStop:
+				return
+			}
+		}
+	}()
+}
+
+func (a *Agent) stopOwnershipRenewal() {
+	if a == nil || a.leaseStop == nil {
+		return
+	}
+	close(a.leaseStop)
+	<-a.leaseDone
+	a.leaseStop, a.leaseDone = nil, nil
+}
+
+func (a *Agent) configureTaskPersistence() bool {
+	if a == nil || a.taskMgr == nil || a.store == nil {
+		return false
+	}
+	st, agentID, hostID := a.store, a.id, a.hostID
+	leaseDuration := a.leaseDuration
+	return a.taskMgr.SetPersistenceOnChange(func(info tasks.Info) error {
+		rec := store.Record{
+			TaskID: info.ID, TaskKind: string(info.Kind), TaskTitle: info.Title,
+			TaskState: string(info.Status), AgentID: info.AgentID,
+			ChildAgentID: info.ChildAgentID, ParentRunID: info.ParentRunID,
+			ParentToolCallID: info.ParentToolCallID, HostID: hostID,
+			LeaseUntil: time.Now().UTC().Add(leaseDuration),
+			StartedAt:  info.StartedAt, EndedAt: info.EndedAt,
+		}
+		if info.Status != tasks.StatusRunning {
+			exit := info.ExitCode
+			rec.ExitCode, rec.LeaseUntil = &exit, time.Time{}
+		}
+		rec.TaskSeq = info.TaskSeq
+		rec.OutputFirstOffset = info.OutputFirstOffset
+		rec.OutputNextOffset = info.OutputNextOffset
+		ownerID := info.AgentID
+		if ownerID == "" {
+			ownerID = agentID
+		}
+		if err := store.AppendTaskState(st, ownerID, rec); err != nil {
+			a.recordPersistError(err)
+			return err
+		}
+		return nil
+	})
+}
+
 // recordPersistError keeps the first write failure, so Wait can report it.
 func (a *Agent) recordPersistError(err error) {
 	a.mu.Lock()
@@ -1640,6 +1830,7 @@ func (a *Agent) Close() error {
 	// released (audit #18): it is cancelled here and waited for below.
 	active := a.activeRun
 	a.mu.Unlock()
+	a.stopOwnershipRenewal()
 
 	if active != nil {
 		_ = active.Cancel(context.Background())
@@ -1696,6 +1887,12 @@ func nonSystemMessages(messages []llm.Message) []llm.Message {
 }
 
 func normalizeOptions(opts Options) (Options, string, error) {
+	if opts.HostID == "" {
+		opts.HostID = processHostID
+	}
+	if opts.LeaseDuration <= 0 {
+		opts.LeaseDuration = defaultRunLeaseDuration
+	}
 	if opts.Provider == "" {
 		opts.Provider = ProviderOpenAI
 	}

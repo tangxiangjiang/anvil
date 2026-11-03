@@ -1,0 +1,56 @@
+{
+  "schema": 1,
+  "artifact_id": "artifact-release",
+  "run_id": "run-plan",
+  "kind": "complex",
+  "revision": 1,
+  "title": "Prepare release",
+  "body": "Build and verify the release in dependency order.",
+  "items": [
+    {
+      "id": "prepare",
+      "title": "Prepare inputs",
+      "goal": "All generated inputs are current.",
+      "plan": [
+        "Regenerate checked-in inputs."
+      ],
+      "files": [
+        "generated/"
+      ],
+      "acceptance": [
+        "The generator reports no diff on a second run."
+      ],
+      "depends_on": [],
+      "approval": "approved",
+      "state": "completed",
+      "source": "complex",
+      "execution_ids": [
+        "run-prepare"
+      ],
+      "checkpoint_run_id": "run-prepare"
+    },
+    {
+      "id": "build",
+      "title": "Build release",
+      "goal": "The release artifact is reproducible.",
+      "plan": [
+        "Build the release artifact.",
+        "Run its packaged smoke test."
+      ],
+      "files": [
+        "dist/"
+      ],
+      "acceptance": [
+        "The build exits successfully.",
+        "The packaged smoke test passes."
+      ],
+      "depends_on": [
+        "prepare"
+      ],
+      "approval": "pending",
+      "state": "proposed",
+      "source": "complex",
+      "execution_ids": []
+    }
+  ]
+}

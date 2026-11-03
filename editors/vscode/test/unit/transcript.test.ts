@@ -341,6 +341,32 @@ test('a stored todo_write replays as the checklist it left on screen', () => {
   ]);
 });
 
+test('a stored todo_write v2 preserves explicit artifact and item identity', () => {
+  const steps = replayOf([
+    {
+      kind: 'message',
+      run_id: 'r1',
+      role: 'assistant',
+      tool_calls: [{
+        id: 't1',
+        name: 'todo_write',
+        args: {
+          artifact_id: 'artifact-release',
+          items: [{
+            id: 'todo-build', text: 'build it', status: 'pending', work_item_id: 'build',
+          }],
+        },
+      }],
+    },
+  ], 's1');
+  const todo = steps[1];
+  assert.ok(todo.kind === 'event');
+  assert.equal(todo.event.artifact_id, 'artifact-release');
+  assert.deepEqual(todo.event.items, [{
+    id: 'todo-build', text: 'build it', status: 'pending', work_item_id: 'build',
+  }]);
+});
+
 test('a todo_write the tool would have refused replays as no list', () => {
   // Failure is not recorded, so the replay has to decide from the arguments —
   // and it applies the tool's own rule. Drawing a list the host rejected would

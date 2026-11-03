@@ -298,6 +298,14 @@ test('the task wire names are the ones both halves spell', () => {
   assert.match(SUBAGENT_GO, /%s started in the background/);
 });
 
+test('durable task history is visible but never receives live controls', () => {
+  assert.match(HUB, /this\.manager\.taskHistory\(agentId\)/);
+  assert.match(HUB, /live: false/);
+  assert.match(TASKS_PANEL, /live: row\.live/);
+  assert.match(TASKS_JS, /row\.kind === 'shell' && row\.live === true/);
+  assert.match(TASKS_JS, /row\.status === 'running' && row\.live === true/);
+});
+
 test('the task panel and the spawn card render output as text only', () => {
   for (const [name, source] of [
     ['tasksPanel.ts', TASKS_PANEL],

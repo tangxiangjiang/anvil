@@ -172,13 +172,16 @@ func projectEvent(sessionID, runID string, ev anvil.Event) (EventParams, bool) {
 	if ev.Type == anvil.EventTodo {
 		list := make([]TodoItem, len(ev.Items))
 		for i, it := range ev.Items {
-			list[i] = TodoItem{Text: it.Text, Status: it.Status}
+			list[i] = TodoItem{
+				ID: it.ID, Text: it.Text, Status: it.Status, WorkItemID: it.WorkItemID,
+			}
 		}
 		items = &list
 	}
 	out := EventParams{
 		SessionID:      sessionID,
 		RunID:          runID,
+		Seq:            ev.Seq,
 		Type:           string(ev.Type),
 		Text:           ev.Text,
 		ToolCallID:     ev.ToolCallID,
@@ -200,6 +203,9 @@ func projectEvent(sessionID, runID string, ev anvil.Event) (EventParams, bool) {
 		UsageEstimated: ev.UsageEstimated,
 		Items:          items,
 		Compact:        compactWire(ev.Compact),
+		ArtifactID:     ev.ArtifactID,
+		WorkItemID:     ev.WorkItemID,
+		ExecutionID:    ev.ExecutionID,
 	}
 	if ev.Type == anvil.EventTruncated {
 		// Assistant deltas already carried and stored the partial answer. The

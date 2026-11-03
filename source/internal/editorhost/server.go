@@ -36,6 +36,8 @@ type Config struct {
 	Model    string
 	// CWD pre-seeds the workspace root. initialize may still override it.
 	CWD string
+	// HostID is a test override for the random process-incarnation id.
+	HostID string
 	// MCPTokenDir is where the host keeps MCP OAuth tokens. Empty means the
 	// SDK's default (~/.anvil/mcp/oauth). Tests point it at a temp directory so
 	// a sign-in never touches the user's real tokens.
@@ -55,6 +57,7 @@ type Server struct {
 	cfg       Config
 	cwd       string
 	client    ClientInfo
+	hostID    string
 	inited    bool
 	sessions  map[string]*session
 	sessionID []string
@@ -73,11 +76,16 @@ func New(cfg Config, in io.Reader, out io.Writer) *Server {
 			fmt.Fprintf(os.Stderr, format+"\n", args...)
 		}
 	}
+	hostID := cfg.HostID
+	if hostID == "" {
+		hostID = "host-" + newID()
+	}
 	return &Server{
 		in:        in,
 		out:       newOutbound(out),
 		approvals: newApprovalBroker(),
 		cfg:       cfg,
+		hostID:    hostID,
 		cwd:       cfg.CWD,
 		sessions:  map[string]*session{},
 		mcp:       map[string]*hostMCPRuntime{},
@@ -234,6 +242,20 @@ func (s *Server) dispatch(ctx context.Context, req *Request) (any, *RPCError) {
 		return s.handleTasksOutput(req.Params)
 	case MethodTasksCancel:
 		return s.handleTasksCancel(req.Params)
+	case MethodRunList:
+		return s.handleRunList(ctx, req.Params)
+	case MethodRunGet:
+		return s.handleRunGet(ctx, req.Params)
+	case MethodRunEvents:
+		return s.handleRunEvents(ctx, req.Params)
+	case MethodRunReconcile:
+		return s.handleRunReconcile(ctx, req.Params)
+	case MethodTaskHistory:
+		return s.handleTaskHistory(ctx, req.Params)
+	case MethodWorkflowGet:
+		return s.handleWorkflowGet(ctx, req.Params)
+	case MethodWorkflowDecide:
+		return s.handleWorkflowDecide(ctx, req.Params)
 	case MethodApprovalResponse:
 		return s.handleApprovalResponse(req.Params)
 	default:
@@ -272,6 +294,11 @@ func (s *Server) handleInitialize(params json.RawMessage) (any, *RPCError) {
 	if err != nil || !info.IsDir() {
 		return nil, errInvalidParams("cwd is not a directory: " + abs)
 	}
+	if err := anvil.ReconcileHost(context.Background(), anvil.ReconcileOptions{
+		Local: anvil.LocalOptions{CWD: abs}, HostID: s.hostID,
+	}); err != nil {
+		return nil, errCode(CodeInternal, "reconcile interrupted work: "+err.Error())
+	}
 
 	s.mu.Lock()
 	s.cwd = abs
@@ -289,7 +316,7 @@ func (s *Server) handleInitialize(params json.RawMessage) (any, *RPCError) {
 }
 
 func capabilities() []string {
-	return []string{"streaming", "sessions", "resume", "cancel", "models", "approval", "context", "vision", "plan", "skills", "rules", "permissions", "mcp", "mcp.runtime", "subagents", "tasks"}
+	return []string{"streaming", "sessions", "resume", "cancel", "models", "approval", "context", "vision", "plan", "skills", "rules", "permissions", "mcp", "mcp.runtime", "subagents", "tasks", "runs.durable", "workflow"}
 }
 
 // ---------------------------------------------------------------------------
@@ -876,6 +903,21 @@ func (s *Server) drain(sess *session, run *anvil.Run) {
 		}
 	}
 	res, err := run.Wait(context.Background())
+	var planArtifactErr error
+	if sess.mode == ModePlan && res != nil && res.Status == anvil.StatusFinished &&
+		strings.TrimSpace(res.Result) != "" {
+		artifact := anvil.PlanArtifact{
+			Schema: anvil.PlanSchemaVersion, ArtifactID: "artifact:" + runID,
+			RunID: runID, Kind: anvil.PlanKindPlan, Revision: 1,
+			Title: workflowPlanTitle(res.Result), Body: res.Result, Items: []anvil.WorkItem{},
+		}
+		if agent := sess.sdk(); agent != nil {
+			if saveErr := agent.SavePlanArtifact(context.Background(), artifact); saveErr != nil {
+				planArtifactErr = fmt.Errorf("persist plan artifact: %w", saveErr)
+				s.logf("persist plan artifact run=%s: %v", runID, saveErr)
+			}
+		}
+	}
 	// The terminal done is queued *before* the run is released, and the order is
 	// load-bearing: endRun is what wakes waitRun, and the two callers that wait
 	// (session.close, and Serve's teardown on shutdown) go straight from that
@@ -883,8 +925,29 @@ func (s *Server) drain(sess *session, run *anvil.Run) {
 	// stops accepting messages and drops anything pushed after it. Released
 	// first, a shutdown-cancelled run could therefore lose the very `done` the
 	// client is waiting for. push never blocks, so there is nothing to deadlock.
-	s.notify(NotifyDone, doneWithContext(sess, projectDone(sess.id, runID, res, err)))
+	done := doneWithContext(sess, projectDone(sess.id, runID, res, err))
+	if planArtifactErr != nil {
+		done.Status = string(anvil.StatusError)
+		done.Err = planArtifactErr.Error()
+	}
+	s.notify(NotifyDone, done)
 	sess.endRun(run)
+}
+
+func workflowPlanTitle(body string) string {
+	title := strings.TrimSpace(body)
+	if i := strings.IndexAny(title, "\r\n"); i >= 0 {
+		title = strings.TrimSpace(title[:i])
+	}
+	title = strings.TrimLeft(title, "#* ")
+	runes := []rune(title)
+	if len(runes) > 80 {
+		title = string(runes[:80]) + "…"
+	}
+	if title == "" {
+		return "Plan"
+	}
+	return title
 }
 
 // doneWithContext appends the post-run estimate to a terminal envelope.
@@ -1040,6 +1103,244 @@ func (s *Server) handleTasksCancel(params json.RawMessage) (any, *RPCError) {
 		return nil, errCode(CodeNoTask, err.Error())
 	}
 	return TasksCancelResult{Task: taskInfo(info)}, nil
+}
+
+func durableRunInfo(run anvil.RunInfo) DurableRunInfo {
+	out := DurableRunInfo{
+		ID: run.ID, Status: run.Status, State: run.State, Steps: run.Steps,
+		StartedAt: run.StartedAt, Usage: usageWire(run.Usage), Error: run.Err,
+		Code: string(run.Code), HostID: run.HostID, LastSeq: run.LastSeq, Cause: run.Cause,
+	}
+	if !run.EndedAt.IsZero() {
+		ended := run.EndedAt
+		out.EndedAt = &ended
+	}
+	if !run.LeaseUntil.IsZero() {
+		lease := run.LeaseUntil
+		out.LeaseUntil = &lease
+	}
+	return out
+}
+
+func (s *Server) runListOptions(storeKind string) anvil.ListOptions {
+	return anvil.ListOptions{Local: anvil.LocalOptions{CWD: s.cwdPath(), Store: storeKind}}
+}
+
+func (s *Server) handleRunList(ctx context.Context, params json.RawMessage) (any, *RPCError) {
+	p, err := decode[RunListParams](params)
+	if err != nil {
+		return nil, errInvalidParams("run.list: " + err.Error())
+	}
+	if strings.TrimSpace(p.AgentID) == "" {
+		return nil, errInvalidParams("run.list: agent_id is required")
+	}
+	runs, err := anvil.ListRuns(ctx, p.AgentID, s.runListOptions(p.Store))
+	if err != nil {
+		return nil, errHost(err)
+	}
+	out := RunListResult{Runs: make([]DurableRunInfo, 0, len(runs))}
+	for _, run := range runs {
+		out.Runs = append(out.Runs, durableRunInfo(run))
+	}
+	return out, nil
+}
+
+func (s *Server) handleRunGet(ctx context.Context, params json.RawMessage) (any, *RPCError) {
+	p, err := decode[RunGetParams](params)
+	if err != nil {
+		return nil, errInvalidParams("run.get: " + err.Error())
+	}
+	if strings.TrimSpace(p.AgentID) == "" || strings.TrimSpace(p.RunID) == "" {
+		return nil, errInvalidParams("run.get: agent_id and run_id are required")
+	}
+	run, err := anvil.GetRun(ctx, p.AgentID, p.RunID, s.runListOptions(p.Store))
+	if err != nil {
+		return nil, errCode(CodeNoRun, err.Error())
+	}
+	return RunGetResult{Run: durableRunInfo(*run)}, nil
+}
+
+func (s *Server) handleRunEvents(ctx context.Context, params json.RawMessage) (any, *RPCError) {
+	p, err := decode[RunEventsParams](params)
+	if err != nil {
+		return nil, errInvalidParams("run.events: " + err.Error())
+	}
+	if strings.TrimSpace(p.AgentID) == "" || strings.TrimSpace(p.RunID) == "" {
+		return nil, errInvalidParams("run.events: agent_id and run_id are required")
+	}
+	page, err := anvil.GetRunEvents(ctx, p.AgentID, p.RunID, p.AfterSeq, p.Limit, s.runListOptions(p.Store))
+	if err != nil {
+		return nil, errCode(CodeNoRun, err.Error())
+	}
+	out := RunEventsResult{
+		Events: make([]EventParams, 0, len(page.Events)), NextSeq: page.NextSeq,
+		Terminal: page.Terminal, Truncated: page.Truncated,
+	}
+	for _, event := range page.Events {
+		wire, ok := projectEvent("", p.RunID, event)
+		if !ok {
+			continue
+		}
+		wire.Seq = event.Seq
+		out.Events = append(out.Events, wire)
+	}
+	return out, nil
+}
+
+func (s *Server) handleRunReconcile(ctx context.Context, params json.RawMessage) (any, *RPCError) {
+	p, err := decode[RunReconcileParams](params)
+	if err != nil {
+		return nil, errInvalidParams("run.reconcile: " + err.Error())
+	}
+	refs, err := anvil.ReconcileRuns(ctx, anvil.ReconcileOptions{
+		Local: anvil.LocalOptions{CWD: s.cwdPath(), Store: p.Store}, HostID: s.hostID,
+	})
+	if err != nil {
+		return nil, errHost(err)
+	}
+	out := RunReconcileResult{Interrupted: make([]RunRef, 0, len(refs))}
+	for _, ref := range refs {
+		out.Interrupted = append(out.Interrupted, RunRef{AgentID: ref.AgentID, RunID: ref.RunID})
+	}
+	return out, nil
+}
+
+func (s *Server) handleTaskHistory(ctx context.Context, params json.RawMessage) (any, *RPCError) {
+	p, err := decode[TaskHistoryParams](params)
+	if err != nil {
+		return nil, errInvalidParams("task.history: " + err.Error())
+	}
+	if strings.TrimSpace(p.AgentID) == "" {
+		return nil, errInvalidParams("task.history: agent_id is required")
+	}
+	tasks, err := anvil.TaskHistory(ctx, p.AgentID, p.RunID, s.runListOptions(p.Store))
+	if err != nil {
+		return nil, errHost(err)
+	}
+	out := TaskHistoryResult{Tasks: make([]DurableTaskInfo, 0, len(tasks))}
+	for _, task := range tasks {
+		wire := DurableTaskInfo{
+			ID: task.ID, Seq: task.Seq, Kind: task.Kind, Title: task.Title, State: task.State,
+			AgentID: task.AgentID, ChildAgentID: task.ChildAgentID,
+			ParentRunID: task.ParentRunID, ParentToolCallID: task.ParentToolCallID,
+			HostID: task.HostID, Cause: task.Cause, StartedAt: task.StartedAt,
+			ExitCode: task.ExitCode, OutputFirstOffset: task.OutputFirstOffset,
+			OutputNextOffset: task.OutputNextOffset,
+		}
+		if !task.LeaseUntil.IsZero() {
+			lease := task.LeaseUntil
+			wire.LeaseUntil = &lease
+		}
+		if !task.EndedAt.IsZero() {
+			ended := task.EndedAt
+			wire.EndedAt = &ended
+		}
+		out.Tasks = append(out.Tasks, wire)
+	}
+	return out, nil
+}
+
+func (s *Server) handleWorkflowGet(ctx context.Context, params json.RawMessage) (any, *RPCError) {
+	p, err := decode[WorkflowGetParams](params)
+	if err != nil {
+		return nil, errInvalidParams("workflow.get: " + err.Error())
+	}
+	if strings.TrimSpace(p.AgentID) == "" {
+		return nil, errInvalidParams("workflow.get: agent_id is required")
+	}
+	var projection anvil.WorkflowProjection
+	if sess, ok := s.sessionForAgent(p.AgentID); ok && sess.sdk() != nil {
+		projection, err = sess.sdk().Workflow(ctx, p.ArtifactID)
+	} else {
+		projection, err = anvil.GetStoredWorkflow(ctx, p.AgentID, p.ArtifactID, s.runListOptions(p.Store))
+	}
+	if err != nil {
+		return nil, errHost(err)
+	}
+	return workflowProjectionWire(projection), nil
+}
+
+func (s *Server) handleWorkflowDecide(ctx context.Context, params json.RawMessage) (any, *RPCError) {
+	p, err := decode[WorkflowDecideParams](params)
+	if err != nil {
+		return nil, errInvalidParams("workflow.decide: " + err.Error())
+	}
+	if strings.TrimSpace(p.AgentID) == "" {
+		return nil, errInvalidParams("workflow.decide: agent_id is required")
+	}
+	request := anvil.PlanDecisionRequest{
+		ArtifactID: p.ArtifactID, ExpectedRevision: p.ExpectedRevision,
+		Decisions: make([]anvil.PlanItemDecision, len(p.Decisions)),
+	}
+	for i, decision := range p.Decisions {
+		request.Decisions[i] = anvil.PlanItemDecision{
+			ItemID: decision.ItemID, Decision: anvil.WorkDecision(decision.Decision),
+			Reason: decision.Reason,
+		}
+	}
+	var result anvil.PlanDecisionResult
+	if sess, ok := s.sessionForAgent(p.AgentID); ok && sess.sdk() != nil {
+		result, err = sess.sdk().DecidePlan(ctx, request)
+	} else {
+		result, err = anvil.DecideStoredPlan(ctx, p.AgentID, request, s.runListOptions(p.Store))
+	}
+	if err != nil {
+		if errors.Is(err, anvil.ErrPlanRevisionConflict) ||
+			errors.Is(err, anvil.ErrPlanDecisionConflict) {
+			return nil, errCode(CodeWorkflowConflict, err.Error())
+		}
+		return nil, errHost(err)
+	}
+	return WorkflowDecideResult{
+		Artifact:         workflowArtifactWire(result.Artifact),
+		AcceptedRevision: result.AcceptedRevision, Changed: result.Changed,
+	}, nil
+}
+
+func workflowProjectionWire(projection anvil.WorkflowProjection) WorkflowGetResult {
+	out := WorkflowGetResult{
+		Artifacts:          make([]WorkflowArtifact, 0, len(projection.Artifacts)),
+		SelectedArtifactID: projection.SelectedArtifactID,
+		States:             make([]WorkflowWorkState, 0, len(projection.States)),
+		LastSeq:            projection.LastSeq,
+	}
+	for _, artifact := range projection.Artifacts {
+		out.Artifacts = append(out.Artifacts, workflowArtifactWire(artifact))
+	}
+	for _, state := range projection.States {
+		wire := WorkflowWorkState{
+			ArtifactID: state.ArtifactID, ItemID: state.ItemID, Revision: state.Revision,
+			ExecutionID: state.ExecutionID, State: string(state.State), Actor: state.Actor,
+			Decision: string(state.Decision), DecisionID: state.DecisionID,
+			Reason: state.Reason, Evidence: append(json.RawMessage(nil), state.Evidence...),
+		}
+		if !state.Time.IsZero() {
+			at := state.Time
+			wire.Timestamp = &at
+		}
+		out.States = append(out.States, wire)
+	}
+	return out
+}
+
+func workflowArtifactWire(artifact anvil.PlanArtifact) WorkflowArtifact {
+	out := WorkflowArtifact{
+		Schema: artifact.Schema, ArtifactID: artifact.ArtifactID, RunID: artifact.RunID,
+		Kind: string(artifact.Kind), Revision: artifact.Revision, Title: artifact.Title,
+		Body: artifact.Body, Items: make([]WorkflowWorkItem, len(artifact.Items)),
+	}
+	for i, item := range artifact.Items {
+		out.Items[i] = WorkflowWorkItem{
+			ID: item.ID, Title: item.Title, Goal: item.Goal,
+			Plan: append([]string{}, item.Plan...), Files: append([]string{}, item.Files...),
+			Acceptance: append([]string{}, item.Acceptance...),
+			DependsOn:  append([]string{}, item.DependsOn...),
+			Approval:   string(item.Approval), State: string(item.State), Source: string(item.Source),
+			ExecutionIDs:    append([]string{}, item.ExecutionIDs...),
+			CheckpointRunID: item.CheckpointRunID,
+		}
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------------
@@ -1574,6 +1875,7 @@ func (s *Server) buildOptions(ctx context.Context, p SessionParams, sess *sessio
 	// computations of one flag is how the option and the mode start disagreeing
 	// about whether this session has read the workspace's policy.
 	opts := anvil.Options{
+		HostID:            s.hostID,
 		Mode:              agentMode,
 		PermissionGroups:  groups,
 		Provider:          anvil.Provider(firstNonEmpty(p.Provider, s.cfg.Provider, os.Getenv("ANVIL_PROVIDER"))),

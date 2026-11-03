@@ -83,15 +83,15 @@ func TestE2EConfigureJoinJobModels(t *testing.T) {
 			if body.Stream {
 				w.Header().Set("Content-Type", "text/event-stream")
 				if !hasToolResult {
-					toolName, args := "read_file", `{\"path\":\"fixture.txt\"}`
+					toolName, args := "read_file", `{"path":"fixture.txt"}`
 					if wantMCP {
-						toolName, args = "mcp_fake_echo", `{\"text\":\"loopback-mcp\"}`
+						toolName, args = "mcp_fake_echo", `{"text":"loopback-mcp"}`
 					}
 					if wantHookBlock {
-						toolName, args = "mcp_fake_echo", `{\"text\":\"blocked\"}`
+						toolName, args = "mcp_fake_echo", `{"text":"blocked"}`
 					}
 					if wantApproval {
-						toolName, args = "write_file", `{\"path\":\"approved.txt\",\"content\":\"approved\"}`
+						toolName, args = "write_file", `{"path":"approved.txt","content":"approved"}`
 					}
 					_, _ = fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_e2e\",\"type\":\"function\",\"function\":{\"name\":%q,\"arguments\":%q}}]}}]}\n\n", toolName, args)
 				} else {

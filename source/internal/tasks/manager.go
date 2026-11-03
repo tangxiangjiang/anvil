@@ -46,6 +46,7 @@ const DefaultLimit = 4
 // Info is one task's snapshot.
 type Info struct {
 	ID               string
+	TaskSeq          uint64
 	Kind             Kind
 	Title            string
 	Status           Status
@@ -57,7 +58,9 @@ type Info struct {
 	EndedAt          time.Time
 	// ExitCode is the process exit code for a shell task; -1 when the process
 	// did not exit on its own. It is 0 for an agent task.
-	ExitCode int
+	ExitCode          int
+	OutputFirstOffset int64
+	OutputNextOffset  int64
 }
 
 // ShellSpec describes one background shell command.
@@ -67,7 +70,9 @@ type ShellSpec struct {
 	CWD     string
 	// AgentID is the agent whose tool call started the task; the table is
 	// tree-wide, and this is what keeps a child's job attributable.
-	AgentID string
+	AgentID          string
+	ParentRunID      string
+	ParentToolCallID string
 	// Timeout bounds the process. Zero means no limit, which no caller uses.
 	Timeout time.Duration
 	// Prepare is the platform hook that makes cancellation kill the process
@@ -123,6 +128,51 @@ type Manager struct {
 	Limit int
 	// onChange, when set, hears about every start and every end.
 	onChange func(Info)
+	// onPersist is installed once by the root agent. Children share this
+	// manager and must not redirect durable task snapshots to another store.
+	onPersist func(Info) error
+}
+
+// SetPersistenceOnChange installs the tree-owned persistence callback once.
+// It reports whether this caller became the owner.
+func (m *Manager) SetPersistenceOnChange(fn func(Info) error) bool {
+	if m == nil || fn == nil {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.onPersist != nil {
+		return false
+	}
+	m.onPersist = fn
+	return true
+}
+
+// Renew persists fresh ownership evidence for every running task. It changes
+// no process state and cannot recreate or control a task after restart.
+func (m *Manager) Renew() error {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.onPersist == nil {
+		return nil
+	}
+	for _, taskID := range m.order {
+		t := m.tasks[taskID]
+		if t == nil || t.Status != StatusRunning {
+			continue
+		}
+		next := t.Info
+		next.TaskSeq++
+		next.OutputFirstOffset, next.OutputNextOffset = t.ring.offsets()
+		if err := m.onPersist(next); err != nil {
+			return fmt.Errorf("renew task %s: %w", taskID, err)
+		}
+		t.Info = next
+	}
+	return nil
 }
 
 // NewManager returns an empty table.
@@ -174,6 +224,7 @@ func (m *Manager) start(
 	t := &task{
 		Info: Info{
 			ID:               "task-" + id.New(),
+			TaskSeq:          1,
 			Kind:             kind,
 			Title:            title,
 			Status:           StatusRunning,
@@ -186,10 +237,16 @@ func (m *Manager) start(
 		cancel: cancel,
 		done:   make(chan struct{}),
 	}
+	info := t.Info
+	hook, persist := m.onChange, m.onPersist
+	if persist != nil {
+		if err := persist(info); err != nil {
+			m.mu.Unlock()
+			return nil, Info{}, fmt.Errorf("persist task start: %w", err)
+		}
+	}
 	m.tasks[t.ID] = t
 	m.order = append(m.order, t.ID)
-	info := t.Info
-	hook := m.onChange
 	m.mu.Unlock()
 	if hook != nil {
 		hook(info)
@@ -203,7 +260,9 @@ func (m *Manager) StartShell(spec ShellSpec) (Info, error) {
 		return Info{}, errors.New("command is required")
 	}
 	ctx, cancel := context.WithCancelCause(context.Background())
-	t, info, err := m.start(KindShell, spec.Title, spec.AgentID, "", "", cancel)
+	t, info, err := m.start(
+		KindShell, spec.Title, spec.AgentID, spec.ParentRunID, spec.ParentToolCallID, cancel,
+	)
 	if err != nil {
 		cancel(nil)
 		return Info{}, err
@@ -244,12 +303,20 @@ func (m *Manager) SetChildAgent(taskID, childAgentID string) error {
 		m.mu.Unlock()
 		return fmt.Errorf("unknown task: %s", taskID)
 	}
-	t.ChildAgentID = childAgentID
-	info := t.Info
-	hook := m.onChange
+	next := t.Info
+	next.TaskSeq++
+	next.ChildAgentID = childAgentID
+	hook, persist := m.onChange, m.onPersist
+	if persist != nil {
+		if err := persist(next); err != nil {
+			m.mu.Unlock()
+			return fmt.Errorf("persist child task identity: %w", err)
+		}
+	}
+	t.Info = next
 	m.mu.Unlock()
 	if hook != nil {
-		hook(info)
+		hook(next)
 	}
 	return nil
 }
@@ -336,9 +403,14 @@ func (m *Manager) finish(t *task, status Status, exit int, output string) {
 		t.Status = status
 		t.ExitCode = exit
 		t.EndedAt = time.Now().UTC()
+		t.TaskSeq++
+		t.OutputFirstOffset, t.OutputNextOffset = t.ring.offsets()
 	}
 	info := t.Info
-	hook := m.onChange
+	hook, persist := m.onChange, m.onPersist
+	if persist != nil {
+		_ = persist(info)
+	}
 	m.mu.Unlock()
 	close(t.done)
 	if hook != nil {

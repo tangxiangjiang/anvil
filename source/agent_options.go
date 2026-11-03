@@ -109,6 +109,13 @@ type Options struct {
 	BaseURL  string
 	Model    Model
 	Local    LocalOptions
+	// HostID identifies one owning process incarnation. Containers should set
+	// one random value for their lifetime; the SDK generates a process-local
+	// value when empty. It is never derived from a PID or machine identity.
+	HostID string
+	// LeaseDuration controls durable run/task ownership renewal. Zero uses the
+	// SDK default.
+	LeaseDuration time.Duration
 	// MaxSteps is an optional hard ceiling on LLM rounds (0 = unlimited, default).
 	// Runaway loops are stopped by the runtime loop guard (repeated tool calls / stalls).
 	MaxSteps int
@@ -457,6 +464,13 @@ type Model struct {
 }
 
 // LocalOptions applies to the local runtime only.
+const (
+	// DefaultRunJournalMaxEvents and DefaultRunJournalMaxBytes bound the
+	// operational replay while the transcript remains the long-term record.
+	DefaultRunJournalMaxEvents = 2048
+	DefaultRunJournalMaxBytes  = 8 << 20
+)
+
 type LocalOptions struct {
 	CWD        string
 	AllowShell *bool // nil = true (default)
@@ -479,6 +493,10 @@ type LocalOptions struct {
 
 	// Store selects the session backend: "jsonl" (default) or "sqlite".
 	Store string
+	// RunJournalMaxEvents and RunJournalMaxBytes bound each run's durable event
+	// tail. Zero uses the defaults; a negative value disables that dimension.
+	RunJournalMaxEvents int
+	RunJournalMaxBytes  int64
 
 	// SettingSources enables file-based MCP/rules/hooks layers (0.10+).
 	// Empty = inline-only (current default): no .cursor/mcp.json load.

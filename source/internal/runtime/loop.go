@@ -61,6 +61,8 @@ type Event struct {
 	// a successful todo_write call. It is the whole list rather than a change:
 	// a client replaces what it shows, and an empty list clears it.
 	Items []tools.TodoItem
+	// ArtifactID explicitly links a v2 todo list to a structured plan.
+	ArtifactID string
 	// Compact is what a history compaction folded away, on the `compact` event
 	// (0.43+). It is nil on every other event. A client draws it as a divider;
 	// the turns themselves are still in the store, so a replay shows them too.
@@ -793,7 +795,10 @@ func runToolCalls(
 		// it is its own event rather than a field on the result: a client draws
 		// one block, replaced on each call, not one block per card.
 		if tc.Name == tools.TodoToolName && !results[i].IsError {
-			emit(Event{Type: "todo", Items: results[i].Todos})
+			emit(Event{
+				Type: "todo", Items: results[i].Todos,
+				ArtifactID: results[i].TodoArtifactID,
+			})
 		}
 		toolMsg := llm.Message{
 			Role:        llm.RoleTool,

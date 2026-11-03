@@ -33,6 +33,7 @@ import {
   CheckpointRestoreResult,
   CheckpointRun,
   CodeNoSession,
+  DurableRunInfo,
   McpAddParams,
   McpAuthenticateParams,
   McpAuthenticateResult,
@@ -52,12 +53,17 @@ import {
   RuleProblem,
   RuleSource,
   RuleSpec,
+  RunEventsResult,
+  RunReconcileResult,
   SessionInfo,
   SessionTranscriptResult,
   SkillEntry,
   SubagentProfile,
   SubagentsResult,
   TaskInfo,
+  WorkflowDecideParams,
+  WorkflowDecideResult,
+  WorkflowGetResult,
 } from './protocol';
 import { PreviewDocuments } from './review';
 import { describeProblem, emptyRulesFile, emptyUserRulesFile, problemPosition } from './rulesFile';
@@ -429,8 +435,34 @@ export class Hub {
       const sessionId = session.id;
       if (!sessionId) continue;
       try {
-        for (const task of await this.manager.listTasks(sessionId)) {
-          rows.push({ sessionId, task });
+        const live = await this.manager.listTasks(sessionId);
+        const liveIds = new Set(live.map((task) => task.id));
+        for (const task of live) {
+          rows.push({ sessionId, live: true, task });
+        }
+        const agentId = session.agent;
+        if (agentId) {
+          const history = await this.manager.taskHistory(agentId).catch(() => []);
+          for (const task of history) {
+            if (liveIds.has(task.id)) continue;
+            rows.push({
+              sessionId,
+              live: false,
+              task: {
+                id: task.id,
+                kind: task.kind,
+                title: task.title,
+                status: task.state,
+                agent_id: task.agent_id,
+                child_agent_id: task.child_agent_id,
+                parent_run_id: task.parent_run_id,
+                parent_tool_call_id: task.parent_tool_call_id,
+                started_at: task.started_at,
+                ended_at: task.ended_at,
+                exit_code: task.exit_code ?? 0,
+              },
+            });
+          }
         }
       } catch (err) {
         if (err instanceof HostRpcError && err.code === CodeNoSession) {
@@ -487,9 +519,29 @@ export class Hub {
     return sessions;
   }
 
+  async workflow(agentId: string, artifactId?: string): Promise<WorkflowGetResult> {
+    return this.manager.workflow(agentId, artifactId);
+  }
+
+  async decideWorkflow(params: WorkflowDecideParams): Promise<WorkflowDecideResult> {
+    return this.manager.decideWorkflow(params);
+  }
+
   /** The stored conversation for one agent, oldest first. */
   transcript(agentId: string, limit?: number): Promise<SessionTranscriptResult> {
     return this.manager.transcript(agentId, limit);
+  }
+
+  listRuns(agentId: string): Promise<DurableRunInfo[]> {
+    return this.manager.listRuns(agentId);
+  }
+
+  runEvents(agentId: string, runId: string, afterSeq = 0): Promise<RunEventsResult> {
+    return this.manager.runEvents(agentId, runId, afterSeq);
+  }
+
+  reconcileRuns(): Promise<RunReconcileResult> {
+    return this.manager.reconcileRuns();
   }
 
   /** The runs of one agent that can be put back, newest first. */
