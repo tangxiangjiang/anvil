@@ -14,9 +14,25 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/anvil-dev/anvil/internal/verify"
 )
 
 const worktreeReviewSchema = 1
+
+type WorktreeIntegrationTransaction struct {
+	ID            string    `json:"id"`
+	Phase         string    `json:"phase"`
+	ReviewDigest  string    `json:"review_digest"`
+	Strategy      string    `json:"strategy"`
+	WorktreeLabel string    `json:"worktree_label"`
+	OriginalHead  string    `json:"original_head"`
+	ResultCommit  string    `json:"result_commit,omitempty"`
+	ResultTree    string    `json:"result_tree,omitempty"`
+	Failure       string    `json:"failure,omitempty"`
+	StartedAt     time.Time `json:"started_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
 
 type WorktreeCommitInfo struct {
 	Hash    string `json:"hash"`
@@ -203,29 +219,52 @@ func IntegrateWorktreeWorker(
 		)
 	}
 
+	transactionID, err := worktreeIDGenerator("tx")
+	if err != nil {
+		return WorktreeIntegrateResult{}, wtError("identity", "generate integration id: %v", err)
+	}
+	now := time.Now().UTC()
 	worker.State = WorktreeIntegrating
 	worker.LeaseUntil = time.Now().UTC().Add(defaultWorktreeLease)
 	worker.Failure = ""
+	worker.Integration = &WorktreeIntegrationTransaction{
+		ID: transactionID, Phase: "prepared",
+		ReviewDigest: current.PatchDigest, Strategy: opts.Strategy,
+		WorktreeLabel: transactionID, OriginalHead: current.CurrentBase,
+		StartedAt: now, UpdatedAt: now,
+	}
 	worker.Revision++
-	worker.UpdatedAt = time.Now().UTC()
+	worker.UpdatedAt = now
 	if err := persistWorktreeTransition(opts.Local, root, key, worker); err != nil {
 		return WorktreeIntegrateResult{}, err
 	}
 
-	resultCommit, integrateErr := applyReviewedWorktree(
-		ctx, git, worker, current, opts.Strategy,
+	resultCommit, safelyAborted, integrateErr := applyReviewedWorktreeTransaction(
+		ctx, git, opts.Local, root, key, &worker, current,
 	)
 	if integrateErr != nil {
-		recovered := recoverWorktreeIntegration(
-			ctx, git, opts.Local, root, key, worker, current.CurrentBase,
-			opts.Strategy, integrateErr,
-		)
-		if recovered != nil {
-			return WorktreeIntegrateResult{Worker: worker}, recovered
+		if !safelyAborted {
+			if worker.Integration != nil &&
+				worker.Integration.Phase != "recovery_required" {
+				worker.Integration.Phase = "recovery_required"
+				worker.Integration.Failure = integrateErr.Error()
+				worker.Integration.UpdatedAt = time.Now().UTC()
+				worker.Failure = "integration recovery requires operator review"
+				worker.LeaseUntil = time.Time{}
+				if persistErr := persistIntegrationPhase(
+					opts.Local, root, key, &worker,
+				); persistErr != nil {
+					return WorktreeIntegrateResult{Worker: worker}, persistErr
+				}
+			}
+			return WorktreeIntegrateResult{Worker: worker}, integrateErr
 		}
 		worker.State = WorktreeReviewReady
 		worker.LeaseUntil = time.Time{}
 		worker.Review = nil
+		worker.Integration.Phase = "aborted"
+		worker.Integration.Failure = integrateErr.Error()
+		worker.Integration.UpdatedAt = time.Now().UTC()
 		worker.Failure = "integration failed and was safely aborted: " + integrateErr.Error()
 		worker.Revision++
 		worker.UpdatedAt = time.Now().UTC()
@@ -239,6 +278,8 @@ func IntegrateWorktreeWorker(
 
 	worker.State = WorktreeIntegrated
 	worker.LeaseUntil = time.Time{}
+	worker.Integration.Phase = "completed"
+	worker.Integration.UpdatedAt = time.Now().UTC()
 	worker.IntegrationCommit = resultCommit
 	worker.Failure = ""
 	worker.Revision++
@@ -610,26 +651,49 @@ func parseWorktreeConflicts(output string) []WorktreeConflict {
 	return conflicts
 }
 
-func applyReviewedWorktree(
+func applyReviewedWorktreeTransaction(
 	ctx context.Context,
 	git worktreeGitRunner,
-	worker WorktreeWorker,
+	local LocalOptions,
+	managerRoot string,
+	key []byte,
+	worker *WorktreeWorker,
 	review WorktreeReview,
-	strategy string,
-) (string, error) {
-	switch strategy {
+) (string, bool, error) {
+	transaction := worker.Integration
+	if transaction == nil || !safeWorktreeTransactionID(transaction.ID) ||
+		transaction.WorktreeLabel != transaction.ID {
+		return "", false, wtError("ownership", "integration transaction identity is invalid")
+	}
+	transactionRoot := filepath.Join(managerRoot, transaction.WorktreeLabel)
+	if err := requireAbsentPath(transactionRoot); err != nil {
+		return integrationSafelyAborted(ctx, git, worker, transactionRoot, err)
+	}
+	if _, err := git.run(
+		ctx, worker.BaseRoot, "worktree", "add", "--detach",
+		transactionRoot, review.CurrentBase,
+	); err != nil {
+		return integrationSafelyAborted(ctx, git, worker, transactionRoot, err)
+	}
+	transaction.Phase = "applying"
+	transaction.UpdatedAt = time.Now().UTC()
+	if err := persistIntegrationPhase(local, managerRoot, key, worker); err != nil {
+		return "", false, err
+	}
+
+	switch transaction.Strategy {
 	case "fast_forward":
 		if _, err := git.run(
-			ctx, worker.BaseRoot, "merge", "--ff-only", review.HeadCommit,
+			ctx, transactionRoot, "merge", "--ff-only", review.HeadCommit,
 		); err != nil {
-			return "", err
+			return integrationSafelyAborted(ctx, git, worker, transactionRoot, err)
 		}
 	case "merge_no_ff":
 		if _, err := git.run(
-			ctx, worker.BaseRoot, "merge", "--no-ff", "--no-edit",
+			ctx, transactionRoot, "merge", "--no-ff", "--no-edit",
 			"-m", "Merge Anvil worktree "+worker.ID, review.HeadCommit,
 		); err != nil {
-			return "", err
+			return integrationSafelyAborted(ctx, git, worker, transactionRoot, err)
 		}
 	case "cherry_pick":
 		commits := make([]string, 0, len(review.Commits))
@@ -637,68 +701,318 @@ func applyReviewedWorktree(
 			commits = append(commits, review.Commits[index].Hash)
 		}
 		if len(commits) == 0 {
-			return "", errors.New("review contains no commits to cherry-pick")
+			err := errors.New("review contains no commits to cherry-pick")
+			return integrationSafelyAborted(ctx, git, worker, transactionRoot, err)
 		}
 		if _, err := git.run(
-			ctx, worker.BaseRoot, append([]string{"cherry-pick"}, commits...)...,
+			ctx, transactionRoot, append([]string{"cherry-pick"}, commits...)...,
 		); err != nil {
-			return "", err
+			return integrationSafelyAborted(ctx, git, worker, transactionRoot, err)
 		}
 	}
-	headRaw, err := git.run(ctx, worker.BaseRoot, "rev-parse", "--verify", "HEAD")
+
+	headRaw, err := git.run(ctx, transactionRoot, "rev-parse", "--verify", "HEAD")
 	if err != nil {
-		return "", err
+		return integrationSafelyAborted(ctx, git, worker, transactionRoot, err)
 	}
 	result := strings.TrimSpace(headRaw)
-	treeDiff, err := git.run(
-		ctx, worker.BaseRoot, "diff", "--name-only", result, review.HeadCommit,
-	)
-	if err != nil || strings.TrimSpace(treeDiff) != "" {
-		return "", errors.New("integrated tree does not match the reviewed worker tree")
+	resultTreeRaw, err := git.run(ctx, transactionRoot, "rev-parse", result+"^{tree}")
+	if err != nil {
+		return integrationSafelyAborted(ctx, git, worker, transactionRoot, err)
 	}
 	status, err := git.run(
-		ctx, worker.BaseRoot, "status", "--porcelain=v1", "--untracked-files=all",
+		ctx, transactionRoot, "status", "--porcelain=v1", "--untracked-files=all",
 	)
 	if err != nil || strings.TrimSpace(status) != "" {
-		return "", errors.New("primary checkout is dirty after integration")
+		verifyErr := errors.New("integration transaction is dirty")
+		return integrationSafelyAborted(ctx, git, worker, transactionRoot, verifyErr)
 	}
-	return result, nil
+	if err := verifyIntegratedWorktree(ctx, worker.BaseRoot, transactionRoot); err != nil {
+		return integrationSafelyAborted(ctx, git, worker, transactionRoot, err)
+	}
+
+	transaction.Phase = "verified"
+	transaction.ResultCommit = result
+	transaction.ResultTree = strings.TrimSpace(resultTreeRaw)
+	transaction.UpdatedAt = time.Now().UTC()
+	if err := persistIntegrationPhase(local, managerRoot, key, worker); err != nil {
+		return "", false, err
+	}
+
+	baseHead, err := git.run(ctx, worker.BaseRoot, "rev-parse", "--verify", "HEAD")
+	if err != nil || strings.TrimSpace(baseHead) != transaction.OriginalHead {
+		staleErr := errors.New("primary HEAD changed before final integration")
+		return integrationSafelyAborted(ctx, git, worker, transactionRoot, staleErr)
+	}
+	baseStatus, err := git.run(
+		ctx, worker.BaseRoot, "status", "--porcelain=v1", "--untracked-files=all",
+	)
+	if err != nil || strings.TrimSpace(baseStatus) != "" {
+		dirtyErr := errors.New("primary checkout changed before final integration")
+		return integrationSafelyAborted(ctx, git, worker, transactionRoot, dirtyErr)
+	}
+	if _, err := git.run(ctx, worker.BaseRoot, "merge", "--ff-only", result); err != nil {
+		return integrationSafelyAborted(ctx, git, worker, transactionRoot, err)
+	}
+	finalHead, headErr := git.run(ctx, worker.BaseRoot, "rev-parse", "--verify", "HEAD")
+	finalTree, treeErr := git.run(ctx, worker.BaseRoot, "rev-parse", "HEAD^{tree}")
+	finalStatus, statusErr := git.run(
+		ctx, worker.BaseRoot, "status", "--porcelain=v1", "--untracked-files=all",
+	)
+	if headErr != nil || treeErr != nil || statusErr != nil ||
+		strings.TrimSpace(finalHead) != result ||
+		strings.TrimSpace(finalTree) != transaction.ResultTree ||
+		strings.TrimSpace(finalStatus) != "" {
+		verifyErr := errors.New("primary checkout could not prove the verified integration result")
+		return integrationRecoveryRequired(
+			local, managerRoot, key, worker, transactionRoot, verifyErr,
+		)
+	}
+	if err := removeIntegrationWorktree(ctx, git, worker.BaseRoot, transactionRoot); err != nil {
+		return integrationRecoveryRequired(
+			local, managerRoot, key, worker, transactionRoot, err,
+		)
+	}
+	return result, false, nil
 }
 
-func recoverWorktreeIntegration(
+func persistIntegrationPhase(
+	local LocalOptions,
+	managerRoot string,
+	key []byte,
+	worker *WorktreeWorker,
+) error {
+	worker.Revision++
+	worker.UpdatedAt = time.Now().UTC()
+	return persistWorktreeTransition(local, managerRoot, key, *worker)
+}
+
+func integrationSafelyAborted(
 	ctx context.Context,
 	git worktreeGitRunner,
-	local LocalOptions,
-	root string,
-	key []byte,
-	worker WorktreeWorker,
-	originalHead, strategy string,
+	worker *WorktreeWorker,
+	transactionRoot string,
 	integrateErr error,
-) error {
-	if strategy == "merge_no_ff" {
-		_, _ = git.run(ctx, worker.BaseRoot, "merge", "--abort")
-	} else if strategy == "cherry_pick" {
-		_, _ = git.run(ctx, worker.BaseRoot, "cherry-pick", "--abort")
-	}
+) (string, bool, error) {
+	_, _ = git.run(ctx, transactionRoot, "merge", "--abort")
+	_, _ = git.run(ctx, transactionRoot, "cherry-pick", "--abort")
+	removeErr := removeIntegrationWorktree(ctx, git, worker.BaseRoot, transactionRoot)
 	headRaw, headErr := git.run(ctx, worker.BaseRoot, "rev-parse", "--verify", "HEAD")
 	status, statusErr := git.run(
 		ctx, worker.BaseRoot, "status", "--porcelain=v1", "--untracked-files=all",
 	)
-	if headErr != nil || statusErr != nil ||
-		strings.TrimSpace(headRaw) != originalHead ||
+	if removeErr != nil || headErr != nil || statusErr != nil ||
+		strings.TrimSpace(headRaw) != worker.Integration.OriginalHead ||
 		strings.TrimSpace(status) != "" {
-		worker.Failure = "integration failed and automatic abort could not prove restoration"
-		worker.LeaseUntil = time.Time{}
-		worker.Revision++
-		worker.UpdatedAt = time.Now().UTC()
-		if err := persistWorktreeTransition(local, root, key, worker); err != nil {
-			return err
-		}
-		return wtError(
-			"recovery", "%s; original failure: %v", worker.Failure, integrateErr,
+		return "", false, wtError(
+			"recovery", "integration transaction could not prove safe abort: %v", integrateErr,
 		)
 	}
+	return "", true, integrateErr
+}
+
+func integrationRecoveryRequired(
+	local LocalOptions,
+	managerRoot string,
+	key []byte,
+	worker *WorktreeWorker,
+	transactionRoot string,
+	integrateErr error,
+) (string, bool, error) {
+	worker.Integration.Phase = "recovery_required"
+	worker.Integration.Failure = integrateErr.Error()
+	worker.Integration.UpdatedAt = time.Now().UTC()
+	worker.Failure = "integration recovery requires operator review"
+	worker.LeaseUntil = time.Time{}
+	if err := persistIntegrationPhase(local, managerRoot, key, worker); err != nil {
+		return "", false, err
+	}
+	return "", false, wtError(
+		"recovery", "%s: %v; retained transaction %s",
+		worker.Failure, integrateErr, filepath.Base(transactionRoot),
+	)
+}
+
+func removeIntegrationWorktree(
+	ctx context.Context,
+	git worktreeGitRunner,
+	baseRoot string,
+	transactionRoot string,
+) error {
+	if _, err := os.Lstat(transactionRoot); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if !safeWorktreeTransactionID(filepath.Base(transactionRoot)) {
+		return wtError("ownership", "transaction worktree label is invalid")
+	}
+	if err := rejectWorktreeReparsePath(transactionRoot); err != nil {
+		return err
+	}
+	canonical, err := canonicalExistingPath(transactionRoot)
+	if err != nil || !sameWorktreePath(canonical, transactionRoot) {
+		return wtError("ownership", "transaction worktree path changed")
+	}
+	_, err = git.run(ctx, baseRoot, "worktree", "remove", transactionRoot)
+	return err
+}
+
+func safeWorktreeTransactionID(value string) bool {
+	prefix, rest, ok := strings.Cut(value, "-")
+	if !ok || prefix != "tx" || len(rest) == 0 || len(rest) > 64 {
+		return false
+	}
+	for _, r := range rest {
+		if !strings.ContainsRune("0123456789abcdef", r) {
+			return false
+		}
+	}
+	return true
+}
+
+func verifyIntegratedWorktree(
+	ctx context.Context,
+	baseRoot, transactionRoot string,
+) error {
+	project, err := verify.LoadProject(baseRoot)
+	if err != nil {
+		return wtError("verification", "load configured verification: %v", err)
+	}
+	for _, named := range []struct {
+		name string
+		spec verify.CommandSpec
+	}{
+		{"test", project.TestSpec()},
+		{"build", project.BuildSpec()},
+	} {
+		if len(named.spec.Command) == 0 {
+			continue
+		}
+		result, runErr := verify.RunIsolated(ctx, transactionRoot, named.spec)
+		if runErr != nil {
+			return wtError("verification", "%s verification could not run: %v", named.name, runErr)
+		}
+		if !result.OK {
+			return wtError(
+				"verification", "%s verification failed: %s", named.name, result.Summary,
+			)
+		}
+	}
 	return nil
+}
+
+func reconcileWorktreeIntegration(
+	ctx context.Context,
+	local LocalOptions,
+	managerRoot string,
+	key []byte,
+	worker WorktreeWorker,
+) (WorktreeWorker, error) {
+	transaction := worker.Integration
+	if worker.State != WorktreeIntegrating || transaction == nil {
+		return worker, nil
+	}
+	if !safeWorktreeTransactionID(transaction.ID) ||
+		transaction.WorktreeLabel != transaction.ID {
+		return worker, wtError("ownership", "persisted integration identity is invalid")
+	}
+	git := worktreeGitRunner{expectedCommonDir: worker.GitCommonDir}
+	headRaw, headErr := git.run(ctx, worker.BaseRoot, "rev-parse", "--verify", "HEAD")
+	statusRaw, statusErr := git.run(
+		ctx, worker.BaseRoot, "status", "--porcelain=v1", "--untracked-files=all",
+	)
+	if headErr != nil || statusErr != nil || strings.TrimSpace(statusRaw) != "" {
+		return persistWorktreeRecoveryRequired(
+			local, managerRoot, key, worker,
+			"primary checkout is not provably clean during integration recovery",
+		)
+	}
+	head := strings.TrimSpace(headRaw)
+	transactionRoot := filepath.Join(managerRoot, transaction.WorktreeLabel)
+	if head == transaction.OriginalHead {
+		_, _ = git.run(ctx, transactionRoot, "merge", "--abort")
+		_, _ = git.run(ctx, transactionRoot, "cherry-pick", "--abort")
+		if err := removeIntegrationWorktree(
+			ctx, git, worker.BaseRoot, transactionRoot,
+		); err != nil {
+			return persistWorktreeRecoveryRequired(
+				local, managerRoot, key, worker,
+				"transaction cleanup failed during safe abort",
+			)
+		}
+		worker.State = WorktreeReviewReady
+		worker.Review = nil
+		worker.LeaseUntil = time.Time{}
+		worker.Failure = "interrupted integration was safely aborted during recovery"
+		worker.Integration.Phase = "aborted"
+		worker.Integration.Failure = worker.Failure
+		worker.Integration.UpdatedAt = time.Now().UTC()
+		worker.Revision++
+		worker.UpdatedAt = time.Now().UTC()
+		if err := persistWorktreeTransition(local, managerRoot, key, worker); err != nil {
+			return worker, err
+		}
+		return worker, nil
+	}
+	if transaction.ResultCommit != "" && head == transaction.ResultCommit {
+		treeRaw, treeErr := git.run(ctx, worker.BaseRoot, "rev-parse", "HEAD^{tree}")
+		if treeErr != nil || strings.TrimSpace(treeRaw) != transaction.ResultTree {
+			return persistWorktreeRecoveryRequired(
+				local, managerRoot, key, worker,
+				"integrated tree does not match the verified transaction",
+			)
+		}
+		if err := removeIntegrationWorktree(
+			ctx, git, worker.BaseRoot, transactionRoot,
+		); err != nil {
+			return persistWorktreeRecoveryRequired(
+				local, managerRoot, key, worker,
+				"transaction cleanup failed after verified integration",
+			)
+		}
+		worker.State = WorktreeIntegrated
+		worker.LeaseUntil = time.Time{}
+		worker.Failure = ""
+		worker.IntegrationCommit = transaction.ResultCommit
+		worker.Integration.Phase = "completed"
+		worker.Integration.UpdatedAt = time.Now().UTC()
+		worker.Revision++
+		worker.UpdatedAt = time.Now().UTC()
+		if err := persistWorktreeTransition(local, managerRoot, key, worker); err != nil {
+			return worker, err
+		}
+		return worker, nil
+	}
+	return persistWorktreeRecoveryRequired(
+		local, managerRoot, key, worker,
+		"primary HEAD is neither the original nor verified integration result",
+	)
+}
+
+func persistWorktreeRecoveryRequired(
+	local LocalOptions,
+	managerRoot string,
+	key []byte,
+	worker WorktreeWorker,
+	reason string,
+) (WorktreeWorker, error) {
+	if worker.Integration.Phase == "recovery_required" &&
+		worker.Integration.Failure == reason {
+		return worker, nil
+	}
+	worker.Integration.Phase = "recovery_required"
+	worker.Integration.Failure = reason
+	worker.Integration.UpdatedAt = time.Now().UTC()
+	worker.Failure = reason
+	worker.LeaseUntil = time.Time{}
+	worker.Revision++
+	worker.UpdatedAt = time.Now().UTC()
+	if err := persistWorktreeTransition(local, managerRoot, key, worker); err != nil {
+		return worker, err
+	}
+	return worker, nil
 }
 
 func sameWorktreeReviewBinding(expected, actual WorktreeReview) bool {

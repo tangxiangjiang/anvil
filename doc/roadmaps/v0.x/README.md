@@ -4,7 +4,7 @@ Versioned delivery for Anvil through milestone **0.57**. Design cutoff:
 [`doc/design/v0.x/`](../../design/v0.x/). Milestone 0.46 closes the original VS Code polish
 line; 0.47–0.50 develop the Agent SDK, and 0.51–0.57 secure and productize those capabilities
 in VS Code.
-The Agent SDK, shipped VSIX, and Host version are **0.52.20**. Roadmap status remains separate
+The Agent SDK, shipped VSIX, and Host version are **0.52.21**. Roadmap status remains separate
 from release status; the synchronized product version advances once for each delivered
 user-visible batch.
 

@@ -400,7 +400,7 @@ func (s *Server) handleInitialize(params json.RawMessage) (any, *RPCError) {
 }
 
 func capabilities() []string {
-	return []string{"streaming", "sessions", "session.search", "session.historyContext", "resume", "cancel", "models", "approval", "context", "vision", "plan", "skills", "rules", "permissions", "mcp", "mcp.runtime", "subagents", "tasks", "runs.durable", "workflow", "worktree.review"}
+	return []string{"streaming", "sessions", "session.search", "session.historyContext", "resume", "cancel", "models", "approval", "context", "vision", "plan", "skills", "rules", "permissions", "mcp", "mcp.runtime", "subagents", "tasks", "runs.durable", "workflow", "worktrees"}
 }
 
 // ---------------------------------------------------------------------------

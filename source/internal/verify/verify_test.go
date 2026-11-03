@@ -77,6 +77,44 @@ func TestUnconfigured(t *testing.T) {
 	}
 }
 
+func TestRunIsolatedUsesPrivateHome(t *testing.T) {
+	dir := t.TempDir()
+	var script string
+	var operatorHome string
+	if runtime.GOOS == "windows" {
+		script = filepath.Join(dir, "home.bat")
+		if err := os.WriteFile(script, []byte("@echo off\r\necho %USERPROFILE%\r\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		operatorHome = os.Getenv("USERPROFILE")
+	} else {
+		script = filepath.Join(dir, "home.sh")
+		if err := os.WriteFile(script, []byte("#!/bin/sh\necho \"$HOME\"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		operatorHome = os.Getenv("HOME")
+	}
+	result, err := verify.RunIsolated(context.Background(), dir, verify.CommandSpec{
+		Command: []string{script},
+	})
+	if err != nil || !result.OK {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	got := strings.TrimSpace(result.LogTail)
+	if got == "" || (operatorHome != "" && samePath(got, operatorHome)) {
+		t.Fatalf("isolated home=%q operator home=%q", got, operatorHome)
+	}
+}
+
+func samePath(left, right string) bool {
+	left = filepath.Clean(left)
+	right = filepath.Clean(right)
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(left, right)
+	}
+	return left == right
+}
+
 func writeExitScript(t *testing.T, dir string, code int, msg string) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {

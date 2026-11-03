@@ -418,6 +418,14 @@ export class WorkflowTreeProvider implements vscode.TreeDataProvider<WorkflowTre
         });
       }
     }
+    if (node.worker.integration_phase) {
+      facts.push({
+        kind: 'leaf', id: `worktree:${node.worker.id}:integration`,
+        label: `Integration ${node.worker.integration_phase}`,
+        description: node.worker.integration_failure,
+        icon: node.worker.integration_phase === 'recovery_required' ? 'warning' : 'git-merge',
+      });
+    }
     if (node.worker.failure) {
       facts.push({
         kind: 'leaf', id: `worktree:${node.worker.id}:failure`,

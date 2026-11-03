@@ -1014,6 +1014,8 @@ export interface WorktreeWorkerInfo {
   base_commit: string;
   head_commit?: string;
   integration_commit?: string;
+  integration_phase?: string;
+  integration_failure?: string;
   review?: WorktreeReviewInfo;
   failure?: string;
 }

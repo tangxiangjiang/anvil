@@ -128,6 +128,31 @@ type Result struct {
 
 // Run executes argv under cwd (optional subdir), capturing truncated output.
 func Run(ctx context.Context, cwd string, spec CommandSpec, extra []string, timeout time.Duration) (*Result, error) {
+	return runWithEnvironment(ctx, cwd, spec, extra, timeout, scrubEnv())
+}
+
+// RunIsolated executes configured verification with a private temporary home
+// so repository commands cannot read the operator's user credentials.
+func RunIsolated(ctx context.Context, cwd string, spec CommandSpec) (*Result, error) {
+	home, err := os.MkdirTemp("", "anvil-verify-home-*")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(home)
+	env := scrubEnv()
+	env = replaceEnvironment(env, "HOME", home)
+	env = replaceEnvironment(env, "USERPROFILE", home)
+	return runWithEnvironment(ctx, cwd, spec, nil, 0, env)
+}
+
+func runWithEnvironment(
+	ctx context.Context,
+	cwd string,
+	spec CommandSpec,
+	extra []string,
+	timeout time.Duration,
+	env []string,
+) (*Result, error) {
 	if len(spec.Command) == 0 {
 		return nil, fmt.Errorf("command is not configured")
 	}
@@ -163,7 +188,7 @@ func Run(ctx context.Context, cwd string, spec CommandSpec, extra []string, time
 	defer cancel()
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = dir
-	cmd.Env = scrubEnv()
+	cmd.Env = env
 	var buf bytes.Buffer
 	cmd.Stdout = &limitedWriter{w: &buf, n: maxCaptureBytes}
 	cmd.Stderr = &limitedWriter{w: &buf, n: maxCaptureBytes}
@@ -205,6 +230,17 @@ func Run(ctx context.Context, cwd string, spec CommandSpec, extra []string, time
 		Errors:   errors,
 		LogTail:  tail(raw, logTailRunes),
 	}, nil
+}
+
+func replaceEnvironment(env []string, key, value string) []string {
+	prefix := strings.ToUpper(key) + "="
+	out := make([]string, 0, len(env)+1)
+	for _, item := range env {
+		if !strings.HasPrefix(strings.ToUpper(item), prefix) {
+			out = append(out, item)
+		}
+	}
+	return append(out, key+"="+value)
 }
 
 type limitedWriter struct {

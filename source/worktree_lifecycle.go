@@ -61,31 +61,32 @@ var errWorktreeLifecycleLockBusy = errors.New("worktree lifecycle lock is busy")
 // WorktreeWorker is the coordinator-owned lifecycle manifest. Absolute paths
 // remain local persistence facts and are not model input.
 type WorktreeWorker struct {
-	Schema            int                 `json:"schema"`
-	Revision          uint64              `json:"revision"`
-	ID                string              `json:"id"`
-	AgentID           string              `json:"agent_id"`
-	ArtifactID        string              `json:"artifact_id"`
-	WorkItemID        string              `json:"work_item_id"`
-	ExecutionID       string              `json:"execution_id"`
-	Attempt           int                 `json:"attempt"`
-	State             WorktreeWorkerState `json:"state"`
-	BaseRoot          string              `json:"base_root"`
-	WorktreeRoot      string              `json:"worktree_root"`
-	GitCommonDir      string              `json:"git_common_dir"`
-	BaseRef           string              `json:"base_ref"`
-	BaseCommit        string              `json:"base_commit"`
-	Branch            string              `json:"branch"`
-	HeadCommit        string              `json:"head_commit,omitempty"`
-	OwnerHostID       string              `json:"owner_host_id"`
-	LeaseUntil        time.Time           `json:"lease_until"`
-	CheckpointID      string              `json:"checkpoint_id,omitempty"`
-	Review            *WorktreeReview     `json:"review,omitempty"`
-	IntegrationCommit string              `json:"integration_commit,omitempty"`
-	CleanupPolicy     string              `json:"cleanup_policy,omitempty"`
-	Failure           string              `json:"failure,omitempty"`
-	CreatedAt         time.Time           `json:"created_at"`
-	UpdatedAt         time.Time           `json:"updated_at"`
+	Schema            int                             `json:"schema"`
+	Revision          uint64                          `json:"revision"`
+	ID                string                          `json:"id"`
+	AgentID           string                          `json:"agent_id"`
+	ArtifactID        string                          `json:"artifact_id"`
+	WorkItemID        string                          `json:"work_item_id"`
+	ExecutionID       string                          `json:"execution_id"`
+	Attempt           int                             `json:"attempt"`
+	State             WorktreeWorkerState             `json:"state"`
+	BaseRoot          string                          `json:"base_root"`
+	WorktreeRoot      string                          `json:"worktree_root"`
+	GitCommonDir      string                          `json:"git_common_dir"`
+	BaseRef           string                          `json:"base_ref"`
+	BaseCommit        string                          `json:"base_commit"`
+	Branch            string                          `json:"branch"`
+	HeadCommit        string                          `json:"head_commit,omitempty"`
+	OwnerHostID       string                          `json:"owner_host_id"`
+	LeaseUntil        time.Time                       `json:"lease_until"`
+	CheckpointID      string                          `json:"checkpoint_id,omitempty"`
+	Review            *WorktreeReview                 `json:"review,omitempty"`
+	Integration       *WorktreeIntegrationTransaction `json:"integration,omitempty"`
+	IntegrationCommit string                          `json:"integration_commit,omitempty"`
+	CleanupPolicy     string                          `json:"cleanup_policy,omitempty"`
+	Failure           string                          `json:"failure,omitempty"`
+	CreatedAt         time.Time                       `json:"created_at"`
+	UpdatedAt         time.Time                       `json:"updated_at"`
 }
 
 // WorktreePrepareOptions contains only coordinator/operator inputs. Directory
@@ -391,6 +392,14 @@ func ListWorktreeWorkers(
 	for _, worker := range owners {
 		if _, err := reconcileWorktreeStore(opts.Local, worker); err != nil {
 			return nil, err
+		}
+		if worker.State == WorktreeIntegrating {
+			worker, err = reconcileWorktreeIntegration(
+				ctx, opts.Local, root, key, worker,
+			)
+			if err != nil {
+				return nil, err
+			}
 		}
 		if opts.AgentID == "" || worker.AgentID == opts.AgentID {
 			out = append(out, worker)
@@ -1158,7 +1167,8 @@ func validWorktreeStoreTransition(previous, current WorktreeWorker) bool {
 	case WorktreeIntegrated, WorktreeDiscarded:
 		allowed = current.State == WorktreeCleaning
 	case WorktreeIntegrating:
-		allowed = current.State == WorktreeIntegrated ||
+		allowed = current.State == WorktreeIntegrating ||
+			current.State == WorktreeIntegrated ||
 			current.State == WorktreeReviewReady
 	case WorktreeCleaning:
 		allowed = current.State == WorktreeRemoved ||
@@ -1203,12 +1213,23 @@ func validWorktreeStoreTransition(previous, current WorktreeWorker) bool {
 		(previous.State == WorktreeIntegrating &&
 			current.State == WorktreeIntegrated &&
 			current.IntegrationCommit != "")
+	transactionValid := sameWorktreeIntegration(previous.Integration, current.Integration)
+	if previous.State == WorktreeReviewReady && current.State == WorktreeIntegrating {
+		transactionValid = previous.Integration == nil && current.Integration != nil
+	} else if previous.State == WorktreeIntegrating {
+		transactionValid = current.Integration != nil &&
+			previous.Integration != nil &&
+			previous.Integration.ID == current.Integration.ID &&
+			previous.Integration.OriginalHead == current.Integration.OriginalHead &&
+			previous.Integration.ReviewDigest == current.Integration.ReviewDigest
+	}
 	return allowed &&
 		headValid &&
 		policyValid &&
 		checkpointValid &&
 		reviewValid &&
 		integrationValid &&
+		transactionValid &&
 		current.Revision == previous.Revision+1 &&
 		previous.Schema == current.Schema &&
 		previous.ID == current.ID &&
@@ -1226,6 +1247,17 @@ func validWorktreeStoreTransition(previous, current WorktreeWorker) bool {
 		previous.OwnerHostID == current.OwnerHostID &&
 		previous.CreatedAt.Equal(current.CreatedAt) &&
 		!current.UpdatedAt.Before(previous.UpdatedAt)
+}
+
+func sameWorktreeIntegration(
+	left, right *WorktreeIntegrationTransaction,
+) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	a, _ := json.Marshal(left)
+	b, _ := json.Marshal(right)
+	return bytes.Equal(a, b)
 }
 
 func sameWorktreeReview(left, right *WorktreeReview) bool {

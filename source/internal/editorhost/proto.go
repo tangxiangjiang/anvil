@@ -1772,19 +1772,21 @@ type WorktreeReviewInfo struct {
 }
 
 type WorktreeWorkerInfo struct {
-	ID                string              `json:"id"`
-	AgentID           string              `json:"agent_id"`
-	ArtifactID        string              `json:"artifact_id"`
-	WorkItemID        string              `json:"work_item_id"`
-	ExecutionID       string              `json:"execution_id"`
-	Revision          uint64              `json:"revision"`
-	State             string              `json:"state"`
-	WorktreeLabel     string              `json:"worktree_label"`
-	BaseCommit        string              `json:"base_commit"`
-	HeadCommit        string              `json:"head_commit,omitempty"`
-	IntegrationCommit string              `json:"integration_commit,omitempty"`
-	Review            *WorktreeReviewInfo `json:"review,omitempty"`
-	Failure           string              `json:"failure,omitempty"`
+	ID                 string              `json:"id"`
+	AgentID            string              `json:"agent_id"`
+	ArtifactID         string              `json:"artifact_id"`
+	WorkItemID         string              `json:"work_item_id"`
+	ExecutionID        string              `json:"execution_id"`
+	Revision           uint64              `json:"revision"`
+	State              string              `json:"state"`
+	WorktreeLabel      string              `json:"worktree_label"`
+	BaseCommit         string              `json:"base_commit"`
+	HeadCommit         string              `json:"head_commit,omitempty"`
+	IntegrationCommit  string              `json:"integration_commit,omitempty"`
+	IntegrationPhase   string              `json:"integration_phase,omitempty"`
+	IntegrationFailure string              `json:"integration_failure,omitempty"`
+	Review             *WorktreeReviewInfo `json:"review,omitempty"`
+	Failure            string              `json:"failure,omitempty"`
 }
 
 type WorktreeReviewResult struct {

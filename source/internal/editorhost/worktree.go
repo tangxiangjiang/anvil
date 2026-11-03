@@ -157,6 +157,10 @@ func worktreeWorkerInfo(worker anvil.WorktreeWorker) WorktreeWorkerInfo {
 		BaseCommit:    worker.BaseCommit, HeadCommit: worker.HeadCommit,
 		IntegrationCommit: worker.IntegrationCommit, Failure: worker.Failure,
 	}
+	if worker.Integration != nil {
+		info.IntegrationPhase = worker.Integration.Phase
+		info.IntegrationFailure = worker.Integration.Failure
+	}
 	if worker.Review != nil {
 		review := worktreeReviewInfo(*worker.Review)
 		info.Review = &review
