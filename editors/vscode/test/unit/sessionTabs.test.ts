@@ -30,6 +30,26 @@ test('every stored session open path reveals its existing chat tab', () => {
   );
 });
 
+test('a restoring session keeps its tab identity during the temporary host open', () => {
+  assert.match(HUB, /findByAgent\(agentId: string\)[\s\S]*?panel\.matchesAgent\(agentId\)/);
+  assert.match(
+    CHAT,
+    /currentAgentId\(\): string \| undefined \{\s*return this\.resumingAgentId \?\? this\.agentId \?\? this\.session\?\.agent/,
+  );
+  assert.match(
+    CHAT,
+    /matchesAgent\(agentId: string\)[\s\S]*?agentId === this\.resumingAgentId[\s\S]*?agentId === this\.agentId[\s\S]*?agentId === this\.session\?\.agent/,
+  );
+  const resume = /private async resumeAgent\(agentId: string\)[\s\S]*?\n {2}\}/.exec(CHAT);
+  assert.ok(resume);
+  assert.ok(
+    resume[0].indexOf('this.resumingAgentId = agentId') < resume[0].indexOf('await this.ensureSession()'),
+    'the destination is claimed before host work starts',
+  );
+  assert.match(resume[0], /catch \(err\) \{\s*this\.resumingAgentId = undefined/);
+  assert.match(CHAT, /if \(this\.resumingAgentId && agentId !== this\.resumingAgentId\) return/);
+});
+
 test('the duplicate-session-tab command is no longer contributed or registered', () => {
   assert.equal(
     PACKAGE.contributes.commands.some((entry) => entry.command === 'anvil.openSessionInNewTab'),

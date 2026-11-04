@@ -154,11 +154,15 @@ export async function pickMentions(): Promise<string[]> {
  * Builds the context object for one prompt, or undefined when there is nothing
  * to say — so a plain question goes on the wire exactly as it did before.
  */
-export function buildPromptContext(mentions: string[], quotes: Quote[] = []): PromptContext | undefined {
+export function buildPromptContext(
+  mentions: string[],
+  quotes: Quote[] = [],
+  explicitSelection?: Selection | null,
+): PromptContext | undefined {
   const context: PromptContext = {};
   if (mentions.length > 0) context.mentions = mentions.map((path) => ({ path }));
   if (quotes.length > 0) context.quotes = quotes;
-  const selection = currentSelection();
+  const selection = explicitSelection === undefined ? currentSelection() : explicitSelection ?? undefined;
   if (selection) context.selection = selection;
   const diagnostics = currentDiagnostics();
   if (diagnostics.length > 0) context.diagnostics = diagnostics;

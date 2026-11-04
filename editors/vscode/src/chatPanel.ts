@@ -71,6 +71,7 @@ import {
   SessionResult,
   SessionCompactResult,
   SessionTranscriptResult,
+  Selection,
   TaskInfo,
 } from './protocol';
 import { RunFailure } from './errors';
@@ -94,11 +95,19 @@ interface TurnPayload {
   quotes?: Array<{ role: 'user' | 'assistant'; text: string }>;
 }
 
+interface SourceSelectionDisplay {
+  path: string;
+  startLine: number;
+  endLine: number;
+}
+
 interface QueuedTurn {
   text: string;
   mentions: string[];
   images: string[];
   quotes: Array<{ role: 'user' | 'assistant'; text: string }>;
+  /** Undefined uses live editor context; null explicitly suppresses it. */
+  selection?: Selection | null;
   /** Options selected in the composer when this turn was submitted. */
   model: string;
   effort: Effort;
@@ -196,6 +205,7 @@ type Inbound =
    * holds; the host writes it, because the clipboard belongs to the editor.
    */
   | { type: 'copy'; text: string }
+  | { type: 'clearSourceSelection' }
   /** The composer's image button: the extension's own open dialog. */
   | { type: 'pickImages' }
   /**
@@ -254,8 +264,9 @@ type Outbound =
     }
   | { type: 'done'; done: DoneParams; failure: RunFailure }
   | { type: 'queue'; count: number; interrupting: boolean }
-  | ({ type: 'dispatchQueued' } & TurnPayload)
+  | ({ type: 'dispatchQueued'; sourceSelection?: SourceSelectionDisplay } & TurnPayload)
   | { type: 'mentions'; paths: string[] }
+  | { type: 'sourceSelection'; selection?: SourceSelectionDisplay }
   /**
    * Images the picker read, as data URLs — the same shape a paste leaves in
    * the composer, so the webview has one representation to draw and one path to
@@ -574,6 +585,8 @@ export class ChatPanel implements HostListener {
    * not started yet.
    */
   private agentId: string | undefined;
+  /** Destination reserved while a stored conversation is being restored. */
+  private resumingAgentId: string | undefined;
   /** Highest durable event sequence rendered for each run in this document. */
   private readonly eventWatermarks = new Map<string, number>();
   /** Keeps replay, gap fills, and live delivery in durable sequence order. */
@@ -594,6 +607,10 @@ export class ChatPanel implements HostListener {
   private resolvedModel: string | undefined;
   /** Whether this is the tab in front, for the one command that means "this one". */
   private active = false;
+  /** Exact source text captured by the editor command for the next submitted turn. */
+  private pendingSourceSelection: Selection | undefined;
+  /** Distinguishes removing an explicit chip from never adding one. */
+  private sourceSelectionTouched = false;
   private disposed = false;
   /** Pre-images for the current turn, so the changed-files list can show diffs. */
   private readonly changes = new ChangesTracker();
@@ -752,9 +769,13 @@ export class ChatPanel implements HostListener {
     );
     panel.webview.onDidReceiveMessage((msg: Inbound) => void this.onMessage(msg));
     this.active = panel.active;
+    if (this.active) this.hub.panelActivated(this);
     panel.onDidChangeViewState((event) => {
       this.active = event.webviewPanel.active;
-      if (this.active) this.post({ type: 'focus' });
+      if (this.active) {
+        this.hub.panelActivated(this);
+        this.post({ type: 'focus' });
+      }
       // The front tab changed, and Stop means the tab in front of the user.
       this.hub.notifyRunning();
     });
@@ -795,6 +816,34 @@ export class ChatPanel implements HostListener {
       return;
     }
     this.panel.reveal(this.panel.viewColumn, false);
+  }
+
+  /** Attaches a frozen editor selection to the next turn and reveals its chip. */
+  addSourceSelection(selection: Selection): void {
+    this.pendingSourceSelection = {
+      ...selection,
+      range: { ...selection.range },
+    };
+    this.sourceSelectionTouched = true;
+    this.reveal();
+    this.post({
+      type: 'sourceSelection',
+      selection: this.sourceSelectionDisplay(this.pendingSourceSelection),
+    });
+  }
+
+  private sourceSelectionDisplay(selection: Selection): SourceSelectionDisplay {
+    const endLine =
+      selection.range.end_column === 1
+      && selection.range.end_line > selection.range.start_line
+      && selection.text.endsWith('\n')
+        ? selection.range.end_line - 1
+        : selection.range.end_line;
+    return {
+      path: vscode.workspace.asRelativePath(selection.path, false).replace(/\\/g, '/'),
+      startLine: selection.range.start_line,
+      endLine,
+    };
   }
 
   /** Draws an old search hit in a bounded block apart from the live transcript. */
@@ -976,6 +1025,9 @@ export class ChatPanel implements HostListener {
       this.postEffort();
       this.postOutputLimit();
       this.postQueue();
+      if (this.pendingSourceSelection) {
+        this.post({ type: 'sourceSelection', selection: this.sourceSelectionDisplay(this.pendingSourceSelection) });
+      }
       if (this.rules.length > 0) this.post({ type: 'rules', files: this.rules });
       this.postState();
       for (const request of this.pendingApprovals()) {
@@ -1010,17 +1062,12 @@ export class ChatPanel implements HostListener {
 
     switch (msg.type) {
       case 'send':
-        await this.sendTurn({
+        await this.sendTurn(this.turnPayload({
           text: msg.text,
           mentions: msg.mentions ?? [],
           images: msg.images ?? [],
           quotes: msg.quotes ?? [],
-          model: this.overrides.model ?? '',
-          effort: this.overrides.effort ?? 'medium',
-          maxOutputTokens: this.overrides.max_output_tokens ?? 0,
-          permissionMode: this.mode ?? null,
-          agentMode: this.collaboration,
-        });
+        }));
         return;
       case 'enqueue':
         await this.enqueueTurn(this.turnPayload(msg));
@@ -1124,6 +1171,10 @@ export class ChatPanel implements HostListener {
         return;
       case 'copy':
         await this.copy(msg.text);
+        return;
+      case 'clearSourceSelection':
+        this.pendingSourceSelection = undefined;
+        this.sourceSelectionTouched = true;
         return;
       case 'pickImages':
         await this.pickImages();
@@ -1335,18 +1386,43 @@ export class ChatPanel implements HostListener {
 
   // --- commands ---------------------------------------------------------------
 
-  private turnPayload(payload: TurnPayload): QueuedTurn {
+  private turnPayload(payload: TurnPayload, consumeSourceSelection = true): QueuedTurn {
+    const selection = consumeSourceSelection && this.sourceSelectionTouched
+      ? this.pendingSourceSelection
+        ? {
+            ...this.pendingSourceSelection,
+            range: { ...this.pendingSourceSelection.range },
+          }
+        : null
+      : undefined;
+    if (consumeSourceSelection && this.sourceSelectionTouched) {
+      this.pendingSourceSelection = undefined;
+      this.sourceSelectionTouched = false;
+      this.post({ type: 'sourceSelection' });
+    }
     return {
       text: payload.text,
       mentions: [...(payload.mentions ?? [])],
       images: [...(payload.images ?? [])],
       quotes: (payload.quotes ?? []).map((quote) => ({ ...quote })),
+      selection,
       model: this.overrides.model ?? '',
       effort: this.overrides.effort ?? 'medium',
       maxOutputTokens: this.overrides.max_output_tokens ?? 0,
       permissionMode: this.mode ?? null,
       agentMode: this.collaboration,
     };
+  }
+
+  private postDispatchQueued(turn: QueuedTurn): void {
+    this.post({
+      type: 'dispatchQueued',
+      text: turn.text,
+      mentions: turn.mentions,
+      images: turn.images,
+      quotes: turn.quotes,
+      sourceSelection: turn.selection ? this.sourceSelectionDisplay(turn.selection) : undefined,
+    });
   }
 
   private postQueue(): void {
@@ -1365,7 +1441,7 @@ export class ChatPanel implements HostListener {
 
   private async enqueueTurn(turn: QueuedTurn): Promise<void> {
     if (!this.busy && !this.dispatchingTurn && this.turnQueue.count === 0) {
-      this.post({ type: 'dispatchQueued', ...turn });
+      this.postDispatchQueued(turn);
       await this.sendTurn(turn);
       return;
     }
@@ -1379,7 +1455,7 @@ export class ChatPanel implements HostListener {
    */
   private async sendPriority(turn: QueuedTurn): Promise<void> {
     if (!this.busy && !this.dispatchingTurn) {
-      this.post({ type: 'dispatchQueued', ...turn });
+      this.postDispatchQueued(turn);
       await this.sendTurn(turn);
       return;
     }
@@ -1406,7 +1482,7 @@ export class ChatPanel implements HostListener {
     }
     this.dispatchingTurn = true;
     this.postQueue();
-    this.post({ type: 'dispatchQueued', ...turn });
+    this.postDispatchQueued(turn);
     try {
       await this.sendTurn(turn);
     } finally {
@@ -1806,7 +1882,12 @@ export class ChatPanel implements HostListener {
 
   /** The agent the tab is showing, whether or not a turn is in flight. */
   currentAgentId(): string | undefined {
-    return this.session?.agent ?? this.agentId;
+    return this.resumingAgentId ?? this.agentId ?? this.session?.agent;
+  }
+
+  /** True for both the tab's durable identity and any live transition identity. */
+  matchesAgent(agentId: string): boolean {
+    return agentId === this.resumingAgentId || agentId === this.agentId || agentId === this.session?.agent;
   }
 
   /** The agent with a turn in flight. */
@@ -1897,7 +1978,7 @@ export class ChatPanel implements HostListener {
     const action = parseSlash(turn.text)
       ? route(turn.text, await this.commandCatalogue())
       : { kind: 'prompt' as const, text: turn.text };
-    await this.runAction(action, turn.text, turn.mentions, turn.images, turn.quotes);
+    await this.runAction(action, turn.text, turn.mentions, turn.images, turn.quotes, turn.selection);
   }
 
   /**
@@ -1911,15 +1992,16 @@ export class ChatPanel implements HostListener {
     mentions: string[],
     images: string[],
     quotes: Array<{ role: 'user' | 'assistant'; text: string }>,
+    selection?: Selection | null,
   ): Promise<void> {
     switch (action.kind) {
       case 'prompt':
-        await this.sendQuestion(action.text, mentions, images, quotes);
+        await this.sendQuestion(action.text, mentions, images, quotes, undefined, selection);
         return;
       case 'mode':
         await this.setMode(action.mode);
         if (action.args !== '') {
-          await this.sendQuestion(action.args, mentions, images, quotes);
+          await this.sendQuestion(action.args, mentions, images, quotes, undefined, selection);
           return;
         }
         this.postState();
@@ -1988,7 +2070,7 @@ export class ChatPanel implements HostListener {
           });
         }
         if (action.args !== '') {
-          await this.sendQuestion(action.args, mentions, images, quotes);
+          await this.sendQuestion(action.args, mentions, images, quotes, undefined, selection);
           return;
         }
         this.postState();
@@ -1997,7 +2079,7 @@ export class ChatPanel implements HostListener {
       default:
         // Unreachable while every action has a case. Sending what was typed is
         // the safe ending: a new command cannot swallow the user's words.
-        await this.sendQuestion(text, mentions, images, quotes);
+        await this.sendQuestion(text, mentions, images, quotes, undefined, selection);
         return;
     }
   }
@@ -2079,10 +2161,14 @@ export class ChatPanel implements HostListener {
       existing.reveal();
       return;
     }
+    // Claim the destination before the host opens its temporary session. A
+    // repeated sidebar click during either await must find this tab.
+    this.resumingAgentId = agentId;
     try {
       const session = await this.ensureSession();
       await session.continueWith(agentId);
     } catch (err) {
+      this.resumingAgentId = undefined;
       this.post({
         type: 'notice',
         level: 'error',
@@ -2092,6 +2178,7 @@ export class ChatPanel implements HostListener {
       return;
     }
     this.agentId = agentId;
+    this.resumingAgentId = undefined;
     this.postAgentId();
     // Cleared before the marker, never after: the transcript that was on screen
     // belonged to the agent that was current a moment ago, and the marker is
@@ -2299,6 +2386,10 @@ export class ChatPanel implements HostListener {
    * that survives a reload.
    */
   private rememberAgent(agentId: string): void {
+    // `ensureSession` opens once before `continueWith` can restore the requested
+    // conversation. That first agent is an implementation detail, not a new tab
+    // identity, and must not make the destination invisible to `findByAgent`.
+    if (this.resumingAgentId && agentId !== this.resumingAgentId) return;
     if (!agentId || agentId === this.agentId) return;
     this.agentId = agentId;
     void this.rememberCollaboration();
@@ -2400,11 +2491,12 @@ export class ChatPanel implements HostListener {
     images: string[],
     quotes: Array<{ role: 'user' | 'assistant'; text: string }>,
     continueFrom?: string,
+    selection?: Selection | null,
   ): Promise<void> {
     // A continuation is intentionally a clean model turn. In particular it
     // must not silently capture the editor's current selection after the user
     // has confirmed the fixed continuation prompt.
-    const context = continueFrom ? undefined : buildPromptContext(dedupeMentions(mentions), quotes);
+    const context = continueFrom ? undefined : buildPromptContext(dedupeMentions(mentions), quotes, selection);
     const { attachments, errors } = continueFrom
       ? { attachments: [], errors: [] }
       : attachmentsFromDataUrls(images);
@@ -2449,7 +2541,7 @@ export class ChatPanel implements HostListener {
       this.post({ type: 'continuationCancelled', runId: id });
       return;
     }
-    const turn = this.turnPayload({ text: CONTINUATION_PROMPT });
+    const turn = this.turnPayload({ text: CONTINUATION_PROMPT }, false);
     turn.continueFrom = id;
     this.post({ type: 'user', text: CONTINUATION_PROMPT, continueFrom: id });
     try {

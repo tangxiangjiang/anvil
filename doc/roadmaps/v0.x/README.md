@@ -6,7 +6,7 @@ line; 0.47–0.50 develop the Agent SDK, and 0.51–0.57 secure and productize t
 in VS Code. The planned 0.60–0.66 line closes end-to-end execution, remote delivery,
 browser/computer use, stronger isolation, autonomous review, production hardening, and remote
 Workers. Milestones 0.58–0.59 are intentionally unassigned.
-The Agent SDK, shipped VSIX, and Host version are **0.52.21**. Roadmap status remains separate
+The Agent SDK, shipped VSIX, and Host version are **0.52.23**. Roadmap status remains separate
 from release status; the synchronized product version advances once for each delivered
 user-visible batch.
 
@@ -59,7 +59,7 @@ user-visible batch.
 | 0.43 | Context management | done | [m_0.43_context_management.vscode.md](m_0.43_context_management.vscode.md) | [43](../../design/v0.x/43-context-management.vscode.md) |
 | 0.44 | MCP management | done | [m_0.44_mcp_management.vscode.md](m_0.44_mcp_management.vscode.md) | [44](../../design/v0.x/44-mcp-management.vscode.md) |
 | 0.45 | Protocol smoke + web polish | done | [m_0.45_protocol_smoke.md](m_0.45_protocol_smoke.md) | [35](../../design/v0.x/35-vscode-extension.vscode.md) + [45](../../design/v0.x/45-web-editor-polish.md) |
-| 0.46 | Editor polish (89 phases) | done | [m_0.46_editor_polish.vscode.md](m_0.46_editor_polish.vscode.md) | [46](../../design/v0.x/46-editor-polish.vscode.md) |
+| 0.46 | Editor polish (91 phases) | done | [m_0.46_editor_polish.vscode.md](m_0.46_editor_polish.vscode.md) | [46](../../design/v0.x/46-editor-polish.vscode.md) |
 | 0.47 | Evaluation baseline and audit | done | [m_0.47_evaluation_and_audit.md](m_0.47_evaluation_and_audit.md) | [47](../../design/v0.x/47-evaluation.md) |
 | 0.48 | LLM calls: effort, retry, stop reasons | done | [m_0.48_llm_calls.md](m_0.48_llm_calls.md) | [48](../../design/v0.x/48-llm-effort-and-retry.md) |
 | 0.49 | Roles and prompts | done | [m_0.49_roles_and_prompts.md](m_0.49_roles_and_prompts.md) | [49](../../design/v0.x/49-roles-and-prompts.md) |

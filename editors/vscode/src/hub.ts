@@ -62,6 +62,7 @@ import {
   SessionSearchParams,
   SessionSearchResult,
   SessionTranscriptResult,
+  Selection,
   SkillEntry,
   SubagentProfile,
   SubagentsResult,
@@ -90,6 +91,8 @@ export class Hub {
   readonly manager: HostManager;
 
   private readonly panels = new Set<ChatPanel>();
+  /** Most recently focused chat, retained while focus moves back to a source editor. */
+  private lastActivePanel: ChatPanel | undefined;
   /** Human-readable names from the latest successful session listing. */
   private readonly sessionTitles = new Map<string, string>();
   /** The window's rules manager; one document, revealed rather than duplicated. */
@@ -208,6 +211,7 @@ export class Hub {
   /** Called by a panel when its webview is disposed. */
   unregister(panel: ChatPanel): void {
     if (!this.panels.delete(panel)) return;
+    if (this.lastActivePanel === panel) this.lastActivePanel = [...this.panels][0];
     this.tabsChanged.fire();
     this.runningChanged.fire();
   }
@@ -215,7 +219,7 @@ export class Hub {
   /** The tab already showing an agent, if one is. */
   findByAgent(agentId: string): ChatPanel | undefined {
     for (const panel of this.panels) {
-      if (panel.currentAgentId() === agentId) return panel;
+      if (panel.matchesAgent(agentId)) return panel;
     }
     return undefined;
   }
@@ -246,6 +250,17 @@ export class Hub {
       if (panel.isActive()) return panel;
     }
     return undefined;
+  }
+
+  /** Remembers a chat before editor focus moves to the source selection command. */
+  panelActivated(panel: ChatPanel): void {
+    if (this.panels.has(panel)) this.lastActivePanel = panel;
+  }
+
+  /** Places a frozen source selection in the best matching chat composer. */
+  addSelectionToChat(selection: Selection): void {
+    const panel = this.activePanel() ?? this.lastActivePanel ?? [...this.panels][0] ?? this.openTab();
+    panel.addSourceSelection(selection);
   }
 
   /**

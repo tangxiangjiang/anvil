@@ -1502,3 +1502,29 @@ Manager root rather than among New session and the dated conversation groups.
 Its label, gear icon, and command remain the same while the hierarchy states
 the correct ownership
 ([p_0.46.89](../../roadmaps/v0.x/m_0.46/p_0.46.89.vscode.md)).
+
+## 77. Source selections become explicit chat references
+
+A source selection is context, not composer text. The editor therefore contributes **Add Selection
+to Anvil Chat** to the source-editor context menu and a matching keyboard shortcut. The command
+captures the current file path, one-based range, and selected text before focus leaves the editor,
+then reveals the most recently used Anvil chat (or creates one).
+
+The composer displays a removable `path:start-end` chip. Sending binds that frozen snapshot to the
+turn; later edits or cursor movement cannot change it, and removing the chip sends no selection.
+The existing `@` picker remains the whole-file/folder path and does not invent line syntax the host
+cannot resolve. Empty, non-file, or whitespace-only selections are refused without opening a new
+conversation
+([p_0.46.90](../../roadmaps/v0.x/m_0.46/p_0.46.90.vscode.md)).
+
+## 78. An open session owns exactly one chat tab
+
+The session id attached to a chat tab is its stable identity. A temporary live session opened while
+the stored conversation is being restored must not replace that identity for tab lookup: otherwise
+a second click during restoration cannot find the first tab and creates a duplicate.
+
+Every Session Manager open path therefore matches the tab's bound agent id before considering the
+live session's id, and `/resume` reserves its destination before asynchronous host work begins.
+Clicking an already open session only reveals and activates its existing tab, including while that
+tab is restoring
+([p_0.46.91](../../roadmaps/v0.x/m_0.46/p_0.46.91.vscode.md)).

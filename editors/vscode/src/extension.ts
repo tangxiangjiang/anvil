@@ -10,6 +10,7 @@
 
 import * as vscode from 'vscode';
 import { ChatPanel } from './chatPanel';
+import { currentSelection } from './editorContext';
 import { Hub } from './hub';
 import { PLAN_SCHEME, planTarget } from './plan';
 import { PlanDocuments } from './planDocument';
@@ -166,6 +167,15 @@ export function activate(context: vscode.ExtensionContext): void {
     // "+" affordances point at: two conversations are two tabs.
     vscode.commands.registerCommand('anvil.openChat', () => {
       hub.openTab();
+    }),
+
+    vscode.commands.registerCommand('anvil.addSelectionToChat', () => {
+      const selection = currentSelection();
+      if (!selection) {
+        void vscode.window.showInformationMessage('Select non-empty text in a file before adding it to Anvil Chat.');
+        return;
+      }
+      hub.addSelectionToChat(selection);
     }),
 
     // What the status bar runs: take the user to the work rather than to a new

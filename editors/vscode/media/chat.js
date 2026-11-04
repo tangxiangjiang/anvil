@@ -290,6 +290,8 @@
   const runSummaries = new Map();
   /** Referenced workspace paths, in the order they were picked. */
   let mentions = [];
+  /** Frozen source range supplied by the editor command for the next turn. */
+  let sourceSelection = null;
   /** Earlier messages selected as context for the next prompt. */
   let quotes = [];
   /** The current browser selection, split into narrative regions by speaker. */
@@ -1365,7 +1367,7 @@
     continuationButtons.clear();
   }
 
-  function addUser(text, sentMentions, sentImages, sentQuotes, continueFrom) {
+  function addUser(text, sentMentions, sentImages, sentQuotes, continueFrom, sentSelection) {
     // This message opens a new turn: the reply above it folds, and the message
     // itself is never part of a reply.
     if (active === mainScope) closeReply();
@@ -1389,6 +1391,11 @@
       const refs = el('div', 'refs');
       for (const mention of sentMentions) refs.appendChild(el('span', 'ref', '@' + mention));
       wrap.appendChild(refs);
+    }
+    if (sentSelection && sentSelection.path) {
+      const refs = wrap.querySelector('.refs') || el('div', 'refs');
+      refs.appendChild(el('span', 'ref selection-ref', '@' + sourceSelectionLabel(sentSelection)));
+      if (!refs.parentNode) wrap.appendChild(refs);
     }
     if (sentQuotes && sentQuotes.length) {
       const refs = wrap.querySelector('.refs') || el('div', 'refs');
@@ -4284,9 +4291,10 @@
   function renderChips() {
     chipsBar.textContent = '';
     for (const mention of mentions) chipsBar.appendChild(mentionChip(mention));
+    if (sourceSelection) chipsBar.appendChild(sourceSelectionChip(sourceSelection));
     for (const quote of quotes) chipsBar.appendChild(quoteChip(quote));
     for (let index = 0; index < images.length; index++) chipsBar.appendChild(imageChip(index));
-    chipsBar.hidden = mentions.length === 0 && quotes.length === 0 && images.length === 0;
+    chipsBar.hidden = mentions.length === 0 && !sourceSelection && quotes.length === 0 && images.length === 0;
   }
 
   function removeChip(title, onRemove) {
@@ -4307,6 +4315,27 @@
       removeChip(`Stop referencing ${path}`, () => {
         mentions = mentions.filter((candidate) => candidate !== path);
         renderChips();
+      }),
+    );
+    return chip;
+  }
+
+  function sourceSelectionLabel(selection) {
+    const start = Number(selection.startLine) || 1;
+    const end = Number(selection.endLine) || start;
+    return selection.path + ':' + start + (end === start ? '' : '-' + end);
+  }
+
+  function sourceSelectionChip(selection) {
+    const label = sourceSelectionLabel(selection);
+    const chip = el('span', 'chip selection');
+    chip.title = 'Source selection ' + label;
+    chip.appendChild(el('span', 'chip-label', label));
+    chip.appendChild(
+      removeChip('Stop referencing ' + label, () => {
+        sourceSelection = null;
+        renderChips();
+        vscode.postMessage({ type: 'clearSourceSelection' });
       }),
     );
     return chip;
@@ -5742,7 +5771,7 @@
     const sentMentions = Array.isArray(msg.mentions) ? msg.mentions : [];
     const sentImages = Array.isArray(msg.images) ? msg.images : [];
     const sentQuotes = Array.isArray(msg.quotes) ? msg.quotes : [];
-    addUser(msg.text || '', sentMentions, sentImages, sentQuotes);
+    addUser(msg.text || '', sentMentions, sentImages, sentQuotes, undefined, msg.sourceSelection);
     setStatus('');
     todoEpoch += 1;
     setRunning(true);
@@ -6510,6 +6539,7 @@
     const sentMentions = mentions.slice();
     const sentImages = images.slice();
     const sentQuotes = quotes.slice();
+    const sentSelection = sourceSelection;
     // Recorded before the box is emptied: the prompt is what the user typed,
     // and the walk below must not depend on the composer still holding it.
     historyMath.record(history, text);
@@ -6519,11 +6549,12 @@
     mentions = [];
     quotes = [];
     images = [];
+    sourceSelection = null;
     closePalette();
     renderChips();
     const type = running ? (runningSendMode === 'steer' ? 'sendPriority' : 'enqueue') : 'send';
     if (!running) {
-      addUser(text, sentMentions, sentImages, sentQuotes);
+      addUser(text, sentMentions, sentImages, sentQuotes, undefined, sentSelection);
       // Optimistic: the host's `state` notification confirms it a moment later.
       setRunning(true);
       setStatus('');
@@ -7202,6 +7233,11 @@
         return;
       case 'mentions':
         addMentions(msg.paths || []);
+        return;
+      case 'sourceSelection':
+        sourceSelection = msg.selection || null;
+        renderChips();
+        if (sourceSelection) input.focus();
         return;
       case 'images':
         // The picker's answer: data URLs in exactly the shape a paste leaves in

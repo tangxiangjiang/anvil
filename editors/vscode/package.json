@@ -2,7 +2,7 @@
   "name": "anvil-vscode",
   "displayName": "Anvil",
   "description": "Anvil agent in VS Code: streaming chat, tool cards, per-call approvals.",
-  "version": "0.52.21",
+  "version": "0.52.23",
   "publisher": "anvil-dev",
   "author": {
     "name": "Xiangjiang Tang",
@@ -81,6 +81,11 @@
       {
         "command": "anvil.openChat",
         "title": "Anvil: Open Chat",
+        "category": "Anvil"
+      },
+      {
+        "command": "anvil.addSelectionToChat",
+        "title": "Anvil: Add Selection to Chat",
         "category": "Anvil"
       },
       {
@@ -301,9 +306,22 @@
         "key": "ctrl+alt+f",
         "mac": "cmd+alt+f",
         "when": "activeWebviewPanelId == anvil.chat"
+      },
+      {
+        "command": "anvil.addSelectionToChat",
+        "key": "ctrl+alt+l",
+        "mac": "cmd+alt+l",
+        "when": "editorTextFocus && editorHasSelection"
       }
     ],
     "menus": {
+      "editor/context": [
+        {
+          "command": "anvil.addSelectionToChat",
+          "when": "editorHasSelection && resourceScheme == file",
+          "group": "anvil@1"
+        }
+      ],
       "view/title": [
         {
           "command": "anvil.searchSessions",
