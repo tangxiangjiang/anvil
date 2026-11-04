@@ -6,7 +6,7 @@ Roadmaps are **versioned by product cutoff**, matching design trees.
 
 | Tree | Role | Index |
 |------|------|--------|
-| [`v0.x/`](v0.x/) | **Current cutoff** — milestones 0.1–0.57 (parity, agent modes, and the VS Code agent bridge) | [v0.x/README.md](v0.x/README.md) |
+| [`v0.x/`](v0.x/) | **Current cutoff** — delivered through 0.57 and planned through 0.66 | [v0.x/README.md](v0.x/README.md) |
 
 Design cutoff: [`doc/design/v0.x/`](../design/v0.x/). Parent design index: [`doc/design/README.md`](../design/README.md).
 

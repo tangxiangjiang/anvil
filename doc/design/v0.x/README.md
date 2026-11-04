@@ -1,14 +1,17 @@
 # Design v0.x (cutoff)
 
-Anvil **local-only** Agent SDK and VS Code design through product milestone **0.57**. Chapters
+Anvil Agent SDK and VS Code design delivered through product milestone **0.57** and proposed
+through **0.66**. Chapters
 51–57 bridge the agent capabilities delivered through 0.50 into the editor, close the shell
 protected-path gap, and add reliable runs, structured plans, session search, and isolated
-workers. 0.39 is the Delivery **execute / test campaign loop**, designed by
+workers. Chapters 60–66 extend that base into end-to-end execution, remote delivery,
+browser/computer use, stronger isolation, autonomous review, production hardening, and remote
+Workers. 0.39 is the Delivery **execute / test campaign loop**, designed by
 [39](39-execute.md) on top of the surfaces in [33](33-delivery-ui.md) and the vision in
 [DELIVERY_PIPELINE_VISION.md](../../../DELIVERY_PIPELINE_VISION.md). Read chapters in order
 before implementing the matching roadmap phase.
 
-This tree is the **design cutoff** for 0.1–0.57 delivery. Later product lines get a new
+This tree is the **design cutoff** for 0.1–0.66 delivery planning. Later product lines get a new
 `doc/design/v…/` directory.
 
 ## Read order
@@ -73,6 +76,15 @@ This tree is the **design cutoff** for 0.1–0.57 delivery. Later product lines 
 | 55 | [55-structured-plans-and-workflow-control.vscode.md](55-structured-plans-and-workflow-control.vscode.md) | One structured plan contract across Plan, todo, and Complex workflow control → **0.55** |
 | 56 | [56-session-search-and-history.vscode.md](56-session-search-and-history.vscode.md) | Local full-text session search and cursor history for JSONL and SQLite → **0.56** |
 | 57 | [57-worktree-workers.vscode.md](57-worktree-workers.vscode.md) | Isolated worktree Workers, attributed checkpoints, conflict review, integration, and cleanup → **0.57** |
+| 60 | [60-worktree-execution-control.vscode.md](60-worktree-execution-control.vscode.md) | Approved work item to isolated durable Worker and review-ready result → **0.60** |
+| 61 | [61-remote-git-pr-ci.vscode.md](61-remote-git-pr-ci.vscode.md) | Exact-commit publication, pull requests, CI observation, and bounded repair → **0.61** |
+| 62 | [62-browser-and-computer-use.vscode.md](62-browser-and-computer-use.vscode.md) | Supervised browser and separately gated desktop interaction → **0.62** |
+| 63 | [63-container-sandbox.vscode.md](63-container-sandbox.vscode.md) | Container runtime boundary for mounts, network, secrets, processes, and resources → **0.63** |
+| 64 | [64-autonomous-review-and-replan.vscode.md](64-autonomous-review-and-replan.vscode.md) | Evidence-bound reviewer, repair attempts, conflict proposals, and controlled re-plan → **0.64** |
+| 65 | [65-production-hardening.vscode.md](65-production-hardening.vscode.md) | Platform/fault/soak gates, diagnostics, telemetry, provenance, and rollback → **0.65** |
+| 66 | [66-remote-workers.vscode.md](66-remote-workers.vscode.md) | Authenticated remote sandbox execution with verifiable results → **0.66** |
+
+Chapters 58–59 are intentionally unassigned; the next planned line begins at 0.60.
 
 Parent index: [`doc/design/README.md`](../README.md).
 
@@ -80,7 +92,8 @@ Parent index: [`doc/design/README.md`](../README.md).
 
 - Design describes **what** and **why** for this cutoff.
 - [`doc/roadmaps/v0.x/`](../../roadmaps/v0.x/) describes **when**.
-- Chapters 11–57 map to [m_0.11](../../roadmaps/v0.x/m_0.11_worker_daemon.md) …
-  [m_0.57](../../roadmaps/v0.x/m_0.57_worktree_workers.vscode.md).
+- Chapters 11–57 map to delivered [m_0.11](../../roadmaps/v0.x/m_0.11_worker_daemon.md) …
+  [m_0.57](../../roadmaps/v0.x/m_0.57_worktree_workers.vscode.md). Chapters 60–66 map to the
+  proposed 0.60–0.66 milestone files in the same roadmap tree.
   [m_0.39](../../roadmaps/v0.x/m_0.39_execute.md) maps to chapter 39; chapter 33 holds its
   surfaces and schema.
