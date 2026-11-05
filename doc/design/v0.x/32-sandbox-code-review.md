@@ -1,7 +1,7 @@
 # 32 — Sandbox code review + VS Code Server
 
 **Product version focus:** **0.32** ([m_0.32_sandbox_code_review.md](../../roadmaps/v0.x/m_0.32_sandbox_code_review.md))  
-**Status:** in_progress
+**Status:** done
 
 ## Intent
 
@@ -10,9 +10,17 @@
 
 Operators review in Anvil; for real editing they open the node-hosted VS Code Server URL. Anvil web never becomes a code editor.
 
-Builds on sandbox list from [29](29-sandbox-workers.md). Complements Flutter execute/review later; **0.32 ships web + agentd code-server control**.
+Builds on sandbox list from [29](29-sandbox-workers.md). The original combined scope proposed Web
+review plus agentd code-server control; 0.32 delivered only read-only Web review and deferred the
+code-server/Flutter direction.
 
 ## Product direction (locked 2026-10-23)
+
+**Superseded 2026-11-04:** chapters
+[60](60-product-requirements-workbench.vscode.md) through
+[65](65-release-and-hardening.vscode.md) make VS Code the only interactive workflow and
+administration client. Web is read-only audit; Flutter workflow mutation and hosted VS Code are not
+in the replacement roadmap. The text below remains the historical decision delivered with 0.32.
 
 The Web workflow surface is frozen. New workflow interaction belongs in clients built for active
 work: the Anvil VS Code extension first, and the Flutter client in parallel as its slower,
@@ -263,6 +271,10 @@ Banner: “Read-only in Anvil · edit via VS Code Server on this node”.
 - Diff/file caps; secret redact when cheap.
 
 ## Acceptance (milestone)
+
+Historical acceptance below describes the original combined scope. Items 1–3 are the delivered
+0.32 subset; hosted VS Code Server items 4–7 were deferred and are not part of the 0.60 replacement
+roadmap.
 
 1. Web: browse tree, view file, git status + diff for a sandbox project.  
 2. No Anvil API/UI writes file contents or mutates git.  

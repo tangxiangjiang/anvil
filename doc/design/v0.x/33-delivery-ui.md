@@ -9,11 +9,11 @@ Ship **anvil-web Delivery** with frozen UI surfaces **and** the durable store / 
 
 Vision: [`DELIVERY_PIPELINE_VISION.md`](../../../DELIVERY_PIPELINE_VISION.md) §4.
 
-> **Direction after 0.33 (locked 2026-10-23):** this chapter records the delivered Web surface;
-> it is not a mandate to keep expanding workflow authoring in Web. The database/API remain the
-> durable workflow source, while new active workflow UX moves to the VS Code extension and
-> Flutter. Web is retained for review, audit and launching hosted VS Code. See
-> [32 — Product direction](32-sandbox-code-review.md#product-direction-locked-2026-10-23).
+> **Superseded client direction (2026-11-04):** this chapter records the delivered Web surface.
+> Chapters [60](60-product-requirements-workbench.vscode.md) through
+> [65](65-release-and-hardening.vscode.md) move all interactive workflow and administration to VS
+> Code and leave Web as read-only audit. The service/API remain authoritative; the table below is
+> historical 0.33 scope, not future UI ownership.
 
 ## Product split
 

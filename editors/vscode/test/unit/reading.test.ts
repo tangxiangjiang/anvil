@@ -102,7 +102,7 @@ test('the focus flag is the document’s, merged into its saved state', () => {
   assert.match(CHAT_PANEL, /<body\$\{focus \? ' class="focus-view"' : ''\} data-font-size="\$\{fontSize\}">/);
   assert.match(
     CHAT_PANEL,
-    /renderHtml\(\s*panel\.webview,\s*this\.context\.extensionUri,\s*this\.focusView,\s*readSettings\(\)\.fontSize,?\s*\)/,
+    /renderHtml\(\s*webview,\s*this\.context\.extensionUri,\s*this\.focusView,\s*readSettings\(\)\.fontSize,?\s*\)/,
   );
 });
 

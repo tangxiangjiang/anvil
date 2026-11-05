@@ -10,7 +10,8 @@
 
 import * as vscode from 'vscode';
 import { ChatPanel } from './chatPanel';
-import { currentSelection } from './editorContext';
+import { ChatSidebarProvider } from './chatSidebar';
+import { currentSelection, rememberSourceEditor } from './editorContext';
 import { Hub } from './hub';
 import { PLAN_SCHEME, planTarget } from './plan';
 import { PlanDocuments } from './planDocument';
@@ -76,6 +77,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const output = vscode.window.createOutputChannel('Anvil');
   context.subscriptions.push(output);
   const log = (line: string): void => output.appendLine(line);
+  rememberSourceEditor(vscode.window.activeTextEditor);
 
   // The root is per window and is read from state this context owns, so it has
   // to be installed before a panel is restored or a command can run. It is the
@@ -104,6 +106,13 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const hub = new Hub(context, log, previews, plans, outputs);
   active = hub;
+
+  const chatSidebar = new ChatSidebarProvider(hub);
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider(ChatSidebarProvider.viewType, chatSidebar, {
+      webviewOptions: { retainContextWhenHidden: true },
+    }),
+  );
 
   // Registered before anything can await: VS Code hands a restored panel to the
   // serializer during activation, and a registration that lands after the first
@@ -162,6 +171,8 @@ export function activate(context: vscode.ExtensionContext): void {
     workflowView,
     workflowTree,
     workflowChecks,
+    vscode.window.onDidChangeActiveTextEditor((editor) => rememberSourceEditor(editor)),
+    vscode.window.onDidChangeTextEditorSelection((event) => rememberSourceEditor(event.textEditor)),
 
     // A new tab, always. This is the command the chat title bar and the
     // "+" affordances point at: two conversations are two tabs.
@@ -172,7 +183,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('anvil.addSelectionToChat', () => {
       const selection = currentSelection();
       if (!selection) {
-        void vscode.window.showInformationMessage('Select non-empty text in a file before adding it to Anvil Chat.');
+        void vscode.window.showInformationMessage('Select non-empty text in a file before attaching it to Anvil Chat.');
         return;
       }
       hub.addSelectionToChat(selection);

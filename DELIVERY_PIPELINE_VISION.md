@@ -3,6 +3,12 @@
 > Status: design notes (product direction). Not yet a versioned `doc/design/v1.0/` chapter.
 > Scope: requirement → design → roadmap (node graph) → agent execute, on top of the existing Anvil stack.
 > Date: 2026-10-14
+>
+> **Superseded client ownership (2026-11-04):** chapters
+> [`60`](doc/design/v0.x/60-product-requirements-workbench.vscode.md) through
+> [`65`](doc/design/v0.x/65-release-and-hardening.vscode.md) move the complete interactive
+> requirement-to-release workflow and administration to VS Code. Web is read-only audit. This file
+> remains historical domain input where it assigns workflow authoring to Web.
 
 ---
 

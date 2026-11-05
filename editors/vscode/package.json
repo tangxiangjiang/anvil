@@ -2,7 +2,7 @@
   "name": "anvil-vscode",
   "displayName": "Anvil",
   "description": "Anvil agent in VS Code: streaming chat, tool cards, per-call approvals.",
-  "version": "0.52.23",
+  "version": "0.52.25",
   "publisher": "anvil-dev",
   "author": {
     "name": "Xiangjiang Tang",
@@ -49,13 +49,21 @@
   },
   "main": "./out/src/extension.js",
   "activationEvents": [
-    "onWebviewPanel:anvil.chat"
+    "onWebviewPanel:anvil.chat",
+    "onView:anvil.chatView"
   ],
   "contributes": {
     "viewsContainers": {
       "activitybar": [
         {
           "id": "anvil",
+          "title": "Anvil",
+          "icon": "media/anvil.svg"
+        }
+      ],
+      "secondarySidebar": [
+        {
+          "id": "anvil-chat",
           "title": "Anvil",
           "icon": "media/anvil.svg"
         }
@@ -75,6 +83,15 @@
           "icon": "media/anvil.svg",
           "contextualTitle": "Anvil"
         }
+      ],
+      "anvil-chat": [
+        {
+          "type": "webview",
+          "id": "anvil.chatView",
+          "name": "Chat",
+          "icon": "media/anvil.svg",
+          "contextualTitle": "Anvil"
+        }
       ]
     },
     "commands": [
@@ -85,7 +102,7 @@
       },
       {
         "command": "anvil.addSelectionToChat",
-        "title": "Anvil: Add Selection to Chat",
+        "title": "Anvil: Attach Selected Code",
         "category": "Anvil"
       },
       {
@@ -315,13 +332,6 @@
       }
     ],
     "menus": {
-      "editor/context": [
-        {
-          "command": "anvil.addSelectionToChat",
-          "when": "editorHasSelection && resourceScheme == file",
-          "group": "anvil@1"
-        }
-      ],
       "view/title": [
         {
           "command": "anvil.searchSessions",

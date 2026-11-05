@@ -21,11 +21,24 @@ const MENTION_EXCLUDE = '**/{node_modules,.git,.venv,dist,out,build,target}/**';
 const MENTION_LIMIT = 5000;
 
 /**
+ * The last real source editor the user worked in.
+ *
+ * Focusing a webview does not clear its selection, but it can make
+ * `activeTextEditor` undefined. Keep the editor identity, not a text snapshot,
+ * so an explicit attach always reads the selection that still exists when the
+ * user confirms it.
+ */
+let lastSourceEditor: vscode.TextEditor | undefined;
+
+export function rememberSourceEditor(editor: vscode.TextEditor | undefined): void {
+  if (editor?.document.uri.scheme === 'file') lastSourceEditor = editor;
+}
+
+/**
  * The active selection, or undefined when there is nothing worth sending.
  *
- * It is read when the user presses Send, not when the panel opens: the
- * selection a prompt should carry is the one that exists at that moment, and
- * one captured earlier is a stale one.
+ * It is read only for an explicit Attach action. Merely selecting code never
+ * adds it to a prompt.
  *
  * The path is deliberately *not* required to be inside the workspace. VS Code
  * edits files outside the folder, the text is already in hand, and no file is
@@ -33,7 +46,9 @@ const MENTION_LIMIT = 5000;
  * gain.
  */
 export function currentSelection(): Selection | undefined {
-  const editor = vscode.window.activeTextEditor;
+  const active = vscode.window.activeTextEditor;
+  if (active?.document.uri.scheme === 'file') rememberSourceEditor(active);
+  const editor = active?.document.uri.scheme === 'file' ? active : lastSourceEditor;
   if (!editor || editor.document.uri.scheme !== 'file') return undefined;
   const selection = editor.selection;
   if (selection.isEmpty) return undefined;
@@ -162,7 +177,7 @@ export function buildPromptContext(
   const context: PromptContext = {};
   if (mentions.length > 0) context.mentions = mentions.map((path) => ({ path }));
   if (quotes.length > 0) context.quotes = quotes;
-  const selection = explicitSelection === undefined ? currentSelection() : explicitSelection ?? undefined;
+  const selection = explicitSelection ?? undefined;
   if (selection) context.selection = selection;
   const diagnostics = currentDiagnostics();
   if (diagnostics.length > 0) context.diagnostics = diagnostics;

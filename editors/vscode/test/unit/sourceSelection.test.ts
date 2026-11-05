@@ -11,11 +11,11 @@ const PANEL = readFileSync(join(ROOT, 'src', 'chatPanel.ts'), 'utf8');
 const CONTEXT = readFileSync(join(ROOT, 'src', 'editorContext.ts'), 'utf8');
 const CHAT = readFileSync(join(ROOT, 'media', 'chat.js'), 'utf8');
 
-test('source selections are offered from the editor context menu and shortcut', () => {
+test('source selections use an Anvil shortcut without competing for the editor context menu', () => {
   const command = PACKAGE.contributes.commands.find(
     (candidate: { command: string }) => candidate.command === 'anvil.addSelectionToChat',
   );
-  assert.equal(command?.title, 'Anvil: Add Selection to Chat');
+  assert.equal(command?.title, 'Anvil: Attach Selected Code');
 
   const binding = PACKAGE.contributes.keybindings.find(
     (candidate: { command: string }) => candidate.command === 'anvil.addSelectionToChat',
@@ -25,11 +25,7 @@ test('source selections are offered from the editor context menu and shortcut', 
   assert.match(binding?.when ?? '', /editorTextFocus/);
   assert.match(binding?.when ?? '', /editorHasSelection/);
 
-  const item = PACKAGE.contributes.menus['editor/context'].find(
-    (candidate: { command: string }) => candidate.command === 'anvil.addSelectionToChat',
-  );
-  assert.match(item?.when ?? '', /editorHasSelection/);
-  assert.match(item?.when ?? '', /resourceScheme == file/);
+  assert.equal(PACKAGE.contributes.menus['editor/context'], undefined);
 });
 
 test('the command refuses an empty selection before choosing or creating a chat', () => {
@@ -44,13 +40,16 @@ test('the command refuses an empty selection before choosing or creating a chat'
   );
 });
 
-test('the most recently active chat receives a frozen source snapshot', () => {
+test('the most recently active chat receives an explicitly attached source snapshot', () => {
   assert.match(HUB, /private lastActivePanel: ChatPanel \| undefined/);
   assert.match(HUB, /this\.activePanel\(\) \?\? this\.lastActivePanel \?\? \[\.\.\.this\.panels\]\[0\] \?\? this\.openTab\(\)/);
   assert.match(PANEL, /pendingSourceSelection = \{\s*\.\.\.selection,\s*range: \{ \.\.\.selection\.range \}/);
   assert.match(PANEL, /selection,\s*model: this\.overrides\.model/);
   assert.match(PANEL, /buildPromptContext\(dedupeMentions\(mentions\), quotes, selection\)/);
-  assert.match(CONTEXT, /explicitSelection === undefined \? currentSelection\(\) : explicitSelection \?\? undefined/);
+  assert.match(CONTEXT, /const selection = explicitSelection \?\? undefined/);
+  assert.doesNotMatch(CONTEXT, /explicitSelection === undefined \? currentSelection\(\)/);
+  assert.match(CONTEXT, /let lastSourceEditor: vscode\.TextEditor \| undefined/);
+  assert.match(EXTENSION, /onDidChangeTextEditorSelection\(\(event\) => rememberSourceEditor\(event\.textEditor\)\)/);
 });
 
 test('the composer displays, removes, and clears the submitted source reference', () => {
@@ -62,4 +61,19 @@ test('the composer displays, removes, and clears the submitted source reference'
   assert.match(CHAT, /addUser\(text, sentMentions, sentImages, sentQuotes, undefined, sentSelection\)/);
   assert.match(PANEL, /case 'clearSourceSelection':\s*this\.pendingSourceSelection = undefined/);
   assert.match(PANEL, /this\.sourceSelectionTouched = true/);
+});
+
+test('typing @attach selected turns the current editor selection into a chip', () => {
+  assert.match(CHAT, /function referencePaletteQuery\(\)/);
+  assert.match(CHAT, /name: 'Attach selected code'/);
+  assert.match(CHAT, /vscode\.postMessage\(\{ type: 'attachSourceSelection' \}\)/);
+  assert.match(PANEL, /case 'attachSourceSelection': \{/);
+  assert.match(PANEL, /const selection = currentSelection\(\)/);
+  assert.match(PANEL, /this\.addSourceSelection\(selection\)/);
+});
+
+test('new chats open beside source code and stay together when started from Anvil', () => {
+  assert.match(PANEL, /activeChat\.viewColumn\(\) \?\? vscode\.ViewColumn\.Beside/);
+  assert.match(PANEL, /vscode\.window\.activeTextEditor\s*\?\s*vscode\.ViewColumn\.Beside\s*:\s*vscode\.ViewColumn\.Active/);
+  assert.match(PANEL, /createWebviewPanel\(\s*ChatPanel\.viewType,\s*'Anvil',\s*targetColumn/);
 });

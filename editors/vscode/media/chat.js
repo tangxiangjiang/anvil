@@ -5269,6 +5269,16 @@
     return match ? match[1].trim().toLowerCase() : null;
   }
 
+  /**
+   * A reference action is deliberately explicit. Selecting code in the editor
+   * does nothing by itself; `@attach selected` confirms that it belongs to the
+   * next prompt.
+   */
+  function referencePaletteQuery() {
+    const match = /^\s*@([^\r\n]*)$/i.exec(input.value);
+    return match ? match[1].trim().toLowerCase() : null;
+  }
+
   /** Prefix match first, then anything whose description mentions the query. */
   function paletteMatches(commands, query) {
     const needle = query.toLowerCase();
@@ -5297,6 +5307,9 @@
         row.appendChild(el('span', 'palette-name', command.role === 'user' ? 'you' : 'anvil'));
         row.appendChild(el('span', 'palette-desc', quotePreview(command.text, 110)));
         if (quotes.some((quote) => quote.id === command.id)) row.appendChild(el('span', 'palette-tag', 'added'));
+      } else if (command.kind === 'reference') {
+        row.appendChild(el('span', 'palette-name', '@ ' + command.name));
+        row.appendChild(el('span', 'palette-desc', command.description || ''));
       } else {
         row.appendChild(el('span', 'palette-name', '/' + command.name));
         row.appendChild(el('span', 'palette-desc', command.description || ''));
@@ -5326,6 +5339,27 @@
         })
         .slice(0, 10)
         .map((quote) => ({ ...quote, kind: 'quote' }));
+      if (paletteIndex >= paletteRows.length) paletteIndex = 0;
+      paintPalette();
+      return;
+    }
+    const referenceQuery = referencePaletteQuery();
+    if (referenceQuery !== null) {
+      const references = [
+        {
+          name: 'Attach selected code',
+          description: 'Add the current editor selection with its exact file and lines',
+          action: 'selection',
+          kind: 'reference',
+        },
+        {
+          name: 'Reference files or folders',
+          description: 'Choose workspace paths to include in this prompt',
+          action: 'files',
+          kind: 'reference',
+        },
+      ];
+      paletteRows = paletteMatches(references, referenceQuery);
       if (paletteIndex >= paletteRows.length) paletteIndex = 0;
       paintPalette();
       return;
@@ -5362,6 +5396,17 @@
       if (/^\s*\/ref(?:[ \t].*)?$/i.test(input.value)) input.value = '';
       addQuote(command);
       growInput();
+      return;
+    }
+    if (command.kind === 'reference') {
+      if (/^\s*@([^\r\n]*)$/i.test(input.value)) input.value = '';
+      growInput();
+      if (command.action === 'selection') {
+        vscode.postMessage({ type: 'attachSourceSelection' });
+        input.focus();
+      } else {
+        askForMentions();
+      }
       return;
     }
     input.value = '/' + command.name + ' ';
@@ -6515,6 +6560,9 @@
 
   // --- wiring ---------------------------------------------------------------
 
+  window.addEventListener('focus', () => vscode.postMessage({ type: 'surfaceFocus' }));
+  window.addEventListener('blur', () => vscode.postMessage({ type: 'surfaceBlur' }));
+
   composer.addEventListener('submit', (event) => {
     event.preventDefault();
     const text = input.value.trim();
@@ -6655,7 +6703,7 @@
   }
 
   /*
-   * "@" opens the reference picker. It is watched on `input` rather than
+   * Reference and command palettes are watched on `input` rather than
    * `keydown` because which character a key produces is a keyboard-layout
    * question, and `key` is "Digit2" on the layouts where "@" needs Shift.
    */
@@ -6670,12 +6718,6 @@
       placed = null;
     }
     growInput();
-    if (input.value.endsWith('@')) {
-      input.value = input.value.slice(0, -1);
-      closePalette();
-      askForMentions();
-      return;
-    }
     updatePalette();
   });
 

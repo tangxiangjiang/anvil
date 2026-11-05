@@ -7,7 +7,7 @@
 Local Worktrees and containers are bounded to one machine. Large builds, platform-specific tests,
 team infrastructure, and unattended CI repair need remote execution. Existing scheduler/fleet
 components do not yet provide the editor-grade identity, evidence, approval, checkpoint, and
-repository boundaries required by 0.51–0.65.
+repository boundaries established by the 0.60–0.65 requirement-to-release workflow.
 
 ## 2. Goals
 
@@ -38,7 +38,7 @@ Model output cannot select a node, endpoint, image, credential, or trust level.
 ## 4. Source and result transport
 
 - Source is an immutable commit plus an optional reviewed patch bundle with digest.
-- The remote side creates its own isolated checkout and 0.63 sandbox.
+- The remote side creates its own isolated checkout and 0.62 sandbox.
 - Git credentials are scoped to fetch the approved source and, where policy allows, publish only a
   generated result ref.
 - Results are signed manifests referencing commit/tree, patch digest, test evidence, logs, and
@@ -96,8 +96,8 @@ The result review shows:
 - truncation, interruption, and artifact provenance;
 - remote publication state.
 
-Remote success is not integration authorization. The same explicit 0.57/0.61 review and
-publication gates apply.
+Remote success is not integration authorization. The same explicit 0.57 integration, 0.64
+review/PR publication, and 0.65 release gates apply.
 
 ## 9. VS Code surface
 

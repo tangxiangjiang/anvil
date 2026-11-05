@@ -67,7 +67,7 @@ test('a live change reaches every open document', () => {
   assert.match(HUB, /for \(const panel of this\.panels\) panel\.setFontSize\(size\)/);
   // First paint and reload: the value is on the body and re-sent at `ready`.
   assert.match(PANEL, /data-font-size="\$\{fontSize\}"/);
-  assert.match(PANEL, /renderHtml\(\s*panel\.webview,\s*this\.context\.extensionUri,\s*this\.focusView,\s*readSettings\(\)\.fontSize,?\s*\)/);
+  assert.match(PANEL, /renderHtml\(\s*webview,\s*this\.context\.extensionUri,\s*this\.focusView,\s*readSettings\(\)\.fontSize,?\s*\)/);
   assert.match(PANEL, /this\.post\(\{ type: 'fontSize', size: readSettings\(\)\.fontSize \}\)/);
   // The document applies it and ignores anything outside the range.
   assert.match(CHAT_JS, /case 'fontSize':/);

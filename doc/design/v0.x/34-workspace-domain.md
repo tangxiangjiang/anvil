@@ -28,6 +28,11 @@ The current client direction is recorded in
 VS Code is the primary fast-moving workflow client, Flutter is the alternative pure client, and
 anvil-web remains review/audit plus the hosted-VS-Code launch point.
 
+**Superseded client ownership (0.60):** the domain hierarchy and service authority remain, but
+[60 — Product requirements workbench](60-product-requirements-workbench.vscode.md) makes VS Code
+the only interactive workflow client. Flutter workflow mutation and hosted-VS-Code launch are not
+in the replacement roadmap; Web becomes read-only audit.
+
 ## Clusters UI
 
 | Page | Content |

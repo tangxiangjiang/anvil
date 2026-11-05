@@ -76,15 +76,16 @@ This tree is the **design cutoff** for 0.1–0.66 delivery planning. Later produ
 | 55 | [55-structured-plans-and-workflow-control.vscode.md](55-structured-plans-and-workflow-control.vscode.md) | One structured plan contract across Plan, todo, and Complex workflow control → **0.55** |
 | 56 | [56-session-search-and-history.vscode.md](56-session-search-and-history.vscode.md) | Local full-text session search and cursor history for JSONL and SQLite → **0.56** |
 | 57 | [57-worktree-workers.vscode.md](57-worktree-workers.vscode.md) | Isolated worktree Workers, attributed checkpoints, conflict review, integration, and cleanup → **0.57** |
-| 60 | [60-worktree-execution-control.vscode.md](60-worktree-execution-control.vscode.md) | Approved work item to isolated durable Worker and review-ready result → **0.60** |
-| 61 | [61-remote-git-pr-ci.vscode.md](61-remote-git-pr-ci.vscode.md) | Exact-commit publication, pull requests, CI observation, and bounded repair → **0.61** |
-| 62 | [62-browser-and-computer-use.vscode.md](62-browser-and-computer-use.vscode.md) | Supervised browser and separately gated desktop interaction → **0.62** |
-| 63 | [63-container-sandbox.vscode.md](63-container-sandbox.vscode.md) | Container runtime boundary for mounts, network, secrets, processes, and resources → **0.63** |
-| 64 | [64-autonomous-review-and-replan.vscode.md](64-autonomous-review-and-replan.vscode.md) | Evidence-bound reviewer, repair attempts, conflict proposals, and controlled re-plan → **0.64** |
-| 65 | [65-production-hardening.vscode.md](65-production-hardening.vscode.md) | Platform/fault/soak gates, diagnostics, telemetry, provenance, and rollback → **0.65** |
+| 60 | [60-product-requirements-workbench.vscode.md](60-product-requirements-workbench.vscode.md) | VS Code requirement lifecycle, artifact-aware Chat, and first Web audit-only cutover → **0.60** |
+| 61 | [61-planning-and-policy.vscode.md](61-planning-and-policy.vscode.md) | Design, roadmap, work graph, execution policy, and planning cutover → **0.61** |
+| 62 | [62-isolated-implementation.vscode.md](62-isolated-implementation.vscode.md) | Worktree execution, container isolation, recovery, and execution cutover → **0.62** |
+| 63 | [63-verification-and-evidence.vscode.md](63-verification-and-evidence.vscode.md) | Verification campaigns plus supervised browser/desktop evidence → **0.63** |
+| 64 | [64-review-and-delivery.vscode.md](64-review-and-delivery.vscode.md) | Evidence-bound review, bounded repair, exact-commit PR/CI delivery → **0.64** |
+| 65 | [65-release-and-hardening.vscode.md](65-release-and-hardening.vscode.md) | Explicit release, production gates, and final audit-only Web enforcement → **0.65** |
 | 66 | [66-remote-workers.vscode.md](66-remote-workers.vscode.md) | Authenticated remote sandbox execution with verifiable results → **0.66** |
 
-Chapters 58–59 are intentionally unassigned; the next planned line begins at 0.60.
+Chapters 58–59 are intentionally unassigned. Chapters 60–65 move the complete interactive
+requirement-to-release workflow to VS Code; chapter 66 adds remote execution.
 
 Parent index: [`doc/design/README.md`](../README.md).
 

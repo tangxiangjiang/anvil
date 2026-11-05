@@ -19,7 +19,10 @@ test('every stored session open path reveals its existing chat tab', () => {
     HUB,
     /openTab\(agentId\?: string\): ChatPanel \{[\s\S]*?findByAgent\(agentId\)[\s\S]*?existing\.reveal\(\)[\s\S]*?return existing/,
   );
-  assert.match(HUB, /async openSession\(agentId: string\): Promise<void> \{\s*this\.openTab\(agentId\)/);
+  assert.match(
+    HUB,
+    /async openSession\(agentId: string\): Promise<void> \{[\s\S]*?sidebarPanel[\s\S]*?openAgent\(agentId\)[\s\S]*?this\.openTab\(agentId\)/,
+  );
   assert.match(
     CHAT,
     /private async resumeAgent\(agentId: string\)[\s\S]*?findByAgent\(agentId\)[\s\S]*?existing\.reveal\(\)[\s\S]*?return/,

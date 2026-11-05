@@ -3,10 +3,10 @@
 Versioned delivery for Anvil through milestone **0.66**. Design cutoff:
 [`doc/design/v0.x/`](../../design/v0.x/). Milestone 0.46 closes the original VS Code polish
 line; 0.47–0.50 develop the Agent SDK, and 0.51–0.57 secure and productize those capabilities
-in VS Code. The planned 0.60–0.66 line closes end-to-end execution, remote delivery,
-browser/computer use, stronger isolation, autonomous review, production hardening, and remote
-Workers. Milestones 0.58–0.59 are intentionally unassigned.
-The Agent SDK, shipped VSIX, and Host version are **0.52.23**. Roadmap status remains separate
+in VS Code. The planned 0.60–0.65 line moves the complete product-requirement-to-release workflow
+into VS Code and leaves Web as read-only audit; 0.66 adds remote Worker execution over those same
+contracts. Milestones 0.58–0.59 are intentionally unassigned.
+The Agent SDK, shipped VSIX, and Host version are **0.52.25**. Roadmap status remains separate
 from release status; the synchronized product version advances once for each delivered
 user-visible batch.
 
@@ -71,12 +71,12 @@ user-visible batch.
 | 0.55 | Structured plans and workflow control | done | [m_0.55_structured_plans.vscode.md](m_0.55_structured_plans.vscode.md) | [55](../../design/v0.x/55-structured-plans-and-workflow-control.vscode.md) |
 | 0.56 | Session search and history | done | [m_0.56_session_search.vscode.md](m_0.56_session_search.vscode.md) | [56](../../design/v0.x/56-session-search-and-history.vscode.md) |
 | 0.57 | Worktree workers | done | [m_0.57_worktree_workers.vscode.md](m_0.57_worktree_workers.vscode.md) | [57](../../design/v0.x/57-worktree-workers.vscode.md) |
-| 0.60 | End-to-end Worktree execution control | planned | [m_0.60_worktree_execution_control.vscode.md](m_0.60_worktree_execution_control.vscode.md) | [60](../../design/v0.x/60-worktree-execution-control.vscode.md) |
-| 0.61 | Remote Git, pull requests, and CI | planned | [m_0.61_remote_git_pr_ci.vscode.md](m_0.61_remote_git_pr_ci.vscode.md) | [61](../../design/v0.x/61-remote-git-pr-ci.vscode.md) |
-| 0.62 | Browser and computer use | planned | [m_0.62_browser_computer_use.vscode.md](m_0.62_browser_computer_use.vscode.md) | [62](../../design/v0.x/62-browser-and-computer-use.vscode.md) |
-| 0.63 | Container sandbox workers | planned | [m_0.63_container_sandbox.vscode.md](m_0.63_container_sandbox.vscode.md) | [63](../../design/v0.x/63-container-sandbox.vscode.md) |
-| 0.64 | Autonomous review and controlled re-planning | planned | [m_0.64_autonomous_review_replan.vscode.md](m_0.64_autonomous_review_replan.vscode.md) | [64](../../design/v0.x/64-autonomous-review-and-replan.vscode.md) |
-| 0.65 | Production hardening and release confidence | planned | [m_0.65_production_hardening.vscode.md](m_0.65_production_hardening.vscode.md) | [65](../../design/v0.x/65-production-hardening.vscode.md) |
+| 0.60 | Product requirements workbench | planned | [m_0.60_product_requirements_workbench.vscode.md](m_0.60_product_requirements_workbench.vscode.md) | [60](../../design/v0.x/60-product-requirements-workbench.vscode.md) |
+| 0.61 | Design, roadmap, planning, and policy | planned | [m_0.61_planning_and_policy.vscode.md](m_0.61_planning_and_policy.vscode.md) | [61](../../design/v0.x/61-planning-and-policy.vscode.md) |
+| 0.62 | Isolated implementation | planned | [m_0.62_isolated_implementation.vscode.md](m_0.62_isolated_implementation.vscode.md) | [62](../../design/v0.x/62-isolated-implementation.vscode.md) |
+| 0.63 | Verification and evidence | planned | [m_0.63_verification_and_evidence.vscode.md](m_0.63_verification_and_evidence.vscode.md) | [63](../../design/v0.x/63-verification-and-evidence.vscode.md) |
+| 0.64 | Autonomous review and reviewed delivery | planned | [m_0.64_review_and_delivery.vscode.md](m_0.64_review_and_delivery.vscode.md) | [64](../../design/v0.x/64-review-and-delivery.vscode.md) |
+| 0.65 | Release, hardening, and audit-only Web | planned | [m_0.65_release_and_hardening.vscode.md](m_0.65_release_and_hardening.vscode.md) | [65](../../design/v0.x/65-release-and-hardening.vscode.md) |
 | 0.66 | Remote Worker execution | planned | [m_0.66_remote_workers.vscode.md](m_0.66_remote_workers.vscode.md) | [66](../../design/v0.x/66-remote-workers.vscode.md) |
 
 ## Naming
@@ -97,15 +97,15 @@ Operational notes from real runs: [LESSONS.md](LESSONS.md).
 
 Implement strictly in this order:
 
-**0.60** end-to-end Worktree execution → **0.61** remote Git/PR/CI →
-**0.62** browser/computer use → **0.63** container sandbox →
-**0.64** autonomous review/re-plan → **0.65** production hardening →
+**0.60** requirements → **0.61** design/roadmap/plan/policy →
+**0.62** isolated implementation → **0.63** verification/evidence →
+**0.64** review/Git/PR/CI delivery → **0.65** release/hardening/Web audit-only →
 **0.66** remote Workers.
 
-0.60 starts only after the delivered 0.51–0.57 line. Later milestones compose rather than weaken
-those contracts: remote delivery uses reviewed local identities, browser actions use the same
-permission/durability model, sandbox and remote execution preserve Worktree attribution, and
-autonomous review never bypasses explicit integration/publication decisions.
+0.60 starts only after the delivered 0.51–0.57 line. VS Code owns every interactive workflow
+action; the service remains authoritative and Web loses each mutation only after its VS Code
+replacement passes parity gates. 0.66 reuses the approved plan, sandbox, evidence, review, release,
+and reconnect contracts rather than introducing a second remote workflow.
 
 ## Post-0.10 scope lock (designs landed)
 
@@ -131,7 +131,8 @@ Explicitly **not** in this lock: Cursor Cloud/Bridge, in-process multi-agent gra
 **First-party IDE plugin UI** was previously on this exclusion list. It is now in scope as **0.35** — a VS Code extension over a new editor-host protocol ([35](../../design/v0.x/35-vscode-extension.vscode.md)), which supersedes that non-goal for the client only. Chapter [32](../../design/v0.x/32-sandbox-code-review.md) (hosted VS Code Server for sandbox review) is a separate, complementary line.
 
 That table is the historical 0.11–0.22 scope lock. The proposed 0.60–0.66 line explicitly
-supersedes its browser/computer-use, stronger sandbox, and remote-execution exclusions. Notebook
-editing, DAP, public marketplace, and unrestricted cloud/desktop control remain out of scope.
+supersedes its browser/computer-use, stronger sandbox, remote-execution, and Web-workflow ownership
+assumptions. Notebook editing, DAP, public marketplace, and unrestricted cloud/desktop control
+remain out of scope.
 
 Parent index: [`doc/roadmaps/README.md`](../README.md).

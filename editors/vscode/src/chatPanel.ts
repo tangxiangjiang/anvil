@@ -29,7 +29,7 @@ import { ChangesTracker, ChangedFile } from './changes';
 import { EditAnchor, PreImage, locateEdit, planReview, reviewOf } from './editDiff';
 import { PartialDiff, applyAccepted, partialDiff, rewriteArgs } from './hunks';
 import { ReviewPanels } from './reviewPanel';
-import { buildPromptContext, pickMentions } from './editorContext';
+import { buildPromptContext, currentSelection, pickMentions } from './editorContext';
 import { attachmentsFromDataUrls, dataUrlFromBytes, mimeForImagePath } from './attachments';
 import type { Hub } from './hub';
 import { HostListener, HostManager, ResolvedMode } from './hostManager';
@@ -120,6 +120,7 @@ interface QueuedTurn {
 /** A message from the webview. */
 type Inbound =
   | { type: 'ready' }
+  | { type: 'surfaceFocus' | 'surfaceBlur' }
   | ({ type: 'send' | 'enqueue' | 'sendPriority' } & TurnPayload)
   | { type: 'cancel' }
   | { type: 'answer'; requestId: string; decision: Decision; scope?: string }
@@ -131,6 +132,7 @@ type Inbound =
   /** The composer's Permissions button: show the file these rules live in. */
   | { type: 'openPermissions' }
   | { type: 'pickMention' }
+  | { type: 'attachSourceSelection' }
   | { type: 'commands' }
   | { type: 'mode'; mode: string }
   | { type: 'selectModel'; model: string }
@@ -555,7 +557,8 @@ export class ChatPanel implements HostListener {
   public static readonly viewType = 'anvil.chat';
 
   private panel: vscode.WebviewPanel | undefined;
-  /** Whether the document in `panel` has asked for its state yet. */
+  private view: vscode.WebviewView | undefined;
+  /** Whether the attached webview document has asked for its state yet. */
   private listening = false;
   /** Messages held until it does. See `post`. */
   private pending: Outbound[] = [];
@@ -717,20 +720,31 @@ export class ChatPanel implements HostListener {
   /**
    * Opens this tab, or reveals it when its document is already up.
    *
-   * `ViewColumn.Active` puts it where the user is looking, which is the least
-   * surprising answer for a command they ran from wherever they were. A reveal
-   * names the panel's own column rather than the active one so that a tab the
-   * user dragged somewhere stays there.
+   * A first chat opens beside source code, in the same editor-side location VS
+   * Code uses for Chat. A new conversation started from an Anvil tab stays in
+   * that tab group. A reveal names the panel's own column so a tab the user
+   * dragged somewhere stays there.
    */
   open(): void {
+    if (this.view) {
+      this.view.show?.(false);
+      return;
+    }
     if (this.panel) {
       this.panel.reveal(this.panel.viewColumn, false);
       return;
     }
+    const activeChat = this.hub.activePanel();
+    const targetColumn =
+      activeChat && activeChat !== this
+        ? activeChat.viewColumn() ?? vscode.ViewColumn.Beside
+        : vscode.window.activeTextEditor
+          ? vscode.ViewColumn.Beside
+          : vscode.ViewColumn.Active;
     const panel = vscode.window.createWebviewPanel(
       ChatPanel.viewType,
       'Anvil',
-      vscode.ViewColumn.Active,
+      targetColumn,
       {
         enableScripts: true,
         // Clicking another editor would otherwise destroy the document and the
@@ -746,6 +760,40 @@ export class ChatPanel implements HostListener {
   }
 
   /**
+   * Attaches this conversation to the Secondary Side Bar.
+   *
+   * A view is persistent while hidden, unlike an editor tab the user can close,
+   * so visibility changes only affect command targeting; they do not end the
+   * host session.
+   */
+  adoptView(view: vscode.WebviewView): void {
+    this.view = view;
+    this.listening = false;
+    this.pending = [];
+    this.configureWebview(view.webview);
+    this.active = false;
+    if (view.visible) this.hub.panelActivated(this);
+    view.onDidChangeVisibility(() => {
+      if (view.visible) {
+        this.hub.panelActivated(this);
+        this.post({ type: 'focus' });
+      } else {
+        this.active = false;
+      }
+      this.hub.notifyRunning();
+    });
+    view.onDidDispose(() => {
+      if (this.view !== view) return;
+      this.view = undefined;
+      this.listening = false;
+      this.pending = [];
+      this.active = false;
+      void this.dispose();
+    });
+    this.updateTitle();
+  }
+
+  /**
    * Attaches to a panel that already exists: one this side just created, or one
    * VS Code restored from a previous window. Both need the same three things —
    * a document, a message port, and a way to notice the tab going away.
@@ -757,17 +805,7 @@ export class ChatPanel implements HostListener {
     this.pending = [];
     // Brand mark on the editor tab (marketplace icon is package.json `icon`).
     panel.iconPath = vscode.Uri.joinPath(this.context.extensionUri, 'media', 'icon.png');
-    panel.webview.options = {
-      enableScripts: true,
-      localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, 'media')],
-    };
-    panel.webview.html = renderHtml(
-      panel.webview,
-      this.context.extensionUri,
-      this.focusView,
-      readSettings().fontSize,
-    );
-    panel.webview.onDidReceiveMessage((msg: Inbound) => void this.onMessage(msg));
+    this.configureWebview(panel.webview);
     this.active = panel.active;
     if (this.active) this.hub.panelActivated(this);
     panel.onDidChangeViewState((event) => {
@@ -795,6 +833,20 @@ export class ChatPanel implements HostListener {
     this.updateTitle();
   }
 
+  private configureWebview(webview: vscode.Webview): void {
+    webview.options = {
+      enableScripts: true,
+      localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, 'media')],
+    };
+    webview.html = renderHtml(
+      webview,
+      this.context.extensionUri,
+      this.focusView,
+      readSettings().fontSize,
+    );
+    webview.onDidReceiveMessage((msg: Inbound) => void this.onMessage(msg));
+  }
+
   /**
    * Closes this tab's document, ending the session behind it.
    *
@@ -805,12 +857,32 @@ export class ChatPanel implements HostListener {
    * way that settles both paths.
    */
   async close(): Promise<void> {
+    if (this.view) {
+      const session = this.session;
+      if (session?.id) this.hub.forgetTasks(session.id);
+      await session?.reset().catch(() => undefined);
+      this.agentId = undefined;
+      this.resumingAgentId = undefined;
+      this.resolvedMode = undefined;
+      this.resolvedModel = undefined;
+      this.post({ type: 'reset' });
+      this.postAgentId();
+      this.postState();
+      this.updateTitle();
+      this.hub.notifyTabs();
+      this.hub.notifySessions();
+      return;
+    }
     this.panel?.dispose();
     await this.dispose();
   }
 
   /** Brings this tab to the front, opening it first when it has no document. */
   reveal(): void {
+    if (this.view) {
+      this.view.show?.(false);
+      return;
+    }
     if (!this.panel) {
       this.open();
       return;
@@ -862,6 +934,18 @@ export class ChatPanel implements HostListener {
   /** Whether this is the tab the user is looking at. */
   isActive(): boolean {
     return this.active;
+  }
+
+  /** The editor group this chat occupies, used to keep Anvil conversations together. */
+  viewColumn(): vscode.ViewColumn | undefined {
+    return this.panel?.viewColumn;
+  }
+
+  /** Opens a stored conversation on this surface without creating a duplicate. */
+  async openAgent(agentId: string): Promise<void> {
+    this.reveal();
+    if (this.matchesAgent(agentId)) return;
+    await this.resumeAgent(agentId);
   }
 
   /** Posts a banner line to this tab, from the window-level half. */
@@ -1061,6 +1145,15 @@ export class ChatPanel implements HostListener {
     }
 
     switch (msg.type) {
+      case 'surfaceFocus':
+        this.active = true;
+        this.hub.panelActivated(this);
+        this.hub.notifyRunning();
+        return;
+      case 'surfaceBlur':
+        this.active = false;
+        this.hub.notifyRunning();
+        return;
       case 'send':
         await this.sendTurn(this.turnPayload({
           text: msg.text,
@@ -1094,6 +1187,19 @@ export class ChatPanel implements HostListener {
         // workspace and returns paths, and a path is all the protocol carries.
         this.post({ type: 'mentions', paths: dedupeMentions(await pickMentions()) });
         return;
+      case 'attachSourceSelection': {
+        const selection = currentSelection();
+        if (!selection) {
+          this.post({
+            type: 'notice',
+            level: 'info',
+            message: 'Select non-empty text in a file before attaching it.',
+          });
+          return;
+        }
+        this.addSourceSelection(selection);
+        return;
+      }
       case 'commands':
         await this.sendCatalogue();
         return;
@@ -2210,7 +2316,7 @@ export class ChatPanel implements HostListener {
    * to keep working: the tab stays usable, with no replay and no error.
    */
   private async replay(agentId: string): Promise<void> {
-    if (!agentId || !this.panel) return;
+    if (!agentId || (!this.panel && !this.view)) return;
     let result: SessionTranscriptResult;
     try {
       result = await this.hub.transcript(agentId);
@@ -2444,6 +2550,7 @@ export class ChatPanel implements HostListener {
     const agentId = this.currentAgentId();
     const title = agentId ? this.hub.sessionTitle(agentId) ?? `Anvil — ${agentId.slice(0, 8)}` : 'Anvil';
     if (this.panel && this.panel.title !== title) this.panel.title = title;
+    if (this.view && this.view.title !== title) this.view.title = title;
   }
 
   /** Applies a model to the conversation, from an argument or a picker. */
@@ -3595,13 +3702,13 @@ export class ChatPanel implements HostListener {
    * to surface as an unhandled one.
    */
   private post(message: Outbound): void {
-    const panel = this.panel;
+    const webview = this.panel?.webview ?? this.view?.webview;
     // Closed tabs drop events rather than queueing them for a document that may
     // never exist: the session carries on, and what was missed is the live
     // rendering of it. Nothing is lost by that — the turns are on disk, and a
     // document that comes back gets them replayed from there rather than from a
     // queue that would have to hold a whole conversation to be any use.
-    if (!panel) return;
+    if (!webview) return;
     if (!this.listening) {
       // A document that has not run its script yet has no listener, and a
       // message posted into it is delivered to nobody. This is not a corner
@@ -3610,7 +3717,7 @@ export class ChatPanel implements HostListener {
       this.pending.push(message);
       return;
     }
-    void panel.webview.postMessage(message).then(undefined, () => undefined);
+    void webview.postMessage(message).then(undefined, () => undefined);
   }
 
   /** Re-announces where this tab's session stands. The mode travels with `postMode`. */
@@ -3719,6 +3826,7 @@ export class ChatPanel implements HostListener {
     // nothing rather than a half-disposed tab.
     this.hub.unregister(this);
     this.panel = undefined;
+    this.view = undefined;
     this.listening = false;
     this.pending = [];
     this.turnQueue.clear();

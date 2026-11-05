@@ -61,7 +61,7 @@ func main() {
 
 ## Status
 
-Product is at **0.52.23** — the Agent SDK, built-in editor Host, VS Code extension, and docs share one product version. The completed editor-polish line includes configured language server and test/build commands, message rewind, plan documents, collapsible live plans and Session Manager groups, archived JSONL conversations, role-preserving quote context, exact source-line references, single-tab Session activation, per-conversation model restoration, focused model settings, Agent Map, transcript focus and export, accessible approval flows, scoped permission rules, protected shell paths, and one workspace root per window. Milestone 0.52 bridges the SDK's Single, Multi, and Complex Agent modes into the editor protocol, persists each conversation's selected mode, and presents Complex stages, Worker briefs, dependencies, and worker-reported acceptance in live and restored transcripts. Milestone 0.53 adds explicit model capability profiles and Anthropic adaptive thinking without model-name inference, durable retry and terminal truncation signals across live and replayed sessions, and a model-aware output ceiling with an explicit, guarded continuation turn. Milestone 0.54 now adds a versioned, strictly sequenced run-event journal plus host leases and durable task-state boundaries: lost owners become `interrupted`, while process handles and output remain memory-only. Full per-milestone index: [`doc/roadmaps/v0.x/README.md`](doc/roadmaps/v0.x/README.md).
+Product is at **0.52.25** — the Agent SDK, built-in editor Host, VS Code extension, and docs share one product version. The completed editor-polish line includes configured language server and test/build commands, message rewind, plan documents, collapsible live plans and Session Manager groups, archived JSONL conversations, role-preserving quote context, exact source-line references, single-tab Session activation, per-conversation model restoration, focused model settings, Agent Map, transcript focus and export, accessible approval flows, scoped permission rules, protected shell paths, and one workspace root per window. Milestone 0.52 bridges the SDK's Single, Multi, and Complex Agent modes into the editor protocol, persists each conversation's selected mode, and presents Complex stages, Worker briefs, dependencies, and worker-reported acceptance in live and restored transcripts. Milestone 0.53 adds explicit model capability profiles and Anthropic adaptive thinking without model-name inference, durable retry and terminal truncation signals across live and replayed sessions, and a model-aware output ceiling with an explicit, guarded continuation turn. Milestone 0.54 now adds a versioned, strictly sequenced run-event journal plus host leases and durable task-state boundaries: lost owners become `interrupted`, while process handles and output remain memory-only. Full per-milestone index: [`doc/roadmaps/v0.x/README.md`](doc/roadmaps/v0.x/README.md).
 
 | Era | Milestones | What |
 |-----|-----------|------|
@@ -95,7 +95,7 @@ by `internal/editorhost/independence_test.go`.
 cd editors/vscode
 npm install
 npm run package:vsix          # this platform; --target <id> / --all for the rest
-code --install-extension anvil-vscode-0.52.23-win32-x64.vsix
+code --install-extension anvil-vscode-0.52.25-win32-x64.vsix
 ```
 
 A platform VSIX carries the matching `anvil-host`, cross-compiled with

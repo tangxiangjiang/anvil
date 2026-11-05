@@ -91,6 +91,8 @@ export class Hub {
   readonly manager: HostManager;
 
   private readonly panels = new Set<ChatPanel>();
+  /** The persistent chat contributed beside VS Code Chat, when it has resolved. */
+  private sidebarPanel: ChatPanel | undefined;
   /** Most recently focused chat, retained while focus moves back to a source editor. */
   private lastActivePanel: ChatPanel | undefined;
   /** Human-readable names from the latest successful session listing. */
@@ -194,6 +196,11 @@ export class Hub {
     return panel;
   }
 
+  /** Identifies the persistent Secondary Side Bar surface for session routing. */
+  registerSidebarPanel(panel: ChatPanel): void {
+    this.sidebarPanel = panel;
+  }
+
   /** Opens a new tab, optionally on a stored agent. */
   openTab(agentId?: string): ChatPanel {
     if (agentId) {
@@ -211,6 +218,7 @@ export class Hub {
   /** Called by a panel when its webview is disposed. */
   unregister(panel: ChatPanel): void {
     if (!this.panels.delete(panel)) return;
+    if (this.sidebarPanel === panel) this.sidebarPanel = undefined;
     if (this.lastActivePanel === panel) this.lastActivePanel = [...this.panels][0];
     this.tabsChanged.fire();
     this.runningChanged.fire();
@@ -270,6 +278,10 @@ export class Hub {
    * rather than duplicated.
    */
   async openSession(agentId: string): Promise<void> {
+    if (this.sidebarPanel && !this.sidebarPanel.busy) {
+      await this.sidebarPanel.openAgent(agentId);
+      return;
+    }
     this.openTab(agentId);
   }
 
