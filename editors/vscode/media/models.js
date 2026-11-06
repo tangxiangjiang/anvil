@@ -19,7 +19,16 @@
   const profileMaxSteps = document.getElementById('profileMaxSteps');
   const profileTools = document.getElementById('profileTools');
   const openProfiles = document.getElementById('openProfiles');
+  const routeEditor = document.getElementById('routeEditor');
+  const routeForm = document.getElementById('routeForm');
+  const routeModel = document.getElementById('routeModel');
+  const routeProvider = document.getElementById('routeProvider');
+  const routeBaseUrl = document.getElementById('routeBaseUrl');
+  const routeCredential = document.getElementById('routeCredential');
+  const removeRoute = document.getElementById('removeRoute');
   let availableIds = [];
+  let routes = {};
+  let routeKeys = { openai: false, anthropic: false };
   let profileState = { profiles: [], tool_groups: [], default_tools: [] };
 
   function element(tag, className, text) {
@@ -62,14 +71,49 @@
       return;
     }
     for (const id of ids) {
+      const route = routes[id];
+      const detail = route
+        ? (route.provider === 'anthropic' ? 'Anthropic' : 'OpenAI-compatible') + ' · ' + route.baseUrl
+        : 'Inherit main connection';
+      const actions = element('div', 'model-actions');
+      actions.appendChild(actionButton('Route', 'Configure route for ' + id, () => openRoute(id)));
+      actions.appendChild(actionButton('×', 'Remove ' + id, () => vscode.postMessage({ type: 'remove', id })));
       available.appendChild(
         modelRow(
           id,
-          id === defaultModel.value ? 'Default' : '',
-          actionButton('×', 'Remove ' + id, () => vscode.postMessage({ type: 'remove', id })),
+          [id === defaultModel.value ? 'Default' : '', detail].filter(Boolean).join(' · '),
+          actions,
         ),
       );
     }
+  }
+
+  function openRoute(id) {
+    const route = routes[id] || {};
+    routeModel.textContent = id;
+    routeProvider.value = route.provider === 'anthropic' ? 'anthropic' : 'openai';
+    updateRoutePlaceholder();
+    routeBaseUrl.value = route.baseUrl || '';
+    routeCredential.value =
+      route.credential === 'openai' || route.credential === 'anthropic' ? route.credential : 'default';
+    removeRoute.disabled = !routes[id];
+    routeEditor.hidden = false;
+    routeBaseUrl.focus();
+  }
+
+  function updateRoutePlaceholder() {
+    routeBaseUrl.placeholder = routeProvider.value === 'anthropic'
+      ? 'https://api.anthropic.com'
+      : 'https://gateway.example.com/v1';
+  }
+
+  function renderRouteKeys() {
+    document.getElementById('openaiKeyState').textContent =
+      'OpenAI route key: ' + (routeKeys.openai ? 'stored' : 'not stored');
+    document.getElementById('anthropicKeyState').textContent =
+      'Anthropic route key: ' + (routeKeys.anthropic ? 'stored' : 'not stored');
+    document.getElementById('clearOpenaiKey').disabled = !routeKeys.openai;
+    document.getElementById('clearAnthropicKey').disabled = !routeKeys.anthropic;
   }
 
   function renderDefault(selected) {
@@ -230,6 +274,44 @@
   defaultModel.addEventListener('change', () => {
     vscode.postMessage({ type: 'setDefault', id: defaultModel.value });
   });
+  document.getElementById('closeRoute').addEventListener('click', () => {
+    routeEditor.hidden = true;
+  });
+  routeProvider.addEventListener('change', updateRoutePlaceholder);
+  routeForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    if (
+      (routeCredential.value === 'openai' && !routeKeys.openai)
+      || (routeCredential.value === 'anthropic' && !routeKeys.anthropic)
+    ) {
+      showBanner('error', 'Set the selected route key before saving this route.');
+      return;
+    }
+    vscode.postMessage({
+      type: 'saveRoute',
+      id: routeModel.textContent,
+      route: {
+        provider: routeProvider.value,
+        baseUrl: routeBaseUrl.value.trim(),
+        credential: routeCredential.value,
+      },
+    });
+  });
+  removeRoute.addEventListener('click', () => {
+    vscode.postMessage({ type: 'removeRoute', id: routeModel.textContent });
+  });
+  document.getElementById('setOpenaiKey').addEventListener('click', () => {
+    vscode.postMessage({ type: 'setRouteKey', provider: 'openai' });
+  });
+  document.getElementById('clearOpenaiKey').addEventListener('click', () => {
+    vscode.postMessage({ type: 'clearRouteKey', provider: 'openai' });
+  });
+  document.getElementById('setAnthropicKey').addEventListener('click', () => {
+    vscode.postMessage({ type: 'setRouteKey', provider: 'anthropic' });
+  });
+  document.getElementById('clearAnthropicKey').addEventListener('click', () => {
+    vscode.postMessage({ type: 'clearRouteKey', provider: 'anthropic' });
+  });
   document.getElementById('addProfile').addEventListener('click', () => openProfileForm());
   document.getElementById('cancelProfile').addEventListener('click', closeProfileForm);
   openProfiles.addEventListener('click', () => vscode.postMessage({ type: 'openProfiles' }));
@@ -266,11 +348,20 @@
     fetchButton.disabled = false;
     fetchButton.textContent = 'Fetch models';
     availableIds = Array.isArray(message.available) ? message.available : [];
+    routes = message.routes && typeof message.routes === 'object' ? message.routes : {};
+    routeKeys = message.routeKeys && typeof message.routeKeys === 'object'
+      ? message.routeKeys
+      : { openai: false, anthropic: false };
     catalogUrl.value = message.catalogUrl || '';
     renderDefault(message.defaultModel || '');
     renderAvailable(availableIds);
     renderDiscovered(message.discovered || []);
     renderProfiles(message.subagents);
+    renderRouteKeys();
+    if (!routeEditor.hidden && routeModel.textContent) {
+      if (availableIds.includes(routeModel.textContent)) openRoute(routeModel.textContent);
+      else routeEditor.hidden = true;
+    }
     if (message.profileSaved) closeProfileForm();
     showBanner(message.note ? 'success' : '', message.note || '');
   });

@@ -179,7 +179,13 @@ textarea {
   border: 0;
 }
 
-.available-pane .row-action {
+.model-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.available-pane .model-actions .row-action:last-child {
   width: 24px;
   height: 24px;
   padding: 0;
@@ -188,10 +194,42 @@ textarea {
   font-size: 1.2rem;
 }
 
-.available-pane .row-action:hover:not(:disabled) {
+.available-pane .model-actions .row-action:last-child:hover:not(:disabled) {
   color: var(--vscode-errorForeground);
   background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.14));
   text-decoration: none;
+}
+
+.route-editor {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  border: 1px solid var(--vscode-focusBorder);
+  border-radius: 8px;
+}
+
+.route-editor[hidden] {
+  display: none;
+}
+
+.route-form {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.45fr) minmax(280px, 1fr) minmax(170px, 0.55fr);
+  gap: 10px;
+}
+
+.route-actions {
+  grid-column: 1 / -1;
+}
+
+.route-keys {
+  display: grid;
+  grid-template-columns: minmax(200px, 1fr) auto auto minmax(200px, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.84rem;
 }
 
 .row-action:hover:not(:disabled) {
@@ -328,6 +366,11 @@ legend {
   }
 
   .profile-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .route-form,
+  .route-keys {
     grid-template-columns: 1fr;
   }
 

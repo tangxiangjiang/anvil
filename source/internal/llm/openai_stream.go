@@ -181,7 +181,7 @@ func (c *OpenAI) CompleteStream(ctx context.Context, req Request, onDelta func(D
 		}
 	}
 	if err := sc.Err(); err != nil {
-		return nil, err
+		return nil, newTransportError("openai stream interrupted", err)
 	}
 
 	msg := Message{Role: RoleAssistant, Content: content.String()}

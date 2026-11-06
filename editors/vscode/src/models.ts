@@ -16,12 +16,21 @@ export interface ModelSettings {
   defaultModel: string;
   capabilities: Record<string, ModelCapabilities>;
   capabilitySources: Record<string, 'explicit' | 'gateway'>;
+  routes: Record<string, StoredModelRoute>;
   problem?: string;
 }
 
 export interface StoredModelCapabilities {
   capabilities: ModelCapabilities;
   source: 'explicit' | 'gateway';
+}
+
+export type ModelCredential = 'default' | 'openai' | 'anthropic';
+
+export interface StoredModelRoute {
+  provider: 'openai' | 'anthropic';
+  baseUrl: string;
+  credential: ModelCredential;
 }
 
 export const MAX_OUTPUT_TOKEN_LIMIT = 2_147_483_647;
@@ -99,6 +108,23 @@ export function withGatewayCapabilities(
   if (normalized) next[key] = { capabilities: normalized, source: 'gateway' };
   else delete next[key];
   return next;
+}
+
+export function normalizeModelRoutes(value: unknown): Record<string, StoredModelRoute> {
+  if (!value || typeof value !== 'object') return {};
+  const out: Record<string, StoredModelRoute> = {};
+  for (const [rawId, entry] of Object.entries(value as Record<string, unknown>)) {
+    const id = rawId.trim();
+    if (!validModelId(id) || !entry || typeof entry !== 'object') continue;
+    const raw = entry as Record<string, unknown>;
+    const provider = raw.provider === 'anthropic' ? 'anthropic' : raw.provider === 'openai' ? 'openai' : undefined;
+    const baseUrl = typeof raw.baseUrl === 'string' ? raw.baseUrl.trim().replace(/\/+$/, '') : '';
+    const credential =
+      raw.credential === 'openai' || raw.credential === 'anthropic' ? raw.credential : 'default';
+    if (!provider || baseUrlProblem(baseUrl)) continue;
+    out[id] = { provider, baseUrl, credential };
+  }
+  return out;
 }
 
 export function connectionMode(value: unknown): ModelConnectionMode {

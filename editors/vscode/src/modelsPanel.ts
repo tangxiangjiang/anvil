@@ -8,6 +8,10 @@ import {
   saveDefaultModel,
   saveGatewayModelCapabilities,
   saveModelCatalogUrl,
+  saveModelRoute,
+  promptForModelApiKey,
+  clearModelApiKey,
+  readModelApiKey,
 } from './settings';
 import { mediaAsset } from './webviewAsset';
 
@@ -18,6 +22,8 @@ export interface ModelsPanelHost {
   subagentProfiles(): Promise<SubagentsResult>;
   upsertSubagentProfile(profile: SubagentProfile): Promise<SubagentsResult>;
   removeSubagentProfile(id: string): Promise<SubagentsResult>;
+  readonly running: boolean;
+  restart(): Promise<void>;
   modelsChanged(): void;
   openModelConnection(): void;
 }
@@ -83,6 +89,18 @@ export class ModelsPanels implements vscode.Disposable {
       case 'setDefault':
         await this.setDefault(message.id);
         return;
+      case 'saveRoute':
+        await this.saveRoute(message.id, message.route);
+        return;
+      case 'removeRoute':
+        await this.removeRoute(message.id);
+        return;
+      case 'setRouteKey':
+        await this.setRouteKey(message.provider);
+        return;
+      case 'clearRouteKey':
+        await this.clearRouteKey(message.provider);
+        return;
       case 'saveProfile':
         await this.saveProfile(message.profile);
         return;
@@ -141,10 +159,12 @@ export class ModelsPanels implements vscode.Disposable {
     const settings = readSettings().models;
     const available = settings.gatewayAvailable.filter((model) => model !== id);
     await saveAvailableModels(this.context, available);
+    await saveModelRoute(this.context, id, undefined);
     if (settings.gatewayDefaultModel === id) {
       await saveDefaultModel(this.context, '');
     }
     this.host.modelsChanged();
+    if (this.host.running) await this.host.restart();
     await this.sendState(`${id} was removed.`);
   }
 
@@ -158,6 +178,52 @@ export class ModelsPanels implements vscode.Disposable {
     await saveDefaultModel(this.context, id);
     this.host.modelsChanged();
     await this.sendState(id === '' ? 'Host default selected.' : `${id} is the default model.`);
+  }
+
+  private async saveRoute(idValue: unknown, value: unknown): Promise<void> {
+    const id = typeof idValue === 'string' ? idValue.trim() : '';
+    if (!readSettings().models.gatewayAvailable.includes(id) || !value || typeof value !== 'object') {
+      await this.post({ type: 'error', message: 'Choose an available model before saving its route.' });
+      return;
+    }
+    const raw = value as Record<string, unknown>;
+    try {
+      await saveModelRoute(this.context, id, {
+        provider: raw.provider === 'anthropic' ? 'anthropic' : 'openai',
+        baseUrl: typeof raw.baseUrl === 'string' ? raw.baseUrl : '',
+        credential:
+          raw.credential === 'openai' || raw.credential === 'anthropic' ? raw.credential : 'default',
+      });
+      this.host.modelsChanged();
+      if (this.host.running) await this.host.restart();
+      await this.sendState(`${id} route saved.`);
+    } catch (err) {
+      await this.post({ type: 'error', message: (err as Error).message });
+    }
+  }
+
+  private async removeRoute(value: unknown): Promise<void> {
+    const id = typeof value === 'string' ? value.trim() : '';
+    if (!id) return;
+    await saveModelRoute(this.context, id, undefined);
+    this.host.modelsChanged();
+    if (this.host.running) await this.host.restart();
+    await this.sendState(`${id} now inherits the main connection.`);
+  }
+
+  private async setRouteKey(value: unknown): Promise<void> {
+    const provider = value === 'anthropic' ? 'anthropic' : value === 'openai' ? 'openai' : undefined;
+    if (!provider || !await promptForModelApiKey(this.context, provider)) return;
+    if (this.host.running) await this.host.restart();
+    await this.sendState(`${provider === 'openai' ? 'OpenAI-compatible' : 'Anthropic'} route key saved.`);
+  }
+
+  private async clearRouteKey(value: unknown): Promise<void> {
+    const provider = value === 'anthropic' ? 'anthropic' : value === 'openai' ? 'openai' : undefined;
+    if (!provider) return;
+    await clearModelApiKey(this.context, provider);
+    if (this.host.running) await this.host.restart();
+    await this.sendState(`${provider === 'openai' ? 'OpenAI-compatible' : 'Anthropic'} route key cleared.`);
   }
 
   private async saveProfile(value: unknown): Promise<void> {
@@ -189,6 +255,10 @@ export class ModelsPanels implements vscode.Disposable {
 
   private async sendState(note = '', profileSaved = false): Promise<void> {
     const settings = readSettings().models;
+    const [openaiApiKey, anthropicApiKey] = await Promise.all([
+      readModelApiKey(this.context, 'openai'),
+      readModelApiKey(this.context, 'anthropic'),
+    ]);
     try {
       this.profiles = await this.host.subagentProfiles();
     } catch (err) {
@@ -202,6 +272,10 @@ export class ModelsPanels implements vscode.Disposable {
       defaultModel: settings.gatewayDefaultModel,
       discovered: this.discovered,
       subagents: this.profiles,
+      routeKeys: {
+        openai: Boolean(openaiApiKey),
+        anthropic: Boolean(anthropicApiKey),
+      },
       profileSaved,
       note,
     });
@@ -248,6 +322,29 @@ function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     <section class="default-section">
       <div class="section-head"><div><h2>Default model</h2><p>New conversations start with this model.</p></div></div>
       <label class="field default-field"><span>Default model</span><select id="defaultModel"></select></label>
+    </section>
+    <section id="routeEditor" class="route-editor" hidden>
+      <div class="section-head">
+        <div><h2>Model route · <code id="routeModel"></code></h2><p>Override the inherited main connection for Subagents that select this model.</p></div>
+        <button id="closeRoute" type="button" class="icon-button" aria-label="Close model route" title="Close">×</button>
+      </div>
+      <form id="routeForm" class="route-form">
+        <label class="field"><span>Protocol</span><select id="routeProvider"><option value="openai">OpenAI-compatible</option><option value="anthropic">Anthropic</option></select></label>
+        <label class="field route-url"><span>Base URL</span><input id="routeBaseUrl" type="url" required spellcheck="false" placeholder="https://gateway.example.com/v1"></label>
+        <label class="field"><span>Credential</span><select id="routeCredential"><option value="default">Default API key</option><option value="openai">OpenAI route key</option><option value="anthropic">Anthropic route key</option></select></label>
+        <div class="form-actions route-actions">
+          <button id="removeRoute" type="button" class="secondary">Use main connection</button>
+          <button type="submit" class="primary">Save route</button>
+        </div>
+      </form>
+      <div class="route-keys">
+        <span id="openaiKeyState">OpenAI route key: fallback</span>
+        <button id="setOpenaiKey" type="button" class="secondary">Set key</button>
+        <button id="clearOpenaiKey" type="button" class="secondary">Clear</button>
+        <span id="anthropicKeyState">Anthropic route key: fallback</span>
+        <button id="setAnthropicKey" type="button" class="secondary">Set key</button>
+        <button id="clearAnthropicKey" type="button" class="secondary">Clear</button>
+      </div>
     </section>
     <div class="model-workbench">
       <section class="model-pane available-pane">

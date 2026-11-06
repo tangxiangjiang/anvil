@@ -108,7 +108,11 @@ type Options struct {
 	APIKey   string
 	BaseURL  string
 	Model    Model
-	Local    LocalOptions
+	// ModelRoutes overrides the wire protocol and connection used when a child
+	// selects a model different from the parent. Keys are exact model IDs.
+	// Missing entries preserve the historical inherited-provider behavior.
+	ModelRoutes map[string]ModelRoute
+	Local       LocalOptions
 	// HostID identifies one owning process incarnation. Containers should set
 	// one random value for their lifetime; the SDK generates a process-local
 	// value when empty. It is never derived from a PID or machine identity.
@@ -465,6 +469,18 @@ type WebSearchOptions struct {
 // Model identifies a provider model and, when known, its explicit capabilities.
 type Model struct {
 	ID           string
+	Capabilities ModelCapabilities
+}
+
+// ModelRoute is the connection and capability profile for one model.
+//
+// APIKey is resolved by the container. The editor host receives only a fixed
+// credential selector over JSON-RPC and reads the matching secret from its own
+// environment, so this value never crosses the editor protocol.
+type ModelRoute struct {
+	Provider     Provider
+	APIKey       string
+	BaseURL      string
 	Capabilities ModelCapabilities
 }
 

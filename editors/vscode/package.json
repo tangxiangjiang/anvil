@@ -2,7 +2,7 @@
   "name": "anvil-vscode",
   "displayName": "Anvil",
   "description": "Anvil agent in VS Code: streaming chat, tool cards, per-call approvals.",
-  "version": "0.52.25",
+  "version": "0.52.30",
   "publisher": "anvil-dev",
   "author": {
     "name": "Xiangjiang Tang",

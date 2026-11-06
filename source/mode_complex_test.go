@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/anvil-dev/anvil/internal/llm"
 )
@@ -44,6 +45,158 @@ func stageOf(req llm.Request) string {
 		return "worker"
 	}
 	return "root"
+}
+
+type flakyAnalyzeStream struct {
+	mu           sync.Mutex
+	analyzeCalls int
+}
+
+func (c *flakyAnalyzeStream) Complete(
+	ctx context.Context,
+	req llm.Request,
+) (*llm.Response, error) {
+	return c.CompleteStream(ctx, req, func(llm.Delta) {})
+}
+
+func (c *flakyAnalyzeStream) CompleteStream(
+	_ context.Context,
+	req llm.Request,
+	onDelta func(llm.Delta),
+) (*llm.Response, error) {
+	var text string
+	switch stageOf(req) {
+	case "decision":
+		text = goodDecision
+	case "analyze":
+		c.mu.Lock()
+		c.analyzeCalls++
+		attempt := c.analyzeCalls
+		c.mu.Unlock()
+		if attempt == 1 {
+			onDelta(llm.Delta{Text: `{"summary":"partial`})
+			return nil, llm.NewHTTPError(503, "stream_incomplete")
+		}
+		text = roadmapJSON(map[string]any{
+			"id":         "a",
+			"goal":       "inspect a",
+			"plan":       []string{"inspect"},
+			"files":      []string{"pkg/a.txt"},
+			"acceptance": []string{"reported"},
+			"depends_on": []string{},
+		})
+	case "worker":
+		text = "reported"
+	default:
+		text = "unexpected"
+	}
+	onDelta(llm.Delta{Text: text})
+	return textResponse(text), nil
+}
+
+func TestComplexRetriesOneReadOnlyStageAfterIncompleteStream(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir, map[string]string{"pkg/a.txt": "old"})
+	parent, err := Create(context.Background(), complexOptions(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+
+	flaky := &flakyAnalyzeStream{}
+	parent.complete = llm.WithRetry(flaky, llm.RetryPolicy{
+		MaxAttempts: 3,
+		BaseDelay:   time.Millisecond,
+		MaxDelay:    time.Millisecond,
+	})
+	run, err := parent.Send(context.Background(), "inspect the file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := run.Wait(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != StatusFinished {
+		t.Fatalf("status=%s code=%s err=%s result=%s", res.Status, res.Code, res.Err, res.Result)
+	}
+	flaky.mu.Lock()
+	defer flaky.mu.Unlock()
+	if flaky.analyzeCalls != 2 {
+		t.Fatalf("analyze calls=%d, want one safe retry", flaky.analyzeCalls)
+	}
+	if parent.budget.used != 4 {
+		t.Fatalf("budget used=%d, want decision + two analyze attempts + worker", parent.budget.used)
+	}
+}
+
+func TestComplexStageRetryRequiresReadOnlyTools(t *testing.T) {
+	if !workflowSelectorsReadOnly([]string{"read", "search", "git", "skills"}) {
+		t.Fatal("the built-in Decision tools should be safe to retry")
+	}
+	for _, selectors := range [][]string{{"write"}, {"edit_file"}, {"shell"}, {"mcp"}, {"custom_tool"}} {
+		if workflowSelectorsReadOnly(selectors) {
+			t.Fatalf("selectors %v must not be replayed automatically", selectors)
+		}
+	}
+}
+
+func TestComplexCanonicalizesSchemaAnswersBeforeWorker(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir, map[string]string{"pkg/a.txt": "old"})
+	parent, err := Create(context.Background(), complexOptions(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+
+	roadmap := roadmapJSON(map[string]any{
+		"id": "a", "goal": "inspect a", "plan": []string{"inspect"},
+		"files": []string{"pkg/a.txt"}, "acceptance": []string{"reported"}, "depends_on": []string{},
+	})
+	var mu sync.Mutex
+	workers := 0
+	parent.complete = completerFunc(func(_ context.Context, req llm.Request) (*llm.Response, error) {
+		switch stageOf(req) {
+		case "decision":
+			return textResponse("Decision explanation with a code brace {not JSON}.\n" + goodDecision), nil
+		case "analyze":
+			if strings.Contains(lastUserText(req), "Decision explanation") {
+				t.Error("the prose around the decision leaked into Analyze")
+			}
+			// Put the roadmap beyond the workflow renderer's preview limit. Display
+			// truncation must never become schema-validation or fan-out truncation.
+			return textResponse("Analysis notes:\n" + strings.Repeat("x", 6000) +
+				"\nAn earlier example: {\"example\":true}\n```json\n" + roadmap + "\n```"), nil
+		case "worker":
+			mu.Lock()
+			workers++
+			mu.Unlock()
+			return textResponse("[met] reported"), nil
+		}
+		return textResponse("unexpected"), nil
+	})
+
+	run, err := parent.Send(context.Background(), "inspect the file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := run.Wait(context.Background())
+	if err != nil || res.Status != StatusFinished {
+		t.Fatalf("err=%v result=%+v", err, res)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if workers != 1 {
+		t.Fatalf("workers=%d, want 1", workers)
+	}
+	projection, err := parent.Workflow(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projection.Artifacts) != 1 || projection.Artifacts[0].Body != roadmap {
+		t.Fatalf("the canonical roadmap was not persisted: %+v", projection.Artifacts)
+	}
 }
 
 // One Send runs decide, analyze and the Workers as a workflow, and the Workers are

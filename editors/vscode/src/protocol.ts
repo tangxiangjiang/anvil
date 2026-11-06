@@ -214,6 +214,7 @@ export interface SessionParams {
   model?: string;
   effort?: Effort;
   model_capabilities?: ModelCapabilities;
+  model_routes?: Record<string, ModelRoute>;
   max_output_tokens?: number;
   system_prompt?: string;
   max_steps?: number;
@@ -288,6 +289,13 @@ export interface ModelCapabilities {
   effort_levels?: Effort[];
   max_output_tokens: boolean;
   vision: boolean;
+}
+
+export interface ModelRoute {
+  provider: 'openai' | 'anthropic';
+  base_url: string;
+  credential?: 'default' | 'openai' | 'anthropic';
+  capabilities?: ModelCapabilities;
 }
 
 /**

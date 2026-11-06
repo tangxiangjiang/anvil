@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -400,7 +401,7 @@ func (s *Server) handleInitialize(params json.RawMessage) (any, *RPCError) {
 }
 
 func capabilities() []string {
-	return []string{"streaming", "sessions", "session.search", "session.historyContext", "resume", "cancel", "models", "approval", "context", "vision", "plan", "skills", "rules", "permissions", "mcp", "mcp.runtime", "subagents", "tasks", "runs.durable", "workflow", "worktrees"}
+	return []string{"streaming", "sessions", "session.search", "session.historyContext", "resume", "cancel", "models", "model_routes", "approval", "context", "vision", "plan", "skills", "rules", "permissions", "mcp", "mcp.runtime", "subagents", "tasks", "runs.durable", "workflow", "worktrees"}
 }
 
 // ---------------------------------------------------------------------------
@@ -2153,6 +2154,21 @@ func (s *Server) buildOptions(ctx context.Context, p SessionParams, sess *sessio
 		return opts, errInvalidParams("model is required (session model, host config, or ANVIL_MODEL)")
 	}
 	opts.Model = anvil.Model{ID: model, Capabilities: capabilitiesFromWire(p.ModelCapabilities)}
+	modelRoutes, routeErr := modelRoutesFromWire(p.ModelRoutes)
+	if routeErr != nil {
+		return opts, routeErr
+	}
+	if len(modelRoutes) > 0 {
+		if _, exists := modelRoutes[model]; !exists && strings.TrimSpace(opts.BaseURL) != "" {
+			modelRoutes[model] = anvil.ModelRoute{
+				Provider:     opts.Provider,
+				APIKey:       os.Getenv("ANVIL_API_KEY"),
+				BaseURL:      strings.TrimRight(strings.TrimSpace(opts.BaseURL), "/"),
+				Capabilities: opts.Model.Capabilities,
+			}
+		}
+	}
+	opts.ModelRoutes = modelRoutes
 	sources, rpcErr := settingSourcesFrom(p.SettingSources)
 	if rpcErr != nil {
 		return opts, rpcErr
@@ -2195,6 +2211,63 @@ func (s *Server) buildOptions(ctx context.Context, p SessionParams, sess *sessio
 	// permissionHookForMode and groupsForMode.
 	opts.Permission = s.permissionHookForMode(sess.mode, sess, approvalTimeout(p.ApprovalTimeoutMS))
 	return opts, nil
+}
+
+func modelRoutesFromWire(routes map[string]ModelRouteParams) (map[string]anvil.ModelRoute, *RPCError) {
+	if len(routes) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]anvil.ModelRoute, len(routes))
+	defaultKey := os.Getenv("ANVIL_API_KEY")
+	for rawID, route := range routes {
+		id := strings.TrimSpace(rawID)
+		if id == "" {
+			return nil, errInvalidParams("model_routes: model id is required")
+		}
+		if _, exists := out[id]; exists {
+			return nil, errInvalidParams("model_routes: duplicate model id after trimming: " + id)
+		}
+		provider := strings.ToLower(strings.TrimSpace(route.Provider))
+		if provider != string(anvil.ProviderOpenAI) && provider != string(anvil.ProviderAnthropic) {
+			return nil, errInvalidParams("model_routes." + id + ": provider must be openai or anthropic")
+		}
+		baseURL := strings.TrimRight(strings.TrimSpace(route.BaseURL), "/")
+		if baseURL == "" {
+			return nil, errInvalidParams("model_routes." + id + ": base_url is required")
+		}
+		parsed, err := url.Parse(baseURL)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+			return nil, errInvalidParams("model_routes." + id + ": base_url must be an absolute HTTP(S) URL")
+		}
+		credential := strings.ToLower(strings.TrimSpace(route.Credential))
+		key := defaultKey
+		switch credential {
+		case "", "default":
+		case "openai":
+			key = os.Getenv("ANVIL_OPENAI_API_KEY")
+			if key == "" {
+				return nil, errInvalidParams("model_routes." + id + ": OpenAI route key is not configured")
+			}
+		case "anthropic":
+			key = os.Getenv("ANVIL_ANTHROPIC_API_KEY")
+			if key == "" {
+				return nil, errInvalidParams("model_routes." + id + ": Anthropic route key is not configured")
+			}
+		default:
+			return nil, errInvalidParams("model_routes." + id + ": unknown credential")
+		}
+		capabilities := capabilitiesFromWire(route.Capabilities)
+		if err := capabilities.ValidateFor(anvil.Provider(provider), anvil.EffortDefault, 0); err != nil {
+			return nil, errInvalidParams("model_routes." + id + ": " + err.Error())
+		}
+		out[id] = anvil.ModelRoute{
+			Provider:     anvil.Provider(provider),
+			APIKey:       key,
+			BaseURL:      baseURL,
+			Capabilities: capabilities,
+		}
+	}
+	return out, nil
 }
 
 // settingSourcesFrom validates the wire's string list against the enum.

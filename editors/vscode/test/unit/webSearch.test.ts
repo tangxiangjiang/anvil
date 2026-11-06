@@ -105,11 +105,13 @@ test('no key field can reach the wire', () => {
   assert.doesNotMatch(SETTINGS, /session\.web_search = [^;]*key/i);
 });
 
-test('the child environment carries both credentials', () => {
+test('the child environment carries model-route and web credentials', () => {
   const spawn = memberOf(HOST_MANAGER, 'private async spawn(');
   assert.match(spawn, /readWebSearchKey\(this\.context\)/);
-  assert.match(spawn, /childEnv\(\{ apiKey, webSearchKey \}\)/);
-  assert.match(HOST_MANAGER, /readApiKey, readSettings, readWebSearchKey/);
+  assert.match(spawn, /childEnv\(\{ apiKey, openaiApiKey, anthropicApiKey, webSearchKey \}\)/);
+  assert.match(HOST_MANAGER, /readApiKey,[\s\S]*?readModelApiKey,[\s\S]*?readSettings,[\s\S]*?readWebSearchKey/);
+  assert.match(SETTINGS, /ANVIL_OPENAI_API_KEY/);
+  assert.match(SETTINGS, /ANVIL_ANTHROPIC_API_KEY/);
 });
 
 test('the key has its own commands and its own secret', () => {

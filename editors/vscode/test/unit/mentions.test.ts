@@ -8,7 +8,13 @@
 
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
-import { dedupeMentions, mentionLabel, relativeMention, toolCallPaths } from '../../src/mentions';
+import {
+  dedupeMentions,
+  mentionLabel,
+  mentionSearchGlob,
+  relativeMention,
+  toolCallPaths,
+} from '../../src/mentions';
 
 const win = process.platform === 'win32';
 const SEP = win ? '\\' : '/';
@@ -58,6 +64,13 @@ test('a label is the last segment', () => {
 
 test('duplicates are dropped and the pick order is kept', () => {
   assert.deepEqual(dedupeMentions(['b.go', 'a.go', 'b.go', '', 'a.go']), ['b.go', 'a.go']);
+});
+
+test('a typed mention narrows the workspace glob without interpreting filename punctuation', () => {
+  assert.equal(mentionSearchGlob('StreamableRenderAsset.cpp'), '**/*StreamableRenderAsset.cpp*');
+  assert.equal(mentionSearchGlob('Engine\\Source\\Runtime'), '**/*Engine/Source/Runtime*');
+  assert.equal(mentionSearchGlob('  [Texture]*.cpp  '), '**/*Texture.cpp*');
+  assert.equal(mentionSearchGlob(''), '**/*');
 });
 
 test('a single-file write names its target', () => {

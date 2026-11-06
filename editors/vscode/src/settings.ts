@@ -15,16 +15,18 @@ import { McpSettings, settingSourcesFor } from './mcp';
 import {
   DEFAULT_MODEL_CATALOG_URL,
   ModelConnectionMode,
+  StoredModelRoute,
   ModelSettings,
   StoredModelCapabilities,
   connectionMode,
   connectionProblem,
   normalizeModelCapabilities,
   normalizeModelIds,
+  normalizeModelRoutes,
   validModelId,
   withGatewayCapabilities,
 } from './models';
-import { Effort, ModelCapabilities } from './protocol';
+import { Effort, ModelCapabilities, ModelRoute } from './protocol';
 import { SessionConfig } from './session';
 import { WebSearchSettings, webSearchParams } from './webSearch';
 import { rootUri } from './workspaceRoot';
@@ -33,6 +35,10 @@ const SECTION = 'anvil';
 const SECRET_KEY = 'anvil.apiKey';
 const WEB_SECRET_KEY = 'anvil.webSearchKey';
 const WEB_ENV_KEY = 'ANVIL_WEB_SEARCH_API_KEY';
+const OPENAI_SECRET_KEY = 'anvil.modelApiKey.openai';
+const ANTHROPIC_SECRET_KEY = 'anvil.modelApiKey.anthropic';
+const OPENAI_ENV_KEY = 'ANVIL_OPENAI_API_KEY';
+const ANTHROPIC_ENV_KEY = 'ANVIL_ANTHROPIC_API_KEY';
 /** Global state only. Not registered with `setKeysForSync`, so it stays on this machine. */
 const SAVED_KEY = 'anvil.apiKey';
 const DEFAULT_MODEL_KEY = 'anvil.defaultModel';
@@ -40,6 +46,7 @@ const MODEL_SETUP_KEY = 'anvil.modelSetup';
 const AVAILABLE_MODELS_KEY = 'anvil.availableModels';
 const MODEL_CAPABILITIES_KEY = 'anvil.modelCapabilities';
 const MODEL_CATALOG_KEY = 'anvil.modelCatalogUrl';
+const MODEL_ROUTES_KEY = 'anvil.modelRoutes';
 let selectedDefaultModel = '';
 let modelSetup: ModelSetup = {
   mode: 'gateway',
@@ -50,6 +57,7 @@ let modelSetup: ModelSetup = {
 };
 let availableModels: string[] = [];
 let modelCapabilities: Record<string, StoredModelCapabilities> = {};
+let modelRoutes: Record<string, StoredModelRoute> = {};
 let modelCatalogUrl = DEFAULT_MODEL_CATALOG_URL;
 
 export interface ModelSetup {
@@ -97,6 +105,7 @@ export function initDefaultModel(context: vscode.ExtensionContext): void {
   modelCapabilities = normalizeModelCapabilities(
     context.workspaceState.get<unknown>(MODEL_CAPABILITIES_KEY),
   );
+  modelRoutes = normalizeModelRoutes(context.workspaceState.get<unknown>(MODEL_ROUTES_KEY));
   modelCatalogUrl = (
     context.workspaceState.get<string>(MODEL_CATALOG_KEY)
       ?? cfg.get<string>('modelCatalogUrl', DEFAULT_MODEL_CATALOG_URL)
@@ -105,6 +114,7 @@ export function initDefaultModel(context: vscode.ExtensionContext): void {
   void context.workspaceState.update(MODEL_SETUP_KEY, modelSetup);
   void context.workspaceState.update(AVAILABLE_MODELS_KEY, availableModels);
   void context.workspaceState.update(MODEL_CAPABILITIES_KEY, modelCapabilities);
+  void context.workspaceState.update(MODEL_ROUTES_KEY, modelRoutes);
   void context.workspaceState.update(MODEL_CATALOG_KEY, modelCatalogUrl);
   selectedDefaultModel = context.workspaceState.get<string>(DEFAULT_MODEL_KEY, legacy);
   if (selectedDefaultModel !== '') {
@@ -136,7 +146,11 @@ export async function saveAvailableModels(context: vscode.ExtensionContext, valu
   modelCapabilities = Object.fromEntries(
     Object.entries(modelCapabilities).filter(([id]) => availableModels.includes(id)),
   );
+  modelRoutes = Object.fromEntries(
+    Object.entries(modelRoutes).filter(([id]) => availableModels.includes(id)),
+  );
   await context.workspaceState.update(MODEL_CAPABILITIES_KEY, modelCapabilities);
+  await context.workspaceState.update(MODEL_ROUTES_KEY, modelRoutes);
 }
 
 export async function saveGatewayModelCapabilities(
@@ -153,6 +167,25 @@ export async function saveGatewayModelCapabilities(
 export async function saveModelCatalogUrl(context: vscode.ExtensionContext, value: string): Promise<void> {
   modelCatalogUrl = value.trim();
   await context.workspaceState.update(MODEL_CATALOG_KEY, modelCatalogUrl);
+}
+
+export async function saveModelRoute(
+  context: vscode.ExtensionContext,
+  id: string,
+  route: StoredModelRoute | undefined,
+): Promise<void> {
+  const key = id.trim();
+  if (!validModelId(key)) return;
+  const next = { ...modelRoutes };
+  if (route) {
+    const normalized = normalizeModelRoutes({ [key]: route })[key];
+    if (!normalized) throw new Error('A model route requires a provider and an absolute Base URL.');
+    next[key] = normalized;
+  } else {
+    delete next[key];
+  }
+  modelRoutes = next;
+  await context.workspaceState.update(MODEL_ROUTES_KEY, modelRoutes);
 }
 
 function normalizeModelSetup(value: ModelSetup): ModelSetup {
@@ -255,6 +288,21 @@ export function readSettings(): ResolvedSettings {
   };
   const selectedCapabilities = effectiveModel ? modelCapabilities[effectiveModel] : undefined;
   if (selectedCapabilities) session.model_capabilities = selectedCapabilities.capabilities;
+  if (mode === 'gateway') {
+    const routes = Object.fromEntries(
+      availableModels.flatMap((id): Array<[string, ModelRoute]> => {
+        const route = modelRoutes[id];
+        if (!route) return [];
+        return [[id, {
+          provider: route.provider,
+          base_url: route.baseUrl,
+          credential: route.credential,
+          capabilities: modelCapabilities[id]?.capabilities,
+        }]];
+      }),
+    );
+    if (Object.keys(routes).length > 0) session.model_routes = routes;
+  }
   const defaultModel = session.model ?? '';
   const curated = availableModels;
   const models: ModelSettings = {
@@ -273,6 +321,7 @@ export function readSettings(): ResolvedSettings {
     capabilitySources: Object.fromEntries(
       Object.entries(modelCapabilities).map(([id, value]) => [id, value.source]),
     ),
+    routes: { ...modelRoutes },
     problem: connectionProblem(mode, baseUrl, singleModelId),
   };
   if (maxSteps > 0) session.max_steps = maxSteps;
@@ -422,6 +471,8 @@ function emptyToUndefined(value: string | undefined): string | undefined {
 /** The credentials the host may need, read from SecretStorage by the caller. */
 export interface ChildKeys {
   apiKey?: string;
+  openaiApiKey?: string;
+  anthropicApiKey?: string;
   webSearchKey?: string;
 }
 
@@ -440,6 +491,8 @@ export interface ChildKeys {
  */
 export function childEnv(keys: ChildKeys): NodeJS.ProcessEnv {
   const env = applyApiKeyEnv(process.env, keys.apiKey);
+  setSecret(env, OPENAI_ENV_KEY, keys.openaiApiKey);
+  setSecret(env, ANTHROPIC_ENV_KEY, keys.anthropicApiKey);
   setSecret(env, WEB_ENV_KEY, keys.webSearchKey);
   return env;
 }
@@ -484,6 +537,37 @@ export async function promptForApiKey(context: vscode.ExtensionContext): Promise
 /** Removes the stored key. */
 export async function clearApiKey(context: vscode.ExtensionContext): Promise<void> {
   await forgetApiKey(keyStore(context));
+}
+
+export async function readModelApiKey(
+  context: vscode.ExtensionContext,
+  provider: 'openai' | 'anthropic',
+): Promise<string | undefined> {
+  return context.secrets.get(provider === 'openai' ? OPENAI_SECRET_KEY : ANTHROPIC_SECRET_KEY);
+}
+
+export async function promptForModelApiKey(
+  context: vscode.ExtensionContext,
+  provider: 'openai' | 'anthropic',
+): Promise<boolean> {
+  const label = provider === 'openai' ? 'OpenAI-compatible' : 'Anthropic';
+  const value = await vscode.window.showInputBox({
+    title: `${label} route API key`,
+    prompt: `Stored in VS Code SecretStorage for ${label} model routes. The default API key remains the fallback.`,
+    password: true,
+    ignoreFocusOut: true,
+    validateInput: (input) => (input.trim() === '' ? 'The key cannot be empty.' : undefined),
+  });
+  if (value === undefined) return false;
+  await context.secrets.store(provider === 'openai' ? OPENAI_SECRET_KEY : ANTHROPIC_SECRET_KEY, value.trim());
+  return true;
+}
+
+export async function clearModelApiKey(
+  context: vscode.ExtensionContext,
+  provider: 'openai' | 'anthropic',
+): Promise<void> {
+  await context.secrets.delete(provider === 'openai' ? OPENAI_SECRET_KEY : ANTHROPIC_SECRET_KEY);
 }
 
 /** Reads the stored web-search key, or undefined when none is set. */

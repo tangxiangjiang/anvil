@@ -64,6 +64,16 @@ test('an exhausted transient provider error does not blame credentials', () => {
   assert.doesNotMatch(failure.message, /API key|model id|baseUrl/i);
 });
 
+test('a provider transport timeout is not described as request rejection', () => {
+  const failure = classifyDone(done({
+    code: 'provider',
+    err: 'context deadline exceeded while reading body',
+  }));
+  assert.equal(failure.kind, 'provider');
+  assert.match(failure.message, /communication|network/i);
+  assert.doesNotMatch(failure.message, /rejected|API key|model id/i);
+});
+
 test('an unknown code keeps whatever the host said', () => {
   const failure = classifyDone(done({ code: 'weird', err: 'something specific broke' }));
   assert.equal(failure.kind, 'unknown');

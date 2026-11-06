@@ -17,6 +17,11 @@ import (
 
 const defaultOpenAIBase = "https://api.openai.com/v1"
 
+// Streaming model responses can legitimately take several minutes for large
+// coding turns. The previous two-minute whole-request timeout expired while an
+// active body was still arriving. Context cancellation still stops immediately.
+const providerResponseTimeout = 15 * time.Minute
+
 // OpenAI is an OpenAI-compatible Chat Completions client.
 type OpenAI struct {
 	cfg    Config
@@ -32,7 +37,7 @@ func NewOpenAI(cfg Config) *OpenAI {
 	return &OpenAI{
 		cfg: cfg,
 		client: &http.Client{
-			Timeout: 120 * time.Second,
+			Timeout: providerResponseTimeout,
 		},
 	}
 }

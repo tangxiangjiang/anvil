@@ -66,6 +66,23 @@ export function dedupeMentions(mentions: string[]): string[] {
   return out;
 }
 
+/**
+ * Narrows VS Code's workspace search as the mention picker is typed into.
+ *
+ * Glob metacharacters are discarded instead of interpreted: a filename query
+ * is data, and typing `[` must not turn the rest of the query into a character
+ * class. Backslashes are accepted because Windows paths are often pasted into
+ * the picker even though mention paths themselves use forward slashes.
+ */
+export function mentionSearchGlob(query: string): string {
+  const literal = query
+    .trim()
+    .split('\\').join('/')
+    .replace(/[?*[\]{}]/g, '')
+    .replace(/\/+/g, '/');
+  return literal === '' ? '**/*' : `**/*${literal}*`;
+}
+
 /** Tools whose `path` argument names the one file they are about to change. */
 const SINGLE_PATH_TOOLS = new Set(['write_file', 'edit_file']);
 

@@ -536,6 +536,7 @@ func (a *Agent) childOptions(in spawnParams, selectors []string, depth int, prof
 		APIKey:           a.opts.APIKey,
 		BaseURL:          a.opts.BaseURL,
 		Model:            a.opts.Model,
+		ModelRoutes:      cloneModelRoutes(a.opts.ModelRoutes),
 		MaxSteps:         a.opts.MaxSteps,
 		MaxWallTime:      a.opts.MaxWallTime,
 		Effort:           a.opts.Effort,
@@ -576,9 +577,7 @@ func (a *Agent) childOptions(in spawnParams, selectors []string, depth int, prof
 			SettingSources:  append([]SettingSource(nil), a.opts.Local.SettingSources...),
 		},
 	}
-	if in.Model != "" {
-		opts.Model = Model{ID: in.Model}
-	}
+	a.applyChildModel(&opts, in.Model)
 	if in.MaxSteps > 0 {
 		if a.opts.MaxSteps > 0 && in.MaxSteps > a.opts.MaxSteps {
 			opts.MaxSteps = a.opts.MaxSteps
@@ -612,6 +611,39 @@ func (a *Agent) childOptions(in spawnParams, selectors []string, depth int, prof
 		opts.skipFileMCP = true
 	}
 	return opts
+}
+
+// applyChildModel keeps the historical request-level model override when no
+// route exists. A route changes the protocol client itself, so only that case
+// clears the inherited completer and asks Create to build a new one.
+func (a *Agent) applyChildModel(opts *Options, model string) {
+	if model == "" || model == a.opts.Model.ID {
+		return
+	}
+	opts.Model = Model{ID: model}
+	route, routed := a.opts.ModelRoutes[model]
+	if !routed {
+		return
+	}
+	opts.Provider = route.Provider
+	opts.BaseURL = route.BaseURL
+	if route.APIKey != "" {
+		opts.APIKey = route.APIKey
+	}
+	opts.Model.Capabilities = route.Capabilities
+	opts.completer = nil
+}
+
+func cloneModelRoutes(routes map[string]ModelRoute) map[string]ModelRoute {
+	if len(routes) == 0 {
+		return nil
+	}
+	out := make(map[string]ModelRoute, len(routes))
+	for id, route := range routes {
+		route.Capabilities.EffortLevels = append([]Effort(nil), route.Capabilities.EffortLevels...)
+		out[id] = route
+	}
+	return out
 }
 
 func cloneWorktreeRouteValue(route *WorktreeWorkerRoute) *WorktreeWorkerRoute {

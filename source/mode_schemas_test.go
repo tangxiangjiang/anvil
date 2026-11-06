@@ -91,6 +91,24 @@ func TestSchemaRoadmap(t *testing.T) {
 	}
 }
 
+func TestCanonicalWorkflowObjectSelectsFinalCompleteObject(t *testing.T) {
+	roadmap := roadmapJSON(item("work"))
+	text := "An example comes first: {not valid JSON}\n" +
+		`{"example":true}` + "\nThe authoritative roadmap follows:\n```json\n" +
+		roadmap + "\n```\n"
+	got, err := canonicalWorkflowObject(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != roadmap {
+		t.Fatalf("canonical object = %s, want %s", got, roadmap)
+	}
+
+	if _, err := canonicalWorkflowObject(`analysis ended early: {"items":[`); err == nil {
+		t.Fatal("an incomplete object was accepted")
+	}
+}
+
 // A roadmap larger than the agents still available is refused by the validator, before
 // any Worker starts.
 func TestSchemaRoadmapBudget(t *testing.T) {

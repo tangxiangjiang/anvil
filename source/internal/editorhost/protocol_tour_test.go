@@ -35,7 +35,7 @@ func TestProtocolTour(t *testing.T) {
 		Client:   ClientInfo{Name: "protocol-tour", Version: "test"},
 	}))
 	caps, _ := init["capabilities"].([]any)
-	for _, want := range []string{"sessions", "approval", "mcp", "skills", "rules"} {
+	for _, want := range []string{"sessions", "model_routes", "approval", "mcp", "skills", "rules"} {
 		if !capabilityHas(caps, want) {
 			t.Fatalf("capabilities missing %q: %v", want, caps)
 		}

@@ -274,18 +274,19 @@ type InitializeResult struct {
 type SessionParams struct {
 	AgentID string `json:"agent_id,omitempty"` // session.resume only
 
-	Provider          string                   `json:"provider,omitempty"`
-	BaseURL           string                   `json:"base_url,omitempty"`
-	Model             string                   `json:"model,omitempty"`
-	Effort            string                   `json:"effort,omitempty"`
-	ModelCapabilities *ModelCapabilitiesParams `json:"model_capabilities,omitempty"`
-	MaxOutputTokens   int                      `json:"max_output_tokens,omitempty"`
-	SystemPrompt      string                   `json:"system_prompt,omitempty"`
-	MaxSteps          int                      `json:"max_steps,omitempty"`
-	Store             string                   `json:"store,omitempty"`
-	LoadRules         bool                     `json:"load_rules,omitempty"`
-	LoadCursorRules   bool                     `json:"load_cursor_rules,omitempty"`
-	SettingSources    []string                 `json:"setting_sources,omitempty"`
+	Provider          string                      `json:"provider,omitempty"`
+	BaseURL           string                      `json:"base_url,omitempty"`
+	Model             string                      `json:"model,omitempty"`
+	Effort            string                      `json:"effort,omitempty"`
+	ModelCapabilities *ModelCapabilitiesParams    `json:"model_capabilities,omitempty"`
+	ModelRoutes       map[string]ModelRouteParams `json:"model_routes,omitempty"`
+	MaxOutputTokens   int                         `json:"max_output_tokens,omitempty"`
+	SystemPrompt      string                      `json:"system_prompt,omitempty"`
+	MaxSteps          int                         `json:"max_steps,omitempty"`
+	Store             string                      `json:"store,omitempty"`
+	LoadRules         bool                        `json:"load_rules,omitempty"`
+	LoadCursorRules   bool                        `json:"load_cursor_rules,omitempty"`
+	SettingSources    []string                    `json:"setting_sources,omitempty"`
 
 	// LoadHooks and LoadPermissions are pointers so that "not sent" is distinct
 	// from "sent as false": both default to ON for a workspace the editor opened,
@@ -364,6 +365,16 @@ type ModelCapabilitiesParams struct {
 	EffortLevels    []string `json:"effort_levels,omitempty"`
 	MaxOutputTokens bool     `json:"max_output_tokens"`
 	Vision          bool     `json:"vision"`
+}
+
+// ModelRouteParams selects the provider client a child model needs.
+// Credential is a non-secret selector: default, openai, or anthropic. The host
+// resolves it from its environment; API key bytes never cross JSON-RPC.
+type ModelRouteParams struct {
+	Provider     string                   `json:"provider"`
+	BaseURL      string                   `json:"base_url"`
+	Credential   string                   `json:"credential,omitempty"`
+	Capabilities *ModelCapabilitiesParams `json:"capabilities,omitempty"`
 }
 
 // LSPParams is the wire form of anvil.LSPOptions. Enabled is explicit because

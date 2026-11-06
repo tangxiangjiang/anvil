@@ -1002,7 +1002,10 @@ func (w *workflowRun) runChild(ctx context.Context, stepIndex, itemIndex int, pr
 		}
 		opts = w.parent.workerOptions(worker, w.plan.selectors[stepIndex], w.depth)
 		if step.Model != "" {
-			opts.Model = Model{ID: step.Model, Capabilities: step.capabilities}
+			w.parent.applyChildModel(&opts, step.Model)
+			if step.capabilities.Configured() {
+				opts.Model.Capabilities = step.capabilities
+			}
 		}
 		prompt = workerPrompt
 	} else {
@@ -1019,7 +1022,7 @@ func (w *workflowRun) runChild(ctx context.Context, stepIndex, itemIndex int, pr
 		if step.Effort != "" {
 			opts.Effort = Effort(step.Effort)
 		}
-		if step.Model != "" {
+		if step.Model != "" && step.capabilities.Configured() {
 			opts.Model.Capabilities = step.capabilities
 		}
 		// A stage that must answer in a schema is told the shape in its own brief layer.
@@ -1035,26 +1038,52 @@ func (w *workflowRun) runChild(ctx context.Context, stepIndex, itemIndex int, pr
 		Brief:            worker,
 	}
 	callCtx := withSubagentOrigin(ctx, w.parent, ident.ParentRunID, ident.ParentToolCallID)
-	child, err := createSubagent(callCtx, opts, ident)
-	if err != nil {
-		out.status = workflowFailed
-		out.errText = "start subagent: " + err.Error()
-		return out
+	maxAttempts := 1
+	if w.isBuiltInComplex() &&
+		(w.plan.ids[stepIndex] == "decide" || w.plan.ids[stepIndex] == "analyze") &&
+		workflowSelectorsReadOnly(w.plan.selectors[stepIndex]) {
+		// Decision and Analyze are read-only. A provider stream that dies after
+		// partial output can safely restart the stage once; Worker must never be
+		// replayed automatically because it may already have edited files.
+		maxAttempts = 2
 	}
-	defer child.Close()
-	out.agentID = child.AgentID()
-	stage := w.complexStageEvent(stepIndex, itemIndex, itemText, worker, child.AgentID())
-	if stage != nil {
-		w.parent.emitStage(*stage)
-	}
+	var child *Agent
+	var res *RunResult
+	var waitErr error
+	var stage *StageEvent
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if attempt > 1 {
+			if err := w.parent.budget.take(); err != nil {
+				out.status = workflowFailed
+				out.errText = "retry read-only complex stage: " + err.Error()
+				return out
+			}
+		}
+		child, err = createSubagent(callCtx, opts, ident)
+		if err != nil {
+			w.parent.budget.give()
+			out.status = workflowFailed
+			out.errText = "start subagent: " + err.Error()
+			return out
+		}
+		defer child.Close()
+		out.agentID = child.AgentID()
+		stage = w.complexStageEvent(stepIndex, itemIndex, itemText, worker, child.AgentID())
+		if stage != nil {
+			w.parent.emitStage(*stage)
+		}
 
-	run, err := child.Send(callCtx, prompt)
-	if err != nil {
-		out.status = workflowFailed
-		out.errText = "start subagent: " + err.Error()
-		return out
+		run, sendErr := child.Send(callCtx, prompt)
+		if sendErr != nil {
+			out.status = workflowFailed
+			out.errText = "start subagent: " + sendErr.Error()
+			return out
+		}
+		res, waitErr = run.Wait(callCtx)
+		if res == nil || res.Status != StatusError || res.Code != CodeProviderMidStream || attempt == maxAttempts {
+			break
+		}
 	}
-	res, waitErr := run.Wait(callCtx)
 	if waitErr != nil && res == nil {
 		out.status = workflowFailed
 		out.errText = fmt.Sprintf("%s did not finish: %v", child.AgentID(), waitErr)
@@ -1068,11 +1097,21 @@ func (w *workflowRun) runChild(ctx context.Context, stepIndex, itemIndex int, pr
 	switch res.Status {
 	case StatusFinished:
 		out.status = workflowFinished
-		out.result = res.Result
+		result := res.Result
+		if step.ResultSchema != "" {
+			// Schema stages are machine-to-machine boundaries. Models sometimes
+			// preface the requested object with an explanation, so keep only the
+			// authoritative object before validating it or handing it downstream.
+			// If extraction fails, retain the original answer for the diagnostic.
+			if canonical, err := canonicalWorkflowObject(result); err == nil {
+				result = canonical
+			}
+		}
+		out.result = result
 		if worker != nil {
 			changed, recorded := child.changedFiles()
-			reportText, acceptance := report(worker, res.Result, changed, recorded)
-			out.result = reportText + res.Result
+			reportText, acceptance := report(worker, result, changed, recorded)
+			out.result = reportText + result
 			if stage != nil {
 				stage.Acceptance = acceptance
 				w.parent.emitStage(*stage)
@@ -1080,7 +1119,7 @@ func (w *workflowRun) runChild(ctx context.Context, stepIndex, itemIndex int, pr
 		}
 		if step.ResultSchema != "" {
 			env := schemaEnv{cwd: w.parent.cwd, budgetLeft: w.parent.budget.remaining()}
-			if problems := validateSchema(step.ResultSchema, res.Result, env); len(problems) > 0 {
+			if problems := validateSchema(step.ResultSchema, result, env); len(problems) > 0 {
 				out.status = workflowFailed
 				out.errText = fmt.Sprintf("the %s stage's answer does not satisfy the %s schema:\n- %s",
 					w.plan.ids[stepIndex], step.ResultSchema, strings.Join(problems, "\n- "))
@@ -1088,7 +1127,7 @@ func (w *workflowRun) runChild(ctx context.Context, stepIndex, itemIndex int, pr
 		}
 		if out.status == workflowFinished && w.isBuiltInComplex() &&
 			w.plan.ids[stepIndex] == "analyze" {
-			if err := w.persistComplexArtifact(callCtx, res.Result); err != nil {
+			if err := w.persistComplexArtifact(callCtx, result); err != nil {
 				out.status = workflowFailed
 				out.errText = "persist the structured plan before Worker starts: " + err.Error()
 			}
@@ -1101,6 +1140,22 @@ func (w *workflowRun) runChild(ctx context.Context, stepIndex, itemIndex int, pr
 		out.errText = firstNonEmpty(res.Err, res.Result, "the run failed")
 	}
 	return out
+}
+
+func workflowSelectorsReadOnly(selectors []string) bool {
+	allowed := map[string]bool{
+		"read_file": true, "grep": true, "glob": true, "semantic_search": true,
+		"list_skills": true, "read_skill": true,
+		"git_status": true, "git_diff": true, "git_log": true,
+		"web_search": true, "fetch_url": true, "read_image": true,
+		"diagnostics": true, "definition": true, "references": true, "hover": true,
+	}
+	for name := range tools.ExpandToolSelectors(selectors) {
+		if !allowed[name] {
+			return false
+		}
+	}
+	return true
 }
 
 func (w *workflowRun) claimComplexItem(
@@ -1312,15 +1367,47 @@ func decodeWorkflowValue(text string) (any, error) {
 			return doc, nil
 		}
 	}
-	// A value embedded in prose: the widest brace span is the best guess.
-	first := strings.IndexByte(text, '{')
-	last := strings.LastIndexByte(text, '}')
-	if first >= 0 && last > first {
-		if err := json.Unmarshal([]byte(text[first:last+1]), &doc); err == nil {
-			return doc, nil
+	// A value embedded in prose. Try every opening brace because explanations
+	// can contain code braces or an earlier JSON example. Prefer the object that
+	// ends latest; when nested objects share an end, prefer the outermost one.
+	bestStart, bestEnd := -1, -1
+	var best any
+	for start := 0; start < len(text); start++ {
+		if text[start] != '{' {
+			continue
+		}
+		dec := json.NewDecoder(strings.NewReader(text[start:]))
+		var candidate any
+		if err := dec.Decode(&candidate); err != nil {
+			continue
+		}
+		if _, ok := candidate.(map[string]any); !ok {
+			continue
+		}
+		end := start + int(dec.InputOffset())
+		if end > bestEnd || (end == bestEnd && (bestStart < 0 || start < bestStart)) {
+			bestStart, bestEnd, best = start, end, candidate
 		}
 	}
+	if bestStart >= 0 {
+		return best, nil
+	}
 	return nil, errors.New("no JSON object in the message")
+}
+
+func canonicalWorkflowObject(text string) (string, error) {
+	doc, err := decodeWorkflowValue(strings.TrimSpace(text))
+	if err != nil {
+		return "", err
+	}
+	if _, ok := doc.(map[string]any); !ok {
+		return "", errors.New("the JSON value is not an object")
+	}
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		return "", fmt.Errorf("encode JSON object: %w", err)
+	}
+	return string(raw), nil
 }
 
 // workflowSubstitute replaces every token in one pass. Inserted answers are

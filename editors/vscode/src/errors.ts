@@ -37,7 +37,7 @@ const MESSAGES: Record<Exclude<FailureKind, 'none'>, string> = {
   cancelled: 'Stopped.',
   interrupted: 'Interrupted because the host that owned this run was lost.',
   max_steps: 'The agent hit its step limit before finishing. Raise anvil.maxSteps or ask for a smaller change.',
-  provider: 'The model provider rejected the request. Check the API key, the model id, and anvil.baseUrl.',
+  provider: 'Communication with the model provider failed. Check the network and anvil.baseUrl, then retry.',
   auth: 'The model provider refused the credentials. Check the API key and anvil.baseUrl.',
   provider_busy: 'The model provider is temporarily unavailable or rate limiting requests, and the retries ran out. Wait a moment and send it again.',
   request_rejected: 'The model provider rejected the request itself. Check the model id and shorten the conversation if it is large.',

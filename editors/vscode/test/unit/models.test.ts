@@ -10,6 +10,7 @@ import {
   connectionProblem,
   MAX_OUTPUT_TOKEN_LIMIT,
   normalizeModelIds,
+  normalizeModelRoutes,
   outputTokenLimitProblem,
   validModelId,
 } from '../../src/models';
@@ -25,6 +26,7 @@ const CHAT = readFileSync(join(ROOT, 'src', 'chatPanel.ts'), 'utf8');
 const CHAT_JS = readFileSync(join(ROOT, 'media', 'chat.js'), 'utf8');
 const SETTINGS = readFileSync(join(ROOT, 'src', 'settings.ts'), 'utf8');
 const EXTENSION = readFileSync(join(ROOT, 'src', 'extension.ts'), 'utf8');
+const HOST_MANAGER = readFileSync(join(ROOT, 'src', 'hostManager.ts'), 'utf8');
 
 test('model ids are trimmed, validated, deduplicated, and stable', () => {
   assert.deepEqual(normalizeModelIds([' gpt-5 ', 'gpt-5', '', 7, 'claude/opus']), [
@@ -33,6 +35,26 @@ test('model ids are trimmed, validated, deduplicated, and stable', () => {
   ]);
   assert.equal(validModelId('provider/model:latest'), true);
   assert.equal(validModelId('two words'), false);
+});
+
+test('per-model routes retain only complete supported connections', () => {
+  const routes = normalizeModelRoutes({
+    ' gpt-worker ': {
+      provider: 'openai',
+      baseUrl: ' https://gateway.example/v1/ ',
+      credential: 'openai',
+    },
+    'claude-reviewer': {
+      provider: 'anthropic',
+      baseUrl: 'https://api.anthropic.com',
+      credential: 'anthropic',
+    },
+    'bad-provider': { provider: 'future', baseUrl: 'https://example.test' },
+    'bad-url': { provider: 'openai', baseUrl: '' },
+  });
+  assert.deepEqual(Object.keys(routes), ['gpt-worker', 'claude-reviewer']);
+  assert.equal(routes['gpt-worker'].baseUrl, 'https://gateway.example/v1');
+  assert.equal(routes['claude-reviewer'].credential, 'anthropic');
 });
 
 test('an exact models endpoint is normalized for the existing host RPC', () => {
@@ -101,9 +123,17 @@ test('the manager curates fetched models without sending credentials to its webv
   assert.match(PANEL, /class="model-workbench"/);
   assert.match(PANEL, /id="available" class="model-list list-box"/);
   assert.match(PANEL, /id="discovered" class="model-list list-box discovered"/);
-  assert.doesNotMatch(PANEL, /api[_A-Z]?key/i);
+  assert.match(PANEL, /openai: Boolean\(openaiApiKey\)/);
+  assert.match(PANEL, /anthropic: Boolean\(anthropicApiKey\)/);
   assert.match(PANEL, /settings\.gatewayDefaultModel === id[\s\S]*?saveDefaultModel\(this\.context, ''\)/);
   assert.match(PANEL, /id="closeManual"/);
+  assert.match(PANEL, /id="routeEditor"/);
+  assert.match(PANEL, /case 'saveRoute'/);
+  assert.match(PANEL, /case 'setRouteKey'/);
+  assert.match(PANEL, /if \(this\.host\.running\) await this\.host\.restart\(\)/);
+  assert.match(MODELS_JS, /type: 'saveRoute'/);
+  assert.match(MODELS_JS, /Inherit main connection/);
+  assert.match(MODELS_JS, /Set the selected route key before saving this route/);
   assert.match(MODELS_JS, /if \(manualForm\.hidden\)[\s\S]*?manualId\.focus\(\)/);
   assert.doesNotMatch(MODELS_JS, /manualForm\.hidden = !/);
 });
@@ -119,6 +149,8 @@ test('the default picker uses only curated models and migrates the old text sett
   assert.match(SETTINGS, /workspaceState\.update\(MODEL_SETUP_KEY, modelSetup\)/);
   assert.match(SETTINGS, /const effectiveModel = mode === 'single' \? singleModelId : selectedDefaultModel/);
   assert.match(SETTINGS, /model: emptyToUndefined\(effectiveModel\)/);
+  assert.match(SETTINGS, /if \(mode === 'gateway'\)[\s\S]*?session\.model_routes/);
+  assert.match(HOST_MANAGER, /handshake\.capabilities\.includes\('model_routes'\)/);
 });
 
 test('the model setup page keeps the five setup controls together', () => {

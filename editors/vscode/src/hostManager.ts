@@ -11,7 +11,7 @@ import * as vscode from 'vscode';
 import { HostClient, LogFn } from './hostClient';
 import { ChatSession, SessionConfig, SessionState } from './session';
 import { SessionRouter } from './router';
-import { childEnv, readApiKey, readSettings, readWebSearchKey } from './settings';
+import { childEnv, readApiKey, readModelApiKey, readSettings, readWebSearchKey } from './settings';
 import { describeHost, hostFixHint, resolveHost, verifyHost, versionDrift } from './hostBundle';
 import { resolveWorkspaceRoot } from './workspaceRoot';
 import {
@@ -269,8 +269,10 @@ export class HostManager {
     const settings = readSettings();
     // Both credentials are read before the spawn and only ever travel through
     // the child environment.
-    const [apiKey, webSearchKey] = await Promise.all([
+    const [apiKey, openaiApiKey, anthropicApiKey, webSearchKey] = await Promise.all([
       readApiKey(this.context),
+      readModelApiKey(this.context, 'openai'),
+      readModelApiKey(this.context, 'anthropic'),
       readWebSearchKey(this.context),
     ]);
     const folder = await resolveWorkspaceRoot(this.context);
@@ -295,7 +297,7 @@ export class HostManager {
     const client = new HostClient({
       command: host.command,
       cwd,
-      env: childEnv({ apiKey, webSearchKey }),
+      env: childEnv({ apiKey, openaiApiKey, anthropicApiKey, webSearchKey }),
       log: this.log,
       onExit: (info) => this.onHostExit(info),
     });
@@ -310,17 +312,25 @@ export class HostManager {
         `could not start the Anvil host: ${(err as Error).message} (${hostFixHint(host)})`,
       );
     }
-    try {
-      const version = this.context.extension.packageJSON.version as string;
-      const handshake = await client.initialize(cwd, { name: 'anvil-vscode', version });
-      this.log(`host ${handshake.host} (capabilities: ${handshake.capabilities.join(', ') || 'none'})`);
-      const drift = versionDrift(handshake.host, version);
-      if (drift) this.listener.onNotice?.('warn', drift);
-    } catch (err) {
+    const version = this.context.extension.packageJSON.version as string;
+    const handshake = await client.initialize(cwd, { name: 'anvil-vscode', version }).catch(async (err) => {
       await client.stop();
       this.listener.onNotice?.('error', `the host did not answer initialize: ${(err as Error).message}`);
       throw err;
+    });
+    this.log(`host ${handshake.host} (capabilities: ${handshake.capabilities.join(', ') || 'none'})`);
+    if (
+      settings.models.mode === 'gateway'
+      && Object.keys(settings.models.routes).length > 0
+      && !handshake.capabilities.includes('model_routes')
+    ) {
+      await client.stop();
+      const message = 'the configured model routes require a newer Anvil host with model_routes support';
+      this.listener.onNotice?.('error', message);
+      throw new Error(message);
     }
+    const drift = versionDrift(handshake.host, version);
+    if (drift) this.listener.onNotice?.('warn', drift);
 
     this.client = client;
     // One router for the whole window. It is installed here rather than per

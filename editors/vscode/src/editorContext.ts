@@ -9,16 +9,17 @@
 
 import * as vscode from 'vscode';
 import { Diagnostic, PromptContext, Quote, Range, Selection } from './protocol';
-import { relativeMention } from './mentions';
+import { mentionSearchGlob, relativeMention } from './mentions';
 import { rootFolder } from './workspaceRoot';
 
 /** How many diagnostics the extension will put on the wire for one prompt. */
 export const MAX_DIAGNOSTICS = 100;
 
-/** What the mention picker will look through before giving up. */
-const MENTION_GLOB = '**/*';
 const MENTION_EXCLUDE = '**/{node_modules,.git,.venv,dist,out,build,target}/**';
-const MENTION_LIMIT = 5000;
+/** Empty searches are a preview; typed searches are narrow enough to return more. */
+const MENTION_PREVIEW_LIMIT = 200;
+const MENTION_SEARCH_LIMIT = 500;
+const MENTION_SEARCH_DELAY_MS = 100;
 
 /**
  * The last real source editor the user worked in.
@@ -146,23 +147,60 @@ function isInside(root: string, path: string): boolean {
 export async function pickMentions(): Promise<string[]> {
   const folder = rootFolder();
   if (!folder) return [];
-  const found = await vscode.workspace.findFiles(MENTION_GLOB, MENTION_EXCLUDE, MENTION_LIMIT);
-  const items: Array<vscode.QuickPickItem & { relative: string }> = [];
-  for (const uri of found) {
-    const relative = relativeMention(folder.uri.fsPath, uri.fsPath);
-    if (relative === undefined) continue;
-    items.push({ label: relative, relative });
-  }
-  items.sort((a, b) => a.label.localeCompare(b.label));
 
-  const picked = await vscode.window.showQuickPick(items, {
-    canPickMany: true,
-    title: 'Reference files or folders',
-    placeHolder: 'The host reads each one into this prompt',
-    matchOnDescription: true,
+  type MentionItem = vscode.QuickPickItem & { relative: string };
+  const picker = vscode.window.createQuickPick<MentionItem>();
+  picker.canSelectMany = true;
+  picker.matchOnDescription = true;
+  picker.title = 'Reference workspace files';
+  picker.placeholder = 'Type a filename or path; the host reads each selected file into this prompt';
+
+  let generation = 0;
+  let timer: NodeJS.Timeout | undefined;
+  let settled = false;
+  const disposables: vscode.Disposable[] = [];
+  const result = new Promise<string[]>((resolve) => {
+    const finish = (paths: string[]): void => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      for (const disposable of disposables) disposable.dispose();
+      picker.dispose();
+      resolve(paths);
+    };
+    disposables.push(
+      picker.onDidAccept(() => finish(picker.selectedItems.map((item) => item.relative))),
+      picker.onDidHide(() => finish([])),
+    );
   });
-  if (!picked) return [];
-  return picked.map((item) => item.relative);
+
+  const update = async (query: string): Promise<void> => {
+    const request = ++generation;
+    picker.busy = true;
+    const include = new vscode.RelativePattern(folder, mentionSearchGlob(query));
+    const exclude = new vscode.RelativePattern(folder, MENTION_EXCLUDE);
+    const limit = query.trim() === '' ? MENTION_PREVIEW_LIMIT : MENTION_SEARCH_LIMIT;
+    const found = await vscode.workspace.findFiles(include, exclude, limit);
+    if (settled || request !== generation) return;
+    const items: MentionItem[] = [];
+    for (const uri of found) {
+      const relative = relativeMention(folder.uri.fsPath, uri.fsPath);
+      if (relative !== undefined) items.push({ label: relative, relative });
+    }
+    items.sort((a, b) => a.label.localeCompare(b.label));
+    picker.items = items;
+    picker.busy = false;
+  };
+
+  disposables.push(
+    picker.onDidChangeValue((query) => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => void update(query), MENTION_SEARCH_DELAY_MS);
+    }),
+  );
+  picker.show();
+  await update('');
+  return result;
 }
 
 /**

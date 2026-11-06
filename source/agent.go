@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1977,6 +1978,29 @@ func normalizeOptions(opts Options) (Options, string, error) {
 	}
 	if err := validateModelSelection(opts.Provider, opts.Model.Capabilities, opts.Effort, opts.MaxOutputTokens); err != nil {
 		return opts, "", newError(err.Error(), false, nil)
+	}
+	for id, route := range opts.ModelRoutes {
+		if strings.TrimSpace(id) == "" || id != strings.TrimSpace(id) {
+			return opts, "", newError("model route id must be non-empty and trimmed", false, nil)
+		}
+		switch route.Provider {
+		case ProviderOpenAI, ProviderAnthropic:
+		default:
+			return opts, "", newError("model route "+id+": unsupported provider: "+string(route.Provider), false, nil)
+		}
+		if strings.TrimSpace(route.BaseURL) == "" {
+			return opts, "", newError("model route "+id+": base URL is required", false, nil)
+		}
+		parsed, err := url.Parse(route.BaseURL)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+			return opts, "", newError("model route "+id+": base URL must be an absolute HTTP(S) URL", false, nil)
+		}
+		// Route profiles can select their own effort when a child is spawned.
+		// Validate the provider/protocol pairing now; Create validates the
+		// child's actual effort and output limit after profile overrides apply.
+		if err := validateModelSelection(route.Provider, route.Capabilities, EffortDefault, 0); err != nil {
+			return opts, "", newError("model route "+id+": "+err.Error(), false, nil)
+		}
 	}
 	switch opts.Mode {
 	case ModeSingle:

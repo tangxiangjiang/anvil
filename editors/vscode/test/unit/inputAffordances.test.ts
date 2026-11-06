@@ -17,6 +17,7 @@ const EXTENSION_ROOT = join(__dirname, '..', '..', '..');
 const CHAT_JS = readFileSync(join(EXTENSION_ROOT, 'media', 'chat.js'), 'utf8');
 const CHAT_CSS = readFileSync(join(EXTENSION_ROOT, 'media', 'chat.css'), 'utf8');
 const CHAT_PANEL = readFileSync(join(EXTENSION_ROOT, 'src', 'chatPanel.ts'), 'utf8');
+const EDITOR_CONTEXT = readFileSync(join(EXTENSION_ROOT, 'src', 'editorContext.ts'), 'utf8');
 const ATTACHMENTS = readFileSync(join(EXTENSION_ROOT, 'src', 'attachments.ts'), 'utf8');
 const PACKAGE_JSON = readFileSync(join(EXTENSION_ROOT, 'package.json'), 'utf8');
 const SETTINGS = readFileSync(join(EXTENSION_ROOT, 'src', 'settings.ts'), 'utf8');
@@ -144,6 +145,13 @@ test('a refused turn is reported, not swallowed', () => {
   // locked with nothing running.
   assert.match(send[0], /this\.postState\(\)/);
   assert.doesNotMatch(send[0], /catch\(\(\) => undefined\)/);
+});
+
+test('the mention picker searches as the user types instead of truncating a large workspace', () => {
+  assert.match(EDITOR_CONTEXT, /createQuickPick<MentionItem>\(\)/);
+  assert.match(EDITOR_CONTEXT, /onDidChangeValue/);
+  assert.match(EDITOR_CONTEXT, /new vscode\.RelativePattern\(folder, mentionSearchGlob\(query\)\)/);
+  assert.doesNotMatch(EDITOR_CONTEXT, /MENTION_LIMIT\s*=\s*5000/);
 });
 
 test('Copy is offered on a finished answer and writes through the host', () => {

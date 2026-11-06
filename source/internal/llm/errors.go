@@ -117,6 +117,12 @@ func NewHTTPError(status int, message string) *HTTPError {
 // error code, then recognize the common transient forms that otherwise look
 // like a non-retryable status=200 rejection.
 func newEmbeddedProviderError(httpStatus int, message, code, errorType string) *HTTPError {
+	if strings.TrimSpace(message) == "" {
+		message = strings.TrimSpace(errorType)
+	}
+	if message == "" {
+		message = "provider stream failed"
+	}
 	if embeddedStatus, err := strconv.Atoi(strings.Trim(strings.TrimSpace(code), `"`)); err == nil &&
 		embeddedStatus >= 400 && embeddedStatus <= 599 {
 		return NewHTTPError(embeddedStatus, message)
@@ -138,6 +144,10 @@ func newEmbeddedProviderError(httpStatus int, message, code, errorType string) *
 		strings.Contains(detail, "bedrockexception"),
 		strings.Contains(detail, "overloaded"),
 		strings.Contains(detail, "temporarily unavailable"),
+		strings.Contains(detail, "stream_incomplete"),
+		strings.Contains(detail, "stream incomplete"),
+		strings.Contains(detail, "incomplete stream"),
+		strings.Contains(detail, "unexpected eof"),
 		strings.Contains(detail, "timed out"),
 		strings.Contains(detail, "timeout"):
 		return NewHTTPError(http.StatusServiceUnavailable, message)

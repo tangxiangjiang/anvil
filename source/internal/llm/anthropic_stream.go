@@ -216,7 +216,7 @@ func (c *Anthropic) CompleteStream(ctx context.Context, req Request, onDelta fun
 		}
 	}
 	if err := sc.Err(); err != nil {
-		return nil, err
+		return nil, newTransportError("anthropic stream interrupted", err)
 	}
 	// A tool_use that started but never received its content_block_stop was cut
 	// off, so its arguments are incomplete. Returning success would drop the

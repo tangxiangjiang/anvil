@@ -11,7 +11,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 )
 
 const defaultAnthropicBase = "https://api.anthropic.com"
@@ -32,7 +31,7 @@ func NewAnthropic(cfg Config) *Anthropic {
 	return &Anthropic{
 		cfg: cfg,
 		client: &http.Client{
-			Timeout: 120 * time.Second,
+			Timeout: providerResponseTimeout,
 		},
 	}
 }
