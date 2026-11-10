@@ -6,7 +6,7 @@ line; 0.47–0.50 develop the Agent SDK, and 0.51–0.57 secure and productize t
 in VS Code. The planned 0.60–0.65 line moves the complete product-requirement-to-release workflow
 into VS Code and leaves Web as read-only audit; 0.66 adds remote Worker execution over those same
 contracts. Milestones 0.58–0.59 are intentionally unassigned.
-The Agent SDK, shipped VSIX, and Host version are **0.52.30**. Roadmap status remains separate
+The Agent SDK, shipped VSIX, and Host version are **0.52.31**. Roadmap status remains separate
 from release status; the synchronized product version advances once for each delivered
 user-visible batch.
 

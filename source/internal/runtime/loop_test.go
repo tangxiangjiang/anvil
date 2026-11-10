@@ -446,7 +446,7 @@ func (c *alwaysDeferredCompleter) Complete(ctx context.Context, req llm.Request)
 	}}, nil
 }
 
-func TestLoopErrorsWhenModelNeverCallsFinishTask(t *testing.T) {
+func TestLoopFallsBackToThirdAnswerWhenGatewayDropsFinishTask(t *testing.T) {
 	dir := t.TempDir()
 	reg := tools.NewRegistry(dir, false)
 	completer := &alwaysDeferredCompleter{}
@@ -466,13 +466,17 @@ func TestLoopErrorsWhenModelNeverCallsFinishTask(t *testing.T) {
 		}
 	})
 
-	if res.Status != "error" || res.Code != runtime.CodeFinishProtocol || res.Err != runtime.FinishTaskRequiredError {
-		t.Fatalf("status=%s code=%q err=%q", res.Status, res.Code, res.Err)
+	if res.Status != "finished" ||
+		res.Result != "我继续完成这版实现，先核对已写入的代码和 RHI 接口，再补齐 IO 完成、取消回收与 CPU 回退路径。" {
+		t.Fatalf("status=%s result=%q code=%q err=%q", res.Status, res.Result, res.Code, res.Err)
 	}
-	if completer.n != 3 || doneEvents != 0 {
+	if completer.n != 3 || doneEvents != 1 {
 		t.Fatalf("calls=%d done=%d", completer.n, doneEvents)
 	}
-	if len(persisted) != 1 || persisted[0].Role != llm.RoleUser {
+	if len(persisted) != 2 ||
+		persisted[0].Role != llm.RoleUser ||
+		persisted[1].Role != llm.RoleAssistant ||
+		persisted[1].Content != res.Result {
 		t.Fatalf("persisted=%+v", persisted)
 	}
 }

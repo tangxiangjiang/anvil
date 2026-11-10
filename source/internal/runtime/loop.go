@@ -579,15 +579,28 @@ func Loop(ctx context.Context, completer llm.Completer, registry *tools.Registry
 				correctionPrompt = finishTaskCorrection
 			}
 		}
+		canCorrect := false
 		if invalidReason != "" {
-			canCorrect := retryReason == ""
+			canCorrect = retryReason == ""
 			if invalidReason == "empty" {
 				canCorrect = emptyResponses < maxEmptyResponses
 			}
 			if invalidReason == "finish" {
 				finishProtocolMisses++
 				canCorrect = finishProtocolMisses < maxFinishProtocolMisses
+				if !canCorrect && len(assistant.ToolCalls) == 0 &&
+					strings.TrimSpace(assistant.Content) != "" {
+					// Some OpenAI-compatible gateways preserve the model's final
+					// prose but repeatedly drop its finish_task call. After two
+					// explicit corrections, failing the run would discard the only
+					// useful result the user received. Accept the third non-empty
+					// answer as the bounded compatibility fallback. A malformed or
+					// mixed tool call remains a protocol error.
+					invalidReason = ""
+				}
 			}
+		}
+		if invalidReason != "" {
 			if canCorrect {
 				// Keep the rejected turn and corrective instruction in this one
 				// provider request only. They are deliberately not sent to sink.
